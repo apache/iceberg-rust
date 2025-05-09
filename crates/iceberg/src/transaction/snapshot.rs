@@ -132,7 +132,7 @@ impl<'a> SnapshotProduceAction<'a> {
         if data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::InvalidArgument,
-                "Doesn't add any data files when fast append",
+                "No data files were provided when adding data files to snapshot",
             ));
         }
 
