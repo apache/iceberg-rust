@@ -20,7 +20,7 @@ use aws_sdk_s3::{
     Config,
 };
 use iceberg::NamespaceIdent;
-use iceberg::{Error, ErrorKind, Namespace, Result};
+use iceberg::{Error, ErrorKind, Result};
 use std::collections::HashMap;
 
 /// Property aws region

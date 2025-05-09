@@ -41,6 +41,7 @@ use crate::{Error, ErrorKind, Result};
 /// | Memory             | `storage-memory`  | `memory`   |
 /// | S3                 | `storage-s3`      | `s3`, `s3a`|
 /// | GCS                | `storage-gcs`     | `gs`, `gcs`|
+/// | Hdfs               | `storage-hdfs-native`     | `hdfs`|
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
@@ -500,6 +501,9 @@ mod tests {
 
         let io = FileIO::from_path("s3://bucket/a").unwrap();
         assert_eq!("s3", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("hdfs://tmp/a").unwrap();
+        assert_eq!("hdfs", io.scheme_str.unwrap().as_str());
 
         let io = FileIO::from_path("tmp/||c");
         assert!(io.is_err());

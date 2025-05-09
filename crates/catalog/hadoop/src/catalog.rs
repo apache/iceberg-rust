@@ -67,7 +67,6 @@ pub struct HadoopCatalog {
 impl HadoopCatalog {
     /// Creates a new Hadoop catalog.
     pub async fn new(config: HadoopCatalogConfig) -> Result<Self> {
-        let mut s3_client: Option<aws_sdk_s3::Client> = None;
         if let Some(warehouse_url) = &config.warehouse {
             if warehouse_url.starts_with("s3://") || warehouse_url.starts_with("s3a://") {
                 let mut io_props = config.properties.clone();
@@ -81,7 +80,7 @@ impl HadoopCatalog {
                     .with_props(&io_props)
                     .build()?;
                 let aws_config = create_sdk_config(&config.properties, config.endpoint_url.clone());
-                s3_client = Some(aws_sdk_s3::Client::from_conf(aws_config));
+                let s3_client = Some(aws_sdk_s3::Client::from_conf(aws_config));
                 return Ok(Self {
                     config: config,
                     file_io,
@@ -392,7 +391,7 @@ impl Catalog for HadoopCatalog {
                         .await
                     {
                         Ok(_) => (),
-                        Err(e) => {
+                        Err(_e) => {
                             return Ok(false);
                         }
                     };
@@ -593,8 +592,6 @@ impl Catalog for HadoopCatalog {
                 "s3 client is not initialized",
             ));
         }
-
-        Ok(vec![])
     }
 
     /// Creates a new table within a specified namespace.
@@ -778,11 +775,6 @@ impl Catalog for HadoopCatalog {
                 "s3 client is not initialized",
             ));
         }
-
-        Err(Error::new(
-            ErrorKind::Unexpected,
-            "Table does not have a metadata location",
-        ))
     }
 
     /// Asynchronously drops a table from the database.

@@ -20,6 +20,8 @@ use std::sync::Arc;
 use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
+#[cfg(feature = "storage-hdfs-native")]
+use opendal::services::HdfsNativeConfig;
 #[cfg(feature = "storage-oss")]
 use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
@@ -47,6 +49,8 @@ pub(crate) enum Storage {
     Oss { config: Arc<OssConfig> },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
+    #[cfg(feature = "storage-hdfs-native")]
+    HdfsNative { config: Arc<HdfsNativeConfig> },
 }
 
 impl Storage {
@@ -72,6 +76,10 @@ impl Storage {
             #[cfg(feature = "storage-oss")]
             Scheme::Oss => Ok(Self::Oss {
                 config: super::oss_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-hdfs-native")]
+            Scheme::HdfsNative => Ok(Self::HdfsNative {
+                config: super::hdfs_native_config_parse(props)?.into(),
             }),
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
@@ -162,11 +170,27 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-hdfs-native")]
+            Storage::HdfsNative { config } => {
+                let op = super::hdfs_native_config_build(config)?;
+
+                // Check prefix of oss path.
+                let prefix = format!("hdfs://{}/", op.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid hdfs url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
-                not(feature = "storage-oss")
+                not(feature = "storage-oss"),
+                not(feature = "storage-hdfs-native")
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -189,6 +213,7 @@ impl Storage {
             "s3" | "s3a" => Ok(Scheme::S3),
             "gs" | "gcs" => Ok(Scheme::Gcs),
             "oss" => Ok(Scheme::Oss),
+            "hdfs" => Ok(Scheme::HdfsNative),
             s => Ok(s.parse::<Scheme>()?),
         }
     }
