@@ -35,7 +35,7 @@ pub(crate) fn available_parallelism() -> NonZeroUsize {
     std::thread::available_parallelism().unwrap_or_else(|_err| {
         // Failed to get the level of parallelism.
         // TODO: log/trace when this fallback occurs.
-        
+
         // Using a default value.
         NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
     })
