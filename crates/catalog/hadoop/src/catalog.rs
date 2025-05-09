@@ -550,10 +550,57 @@ impl Catalog for HadoopCatalog {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
                 }
             }
+        } else if self.hdfs_native_client.is_some() {
+            let hdfs_native_client = self.hdfs_native_client.as_ref().unwrap();
+            let default_fs =
+                self.config
+                    .properties
+                    .get(FS_DEFAULTFS)
+                    .ok_or(iceberg::Error::new(
+                        ErrorKind::DataInvalid,
+                        " fs.defaultFS is null",
+                    ))?;
+
+            match self.config.warehouse.clone() {
+                Some(warehouse_url) => {
+                    let prefix = format!(
+                        "{}/{}",
+                        &warehouse_url[default_fs.len()..].to_string(),
+                        namespace.join("/")
+                    );
+
+                    match hdfs_native_client
+                        .get_file_info(&prefix)
+                        .await
+                        .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()))
+                    {
+                        Ok(_) => (),
+                        Err(_e) => {
+                            return Ok(false);
+                        }
+                    }
+                    let table_version_hint_path =
+                        format!("{}/metadata/version-hint.text", &prefix,);
+                    //check It's not table
+                    let table_version_hint = hdfs_native_client
+                        .get_file_info(&table_version_hint_path)
+                        .await
+                        .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()));
+                    if table_version_hint.is_ok() {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "It's a table not namespace",
+                        ));
+                    }
+                }
+                None => {
+                    return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
+                }
+            }
         } else {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "s3 client is not initialized",
+                "s3 client or hdfs native client is not initialized",
             ));
         }
 
