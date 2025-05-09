@@ -429,8 +429,7 @@ impl TableScan {
                         .send(Err(error))
                         .await;
                 }
-            })
-            .await;
+            });
         }
 
         // Process the data file [`ManifestEntry`] stream in parallel
