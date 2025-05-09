@@ -650,33 +650,33 @@ pub fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
 }
 
 /// Convert Iceberg Datum to Arrow Datum.
-pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
+pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send + Sync>> {
     match (datum.data_type(), datum.literal()) {
         (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
-            Ok(Box::new(BooleanArray::new_scalar(*value)))
+            Ok(Arc::new(BooleanArray::new_scalar(*value)))
         }
         (PrimitiveType::Int, PrimitiveLiteral::Int(value)) => {
-            Ok(Box::new(Int32Array::new_scalar(*value)))
+            Ok(Arc::new(Int32Array::new_scalar(*value)))
         }
         (PrimitiveType::Long, PrimitiveLiteral::Long(value)) => {
-            Ok(Box::new(Int64Array::new_scalar(*value)))
+            Ok(Arc::new(Int64Array::new_scalar(*value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
-            Ok(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
+            Ok(Arc::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
-            Ok(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
+            Ok(Arc::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
-            Ok(Box::new(StringArray::new_scalar(value.as_str())))
+            Ok(Arc::new(StringArray::new_scalar(value.as_str())))
         }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
-            Ok(Box::new(Date32Array::new_scalar(*value)))
+            Ok(Arc::new(Date32Array::new_scalar(*value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
-            Ok(Box::new(TimestampMicrosecondArray::new_scalar(*value)))
+            Ok(Arc::new(TimestampMicrosecondArray::new_scalar(*value)))
         }
-        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Box::new(Scalar::new(
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
             PrimitiveArray::<TimestampMicrosecondType>::new(vec![*value; 1].into(), None)
                 .with_timezone("UTC"),
         ))),
