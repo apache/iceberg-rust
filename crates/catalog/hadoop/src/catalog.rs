@@ -909,10 +909,32 @@ impl Catalog for HadoopCatalog {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
                 }
             }
+        } else if self.hdfs_native_client.is_some() {
+            let hdfs_native_client = self.hdfs_native_client.as_ref().unwrap();
+            let default_fs =
+                self.config
+                    .properties
+                    .get(FS_DEFAULTFS)
+                    .ok_or(iceberg::Error::new(
+                        ErrorKind::DataInvalid,
+                        " fs.defaultFS is null",
+                    ))?;
+
+            let table_version_hint_relative_path = format!(
+                "{}/metadata/version-hint.text",
+                &location[default_fs.len()..]
+            );
+            let table_version_hint = hdfs_native_client
+                .get_file_info(&table_version_hint_relative_path)
+                .await
+                .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()));
+            if table_version_hint.is_ok() {
+                return Err(Error::new(ErrorKind::DataInvalid, "Table already exists"));
+            }
         } else {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "s3 client is not initialized",
+                "s3 client or hdfs native client is not initialized",
             ));
         }
 
