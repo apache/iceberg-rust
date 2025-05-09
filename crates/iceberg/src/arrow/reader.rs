@@ -1272,7 +1272,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
                 let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
                 for literal in &literals {
-                    let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                    let literal = cast_literal_if_required(Arc::clone(literal), left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
                 }
 
@@ -1301,7 +1301,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 let left = project_column(&batch, idx)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
                 for literal in &literals {
-                    let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                    let literal = cast_literal_if_required(Arc::clone(literal), left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
                 }
 
@@ -1640,27 +1640,30 @@ message schema {
     async fn test_predicate_cast_literal() {
         let predicates = vec![
             // a == 'foo'
-            (Reference::new("a").equal_to(Datum::string("foo")), vec![
-                Some("foo".to_string()),
-            ]),
+            (
+                Reference::new("a").equal_to(Datum::string("foo")),
+                vec![Some("foo".to_string())],
+            ),
             // a != 'foo'
             (
                 Reference::new("a").not_equal_to(Datum::string("foo")),
                 vec![Some("bar".to_string())],
             ),
             // STARTS_WITH(a, 'foo')
-            (Reference::new("a").starts_with(Datum::string("f")), vec![
-                Some("foo".to_string()),
-            ]),
+            (
+                Reference::new("a").starts_with(Datum::string("f")),
+                vec![Some("foo".to_string())],
+            ),
             // NOT STARTS_WITH(a, 'foo')
             (
                 Reference::new("a").not_starts_with(Datum::string("f")),
                 vec![Some("bar".to_string())],
             ),
             // a < 'foo'
-            (Reference::new("a").less_than(Datum::string("foo")), vec![
-                Some("bar".to_string()),
-            ]),
+            (
+                Reference::new("a").less_than(Datum::string("foo")),
+                vec![Some("bar".to_string())],
+            ),
             // a <= 'foo'
             (
                 Reference::new("a").less_than_or_equal_to(Datum::string("foo")),
