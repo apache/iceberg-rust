@@ -33,6 +33,12 @@ pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
 pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 /// S3 Path Style Access.
 pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
+
+
+/// The configuration key for the default filesystem in core-site.xml.
+/// This key is typically used to specify the HDFS namenode address.
+pub const FS_DEFAULTFS: &str = "fs.defaultFS";
+
 /// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
 pub(crate) fn create_sdk_config(

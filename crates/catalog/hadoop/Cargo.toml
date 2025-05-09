@@ -38,6 +38,7 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 aws-sdk-s3 = {version="1.84.0",features = ["behavior-version-latest"]}
 tokio = { workspace = true }
+hdfs-native = { workspace = true }
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }

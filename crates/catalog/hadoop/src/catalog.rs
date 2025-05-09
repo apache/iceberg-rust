@@ -30,6 +30,7 @@ use typed_builder::TypedBuilder;
 
 use crate::utils::{
     create_metadata_location, create_sdk_config, get_default_table_location, valid_s3_namespaces,
+    FS_DEFAULTFS,
 };
 
 /// Hadoop catalog configuration.
@@ -62,6 +63,7 @@ pub struct HadoopCatalog {
     config: HadoopCatalogConfig,
     file_io: FileIO,
     s3_client: Option<aws_sdk_s3::Client>,
+    hdfs_native_client: Option<hdfs_native::Client>,
 }
 
 impl HadoopCatalog {
@@ -85,16 +87,28 @@ impl HadoopCatalog {
                     config: config,
                     file_io,
                     s3_client: s3_client,
+                    hdfs_native_client: None,
                 });
             } else if warehouse_url.starts_with("hdfs://") {
                 //todo hdfs native client
                 let file_io = FileIO::from_path(&warehouse_url)?
                     .with_props(&config.properties)
                     .build()?;
+                let default_fs = config
+                    .properties
+                    .get(FS_DEFAULTFS)
+                    .ok_or(iceberg::Error::new(
+                        ErrorKind::DataInvalid,
+                        " fs.defaultFS is null",
+                    ))?;
+                let hdfs_native_client =
+                    hdfs_native::Client::new_with_config(&default_fs, config.properties.clone())
+                        .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()))?;
                 return Ok(Self {
                     config: config,
                     file_io: file_io,
                     s3_client: None,
+                    hdfs_native_client: Some(hdfs_native_client),
                 });
             }
 
@@ -202,10 +216,55 @@ impl Catalog for HadoopCatalog {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
                 }
             }
+        } else if self.hdfs_native_client.is_some() {
+            let hdfs_native_client = self.hdfs_native_client.as_ref().unwrap();
+            let default_fs =
+                self.config
+                    .properties
+                    .get(FS_DEFAULTFS)
+                    .ok_or(iceberg::Error::new(
+                        ErrorKind::DataInvalid,
+                        " fs.defaultFS is null",
+                    ))?;
+
+            match self.config.warehouse.clone() {
+                Some(warehouse_url) => {
+                    let mut prefix = warehouse_url[default_fs.len()..].to_string();
+                    if let Some(parent) = parent {
+                        prefix = format!("{}/{}", &prefix, parent.join("/"));
+                    }
+                    let list = hdfs_native_client
+                        .list_status(&prefix, false)
+                        .await
+                        .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()))?;
+                    for f in list {
+                        let table_version_hint_path =
+                            format!("{}/metadata/version-hint.text", f.path.clone(),);
+                        if hdfs_native_client
+                            .get_file_info(&table_version_hint_path)
+                            .await
+                            .is_err()
+                        {
+                            let file_relative_path = f.path[prefix.len()..].to_string();
+                            let namespaces = file_relative_path.split("/").collect::<Vec<_>>();
+                            result.push(NamespaceIdent::from_vec(
+                                namespaces
+                                    .iter()
+                                    .filter(|e| !e.is_empty())
+                                    .map(|e| e.to_string())
+                                    .collect(),
+                            )?);
+                        }
+                    }
+                }
+                None => {
+                    return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
+                }
+            }
         } else {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "s3 client is not initialized",
+                "s3 client or hdfs native client is not initialized",
             ));
         }
 
