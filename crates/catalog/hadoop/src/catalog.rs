@@ -492,8 +492,8 @@ impl Catalog for HadoopCatalog {
                             .await
                             .map_err(|e| {
                                 Error::new(
-                                    ErrorKind::DataInvalid, 
-                                    format!("Failed to delete object: {}", e)
+                                    ErrorKind::DataInvalid,
+                                    format!("Failed to delete object: {}", e),
                                 )
                             })?;
                     }
@@ -630,23 +630,17 @@ impl Catalog for HadoopCatalog {
         };
 
         let table_version_hint_path = format!("{}/metadata/version-hint.text", &location,);
-       
+
         if self.s3_client.is_some() {
             let s3_client = self.s3_client.as_ref().unwrap();
-            let table_version_hint_relative_path=
-                format!("{}/metadata/version-hint.text", &location
-                .split("/")
-                .skip(3)
-                .collect::<Vec<_>>()
-                .join("/"));
-            
+            let table_version_hint_relative_path = format!(
+                "{}/metadata/version-hint.text",
+                &location.split("/").skip(3).collect::<Vec<_>>().join("/")
+            );
+
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
-                    println!(
-                        "bucket: {}",
-                        bucket.clone()
-                    );
                     let table_version_hint = s3_client
                         .get_object()
                         .bucket(bucket)
@@ -662,7 +656,6 @@ impl Catalog for HadoopCatalog {
                     if table_version_hint.is_ok() {
                         return Err(Error::new(ErrorKind::DataInvalid, "Table already exists"));
                     }
-
 
                     if valid_s3_namespaces(&namespace).is_err() {
                         return Err(Error::new(ErrorKind::DataInvalid, "Invalid namespace name"));
@@ -729,26 +722,13 @@ impl Catalog for HadoopCatalog {
                         table_ident.namespace.join("/"),
                         &table_name
                     );
-                   
+
                     let table_version_hint_result = s3_client
                         .get_object()
                         .bucket(bucket)
                         .key(table_version_hint_path)
                         .send()
                         .await;
-                    let location = match self.config.warehouse.clone() {
-                        Some(warehouse_url) => get_default_table_location(
-                            &table_ident.namespace,
-                            &table_name,
-                            &warehouse_url,
-                        ),
-                        None => {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                "warehouse_url is required",
-                            ));
-                        }
-                    };
 
                     match table_version_hint_result {
                         Ok(table_version_hint_result_output) => {
@@ -854,8 +834,8 @@ impl Catalog for HadoopCatalog {
                             .await
                             .map_err(|e| {
                                 Error::new(
-                                    ErrorKind::DataInvalid, 
-                                    format!("Failed to delete object: {}", e)
+                                    ErrorKind::DataInvalid,
+                                    format!("Failed to delete object: {}", e),
                                 )
                             })?;
                     }

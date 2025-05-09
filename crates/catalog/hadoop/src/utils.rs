@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use aws_sdk_s3::{Config, config::{Credentials,BehaviorVersion}};
+use aws_sdk_s3::{
+    config::{BehaviorVersion, Credentials},
+    Config,
+};
 use iceberg::NamespaceIdent;
 use iceberg::{Error, ErrorKind, Namespace, Result};
 use std::collections::HashMap;
 
-/// Property aws profile name
-pub const AWS_PROFILE_NAME: &str = "profile_name";
 /// Property aws region
 pub const AWS_REGION_NAME: &str = "region_name";
 /// Property aws access key
@@ -34,13 +35,12 @@ pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
-pub(crate)  fn create_sdk_config(
+pub(crate) fn create_sdk_config(
     properties: &HashMap<String, String>,
     endpoint_url: Option<String>,
 ) -> Config {
-    let mut config =Config::builder()
-        .behavior_version(BehaviorVersion::latest());
-    
+    let mut config = Config::builder().behavior_version(BehaviorVersion::latest());
+
     if properties.is_empty() {
         return config.build();
     }
@@ -48,7 +48,6 @@ pub(crate)  fn create_sdk_config(
     if let Some(endpoint_url) = endpoint_url {
         config = config.endpoint_url(endpoint_url);
     }
-
 
     if let Some(path_style_access) = properties.get(S3_PATH_STYLE_ACCESS) {
         config = config.force_path_style(path_style_access.parse::<bool>().unwrap_or(false));
