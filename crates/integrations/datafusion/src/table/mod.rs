@@ -125,7 +125,7 @@ impl IcebergTableProvider {
     /// reference to the catalog to load the updated table from.
     pub async fn refresh_table_metadata(&self) -> Result<Table> {
         let Some(catalog) = &self.catalog else {
-            return Err(Error::new(ErrorKind::Unexpected, format!("Table provider could not refresh table metadata because no catalog client was provided")));
+            return Err(Error::new(ErrorKind::Unexpected, "Table provider could not refresh table metadata because no catalog client was provided".to_string()));
         };
 
         let updated_table = catalog.load_table(&self.table_identifier).await?;
