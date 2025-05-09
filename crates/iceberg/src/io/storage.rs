@@ -102,9 +102,9 @@ impl Storage {
             #[cfg(feature = "storage-memory")]
             Storage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok((op.clone(), stripped))
+                    Ok::<_, crate::Error>((op.clone(), stripped))
                 } else {
-                    Ok((op.clone(), &path[1..]))
+                    Ok::<_, crate::Error>((op.clone(), &path[1..]))
                 }
             }
             #[cfg(feature = "storage-fs")]
@@ -112,9 +112,9 @@ impl Storage {
                 let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
-                    Ok((op, stripped))
+                    Ok::<_, crate::Error>((op, stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    Ok::<_, crate::Error>((op, &path[1..]))
                 }
             }
             #[cfg(feature = "storage-s3")]
