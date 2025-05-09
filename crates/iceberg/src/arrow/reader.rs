@@ -1640,30 +1640,27 @@ message schema {
     async fn test_predicate_cast_literal() {
         let predicates = vec![
             // a == 'foo'
-            (
-                Reference::new("a").equal_to(Datum::string("foo")),
-                vec![Some("foo".to_string())],
-            ),
+            (Reference::new("a").equal_to(Datum::string("foo")), vec![
+                Some("foo".to_string()),
+            ]),
             // a != 'foo'
             (
                 Reference::new("a").not_equal_to(Datum::string("foo")),
                 vec![Some("bar".to_string())],
             ),
             // STARTS_WITH(a, 'foo')
-            (
-                Reference::new("a").starts_with(Datum::string("f")),
-                vec![Some("foo".to_string())],
-            ),
+            (Reference::new("a").starts_with(Datum::string("f")), vec![
+                Some("foo".to_string()),
+            ]),
             // NOT STARTS_WITH(a, 'foo')
             (
                 Reference::new("a").not_starts_with(Datum::string("f")),
                 vec![Some("bar".to_string())],
             ),
             // a < 'foo'
-            (
-                Reference::new("a").less_than(Datum::string("foo")),
-                vec![Some("bar".to_string())],
-            ),
+            (Reference::new("a").less_than(Datum::string("foo")), vec![
+                Some("bar".to_string()),
+            ]),
             // a <= 'foo'
             (
                 Reference::new("a").less_than_or_equal_to(Datum::string("foo")),
