@@ -1038,10 +1038,83 @@ impl Catalog for HadoopCatalog {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
                 }
             }
+        } else if self.hdfs_native_client.is_some() {
+            let hdfs_native_client = self.hdfs_native_client.as_ref().unwrap();
+            let default_fs =
+                self.config
+                    .properties
+                    .get(FS_DEFAULTFS)
+                    .ok_or(iceberg::Error::new(
+                        ErrorKind::DataInvalid,
+                        " fs.defaultFS is null",
+                    ))?;
+
+            match self.config.warehouse.clone() {
+                Some(warehouse_url) => {
+                    let table_name = table_ident.name.clone();
+                    let table_version_hint_path = format!(
+                        "{}/{}/{}/metadata/version-hint.text",
+                        &warehouse_url[default_fs.len()..].to_string(),
+                        table_ident.namespace.join("/"),
+                        &table_name
+                    );
+
+                    let table_version_hint_result = hdfs_native_client
+                        .get_file_info(&table_version_hint_path)
+                        .await
+                        .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()));
+
+                    match table_version_hint_result {
+                        Ok(table_version_hint_file_status) => {
+                            let mut table_version_hint_reader = hdfs_native_client
+                                .read(&table_version_hint_path)
+                                .await
+                                .map_err(|e| {
+                                    iceberg::Error::new(ErrorKind::Unexpected, e.to_string())
+                                })?;
+                            let buf = table_version_hint_reader
+                                .read(table_version_hint_file_status.length as usize)
+                                .await
+                                .map_err(|e| {
+                                    iceberg::Error::new(ErrorKind::Unexpected, e.to_string())
+                                })?;
+                            let table_version_hint = String::from_utf8_lossy(&buf);
+
+                            let metadata_location = format!(
+                                "{}/{}/{}/metadata/v{}.metadata.json",
+                                &warehouse_url[default_fs.len()..].to_string(),
+                                table_ident.namespace.join("/"),
+                                &table_name,
+                                &table_version_hint
+                            );
+                            let metadata_content =
+                                self.file_io.new_input(&metadata_location)?.read().await?;
+                            let metadata =
+                                serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+                            return Ok(Table::builder()
+                                .file_io(self.file_io.clone())
+                                .metadata_location(metadata_location)
+                                .metadata(metadata)
+                                .identifier(table_ident.clone())
+                                .build()?);
+                        }
+                        Err(e) => {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Failed to get table version hint: {}", e),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
+                }
+            }
         } else {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "s3 client is not initialized",
+                "s3 client or hdfs native client is not initialized",
             ));
         }
     }
