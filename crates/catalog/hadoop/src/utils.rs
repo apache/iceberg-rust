@@ -19,7 +19,6 @@ use aws_sdk_s3::{Config, config::{Credentials,BehaviorVersion}};
 use iceberg::NamespaceIdent;
 use iceberg::{Error, ErrorKind, Namespace, Result};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";
@@ -89,13 +88,10 @@ pub(crate) fn create_metadata_location(
         ));
     };
 
-    let version = format!("{:0>5}", version);
-    let id = Uuid::new_v4();
     let metadata_location = format!(
-        "{}/metadata/{}-{}.metadata.json",
+        "{}/metadata/v{}.metadata.json",
         warehouse_location.as_ref(),
-        version,
-        id
+        &version
     );
 
     Ok(metadata_location)

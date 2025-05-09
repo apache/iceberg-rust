@@ -470,18 +470,33 @@ impl Catalog for HadoopCatalog {
                             .join("/"),
                         namespace.join("/")
                     );
-                    s3_client
-                        .delete_object()
+                    let list = s3_client
+                        .list_objects_v2()
                         .bucket(bucket)
-                        .key(prefix)
+                        .prefix(&prefix)
                         .send()
                         .await
                         .map_err(|e| {
                             Error::new(
                                 ErrorKind::DataInvalid,
-                                format!("Failed to delete namespace: {}", e),
+                                format!("Failed to list objects: {}", e),
                             )
                         })?;
+
+                    for object in list.contents.unwrap_or_default() {
+                        s3_client
+                            .delete_object()
+                            .bucket(bucket)
+                            .key(object.key.unwrap_or_default())
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                Error::new(
+                                    ErrorKind::DataInvalid, 
+                                    format!("Failed to delete object: {}", e)
+                                )
+                            })?;
+                    }
                 }
                 None => {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
@@ -613,15 +628,71 @@ impl Catalog for HadoopCatalog {
                 ));
             }
         };
+
+        let table_version_hint_path = format!("{}/metadata/version-hint.text", &location,);
+       
+        if self.s3_client.is_some() {
+            let s3_client = self.s3_client.as_ref().unwrap();
+            let table_version_hint_relative_path=
+                format!("{}/metadata/version-hint.text", &location
+                .split("/")
+                .skip(3)
+                .collect::<Vec<_>>()
+                .join("/"));
+            
+            match self.config.warehouse.clone() {
+                Some(warehouse_url) => {
+                    let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
+                    println!(
+                        "bucket: {}",
+                        bucket.clone()
+                    );
+                    let table_version_hint = s3_client
+                        .get_object()
+                        .bucket(bucket)
+                        .key(&table_version_hint_relative_path)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Failed to get table version hint: {}", e),
+                            )
+                        });
+                    if table_version_hint.is_ok() {
+                        return Err(Error::new(ErrorKind::DataInvalid, "Table already exists"));
+                    }
+
+
+                    if valid_s3_namespaces(&namespace).is_err() {
+                        return Err(Error::new(ErrorKind::DataInvalid, "Invalid namespace name"));
+                    }
+                }
+                None => {
+                    return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
+                }
+            }
+        } else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "s3 client is not initialized",
+            ));
+        }
+
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
 
-        let metadata_location = create_metadata_location(&location, 0)?;
+        let metadata_location = create_metadata_location(&location, 1)?;
 
         self.file_io
             .new_output(&metadata_location)?
             .write(serde_json::to_vec(&metadata)?.into())
+            .await?;
+
+        self.file_io
+            .new_output(&table_version_hint_path)?
+            .write("1".into())
             .await?;
         Table::builder()
             .file_io(self.file_io.clone())
@@ -658,6 +729,7 @@ impl Catalog for HadoopCatalog {
                         table_ident.namespace.join("/"),
                         &table_name
                     );
+                   
                     let table_version_hint_result = s3_client
                         .get_object()
                         .bucket(bucket)
@@ -751,7 +823,7 @@ impl Catalog for HadoopCatalog {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let table_name = table.name.clone();
                     let table_path = format!(
-                        "{}/{}/{}",
+                        "{}/{}/{}/",
                         &warehouse_url
                             .split("/")
                             .skip(3)
@@ -760,18 +832,33 @@ impl Catalog for HadoopCatalog {
                         table.namespace.join("/"),
                         &table_name
                     );
-                    s3_client
-                        .delete_object()
+                    let list = s3_client
+                        .list_objects_v2()
                         .bucket(bucket)
-                        .key(table_path)
+                        .prefix(&table_path)
                         .send()
                         .await
                         .map_err(|e| {
                             Error::new(
                                 ErrorKind::DataInvalid,
-                                format!("Failed to delete table: {}", e),
+                                format!("Failed to list objects: {}", e),
                             )
                         })?;
+
+                    for object in list.contents.unwrap_or_default() {
+                        s3_client
+                            .delete_object()
+                            .bucket(bucket)
+                            .key(object.key.unwrap_or_default())
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                Error::new(
+                                    ErrorKind::DataInvalid, 
+                                    format!("Failed to delete object: {}", e)
+                                )
+                            })?;
+                    }
                 }
                 None => {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
