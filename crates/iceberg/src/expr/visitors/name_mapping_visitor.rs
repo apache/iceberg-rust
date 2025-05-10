@@ -15,13 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod bound_predicate_visitor;
-pub(crate) mod expression_evaluator;
-pub(crate) mod inclusive_metrics_evaluator;
-pub(crate) mod inclusive_projection;
-pub(crate) mod manifest_evaluator;
-pub(crate) mod name_mapping_visitor;
-pub(crate) mod page_index_evaluator;
-pub(crate) mod row_group_metrics_evaluator;
-pub(crate) mod strict_metrics_evaluator;
-pub(crate) mod strict_projection;
+use crate::spec::MappedField;
+
+/// A trait for visiting and transforming a name mapping
+pub trait NameMappingVisitor {
+    /// Aggregated result of `MappedField`s
+    type S;
+    /// Result type for processing one `MappedField`
+    type T;
+
+    /// Handles entire `NameMapping` field
+    fn mapping(&self, field_result: Self::S) -> Self::S;
+
+    /// Takes all visited child maps and merges into one map
+    fn fields(&self, field_results: Vec<Self::T>) -> Self::S;
+
+    /// Handles a single `MappedField`
+    fn field(&self, field: &MappedField, field_result: Self::S) -> Self::T;
+}
