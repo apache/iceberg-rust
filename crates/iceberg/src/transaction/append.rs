@@ -224,7 +224,8 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
-        assert!(action.add_data_files(vec![]).is_err());
+        action.add_data_files(vec![]).unwrap();
+        assert!(action.apply().await.is_err());
     }
 
     #[tokio::test]
