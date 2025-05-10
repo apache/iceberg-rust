@@ -129,13 +129,6 @@ impl<'a> SnapshotProduceAction<'a> {
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
         let data_files: Vec<DataFile> = data_files.into_iter().collect();
-        if data_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::InvalidArgument,
-                "No data files were provided when adding data files to snapshot",
-            ));
-        }
-
         for data_file in &data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
@@ -181,7 +174,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
         if added_data_files.is_empty() {
             return Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::FailedPrecondition,
                 "No added data files found when write a manifest file",
             ));
         }

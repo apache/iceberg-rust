@@ -28,8 +28,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// Function receives an invalid argument, which iceberg library cannot handle.
-    InvalidArgument,
+    /// The operation was rejected because the system is not in a state required for the operation’s execution.
+    FailedPrecondition,
 
     /// Iceberg don't know what happened here, and no actions other than
     /// just returning it back. For example, iceberg returns an internal
@@ -79,7 +79,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::TableNotFound => "TableNotFound",
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
-            ErrorKind::InvalidArgument => "InvalidArgument",
+            ErrorKind::FailedPrecondition => "FailedPrecondition",
         }
     }
 }
