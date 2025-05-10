@@ -371,7 +371,14 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -545,6 +552,13 @@
     <span class="comment">// Write manifest file for added data files and return the ManifestFile for ManifestList.
     </span><span class="kw">async fn </span>write_added_manifest(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestFile&gt; {
         <span class="kw">let </span>added_data_files = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.added_data_files);
+        <span class="kw">if </span>added_data_files.is_empty() {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::PreconditionFailed,
+                <span class="string">"No added data files found when write a manifest file"</span>,
+            ));
+        }
+
         <span class="kw">let </span>snapshot_id = <span class="self">self</span>.snapshot_id;
         <span class="kw">let </span>format_version = <span class="self">self</span>.tx.current_table.metadata().format_version();
         <span class="kw">let </span>manifest_entries = added_data_files.into_iter().map(|data_file| {

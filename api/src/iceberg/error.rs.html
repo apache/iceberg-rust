@@ -484,7 +484,11 @@
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
 <a href="#485" id="485">485</a>
-<a href="#486" id="486">486</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -514,6 +518,9 @@
 </span><span class="attr">#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 </span><span class="kw">pub enum </span>ErrorKind {
+    <span class="doccomment">/// The operation was rejected because the system is not in a state required for the operation’s execution.
+    </span>PreconditionFailed,
+
     <span class="doccomment">/// Iceberg don't know what happened here, and no actions other than
     /// just returning it back. For example, iceberg returns an internal
     /// service error.
@@ -562,6 +569,7 @@
             ErrorKind::TableNotFound =&gt; <span class="string">"TableNotFound"</span>,
             ErrorKind::NamespaceAlreadyExists =&gt; <span class="string">"NamespaceAlreadyExists"</span>,
             ErrorKind::NamespaceNotFound =&gt; <span class="string">"NamespaceNotFound"</span>,
+            ErrorKind::PreconditionFailed =&gt; <span class="string">"PreconditionFailed"</span>,
         }
     }
 }

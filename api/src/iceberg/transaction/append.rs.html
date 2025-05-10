@@ -383,7 +383,16 @@
 <a href="#382" id="382">382</a>
 <a href="#383" id="383">383</a>
 <a href="#384" id="384">384</a>
-<a href="#385" id="385">385</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -603,6 +612,15 @@
     <span class="kw">use </span><span class="kw">crate</span>::transaction::tests::make_v2_minimal_table;
     <span class="kw">use </span><span class="kw">crate</span>::transaction::Transaction;
     <span class="kw">use crate</span>::{TableRequirement, TableUpdate};
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_empty_data_append_action() {
+        <span class="kw">let </span>table = make_v2_minimal_table();
+        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+        <span class="kw">let </span><span class="kw-2">mut </span>action = tx.fast_append(<span class="prelude-val">None</span>, <span class="macro">vec!</span>[]).unwrap();
+        action.add_data_files(<span class="macro">vec!</span>[]).unwrap();
+        <span class="macro">assert!</span>(action.apply().<span class="kw">await</span>.is_err());
+    }
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_fast_append_action() {
