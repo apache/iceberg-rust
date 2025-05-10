@@ -49,10 +49,11 @@ volo-thrift = { workspace = true }
 # They can be removed when the direct dependencies are updated.
 
 # transitive dependencies of pilota/volo-thrift
-volo = { workspace = true }
 faststr = { workspace = true }
 linkedbytes = { workspace = true }
 metainfo = { workspace = true }
+motore-macros = { workspace = true }
+volo = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
@@ -61,4 +62,4 @@ port_scanner = { workspace = true }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
-ignored = ["faststr", "linkedbytes", "metainfo", "volo"]
+ignored = ["faststr", "linkedbytes", "metainfo", "volo", "motore-macros"]

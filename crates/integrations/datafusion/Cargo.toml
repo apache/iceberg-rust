@@ -19,8 +19,8 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-datafusion"
-version = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"
