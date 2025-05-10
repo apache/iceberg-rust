@@ -579,31 +579,29 @@ impl PartitionSpecBuilder {
             )
         })?;
 
-        if field.transform != Transform::Void {
-            if !schema_field.field_type.is_primitive() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot partition by non-primitive source field: '{}'.",
-                        schema_field.field_type
-                    ),
-                ));
-            }
+        if !schema_field.field_type.is_primitive() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot partition by non-primitive source field: '{}'.",
+                    schema_field.field_type
+                ),
+            ));
+        }
 
-            if field
-                .transform
-                .result_type(&schema_field.field_type)
-                .is_err()
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid source type: '{}' for transform: '{}'.",
-                        schema_field.field_type,
-                        field.transform.dedup_name()
-                    ),
-                ));
-            }
+        if field
+            .transform
+            .result_type(&schema_field.field_type)
+            .is_err()
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid source type: '{}' for transform: '{}'.",
+                    schema_field.field_type,
+                    field.transform.dedup_name()
+                ),
+            ));
         }
 
         Ok(())
@@ -682,7 +680,7 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{Literal, PrimitiveType, Type};
+    use crate::spec::{Literal, MapType, PrimitiveType, Type};
 
     #[test]
     fn test_partition_spec() {
@@ -1378,6 +1376,42 @@ mod tests {
                 field_id: None,
                 name: "id_year".to_string(),
                 transform: Transform::Year,
+            })
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_builder_non_primitive_type_disallowed() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "map",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(3, Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::map_value_element(
+                            4,
+                            Type::Primitive(PrimitiveType::Boolean),
+                            true,
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        PartitionSpec::builder(schema)
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 2,
+                field_id: None,
+                name: "map_partition".to_string(),
+                transform: Transform::Void,
             })
             .unwrap_err();
     }
