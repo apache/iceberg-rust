@@ -174,7 +174,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
         if added_data_files.is_empty() {
             return Err(Error::new(
-                ErrorKind::FailedPrecondition,
+                ErrorKind::PreconditionFailed,
                 "No added data files found when write a manifest file",
             ));
         }
