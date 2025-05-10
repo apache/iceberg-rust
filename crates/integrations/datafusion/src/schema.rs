@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result as DFResult;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
@@ -61,13 +61,26 @@ impl IcebergSchemaProvider {
             .map(|tbl| tbl.name().to_string())
             .collect();
 
-        let providers = try_join_all(
-            table_names
-                .iter()
-                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
-                .collect::<Vec<_>>(),
-        )
-        .await?;
+        let providers = join_all(table_names.iter().map(|table_name| {
+            let client = client.clone();
+            let namespace = namespace.clone();
+            async move {
+                match IcebergTableProvider::try_new(client, namespace, table_name).await {
+                    Ok(provider) => {
+                        println!("Successfully loaded table {}", table_name);
+                        Some(provider)
+                    }
+                    Err(e) => {
+                        println!("Error loading table {} due to {}", table_name, e);
+                        None
+                    }
+                }
+            }
+        }))
+        .await
+        .into_iter()
+        .flatten() // Remove the None values
+        .collect::<Vec<_>>();
 
         let tables: HashMap<String, Arc<dyn TableProvider>> = table_names
             .into_iter()

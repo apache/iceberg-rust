@@ -3395,6 +3395,7 @@ dependencies = [
  "datafusion-cli",
  "dirs",
  "fs-err",
+ "iceberg-catalog-glue",
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "mimalloc",

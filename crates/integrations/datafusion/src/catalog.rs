@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::catalog::{CatalogProvider, SchemaProvider};
@@ -47,15 +47,32 @@ impl IcebergCatalogProvider {
     /// attempts to create a schema provider for each namespace, and
     /// collects these providers into a `HashMap`.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
+        Self::try_new_with_schemas(client, HashSet::new()).await
+    }
+
+    pub async fn try_new_with_schemas(
+        client: Arc<dyn Catalog>,
+        schemas: HashSet<String>,
+    ) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
-        let schema_names: Vec<_> = client
+        let all_schema_names: Vec<_> = client
             .list_namespaces(None)
             .await?
             .iter()
             .flat_map(|ns| ns.as_ref().clone())
             .collect();
+
+        let schema_names = if schemas.is_empty() {
+            all_schema_names
+        } else {
+            // Apply filter
+            all_schema_names
+                .into_iter()
+                .filter(|name| schemas.contains(name))
+                .collect()
+        };
 
         let providers = try_join_all(
             schema_names
