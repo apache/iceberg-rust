@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::{self, Debug};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -24,6 +25,7 @@ use std::task::{Context, Poll};
 
 use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
+use waker_set::WakerSet;
 
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
@@ -31,15 +33,25 @@ use crate::spec::{DataContentType, DataFile, Struct};
 use crate::{Error, ErrorKind, Result};
 
 /// Index of delete files
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct DeleteFileIndex {
     state: Arc<RwLock<DeleteFileIndexState>>,
+    waker_set: Arc<WakerSet>,
 }
 
 #[derive(Debug)]
 enum DeleteFileIndexState {
     Populating,
     Populated(PopulatedDeleteFileIndex),
+}
+
+impl Debug for DeleteFileIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeleteFileIndex")
+            .field("state", &self.state)
+            .field("waker_set", &"<No Debug>")
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -59,22 +71,28 @@ impl DeleteFileIndex {
     pub(crate) fn new() -> (DeleteFileIndex, Sender<DeleteFileContext>) {
         // TODO: what should the channel limit be?
         let (tx, rx) = channel(10);
+        let waker_set = Arc::new(WakerSet::new());
         let state = Arc::new(RwLock::new(DeleteFileIndexState::Populating));
         let delete_file_stream = rx.boxed();
 
         spawn({
             let state = state.clone();
+            let waker_set = waker_set.clone();
             async move {
                 let delete_files = delete_file_stream.collect::<Vec<_>>().await;
 
                 let populated_delete_file_index = PopulatedDeleteFileIndex::new(delete_files);
 
-                let mut guard = state.write().unwrap();
-                *guard = DeleteFileIndexState::Populated(populated_delete_file_index);
+                {
+                    let mut guard = state.write().unwrap();
+                    *guard = DeleteFileIndexState::Populated(populated_delete_file_index);
+                }
+
+                waker_set.notify_all();
             }
         });
 
-        (DeleteFileIndex { state }, tx)
+        (DeleteFileIndex { state, waker_set }, tx)
     }
 
     /// Gets all the delete files that apply to the specified data file.
@@ -89,6 +107,7 @@ impl DeleteFileIndex {
             state: self.state.clone(),
             data_file,
             seq_num,
+            waker_set: self.waker_set.clone(),
         }
     }
 }
@@ -99,7 +118,7 @@ impl PopulatedDeleteFileIndex {
     ///
     /// 1. The partition information is extracted from each delete file's manifest entry.
     /// 2. If the partition is empty and the delete file is not a positional delete,
-    ///    it is added to the `global_delees` vector
+    ///    it is added to the `global_deletes` vector
     /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
     fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
         let mut eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
@@ -199,18 +218,22 @@ pub(crate) struct DeletesForDataFile<'a> {
     state: Arc<RwLock<DeleteFileIndexState>>,
     data_file: &'a DataFile,
     seq_num: Option<i64>,
+    waker_set: Arc<WakerSet>,
 }
 
 impl Future for DeletesForDataFile<'_> {
     type Output = Result<Vec<FileScanTaskDeleteFile>>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state.try_read() {
             Ok(guard) => match guard.deref() {
                 DeleteFileIndexState::Populated(idx) => Poll::Ready(Ok(
                     idx.get_deletes_for_data_file(self.data_file, self.seq_num)
                 )),
-                _ => Poll::Pending,
+                _ => {
+                    self.waker_set.insert(cx);
+                    Poll::Pending
+                }
             },
             Err(err) => Poll::Ready(Err(Error::new(ErrorKind::Unexpected, err.to_string()))),
         }
