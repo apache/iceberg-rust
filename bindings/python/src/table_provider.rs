@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -38,18 +39,32 @@ pub struct PyIcebergTableProvider {
 #[pymethods]
 impl PyIcebergTableProvider {
     #[new]
-    fn new(metadata_location: String) -> PyResult<Self> {
+    fn new(
+        metadata_location: String,
+        file_io_properties: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
         // Create TableIdent
         let table_ident = TableIdent::from_strs(["myschema", "mytable"]).map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("Failed to create table ident: {}", e))
         })?;
 
-        // Create FileIO
-        let file_io = FileIO::from_path(&metadata_location)
-            .and_then(|builder| builder.build())
-            .map_err(|e| {
-                PyErr::new::<PyRuntimeError, _>(format!("Failed to create file IO: {}", e))
-            })?;
+        // Create FileIO with optional properties
+        let file_io_builder_result = FileIO::from_path(&metadata_location).map_err(|e| {
+            PyErr::new::<PyRuntimeError, _>(format!("Failed to create FileIO builder: {}", e))
+        });
+
+        let mut file_io_builder = match file_io_builder_result {
+            Ok(builder) => builder,
+            Err(e) => return Err(e),
+        };
+
+        if let Some(props) = file_io_properties {
+            file_io_builder = file_io_builder.with_props(props);
+        }
+
+        let file_io = file_io_builder.build().map_err(|e| {
+            PyErr::new::<PyRuntimeError, _>(format!("Failed to build FileIO: {}", e))
+        })?;
 
         // Create a runtime for running async code
         let runtime = Runtime::new().map_err(|e| {
@@ -83,7 +98,7 @@ impl PyIcebergTableProvider {
                 })
         })?;
 
-        Ok(PyIcebergTableProvider { 
+        Ok(PyIcebergTableProvider {
             inner: provider,
             runtime: Arc::new(runtime),
         })
@@ -93,17 +108,24 @@ impl PyIcebergTableProvider {
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyCapsule>> {        
+    ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
-        let provider = FFI_TableProvider::new(Arc::new(self.inner.clone()), false, Some(self.runtime.handle().clone()));
+        let provider = FFI_TableProvider::new(
+            Arc::new(self.inner.clone()),
+            false,
+            Some(self.runtime.handle().clone()),
+        );
         PyCapsule::new_bound(py, provider, Some(name.clone()))
     }
 }
 
 /// Standalone function to create a table provider
 #[pyfunction]
-pub fn create_table_provider(metadata_location: String) -> PyResult<PyIcebergTableProvider> {
-    PyIcebergTableProvider::new(metadata_location)
+pub fn create_table_provider(
+    metadata_location: String,
+    file_io_properties: Option<HashMap<String, String>>,
+) -> PyResult<PyIcebergTableProvider> {
+    PyIcebergTableProvider::new(metadata_location, file_io_properties)
 }
 
 /// Register the module

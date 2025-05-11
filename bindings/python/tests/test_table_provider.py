@@ -16,6 +16,8 @@
 # under the License.
 
 
+from datetime import date, datetime, timezone
+import uuid
 import pytest
 from pyiceberg_core import table_provider
 from datafusion import SessionContext
@@ -84,3 +86,86 @@ def test_iceberg_table_provider():
             print(df)
         except Exception as e:
             pytest.fail(f"Failed to query table: {e}")
+
+
+@pytest.fixture(scope="session")
+def arrow_table_with_null() -> "pa.Table":
+    """Pyarrow table with all kinds of columns."""
+    import pyarrow as pa
+
+    return pa.Table.from_pydict(
+        {
+            "bool": [False, None, True],
+            "string": ["a", None, "z"],
+            # Go over the 16 bytes to kick in truncation
+            "string_long": ["a" * 22, None, "z" * 22],
+            "int": [1, None, 9],
+            "long": [1, None, 9],
+            "float": [0.0, None, 0.9],
+            "double": [0.0, None, 0.9],
+            # 'time': [1_000_000, None, 3_000_000],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
+            "timestamp": [datetime(2023, 1, 1, 19, 25, 00), None, datetime(2023, 3, 1, 19, 25, 00)],
+            # "timestamptz": [
+            #     datetime(2023, 1, 1, 19, 25, 00, tzinfo=timezone.utc),
+            #     None,
+            #     datetime(2023, 3, 1, 19, 25, 00, tzinfo=timezone.utc),
+            # ],
+            "date": [date(2023, 1, 1), None, date(2023, 3, 1)],
+            # Not supported by Spark
+            # 'time': [time(1, 22, 0), None, time(19, 25, 0)],
+            # Not natively supported by Arrow
+            # 'uuid': [uuid.UUID('00000000-0000-0000-0000-000000000000').bytes, None, uuid.UUID('11111111-1111-1111-1111-111111111111').bytes],
+            "binary": [b"\01", None, b"\22"],
+            "fixed": [
+                uuid.UUID("00000000-0000-0000-0000-000000000000").bytes,
+                None,
+                uuid.UUID("11111111-1111-1111-1111-111111111111").bytes,
+            ],
+        },
+    )
+
+
+def test_register_iceberg_tables(arrow_table_with_null: pa.Table):
+    import datafusion
+    assert datafusion.__version__ >= '45'
+
+    # connect to pyiceberg integration test IRC
+    from pyiceberg.catalog import load_catalog
+    catalog = load_catalog(
+        "local",
+        **{
+            "type": "rest",
+            "uri": "http://localhost:8181",
+            "s3.endpoint": "http://localhost:9000",
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+        },
+    )
+
+    namespace = "foo"
+    table_identifier = f"{namespace}.bar"
+    catalog.create_namespace_if_not_exists(namespace=namespace)
+    try:
+        catalog.drop_table(identifier=table_identifier)
+    except:
+        pass
+    tbl = catalog.create_table(identifier=table_identifier, schema=arrow_table_with_null.schema)
+
+    # Write some data
+    tbl.append(arrow_table_with_null)
+    iceberg_df = tbl.scan().to_arrow()
+
+    print(tbl.metadata_location)
+
+    # `PyIcebergTableProvider` does not have S3 configured
+    iceberg_table_provider = table_provider.create_table_provider(
+        metadata_location=tbl.metadata_location,
+        file_io_properties=tbl.io.properties
+    )
+    ctx = SessionContext()
+    ctx.sql("CREATE SCHEMA foo").show()
+    ctx.register_table_provider(table_identifier, iceberg_table_provider)
+    df = ctx.table(table_identifier)
+    df.show()
+    assert iceberg_df.to_pydict() == df.to_pydict()
+    
