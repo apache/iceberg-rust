@@ -182,13 +182,10 @@ impl<'a> Transaction<'a> {
         )?;
         Ok(self)
     }
-    
+
     /// Set the location of table
     pub fn set_location(mut self, location: String) -> Result<Self> {
-        self.apply(
-            vec![TableUpdate::SetLocation { location }],
-            vec![],
-        )?;
+        self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
         Ok(self)
     }
 
@@ -343,7 +340,7 @@ mod tests {
             tx.updates
         );
     }
-    
+
     #[test]
     fn test_set_location() {
         let table = make_v2_table();
@@ -351,7 +348,7 @@ mod tests {
         let tx = tx
             .set_location(String::from("s3://bucket/prefix/new_table"))
             .unwrap();
-        
+
         assert_eq!(
             vec![TableUpdate::SetLocation {
                 location: String::from("s3://bucket/prefix/new_table")
