@@ -50,6 +50,7 @@ arrow-ord = { version = "54.2.0" }
 arrow-schema = { version = "54.2.0" }
 arrow-select = { version = "54.2.0" }
 arrow-string = { version = "54.2.0" }
+arrow-row = { version = "54.2.0" }
 async-std = "1.12"
 async-trait = "0.1.86"
 aws-config = "1.5"
