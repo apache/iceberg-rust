@@ -34,6 +34,25 @@ pub struct Blob {
 }
 
 impl Blob {
+    /// Create a `Blob` object.
+    pub fn new(
+        blob_type: String,
+        fields: Vec<i32>,
+        snapshot_id: i64,
+        sequence_number: i64,
+        data: Vec<u8>,
+        properties: HashMap<String, String>,
+    ) -> Blob {
+        Self {
+            r#type: blob_type,
+            fields,
+            snapshot_id,
+            sequence_number,
+            data,
+            properties,
+        }
+    }
+
     #[inline]
     /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
     pub fn blob_type(&self) -> &str {
