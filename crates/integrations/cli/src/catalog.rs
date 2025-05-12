@@ -16,13 +16,14 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
+use iceberg_catalog_glue::{GlueCatalog, GlueCatalogConfig};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
@@ -77,10 +78,6 @@ impl IcebergCatalogList {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("type is not string"))?;
 
-        if r#type != "rest" {
-            return Err(anyhow::anyhow!("Only rest catalog is supported for now!"));
-        }
-
         let catalog_config = config
             .get("config")
             .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
@@ -99,6 +96,16 @@ impl IcebergCatalogList {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("warehouse is not string for catalog {name}"))?;
 
+        let schemas: HashSet<String> = HashSet::from_iter(
+            catalog_config
+                .get("schemas")
+                .and_then(|schemas| schemas.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+                .map(String::from),
+        );
+
         let props_table = catalog_config
             .get("props")
             .ok_or_else(|| anyhow::anyhow!("props not found for catalog {name}"))?
@@ -113,9 +120,47 @@ impl IcebergCatalogList {
             props.insert(key.to_string(), value_str.to_string());
         }
 
+        match r#type {
+            "rest" => {
+                Self::rest_catalog_provider(
+                    name.to_string(),
+                    uri.to_string(),
+                    warehouse.to_string(),
+                    props,
+                )
+                .await
+            }
+            "glue" => {
+                let catalog_id = catalog_config
+                    .get("catalog_id")
+                    .ok_or_else(|| anyhow::anyhow!("catalog_id not found for catalog {name}"))?
+                    .as_str()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("catalog_id is not string for catalog {name}")
+                    })?;
+                Self::glue_catalog_provider(
+                    name.to_string(),
+                    uri.to_string(),
+                    catalog_id.to_string(),
+                    warehouse.to_string(),
+                    schemas,
+                    props,
+                )
+                .await
+            }
+            _ => Err(anyhow::anyhow!("Unsupported catalog type: {}", r#type)),
+        }
+    }
+
+    async fn rest_catalog_provider(
+        name: String,
+        uri: String,
+        warehouse: String,
+        props: HashMap<String, String>,
+    ) -> anyhow::Result<(String, Arc<IcebergCatalogProvider>)> {
         let rest_catalog_config = RestCatalogConfig::builder()
-            .uri(uri.to_string())
-            .warehouse(warehouse.to_string())
+            .uri(uri)
+            .warehouse(warehouse)
             .props(props)
             .build();
 
@@ -124,6 +169,33 @@ impl IcebergCatalogList {
             Arc::new(
                 IcebergCatalogProvider::try_new(Arc::new(RestCatalog::new(rest_catalog_config)))
                     .await?,
+            ),
+        ))
+    }
+
+    async fn glue_catalog_provider(
+        name: String,
+        uri: String,
+        catalog_id: String,
+        warehouse: String,
+        schemas: HashSet<String>,
+        props: HashMap<String, String>,
+    ) -> anyhow::Result<(String, Arc<IcebergCatalogProvider>)> {
+        let glue_catalog_config = GlueCatalogConfig::builder()
+            .uri(uri.to_string())
+            .catalog_id(catalog_id.to_string())
+            .warehouse(warehouse.to_string())
+            .props(props)
+            .build();
+
+        Ok((
+            name.to_string(),
+            Arc::new(
+                IcebergCatalogProvider::try_new_with_schemas(
+                    Arc::new(GlueCatalog::new(glue_catalog_config).await?),
+                    schemas,
+                )
+                .await?,
             ),
         ))
     }
