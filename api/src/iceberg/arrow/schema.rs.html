@@ -2359,33 +2359,33 @@
 }
 
 <span class="doccomment">/// Convert Iceberg Datum to Arrow Datum.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_arrow_datum(datum: <span class="kw-2">&amp;</span>Datum) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ArrowDatum + Send&gt;&gt; {
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_arrow_datum(datum: <span class="kw-2">&amp;</span>Datum) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>ArrowDatum + Send + Sync&gt;&gt; {
     <span class="kw">match </span>(datum.data_type(), datum.literal()) {
         (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(BooleanArray::new_scalar(<span class="kw-2">*</span>value)))
+            <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Int, PrimitiveLiteral::Int(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Int32Array::new_scalar(<span class="kw-2">*</span>value)))
+            <span class="prelude-val">Ok</span>(Arc::new(Int32Array::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Long, PrimitiveLiteral::Long(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Int64Array::new_scalar(<span class="kw-2">*</span>value)))
+            <span class="prelude-val">Ok</span>(Arc::new(Int64Array::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
+            <span class="prelude-val">Ok</span>(Arc::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
+            <span class="prelude-val">Ok</span>(Arc::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(StringArray::new_scalar(value.as_str())))
+            <span class="prelude-val">Ok</span>(Arc::new(StringArray::new_scalar(value.as_str())))
         }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Date32Array::new_scalar(<span class="kw-2">*</span>value)))
+            <span class="prelude-val">Ok</span>(Arc::new(Date32Array::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(TimestampMicrosecondArray::new_scalar(<span class="kw-2">*</span>value)))
+            <span class="prelude-val">Ok</span>(Arc::new(TimestampMicrosecondArray::new_scalar(<span class="kw-2">*</span>value)))
         }
-        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) =&gt; <span class="prelude-val">Ok</span>(Box::new(Scalar::new(
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Scalar::new(
             PrimitiveArray::&lt;TimestampMicrosecondType&gt;::new(<span class="macro">vec!</span>[<span class="kw-2">*</span>value; <span class="number">1</span>].into(), <span class="prelude-val">None</span>)
                 .with_timezone(<span class="string">"UTC"</span>),
         ))),

@@ -1838,7 +1838,119 @@
 <a href="#1837" id="1837">1837</a>
 <a href="#1838" id="1838">1838</a>
 <a href="#1839" id="1839">1839</a>
-<a href="#1840" id="1840">1840</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#1840" id="1840">1840</a>
+<a href="#1841" id="1841">1841</a>
+<a href="#1842" id="1842">1842</a>
+<a href="#1843" id="1843">1843</a>
+<a href="#1844" id="1844">1844</a>
+<a href="#1845" id="1845">1845</a>
+<a href="#1846" id="1846">1846</a>
+<a href="#1847" id="1847">1847</a>
+<a href="#1848" id="1848">1848</a>
+<a href="#1849" id="1849">1849</a>
+<a href="#1850" id="1850">1850</a>
+<a href="#1851" id="1851">1851</a>
+<a href="#1852" id="1852">1852</a>
+<a href="#1853" id="1853">1853</a>
+<a href="#1854" id="1854">1854</a>
+<a href="#1855" id="1855">1855</a>
+<a href="#1856" id="1856">1856</a>
+<a href="#1857" id="1857">1857</a>
+<a href="#1858" id="1858">1858</a>
+<a href="#1859" id="1859">1859</a>
+<a href="#1860" id="1860">1860</a>
+<a href="#1861" id="1861">1861</a>
+<a href="#1862" id="1862">1862</a>
+<a href="#1863" id="1863">1863</a>
+<a href="#1864" id="1864">1864</a>
+<a href="#1865" id="1865">1865</a>
+<a href="#1866" id="1866">1866</a>
+<a href="#1867" id="1867">1867</a>
+<a href="#1868" id="1868">1868</a>
+<a href="#1869" id="1869">1869</a>
+<a href="#1870" id="1870">1870</a>
+<a href="#1871" id="1871">1871</a>
+<a href="#1872" id="1872">1872</a>
+<a href="#1873" id="1873">1873</a>
+<a href="#1874" id="1874">1874</a>
+<a href="#1875" id="1875">1875</a>
+<a href="#1876" id="1876">1876</a>
+<a href="#1877" id="1877">1877</a>
+<a href="#1878" id="1878">1878</a>
+<a href="#1879" id="1879">1879</a>
+<a href="#1880" id="1880">1880</a>
+<a href="#1881" id="1881">1881</a>
+<a href="#1882" id="1882">1882</a>
+<a href="#1883" id="1883">1883</a>
+<a href="#1884" id="1884">1884</a>
+<a href="#1885" id="1885">1885</a>
+<a href="#1886" id="1886">1886</a>
+<a href="#1887" id="1887">1887</a>
+<a href="#1888" id="1888">1888</a>
+<a href="#1889" id="1889">1889</a>
+<a href="#1890" id="1890">1890</a>
+<a href="#1891" id="1891">1891</a>
+<a href="#1892" id="1892">1892</a>
+<a href="#1893" id="1893">1893</a>
+<a href="#1894" id="1894">1894</a>
+<a href="#1895" id="1895">1895</a>
+<a href="#1896" id="1896">1896</a>
+<a href="#1897" id="1897">1897</a>
+<a href="#1898" id="1898">1898</a>
+<a href="#1899" id="1899">1899</a>
+<a href="#1900" id="1900">1900</a>
+<a href="#1901" id="1901">1901</a>
+<a href="#1902" id="1902">1902</a>
+<a href="#1903" id="1903">1903</a>
+<a href="#1904" id="1904">1904</a>
+<a href="#1905" id="1905">1905</a>
+<a href="#1906" id="1906">1906</a>
+<a href="#1907" id="1907">1907</a>
+<a href="#1908" id="1908">1908</a>
+<a href="#1909" id="1909">1909</a>
+<a href="#1910" id="1910">1910</a>
+<a href="#1911" id="1911">1911</a>
+<a href="#1912" id="1912">1912</a>
+<a href="#1913" id="1913">1913</a>
+<a href="#1914" id="1914">1914</a>
+<a href="#1915" id="1915">1915</a>
+<a href="#1916" id="1916">1916</a>
+<a href="#1917" id="1917">1917</a>
+<a href="#1918" id="1918">1918</a>
+<a href="#1919" id="1919">1919</a>
+<a href="#1920" id="1920">1920</a>
+<a href="#1921" id="1921">1921</a>
+<a href="#1922" id="1922">1922</a>
+<a href="#1923" id="1923">1923</a>
+<a href="#1924" id="1924">1924</a>
+<a href="#1925" id="1925">1925</a>
+<a href="#1926" id="1926">1926</a>
+<a href="#1927" id="1927">1927</a>
+<a href="#1928" id="1928">1928</a>
+<a href="#1929" id="1929">1929</a>
+<a href="#1930" id="1930">1930</a>
+<a href="#1931" id="1931">1931</a>
+<a href="#1932" id="1932">1932</a>
+<a href="#1933" id="1933">1933</a>
+<a href="#1934" id="1934">1934</a>
+<a href="#1935" id="1935">1935</a>
+<a href="#1936" id="1936">1936</a>
+<a href="#1937" id="1937">1937</a>
+<a href="#1938" id="1938">1938</a>
+<a href="#1939" id="1939">1939</a>
+<a href="#1940" id="1940">1940</a>
+<a href="#1941" id="1941">1941</a>
+<a href="#1942" id="1942">1942</a>
+<a href="#1943" id="1943">1943</a>
+<a href="#1944" id="1944">1944</a>
+<a href="#1945" id="1945">1945</a>
+<a href="#1946" id="1946">1946</a>
+<a href="#1947" id="1947">1947</a>
+<a href="#1948" id="1948">1948</a>
+<a href="#1949" id="1949">1949</a>
+<a href="#1950" id="1950">1950</a>
+<a href="#1951" id="1951">1951</a>
+<a href="#1952" id="1952">1952</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -1863,7 +1975,8 @@
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
-<span class="kw">use </span>arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+<span class="kw">use </span>arrow_array::{Array, ArrayRef, BooleanArray, Datum <span class="kw">as </span>ArrowDatum, RecordBatch, Scalar};
+<span class="kw">use </span>arrow_cast::cast::cast;
 <span class="kw">use </span>arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 <span class="kw">use </span>arrow_schema::{
     ArrowError, DataType, FieldRef, Schema <span class="kw">as </span>ArrowSchema, SchemaRef <span class="kw">as </span>ArrowSchemaRef,
@@ -2943,6 +3056,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 lt(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -2962,6 +3076,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 lt_eq(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -2981,6 +3096,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 gt(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -3000,6 +3116,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 gt_eq(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -3019,6 +3136,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 eq(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -3038,6 +3156,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 neq(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -3057,6 +3176,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 starts_with(<span class="kw-2">&amp;</span>left, literal.as_ref())
             }))
         } <span class="kw">else </span>{
@@ -3076,7 +3196,7 @@
 
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
-
+                <span class="kw">let </span>literal = try_cast_literal(<span class="kw-2">&amp;</span>literal, left.data_type())<span class="question-mark">?</span>;
                 <span class="comment">// update here if arrow ever adds a native not_starts_with
                 </span>not(<span class="kw-2">&amp;</span>starts_with(<span class="kw-2">&amp;</span>left, literal.as_ref())<span class="question-mark">?</span>)
             }))
@@ -3101,8 +3221,10 @@
             <span class="prelude-val">Ok</span>(Box::new(<span class="kw">move </span>|batch| {
                 <span class="comment">// update this if arrow ever adds a native is_in kernel
                 </span><span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
+
                 <span class="kw">let </span><span class="kw-2">mut </span>acc = BooleanArray::from(<span class="macro">vec!</span>[<span class="bool-val">false</span>; batch.num_rows()]);
                 <span class="kw">for </span>literal <span class="kw">in </span><span class="kw-2">&amp;</span>literals {
+                    <span class="kw">let </span>literal = try_cast_literal(literal, left.data_type())<span class="question-mark">?</span>;
                     acc = or(<span class="kw-2">&amp;</span>acc, <span class="kw-2">&amp;</span>eq(<span class="kw-2">&amp;</span>left, literal.as_ref())<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>}
 
@@ -3131,6 +3253,7 @@
                 </span><span class="kw">let </span>left = project_column(<span class="kw-2">&amp;</span>batch, idx)<span class="question-mark">?</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>acc = BooleanArray::from(<span class="macro">vec!</span>[<span class="bool-val">true</span>; batch.num_rows()]);
                 <span class="kw">for </span>literal <span class="kw">in </span><span class="kw-2">&amp;</span>literals {
+                    <span class="kw">let </span>literal = try_cast_literal(literal, left.data_type())<span class="question-mark">?</span>;
                     acc = and(<span class="kw-2">&amp;</span>acc, <span class="kw-2">&amp;</span>neq(<span class="kw-2">&amp;</span>left, literal.as_ref())<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>}
 
@@ -3210,6 +3333,27 @@
     }
 }
 
+<span class="doccomment">/// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
+/// that Iceberg uses for literals - but they are effectively the same logical type,
+/// i.e. LargeUtf8 and Utf8 or Utf8View and Utf8 or Utf8View and LargeUtf8.
+///
+/// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
+/// into the type of the batch we read from Parquet before sending it to the compute kernel.
+</span><span class="kw">fn </span>try_cast_literal(
+    literal: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ArrowDatum + Send + Sync&gt;,
+    column_type: <span class="kw-2">&amp;</span>DataType,
+) -&gt; std::result::Result&lt;Arc&lt;<span class="kw">dyn </span>ArrowDatum + Send + Sync&gt;, ArrowError&gt; {
+    <span class="kw">let </span>literal_array = literal.get().<span class="number">0</span>;
+
+    <span class="comment">// No cast required
+    </span><span class="kw">if </span>literal_array.data_type() == column_type {
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::clone(literal));
+    }
+
+    <span class="kw">let </span>literal_array = cast(literal_array, column_type)<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Arc::new(Scalar::new(literal_array)))
+}
+
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::collections::{HashMap, HashSet};
@@ -3217,7 +3361,7 @@
     <span class="kw">use </span>std::sync::Arc;
 
     <span class="kw">use </span>arrow_array::cast::AsArray;
-    <span class="kw">use </span>arrow_array::{ArrayRef, RecordBatch, StringArray};
+    <span class="kw">use </span>arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
     <span class="kw">use </span>arrow_schema::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
     <span class="kw">use </span>futures::TryStreamExt;
     <span class="kw">use </span>parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -3413,7 +3557,8 @@ message schema {
         <span class="comment">// Expected: [NULL, "foo"].
         </span><span class="kw">let </span>expected = <span class="macro">vec!</span>[<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string())];
 
-        <span class="kw">let </span>(file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        <span class="kw">let </span>(file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::Utf8);
         <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 
         <span class="kw">let </span>result_data = test_perform_read(predicate, schema, table_location, reader).<span class="kw">await</span>;
@@ -3434,12 +3579,86 @@ message schema {
         <span class="comment">// Expected: ["bar"].
         </span><span class="kw">let </span>expected = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())];
 
-        <span class="kw">let </span>(file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        <span class="kw">let </span>(file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::Utf8);
         <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 
         <span class="kw">let </span>result_data = test_perform_read(predicate, schema, table_location, reader).<span class="kw">await</span>;
 
         <span class="macro">assert_eq!</span>(result_data, expected);
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_predicate_cast_literal() {
+        <span class="kw">let </span>predicates = <span class="macro">vec!</span>[
+            <span class="comment">// a == 'foo'
+            </span>(Reference::new(<span class="string">"a"</span>).equal_to(Datum::string(<span class="string">"foo"</span>)), <span class="macro">vec!</span>[
+                <span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string()),
+            ]),
+            <span class="comment">// a != 'foo'
+            </span>(
+                Reference::new(<span class="string">"a"</span>).not_equal_to(Datum::string(<span class="string">"foo"</span>)),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())],
+            ),
+            <span class="comment">// STARTS_WITH(a, 'foo')
+            </span>(Reference::new(<span class="string">"a"</span>).starts_with(Datum::string(<span class="string">"f"</span>)), <span class="macro">vec!</span>[
+                <span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string()),
+            ]),
+            <span class="comment">// NOT STARTS_WITH(a, 'foo')
+            </span>(
+                Reference::new(<span class="string">"a"</span>).not_starts_with(Datum::string(<span class="string">"f"</span>)),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())],
+            ),
+            <span class="comment">// a &lt; 'foo'
+            </span>(Reference::new(<span class="string">"a"</span>).less_than(Datum::string(<span class="string">"foo"</span>)), <span class="macro">vec!</span>[
+                <span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string()),
+            ]),
+            <span class="comment">// a &lt;= 'foo'
+            </span>(
+                Reference::new(<span class="string">"a"</span>).less_than_or_equal_to(Datum::string(<span class="string">"foo"</span>)),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string()), <span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())],
+            ),
+            <span class="comment">// a &gt; 'foo'
+            </span>(
+                Reference::new(<span class="string">"a"</span>).greater_than(Datum::string(<span class="string">"bar"</span>)),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string())],
+            ),
+            <span class="comment">// a &gt;= 'foo'
+            </span>(
+                Reference::new(<span class="string">"a"</span>).greater_than_or_equal_to(Datum::string(<span class="string">"foo"</span>)),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string())],
+            ),
+            <span class="comment">// a IN ('foo', 'bar')
+            </span>(
+                Reference::new(<span class="string">"a"</span>).is_in([Datum::string(<span class="string">"foo"</span>), Datum::string(<span class="string">"baz"</span>)]),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string())],
+            ),
+            <span class="comment">// a NOT IN ('foo', 'bar')
+            </span>(
+                Reference::new(<span class="string">"a"</span>).is_not_in([Datum::string(<span class="string">"foo"</span>), Datum::string(<span class="string">"baz"</span>)]),
+                <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())],
+            ),
+        ];
+
+        <span class="comment">// Table data: ["foo", "bar"]
+        </span><span class="kw">let </span>data_for_col_a = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"foo"</span>.to_string()), <span class="prelude-val">Some</span>(<span class="string">"bar"</span>.to_string())];
+
+        <span class="kw">let </span>(file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::LargeUtf8);
+        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+
+        <span class="kw">for </span>(predicate, expected) <span class="kw">in </span>predicates {
+            <span class="macro">println!</span>(<span class="string">"testing predicate {predicate}"</span>);
+            <span class="kw">let </span>result_data = test_perform_read(
+                predicate.clone(),
+                schema.clone(),
+                table_location.clone(),
+                reader.clone(),
+            )
+            .<span class="kw">await</span>;
+
+            <span class="macro">assert_eq!</span>(result_data, expected, <span class="string">"predicate={predicate}"</span>);
+        }
     }
 
     <span class="kw">async fn </span>test_perform_read(
@@ -3484,6 +3703,7 @@ message schema {
 
     <span class="kw">fn </span>setup_kleene_logic(
         data_for_col_a: Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
+        col_a_type: DataType,
     ) -&gt; (FileIO, SchemaRef, String, TempDir) {
         <span class="kw">let </span>schema = Arc::new(
             Schema::builder()
@@ -3500,7 +3720,7 @@ message schema {
 
         <span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[Field::new(
             <span class="string">"a"</span>,
-            DataType::Utf8,
+            col_a_type.clone(),
             <span class="bool-val">true</span>,
         )
         .with_metadata(HashMap::from([(
@@ -3513,7 +3733,11 @@ message schema {
 
         <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
 
-        <span class="kw">let </span>col = Arc::new(StringArray::from(data_for_col_a)) <span class="kw">as </span>ArrayRef;
+        <span class="kw">let </span>col = <span class="kw">match </span>col_a_type {
+            DataType::Utf8 =&gt; Arc::new(StringArray::from(data_for_col_a)) <span class="kw">as </span>ArrayRef,
+            DataType::LargeUtf8 =&gt; Arc::new(LargeStringArray::from(data_for_col_a)) <span class="kw">as </span>ArrayRef,
+            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"unexpected col_a_type"</span>),
+        };
 
         <span class="kw">let </span>to_write = RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[col]).unwrap();
 

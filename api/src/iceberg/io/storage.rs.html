@@ -297,9 +297,9 @@
             <span class="attr">#[cfg(feature = <span class="string">"storage-memory"</span>)]
             </span>Storage::Memory(op) =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(stripped) = path.strip_prefix(<span class="string">"memory:/"</span>) {
-                    <span class="prelude-val">Ok</span>((op.clone(), stripped))
+                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, <span class="kw">crate</span>::Error&gt;((op.clone(), stripped))
                 } <span class="kw">else </span>{
-                    <span class="prelude-val">Ok</span>((op.clone(), <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
+                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, <span class="kw">crate</span>::Error&gt;((op.clone(), <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
                 }
             }
             <span class="attr">#[cfg(feature = <span class="string">"storage-fs"</span>)]
@@ -307,9 +307,9 @@
                 <span class="kw">let </span>op = <span class="kw">super</span>::fs_config_build()<span class="question-mark">?</span>;
 
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(stripped) = path.strip_prefix(<span class="string">"file:/"</span>) {
-                    <span class="prelude-val">Ok</span>((op, stripped))
+                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, <span class="kw">crate</span>::Error&gt;((op, stripped))
                 } <span class="kw">else </span>{
-                    <span class="prelude-val">Ok</span>((op, <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
+                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, <span class="kw">crate</span>::Error&gt;((op, <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
                 }
             }
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
