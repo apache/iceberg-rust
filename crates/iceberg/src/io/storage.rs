@@ -174,8 +174,8 @@ impl Storage {
             Storage::HdfsNative { config } => {
                 let op = super::hdfs_native_config_build(config)?;
 
-                // Check prefix of oss path.
-                let prefix = format!("hdfs://{}/", op.info().name());
+                // Check prefix of hdfs path.
+                let prefix = config.name_node.clone().unwrap_or_default();
                 if path.starts_with(&prefix) {
                     Ok((op, &path[prefix.len()..]))
                 } else {

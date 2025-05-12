@@ -239,13 +239,13 @@ impl Catalog for HadoopCatalog {
                         .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()))?;
                     for f in list {
                         let table_version_hint_path =
-                            format!("{}/metadata/version-hint.text", f.path.clone(),);
+                            format!("{}/metadata/version-hint.text", f.path.replace("\\","/").clone(),);
                         if hdfs_native_client
                             .get_file_info(&table_version_hint_path)
                             .await
                             .is_err()
                         {
-                            let file_relative_path = f.path[prefix.len()..].to_string();
+                            let file_relative_path = f.path.replace("\\","/")[prefix.len()..].to_string();
                             let namespaces = file_relative_path.split("/").collect::<Vec<_>>();
                             result.push(NamespaceIdent::from_vec(
                                 namespaces
@@ -810,19 +810,20 @@ impl Catalog for HadoopCatalog {
                     );
 
                     let list = hdfs_native_client
-                        .list_status(&prefix, true)
+                        .list_status(&prefix, false)
                         .await
                         .map_err(|e| iceberg::Error::new(ErrorKind::Unexpected, e.to_string()))?;
                     let mut result = Vec::new();
                     for f in list {
                         let table_version_hint_path =
-                            format!("{}/metadata/version-hint.text", f.path.clone(),);
+                            format!("{}/metadata/version-hint.text", f.path.replace("\\","/").clone(),);
+                        println!("table_version_hint_path: {}", &table_version_hint_path);    
                         if hdfs_native_client
                             .get_file_info(&table_version_hint_path)
                             .await
                             .is_ok()
                         {
-                            let file_relative_path = f.path[prefix.len()..].to_string();
+                            let file_relative_path = f.path.replace("\\","/")[prefix.len()..].to_string();
                             let table_name = file_relative_path.split("/").last().unwrap_or(&"");
                             result.push(TableIdent::new(namespace.clone(), table_name.to_string()));
                         }
