@@ -384,10 +384,12 @@ impl Catalog for GlueCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse)
+                let location =
+                    get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse);
+                creation.location = Some(location.clone());
+                location
             }
         };
-        creation.location = Some(location.clone());
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;

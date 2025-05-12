@@ -105,7 +105,7 @@ async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -
     Ok(())
 }
 
-fn set_table_creation(name: impl ToString) -> Result<TableCreation> {
+fn set_table_creation(location: Option<String>, name: impl ToString) -> Result<TableCreation> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
@@ -114,19 +114,19 @@ fn set_table_creation(name: impl ToString) -> Result<TableCreation> {
         ])
         .build()?;
 
-    let creation = TableCreation::builder()
+    let builder = TableCreation::builder()
         .name(name.to_string())
         .properties(HashMap::new())
-        .schema(schema)
-        .build();
+        .location_opt(location)
+        .schema(schema);
 
-    Ok(creation)
+    Ok(builder.build())
 }
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
 
     catalog
@@ -153,7 +153,7 @@ async fn test_rename_table() -> Result<()> {
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
 
     catalog
@@ -177,7 +177,7 @@ async fn test_table_exists() -> Result<()> {
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
 
     catalog
@@ -198,7 +198,7 @@ async fn test_drop_table() -> Result<()> {
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
     let catalog = get_catalog().await;
-    let creation = set_table_creation("my_table")?;
+    let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
 
     catalog
@@ -226,10 +226,8 @@ async fn test_create_table() -> Result<()> {
     let catalog = get_catalog().await;
     let namespace = NamespaceIdent::new("test_create_table".to_string());
     set_test_namespace(&catalog, &namespace).await?;
-    let mut creation = set_table_creation("my_table")?;
     // inject custom location, ignore the namespace prefix
-    creation.location = Some("s3a://warehouse/hive".to_string());
-
+    let creation = set_table_creation(Some("s3a://warehouse/hive".into()), "my_table")?;
     let result = catalog.create_table(&namespace, creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
