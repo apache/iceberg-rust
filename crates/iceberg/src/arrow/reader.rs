@@ -1104,7 +1104,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
             }))
         } else {
@@ -1124,7 +1124,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
             }))
         } else {
@@ -1144,7 +1144,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
             }))
         } else {
@@ -1164,7 +1164,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
             }))
         } else {
@@ -1184,7 +1184,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
             }))
         } else {
@@ -1204,7 +1204,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
             }))
         } else {
@@ -1224,7 +1224,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 starts_with(&left, literal.as_ref())
             }))
         } else {
@@ -1244,7 +1244,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-                let literal = cast_literal_if_required(Arc::clone(&literal), left.data_type())?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 // update here if arrow ever adds a native not_starts_with
                 not(&starts_with(&left, literal.as_ref())?)
             }))
@@ -1272,7 +1272,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
                 let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
                 for literal in &literals {
-                    let literal = cast_literal_if_required(Arc::clone(literal), left.data_type())?;
+                    let literal = try_cast_literal(literal, left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
                 }
 
@@ -1301,7 +1301,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 let left = project_column(&batch, idx)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
                 for literal in &literals {
-                    let literal = cast_literal_if_required(Arc::clone(literal), left.data_type())?;
+                    let literal = try_cast_literal(literal, left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
                 }
 
@@ -1387,15 +1387,15 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 ///
 /// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
 /// into the type of the batch we read from Parquet before sending it to the compute kernel.
-fn cast_literal_if_required(
-    literal: Arc<dyn ArrowDatum + Send + Sync>,
+fn try_cast_literal(
+    literal: &Arc<dyn ArrowDatum + Send + Sync>,
     column_type: &DataType,
 ) -> std::result::Result<Arc<dyn ArrowDatum + Send + Sync>, ArrowError> {
     let literal_array = literal.get().0;
 
     // No cast required
     if literal_array.data_type() == column_type {
-        return Ok(literal);
+        return Ok(Arc::clone(literal));
     }
 
     let literal_array = cast(literal_array, column_type)?;
