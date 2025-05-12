@@ -1083,7 +1083,7 @@ impl Catalog for HadoopCatalog {
 
                             let metadata_location = format!(
                                 "{}/{}/{}/metadata/v{}.metadata.json",
-                                &warehouse_url[default_fs.len()..].to_string(),
+                                &warehouse_url,
                                 table_ident.namespace.join("/"),
                                 &table_name,
                                 &table_version_hint
