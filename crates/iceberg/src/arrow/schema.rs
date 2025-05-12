@@ -1688,5 +1688,22 @@ mod tests {
             ]));
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
         }
+
+        // test dictionary type
+        {
+            let arrow_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int8));
+            let iceberg_type = Type::Primitive(PrimitiveType::Int);
+            assert_eq!(
+                iceberg_type,
+                arrow_type_to_type(&arrow_type).unwrap(),
+                "Expected dictionary conversion to use the contained value"
+            );
+
+            let arrow_type =
+                DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean));
+            let iceberg_type = Type::Primitive(PrimitiveType::Boolean);
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
     }
 }
