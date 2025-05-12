@@ -640,7 +640,12 @@
 <a href="#639" id="639">639</a>
 <a href="#640" id="640">640</a>
 <a href="#641" id="641">641</a>
-<a href="#642" id="642">642</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -813,7 +818,8 @@
                     <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                         ErrorKind::DataInvalid,
                         <span class="macro">format!</span>(
-                            <span class="string">"Content type of entry {:?} should have DataContentType::Data"</span>,
+                            <span class="string">"Date file at path {} with manifest content type `data`, should have DataContentType `Data`, but has `{:?}`"</span>,
+                            data_file.file_path(),
                             data_file.content
                         ),
                     ));
@@ -825,7 +831,11 @@
                 {
                     <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
-                    <span class="macro">format!</span>(<span class="string">"Content type of entry {:?} should have DataContentType::EqualityDeletes or DataContentType::PositionDeletes"</span>, data_file.content),
+                    <span class="macro">format!</span>(
+                        <span class="string">"Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`"</span>,
+                        data_file.file_path(),
+                        data_file.content
+                    ),
                 ));
                 }
             }
