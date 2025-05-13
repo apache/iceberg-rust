@@ -113,3 +113,30 @@ def test_register_iceberg_table_provider(catalog: Catalog, arrow_table_with_null
     # large/small type mismatches, fixed in pyiceberg 0.10.0
     # assert datafusion_table.to_arrow_table() == iceberg_table.scan().to_arrow()
 
+
+def test_register_pyiceberg_table(catalog: Catalog, arrow_table_with_null: pa.Table) -> None:
+    import datafusion
+    assert datafusion.__version__ >= '45' # iceberg table provider only works for datafusion >= 45
+    from types import MethodType
+
+    catalog.create_namespace_if_not_exists("default")
+    iceberg_table = catalog.create_table_if_not_exists(
+        "default.dataset",
+        schema=arrow_table_with_null.schema,
+    )
+    iceberg_table.append(arrow_table_with_null)
+
+    # monkey patch the __datafusion_table_provider__ method to the iceberg table
+    def __datafusion_table_provider__(self):
+        return table_provider.create_table_provider(
+            metadata_location=self.metadata_location,
+            file_io_properties=self.io.properties
+        ).__datafusion_table_provider__()
+        
+    iceberg_table.__datafusion_table_provider__ = MethodType(__datafusion_table_provider__, iceberg_table)
+
+    ctx = SessionContext()
+    ctx.register_table_provider("test", iceberg_table)
+
+    datafusion_table = ctx.table("test")
+    assert datafusion_table is not None
