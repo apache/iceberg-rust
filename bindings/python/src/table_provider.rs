@@ -29,115 +29,87 @@ use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use tokio::runtime::Runtime;
 
-#[pyclass(name = "IcebergTableProvider")]
-#[derive(Clone)]
-pub struct PyIcebergTableProvider {
-    inner: IcebergTableProvider,
+#[pyclass(name = "IcebergDataFusionTable")]
+pub struct PyIcebergDataFusionTable {
+    inner: Arc<IcebergTableProvider>,
     runtime: Arc<Runtime>,
 }
 
 #[pymethods]
-impl PyIcebergTableProvider {
+impl PyIcebergDataFusionTable {
     #[new]
     fn new(
         metadata_location: String,
         file_io_properties: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        // Create TableIdent
-        let table_ident = TableIdent::from_strs(["myschema", "mytable"]).map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("Failed to create table ident: {}", e))
-        })?;
+        let table_ident = TableIdent::from_strs(["myschema", "mytable"])
+            .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
 
-        // Create FileIO with optional properties
-        let file_io_builder_result = FileIO::from_path(&metadata_location).map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("Failed to create FileIO builder: {}", e))
-        });
-
-        let mut file_io_builder = match file_io_builder_result {
-            Ok(builder) => builder,
-            Err(e) => return Err(e),
-        };
+        let mut builder = FileIO::from_path(&metadata_location)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to init FileIO: {e}")))?;
 
         if let Some(props) = file_io_properties {
-            file_io_builder = file_io_builder.with_props(props);
+            builder = builder.with_props(props);
         }
 
-        let file_io = file_io_builder.build().map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("Failed to build FileIO: {}", e))
-        })?;
+        let file_io = builder
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
 
-        // Create a runtime for running async code
-        let runtime = Runtime::new().map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("Failed to create runtime: {}", e))
-        })?;
+        let runtime = Runtime::new()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {e}")))?;
 
-        // Run the async initialization in the runtime
         let provider = runtime.block_on(async {
-            // Load static table
             let static_table =
                 StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)
                     .await
                     .map_err(|e| {
-                        PyErr::new::<PyRuntimeError, _>(format!(
-                            "Failed to load static table: {}",
-                            e
-                        ))
+                        PyRuntimeError::new_err(format!("Failed to load static table: {e}"))
                     })?;
 
-            // Convert to table and create schema
             let table = static_table.into_table();
 
-            // Use the public try_new_from_table function
             IcebergTableProvider::try_new_from_table(table)
                 .await
                 .map_err(|e| {
-                    PyErr::new::<PyRuntimeError, _>(format!(
-                        "Failed to create table provider: {}",
-                        e
-                    ))
+                    PyRuntimeError::new_err(format!("Failed to create table provider: {e}"))
                 })
         })?;
 
-        Ok(PyIcebergTableProvider {
-            inner: provider,
+        Ok(Self {
+            inner: Arc::new(provider),
             runtime: Arc::new(runtime),
         })
     }
 
-    /// Expose as a DataFusion table provider
+    /// Used by Python DataFusion to retrieve a FFI capsule.
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        let name = CString::new("datafusion_table_provider").unwrap();
-        let provider = FFI_TableProvider::new(
-            Arc::new(self.inner.clone()),
+        let capsule_name = CString::new("datafusion_table_provider").unwrap();
+
+        let ffi_provider = FFI_TableProvider::new(
+            self.inner.clone(),
             false,
             Some(self.runtime.handle().clone()),
         );
-        PyCapsule::new_bound(py, provider, Some(name.clone()))
+
+        PyCapsule::new(py, ffi_provider, Some(capsule_name))
     }
 }
 
-/// Standalone function to create a table provider
-#[pyfunction]
-pub fn create_table_provider(
-    metadata_location: String,
-    file_io_properties: Option<HashMap<String, String>>,
-) -> PyResult<PyIcebergTableProvider> {
-    PyIcebergTableProvider::new(metadata_location, file_io_properties)
-}
-
-/// Register the module
 pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let submod = PyModule::new_bound(py, "table_provider")?;
-    submod.add_function(wrap_pyfunction!(create_table_provider, &submod)?)?;
+    let submod = PyModule::new(py, "datafusion")?;
 
-    // Add as submodule and register in sys.modules
+    // Register just the class
+    submod.add_class::<PyIcebergDataFusionTable>()?;
+
+    // Add submodule under pyiceberg_core
     m.add_submodule(&submod)?;
-    py.import_bound("sys")?
+    py.import("sys")?
         .getattr("modules")?
-        .set_item("pyiceberg_core.table_provider", submod)?;
+        .set_item("pyiceberg_core.datafusion", submod)?;
 
     Ok(())
 }

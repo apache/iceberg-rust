@@ -19,7 +19,7 @@
 from datetime import date, datetime
 import uuid
 import pytest
-from pyiceberg_core import table_provider
+from pyiceberg_core.datafusion import IcebergDataFusionTable
 from datafusion import SessionContext
 from pyiceberg.catalog import Catalog, load_catalog
 import pyarrow as pa
@@ -99,7 +99,7 @@ def test_register_iceberg_table_provider(
     )
     iceberg_table.append(arrow_table_with_null)
 
-    iceberg_table_provider = table_provider.create_table_provider(
+    iceberg_table_provider = IcebergDataFusionTable(
         metadata_location=iceberg_table.metadata_location,
         file_io_properties=iceberg_table.io.properties,
     )
@@ -142,7 +142,7 @@ def test_register_pyiceberg_table(
 
     # monkey patch the __datafusion_table_provider__ method to the iceberg table
     def __datafusion_table_provider__(self):
-        return table_provider.create_table_provider(
+        return IcebergDataFusionTable(
             metadata_location=self.metadata_location,
             file_io_properties=self.io.properties,
         ).__datafusion_table_provider__()
