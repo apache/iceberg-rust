@@ -34,23 +34,9 @@ pub struct Blob {
 }
 
 impl Blob {
-    /// Create a `Blob` object.
-    pub fn new(
-        blob_type: String,
-        fields: Vec<i32>,
-        snapshot_id: i64,
-        sequence_number: i64,
-        data: Vec<u8>,
-        properties: HashMap<String, String>,
-    ) -> Blob {
-        Self {
-            r#type: blob_type,
-            fields,
-            snapshot_id,
-            sequence_number,
-            data,
-            properties,
-        }
+    /// Returns a BlobBuilder to build a build
+    pub fn builder() -> BlobBuilder {
+        BlobBuilder::default()
     }
 
     #[inline]
@@ -87,5 +73,59 @@ impl Blob {
     /// Arbitrary meta-information about the blob
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+}
+
+/// Builder to create a Blob.
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct BlobBuilder {
+    r#type: String,
+    fields: Vec<i32>,
+    snapshot_id: i64,
+    sequence_number: i64,
+    data: Vec<u8>,
+    properties: HashMap<String, String>,
+}
+
+impl BlobBuilder {
+    pub fn r#type(mut self, t: impl Into<String>) -> Self {
+        self.r#type = t.into();
+        self
+    }
+
+    pub fn fields(mut self, fields: Vec<i32>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub fn snapshot_id(mut self, id: i64) -> Self {
+        self.snapshot_id = id;
+        self
+    }
+
+    pub fn sequence_number(mut self, num: i64) -> Self {
+        self.sequence_number = num;
+        self
+    }
+
+    pub fn data(mut self, data: Vec<u8>) -> Self {
+        self.data = data;
+        self
+    }
+
+    pub fn properties(mut self, props: HashMap<String, String>) -> Self {
+        self.properties = props;
+        self
+    }
+
+    pub fn build(self) -> Blob {
+        Blob {
+            r#type: self.r#type,
+            fields: self.fields,
+            snapshot_id: self.snapshot_id,
+            sequence_number: self.sequence_number,
+            data: self.data,
+            properties: self.properties,
+        }
     }
 }
