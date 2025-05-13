@@ -172,6 +172,13 @@ impl<'a> SnapshotProduceAction<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
+        if added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added data files found when write a manifest file",
+            ));
+        }
+
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {

@@ -19,6 +19,8 @@ use std::collections::HashMap;
 
 /// A serialized form of a "compact" Theta sketch produced by the Apache DataSketches library.
 pub const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
+/// A serialized form of a deletion vector.
+pub const DELETION_VECTOR_V1: &str = "deletion-vector-v1";
 
 /// The blob
 #[derive(Debug, PartialEq, Clone)]
