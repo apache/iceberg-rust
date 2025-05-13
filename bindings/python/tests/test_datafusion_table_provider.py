@@ -100,6 +100,7 @@ def test_register_iceberg_table_provider(
     iceberg_table.append(arrow_table_with_null)
 
     iceberg_table_provider = IcebergDataFusionTable(
+        identifier=iceberg_table.name(),
         metadata_location=iceberg_table.metadata_location,
         file_io_properties=iceberg_table.io.properties,
     )
@@ -143,6 +144,7 @@ def test_register_pyiceberg_table(
     # monkey patch the __datafusion_table_provider__ method to the iceberg table
     def __datafusion_table_provider__(self):
         return IcebergDataFusionTable(
+            identifier=self.name(),
             metadata_location=self.metadata_location,
             file_io_properties=self.io.properties,
         ).__datafusion_table_provider__()

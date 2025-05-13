@@ -39,10 +39,11 @@ pub struct PyIcebergDataFusionTable {
 impl PyIcebergDataFusionTable {
     #[new]
     fn new(
+        identifier: Vec<String>,
         metadata_location: String,
         file_io_properties: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let table_ident = TableIdent::from_strs(["myschema", "mytable"])
+        let table_ident = TableIdent::from_strs(identifier)
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
 
         let mut builder = FileIO::from_path(&metadata_location)
