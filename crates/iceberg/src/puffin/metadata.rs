@@ -867,7 +867,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file, ).await.unwrap_err().to_string(),
+            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
             format!(
                 "DataInvalid => Given string is not valid JSON, source: invalid value: integer `{}`, expected i32 at line 5 column 51",
                 out_of_i32_range_number
