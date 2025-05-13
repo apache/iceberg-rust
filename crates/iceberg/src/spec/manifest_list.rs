@@ -883,16 +883,6 @@ pub(super) mod _serde {
         if let Some(partitions) = partitions {
             if let Some(partition_type) = partition_type {
                 let partition_types = partition_type.fields();
-                if partitions.len() != partition_types.len() {
-                    return Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        format!(
-                            "Invalid partition spec. Expected {} fields, got {}",
-                            partition_types.len(),
-                            partitions.len()
-                        ),
-                    ));
-                }
                 partitions
                     .into_iter()
                     .zip(partition_types)

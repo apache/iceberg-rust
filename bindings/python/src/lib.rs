@@ -19,9 +19,11 @@ use pyo3::prelude::*;
 
 mod error;
 mod transform;
+mod manifest;
 
 #[pymodule]
 fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     transform::register_module(py, m)?;
+    manifest::register_module(py, m)?;
     Ok(())
 }

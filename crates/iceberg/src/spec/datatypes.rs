@@ -943,6 +943,21 @@ mod tests {
     }
 
     #[test]
+    fn struct_type_empty() {
+        let record = "{\"type\":\"struct\",\"fields\":[]}";
+
+        check_type_serde(
+            record,
+            Type::Struct(StructType {
+                fields: vec![],
+                id_lookup: OnceLock::default(),
+                name_lookup: OnceLock::default(),
+            }),
+        )
+    }
+
+
+    #[test]
     fn struct_type() {
         let record = r#"
         {

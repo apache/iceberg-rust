@@ -33,7 +33,7 @@ classifiers = [
 name = "pyiceberg-core"
 readme = "project-description.md"
 requires-python = "~=3.9"
-version = "0.4.0"
+version = "0.22123123.0"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
