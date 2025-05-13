@@ -1575,7 +1575,7 @@
         <span class="self">self</span>.name_to_id.get(name).copied()
     }
 
-    <span class="doccomment">/// Get field id by full name.
+    <span class="doccomment">/// Get full name by field id.
     </span><span class="kw">pub fn </span>name_by_field_id(<span class="kw-2">&amp;</span><span class="self">self</span>, field_id: i32) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt; {
         <span class="self">self</span>.id_to_name.get(<span class="kw-2">&amp;</span>field_id).map(String::as_str)
     }
