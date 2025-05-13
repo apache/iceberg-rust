@@ -21,15 +21,10 @@ use crate::spec::MappedField;
 pub trait NameMappingVisitor {
     /// Aggregated result of `MappedField`s
     type S;
-    /// Result type for processing one `MappedField`
-    type T;
 
     /// Handles entire `NameMapping` field
     fn mapping(&self, field_result: Self::S) -> Self::S;
 
-    /// Takes all visited child maps and merges into one map
-    fn fields(&self, field_results: Vec<Self::T>) -> Self::S;
-
     /// Handles a single `MappedField`
-    fn field(&self, field: &MappedField, field_result: Self::S) -> Self::T;
+    fn field(&self, field: &MappedField, field_result: Self::S) -> Self::S;
 }

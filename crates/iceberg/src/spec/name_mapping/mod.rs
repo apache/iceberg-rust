@@ -17,17 +17,19 @@
 
 //! Iceberg name mapping.
 
+mod visitor;
+
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DefaultOnNull};
+use visitor::NameMappingVisitor;
 
-use crate::expr::visitors::name_mapping_visitor::NameMappingVisitor;
 use crate::spec::{
     visit_schema, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType,
+    StructType, LIST_FIELD_NAME, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use crate::{Error, Result};
 
@@ -76,12 +78,12 @@ impl NameMapping {
 
     /// Returns an index mapping id to `MappedField`` by visiting the schema.
     fn index_by_id(mapping: &Vec<Arc<MappedField>>) -> HashMap<i32, Arc<MappedField>> {
-        visit_name_mapping(mapping, &IndexById {})
+        visit_name_mapping(mapping, &IndexById {}).unwrap()
     }
 
-    /// Returns an index mapping names to `MappedField`` by visiting the schema.
+    /// Returns an index mapping names to `MappedField` by visiting the schema.
     fn index_by_name(mapping: &Vec<Arc<MappedField>>) -> HashMap<String, Arc<MappedField>> {
-        visit_name_mapping(mapping, &IndexByName {})
+        visit_name_mapping(mapping, &IndexByName {}).unwrap()
     }
 }
 
@@ -126,57 +128,46 @@ impl MappedField {
     pub fn names(&self) -> &[String] {
         &self.names
     }
-
-    /// Get a reference to the field mapping for any child fields.
-    pub fn fields(&self) -> &[Arc<MappedField>] {
-        &self.fields
-    }
 }
 
 /// Recursively visits the entire name mapping using visitor
-fn visit_name_mapping<V>(namespace: &Vec<Arc<MappedField>>, visitor: &V) -> V::S
-where V: NameMappingVisitor {
-    let root_result = visit_fields(namespace, visitor);
-    visitor.mapping(root_result)
+fn visit_name_mapping<V>(name_mapping: &Vec<Arc<MappedField>>, visitor: &V) -> Result<V::S>
+where
+    V: NameMappingVisitor,
+    V::S: IntoIterator + FromIterator<<V::S as IntoIterator>::Item>,
+{
+    let root_result = visit_fields(name_mapping, visitor);
+    Ok(visitor.mapping(root_result))
 }
 
 /// Recursively visits a slice of mapped fields using visitor
 fn visit_fields<V>(fields: &Vec<Arc<MappedField>>, visitor: &V) -> V::S
-where V: NameMappingVisitor {
-    let mut results: Vec<V::T> = Vec::new();
-
-    for field in fields {
-        let child_result = visit_fields(&field.fields, visitor);
-        let field_result = visitor.field(field, child_result);
-        results.push(field_result);
+where
+    V: NameMappingVisitor,
+    V::S: IntoIterator + FromIterator<<V::S as IntoIterator>::Item>,
+{
+    let mut results: Vec<V::S> = Vec::with_capacity(fields.len());
+    for f in fields {
+        let child_s = visit_fields(&f.fields, visitor);
+        let this_s = visitor.field(f, child_s);
+        results.push(this_s);
     }
 
-    visitor.fields(results)
+    let merged: V::S = results.into_iter().flat_map(|m| m.into_iter()).collect();
+
+    visitor.mapping(merged)
 }
 
 struct IndexByName {}
 
 impl NameMappingVisitor for IndexByName {
     type S = HashMap<String, Arc<MappedField>>;
-    type T = HashMap<String, Arc<MappedField>>;
 
     fn mapping(
         &self,
         field_result: HashMap<String, Arc<MappedField>>,
     ) -> HashMap<String, Arc<MappedField>> {
         field_result
-    }
-
-    fn fields(
-        &self,
-        field_results: Vec<HashMap<String, Arc<MappedField>>>,
-    ) -> HashMap<String, Arc<MappedField>> {
-        field_results
-            .into_iter()
-            .fold(HashMap::new(), |mut acc, map| {
-                acc.extend(map);
-                acc
-            })
     }
 
     fn field(
@@ -204,25 +195,12 @@ struct IndexById {}
 
 impl NameMappingVisitor for IndexById {
     type S = HashMap<i32, Arc<MappedField>>;
-    type T = HashMap<i32, Arc<MappedField>>;
 
     fn mapping(
         &self,
         field_result: HashMap<i32, Arc<MappedField>>,
     ) -> HashMap<i32, Arc<MappedField>> {
         field_result
-    }
-
-    fn fields(
-        &self,
-        field_results: Vec<HashMap<i32, Arc<MappedField>>>,
-    ) -> HashMap<i32, Arc<MappedField>> {
-        field_results
-            .into_iter()
-            .fold(HashMap::new(), |mut acc, map| {
-                acc.extend(map);
-                acc
-            })
     }
 
     fn field(
@@ -272,7 +250,7 @@ impl SchemaVisitor for CreateMapping {
     fn list(&mut self, list: &ListType, value: Self::T) -> Result<Self::T> {
         Ok(vec![Arc::new(MappedField::new(
             Some(list.element_field.id),
-            vec!["element".to_string()],
+            vec![LIST_FIELD_NAME.to_string()],
             value,
         ))])
     }
@@ -281,12 +259,12 @@ impl SchemaVisitor for CreateMapping {
         Ok(vec![
             Arc::new(MappedField::new(
                 Some(map.key_field.id),
-                vec!["key".to_string()],
+                vec![MAP_KEY_FIELD_NAME.to_string()],
                 key_value,
             )),
             Arc::new(MappedField::new(
                 Some(map.value_field.id),
-                vec!["value".to_string()],
+                vec![MAP_VALUE_FIELD_NAME.to_string()],
                 value,
             )),
         ])
@@ -301,7 +279,7 @@ impl SchemaVisitor for CreateMapping {
 mod tests {
 
     use super::*;
-    use crate::spec::{NestedField, Type};
+    use crate::spec::{NestedField, Type, MAP_VALUE_FIELD_NAME};
 
     fn make_field(
         field_id: Option<i32>,
@@ -504,7 +482,7 @@ mod tests {
                     names: vec!["qux".to_string()],
                     fields: vec![Arc::new(MappedField {
                         field_id: Some(5),
-                        names: vec!["element".to_string()],
+                        names: vec![LIST_FIELD_NAME.to_string()],
                         fields: vec![],
                     })],
                 }),
@@ -514,21 +492,21 @@ mod tests {
                     fields: vec![
                         Arc::new(MappedField {
                             field_id: Some(7),
-                            names: vec!["key".to_string()],
+                            names: vec![MAP_KEY_FIELD_NAME.to_string()],
                             fields: vec![],
                         }),
                         Arc::new(MappedField {
                             field_id: Some(8),
-                            names: vec!["value".to_string()],
+                            names: vec![MAP_VALUE_FIELD_NAME.to_string()],
                             fields: vec![
                                 Arc::new(MappedField {
                                     field_id: Some(9),
-                                    names: vec!["key".to_string()],
+                                    names: vec![MAP_KEY_FIELD_NAME.to_string()],
                                     fields: vec![],
                                 }),
                                 Arc::new(MappedField {
                                     field_id: Some(10),
-                                    names: vec!["value".to_string()],
+                                    names: vec![MAP_VALUE_FIELD_NAME.to_string()],
                                     fields: vec![],
                                 }),
                             ],
@@ -540,7 +518,7 @@ mod tests {
                     names: vec!["location".to_string()],
                     fields: vec![Arc::new(MappedField {
                         field_id: Some(12),
-                        names: vec!["element".to_string()],
+                        names: vec![LIST_FIELD_NAME.to_string()],
                         fields: vec![
                             Arc::new(MappedField {
                                 field_id: Some(13),
