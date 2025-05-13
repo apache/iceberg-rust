@@ -2610,7 +2610,7 @@
             <span class="kw">let </span>reader = input_file.reader().<span class="kw">await</span><span class="question-mark">?</span>;
 
             <span class="kw">let </span><span class="kw-2">mut </span>parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            <span class="kw">let </span>parquet_metadata = parquet_reader.get_metadata().<span class="kw">await</span>.map_err(|err| {
+            <span class="kw">let </span>parquet_metadata = parquet_reader.get_metadata(<span class="prelude-val">None</span>).<span class="kw">await</span>.map_err(|err| {
                 Error::new(
                     ErrorKind::DataInvalid,
                     <span class="macro">format!</span>(<span class="string">"Error reading Parquet metadata: {}"</span>, err),

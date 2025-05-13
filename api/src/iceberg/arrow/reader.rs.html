@@ -1950,7 +1950,24 @@
 <a href="#1949" id="1949">1949</a>
 <a href="#1950" id="1950">1950</a>
 <a href="#1951" id="1951">1951</a>
-<a href="#1952" id="1952">1952</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#1952" id="1952">1952</a>
+<a href="#1953" id="1953">1953</a>
+<a href="#1954" id="1954">1954</a>
+<a href="#1955" id="1955">1955</a>
+<a href="#1956" id="1956">1956</a>
+<a href="#1957" id="1957">1957</a>
+<a href="#1958" id="1958">1958</a>
+<a href="#1959" id="1959">1959</a>
+<a href="#1960" id="1960">1960</a>
+<a href="#1961" id="1961">1961</a>
+<a href="#1962" id="1962">1962</a>
+<a href="#1963" id="1963">1963</a>
+<a href="#1964" id="1964">1964</a>
+<a href="#1965" id="1965">1965</a>
+<a href="#1966" id="1966">1966</a>
+<a href="#1967" id="1967">1967</a>
+<a href="#1968" id="1968">1968</a>
+<a href="#1969" id="1969">1969</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -2281,12 +2298,15 @@
         </span><span class="kw">let </span>parquet_file = file_io.new_input(data_file_path)<span class="question-mark">?</span>;
         <span class="kw">let </span>(parquet_metadata, parquet_reader) =
             <span class="macro">try_join!</span>(parquet_file.metadata(), parquet_file.reader())<span class="question-mark">?</span>;
-        <span class="kw">let </span>parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        <span class="kw">let </span>parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
+            .with_preload_column_index(<span class="bool-val">true</span>)
+            .with_preload_offset_index(<span class="bool-val">true</span>)
+            .with_preload_page_index(should_load_page_index);
 
         <span class="comment">// Create the record batch stream builder, which wraps the parquet file reader
         </span><span class="kw">let </span>record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+            ArrowReaderOptions::new(),
         )
         .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(record_batch_stream_builder)
@@ -3271,6 +3291,7 @@
     meta: FileMetadata,
     preload_column_index: bool,
     preload_offset_index: bool,
+    preload_page_index: bool,
     metadata_size_hint: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     r: R,
 }
@@ -3282,6 +3303,7 @@
             meta,
             preload_column_index: <span class="bool-val">false</span>,
             preload_offset_index: <span class="bool-val">false</span>,
+            preload_page_index: <span class="bool-val">false</span>,
             metadata_size_hint: <span class="prelude-val">None</span>,
             r,
         }
@@ -3299,6 +3321,12 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Enable or disable preloading of the page index
+    </span><span class="kw">pub fn </span>with_preload_page_index(<span class="kw-2">mut </span><span class="self">self</span>, preload: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.preload_page_index = preload;
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
     ///
     /// This hint can help reduce the number of fetch requests. For more details see the
@@ -3310,21 +3338,27 @@
 }
 
 <span class="kw">impl</span>&lt;R: FileRead&gt; AsyncFileReader <span class="kw">for </span>ArrowFileReader&lt;R&gt; {
-    <span class="kw">fn </span>get_bytes(<span class="kw-2">&amp;mut </span><span class="self">self</span>, range: Range&lt;usize&gt;) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Bytes&gt;&gt; {
+    <span class="kw">fn </span>get_bytes(<span class="kw-2">&amp;mut </span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Bytes&gt;&gt; {
         Box::pin(
             <span class="self">self</span>.r
-                .read(range.start <span class="kw">as _</span>..range.end <span class="kw">as _</span>)
+                .read(range.start..range.end)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
     }
 
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Arc&lt;ParquetMetaData&gt;&gt;&gt; {
+    <span class="comment">// TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
+    // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
+    </span><span class="kw">fn </span>get_metadata(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        _options: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>ArrowReaderOptions&gt;,
+    ) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Arc&lt;ParquetMetaData&gt;&gt;&gt; {
         <span class="kw">async move </span>{
             <span class="kw">let </span>reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(<span class="self">self</span>.metadata_size_hint)
                 .with_column_indexes(<span class="self">self</span>.preload_column_index)
+                .with_page_indexes(<span class="self">self</span>.preload_page_index)
                 .with_offset_indexes(<span class="self">self</span>.preload_offset_index);
-            <span class="kw">let </span>size = <span class="self">self</span>.meta.size <span class="kw">as </span>usize;
+            <span class="kw">let </span>size = <span class="self">self</span>.meta.size;
             <span class="kw">let </span>meta = reader.load_and_finish(<span class="self">self</span>, size).<span class="kw">await</span><span class="question-mark">?</span>;
 
             <span class="prelude-val">Ok</span>(Arc::new(meta))
