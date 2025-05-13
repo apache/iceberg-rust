@@ -20,7 +20,7 @@
 #![deny(missing_docs)]
 
 mod blob;
-pub use blob::{Blob, APACHE_DATASKETCHES_THETA_V1};
+pub use blob::{Blob, APACHE_DATASKETCHES_THETA_V1, DELETION_VECTOR_V1};
 
 mod compression;
 pub use compression::CompressionCodec;
