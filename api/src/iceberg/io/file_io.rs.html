@@ -745,7 +745,7 @@
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 </span><span class="attr">#[async_trait::async_trait]
-</span><span class="kw">pub trait </span>FileRead: Send + Unpin + <span class="lifetime">'static </span>{
+</span><span class="kw">pub trait </span>FileRead: Send + Sync + Unpin + <span class="lifetime">'static </span>{
     <span class="doccomment">/// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
