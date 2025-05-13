@@ -36,4 +36,4 @@ iceberg = { path = "../../crates/iceberg" }
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
 datafusion-ffi = { version = "47" }
-tokio = { version = "1.36" }
+tokio = { version = "1.44", default-features = false }
