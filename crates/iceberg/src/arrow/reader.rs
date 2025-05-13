@@ -328,12 +328,15 @@ impl ArrowReader {
         let parquet_file = file_io.new_input(data_file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
+            .with_preload_column_index(true)
+            .with_preload_offset_index(true)
+            .with_preload_page_index(should_load_page_index);
 
         // Create the record batch stream builder, which wraps the parquet file reader
         let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+            ArrowReaderOptions::new(),
         )
         .await?;
         Ok(record_batch_stream_builder)
@@ -1308,6 +1311,7 @@ pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
     preload_column_index: bool,
     preload_offset_index: bool,
+    preload_page_index: bool,
     metadata_size_hint: Option<usize>,
     r: R,
 }
@@ -1319,6 +1323,7 @@ impl<R: FileRead> ArrowFileReader<R> {
             meta,
             preload_column_index: false,
             preload_offset_index: false,
+            preload_page_index: false,
             metadata_size_hint: None,
             r,
         }
@@ -1333,6 +1338,12 @@ impl<R: FileRead> ArrowFileReader<R> {
     /// Enable or disable preloading of the offset index
     pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
         self.preload_offset_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the page index
+    pub fn with_preload_page_index(mut self, preload: bool) -> Self {
+        self.preload_page_index = preload;
         self
     }
 
@@ -1355,6 +1366,8 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         )
     }
 
+    // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
+    // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
     fn get_metadata(
         &mut self,
         _options: Option<&'_ ArrowReaderOptions>,
@@ -1363,6 +1376,7 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 .with_column_indexes(self.preload_column_index)
+                .with_page_indexes(self.preload_page_index)
                 .with_offset_indexes(self.preload_offset_index);
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
