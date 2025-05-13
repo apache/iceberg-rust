@@ -100,16 +100,14 @@ impl PyIcebergDataFusionTable {
 }
 
 pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let submod = PyModule::new(py, "datafusion")?;
+    let this = PyModule::new(py, "datafusion")?;
 
-    // Register just the class
-    submod.add_class::<PyIcebergDataFusionTable>()?;
+    this.add_class::<PyIcebergDataFusionTable>()?;
 
-    // Add submodule under pyiceberg_core
-    m.add_submodule(&submod)?;
+    m.add_submodule(&this)?;
     py.import("sys")?
         .getattr("modules")?
-        .set_item("pyiceberg_core.datafusion", submod)?;
+        .set_item("pyiceberg_core.datafusion", this)?;
 
     Ok(())
 }
