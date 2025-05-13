@@ -24,6 +24,11 @@ from datafusion import SessionContext
 from pyiceberg.catalog import Catalog, load_catalog
 import pyarrow as pa
 from pathlib import Path
+import datafusion
+
+assert (
+    datafusion.__version__ >= "45"
+)  # iceberg table provider only works for datafusion >= 45
 
 
 @pytest.fixture(scope="session")
@@ -59,7 +64,11 @@ def arrow_table_with_null() -> "pa.Table":
             "float": [0.0, None, 0.9],
             "double": [0.0, None, 0.9],
             # 'time': [1_000_000, None, 3_000_000],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
-            "timestamp": [datetime(2023, 1, 1, 19, 25, 00), None, datetime(2023, 3, 1, 19, 25, 00)],
+            "timestamp": [
+                datetime(2023, 1, 1, 19, 25, 00),
+                None,
+                datetime(2023, 3, 1, 19, 25, 00),
+            ],
             # "timestamptz": [
             #     datetime(2023, 1, 1, 19, 25, 00, tzinfo=timezone.utc),
             #     None,
@@ -80,10 +89,9 @@ def arrow_table_with_null() -> "pa.Table":
     )
 
 
-def test_register_iceberg_table_provider(catalog: Catalog, arrow_table_with_null: pa.Table) -> None:
-    import datafusion
-    assert datafusion.__version__ >= '45' # iceberg table provider only works for datafusion >= 45
-
+def test_register_iceberg_table_provider(
+    catalog: Catalog, arrow_table_with_null: pa.Table
+) -> None:
     catalog.create_namespace_if_not_exists("default")
     iceberg_table = catalog.create_table_if_not_exists(
         "default.dataset",
@@ -93,7 +101,7 @@ def test_register_iceberg_table_provider(catalog: Catalog, arrow_table_with_null
 
     iceberg_table_provider = table_provider.create_table_provider(
         metadata_location=iceberg_table.metadata_location,
-        file_io_properties=iceberg_table.io.properties
+        file_io_properties=iceberg_table.io.properties,
     )
 
     ctx = SessionContext()
@@ -104,19 +112,25 @@ def test_register_iceberg_table_provider(catalog: Catalog, arrow_table_with_null
 
     # check that the schema is the same
     from pyiceberg.io.pyarrow import _pyarrow_schema_ensure_small_types
-    assert _pyarrow_schema_ensure_small_types(datafusion_table.schema()) == _pyarrow_schema_ensure_small_types(iceberg_table.schema().as_arrow())
+
+    assert _pyarrow_schema_ensure_small_types(
+        datafusion_table.schema()
+    ) == _pyarrow_schema_ensure_small_types(iceberg_table.schema().as_arrow())
     # large/small type mismatches, fixed in pyiceberg 0.10.0
     # assert datafusion_table.schema() == iceberg_table.schema().as_arrow()
 
     # check that the data is the same
-    assert datafusion_table.to_arrow_table().to_pylist() == iceberg_table.scan().to_arrow().to_pylist()
+    assert (
+        datafusion_table.to_arrow_table().to_pylist()
+        == iceberg_table.scan().to_arrow().to_pylist()
+    )
     # large/small type mismatches, fixed in pyiceberg 0.10.0
     # assert datafusion_table.to_arrow_table() == iceberg_table.scan().to_arrow()
 
 
-def test_register_pyiceberg_table(catalog: Catalog, arrow_table_with_null: pa.Table) -> None:
-    import datafusion
-    assert datafusion.__version__ >= '45' # iceberg table provider only works for datafusion >= 45
+def test_register_pyiceberg_table(
+    catalog: Catalog, arrow_table_with_null: pa.Table
+) -> None:
     from types import MethodType
 
     catalog.create_namespace_if_not_exists("default")
@@ -130,10 +144,12 @@ def test_register_pyiceberg_table(catalog: Catalog, arrow_table_with_null: pa.Ta
     def __datafusion_table_provider__(self):
         return table_provider.create_table_provider(
             metadata_location=self.metadata_location,
-            file_io_properties=self.io.properties
+            file_io_properties=self.io.properties,
         ).__datafusion_table_provider__()
-        
-    iceberg_table.__datafusion_table_provider__ = MethodType(__datafusion_table_provider__, iceberg_table)
+
+    iceberg_table.__datafusion_table_provider__ = MethodType(
+        __datafusion_table_provider__, iceberg_table
+    )
 
     ctx = SessionContext()
     ctx.register_table_provider("test", iceberg_table)
