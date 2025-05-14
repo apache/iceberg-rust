@@ -43,23 +43,23 @@ impl PyIcebergDataFusionTable {
         metadata_location: String,
         file_io_properties: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let table_ident = TableIdent::from_strs(identifier)
-            .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
-
-        let mut builder = FileIO::from_path(&metadata_location)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to init FileIO: {e}")))?;
-
-        if let Some(props) = file_io_properties {
-            builder = builder.with_props(props);
-        }
-
-        let file_io = builder
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
-
         let runtime = runtime();
 
         let provider = runtime.block_on(async {
+            let table_ident = TableIdent::from_strs(identifier)
+                .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
+
+            let mut builder = FileIO::from_path(&metadata_location)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to init FileIO: {e}")))?;
+
+            if let Some(props) = file_io_properties {
+                builder = builder.with_props(props);
+            }
+
+            let file_io = builder
+                .build()
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
+
             let static_table =
                 StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)
                     .await
@@ -81,15 +81,13 @@ impl PyIcebergDataFusionTable {
         })
     }
 
-    /// Used by Python DataFusion to retrieve a FFI capsule.
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let capsule_name = CString::new("datafusion_table_provider").unwrap();
 
-        let runtime = runtime();
-        let ffi_provider = FFI_TableProvider::new(self.inner.clone(), false, Some(runtime.clone()));
+        let ffi_provider = FFI_TableProvider::new(self.inner.clone(), false, Some(runtime()));
 
         PyCapsule::new(py, ffi_provider, Some(capsule_name))
     }
