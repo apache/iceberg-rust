@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::spec::{DataContentType, DataFile, DataFileFormat, FieldSummary, FormatVersion, Literal, Manifest, ManifestContentType, ManifestEntry, ManifestFile, ManifestList, ManifestStatus, PrimitiveLiteral, StructType, Type};
+use iceberg::spec::{DataFile, DataFileFormat, FieldSummary, FormatVersion, Literal, Manifest, ManifestEntry, ManifestFile, ManifestList, ManifestStatus, PrimitiveLiteral, StructType, Type};
+use iceberg::{Error, ErrorKind};
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use std::collections::HashMap;
 use std::sync::Arc;
-use pyo3::types::PyAny;
-use iceberg::{Error, ErrorKind};
 
 #[pyclass]
 pub struct PyLiteral {
@@ -44,13 +44,7 @@ impl PyDataFile {
 
     #[getter]
     fn content(&self) -> i32 {
-        // TODO: Maps the enum back to the int
-        // I have a feeling this can be done more intelligently
-        match self.inner.content_type() {
-            DataContentType::Data => 0,
-            DataContentType::PositionDeletes => 1,
-            DataContentType::EqualityDeletes => 2,
-        }
+        self.inner.content_type() as i32
     }
 
     #[getter]
@@ -60,8 +54,6 @@ impl PyDataFile {
 
     #[getter]
     fn file_format(&self) -> &str {
-        // TODO: Maps the enum back to the int
-        // I have a feeling this can be done more intelligently
         match self.inner.file_format() {
             DataFileFormat::Avro => "avro",
             DataFileFormat::Orc => "orc",
@@ -214,12 +206,7 @@ impl crate::manifest::PyManifestFile {
 
     #[getter]
     fn content(&self) -> i32 {
-        // TODO: Maps the enum back to the int
-        // I have a feeling this can be done more intelligently
-        match self.inner.content {
-            ManifestContentType::Data => 0,
-            ManifestContentType::Deletes => 1,
-        }
+        self.inner.content as i32
     }
 
     #[getter]
@@ -293,13 +280,7 @@ impl PyManifestEntry {
 
     #[getter]
     fn status(&self) -> i32 {
-        // TODO: Maps the enum back to the int
-        // I have a feeling this can be done more intelligently
-        match self.inner.status {
-            ManifestStatus::Existing => 0,
-            ManifestStatus::Added => 1,
-            ManifestStatus::Deleted => 2,
-        }
+        ManifestStatus::Existing as i32
     }
 
     #[getter]
