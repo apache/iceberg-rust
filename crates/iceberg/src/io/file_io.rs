@@ -95,6 +95,23 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    #[deprecated(note = "use remove_dir_all instead", since = "0.4.0")]
+    pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        Ok(op.remove_all(relative_path).await?)
+    }
+
+    /// Remove the path and all nested dirs and files recursively.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Behavior
+    ///
+    /// - If the path is a file or not exist, this function will be no-op.
+    /// - If the path is a empty directory, this function will remove the directory itself.
+    /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn remove_dir_all(&self, path: impl AsRef<str>) -> Result<()> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = if relative_path.ends_with('/') {
@@ -446,6 +463,14 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(file_io.exists(&a_path).await.unwrap());
 
+        // Remove a file should be no-op.
+        file_io.remove_dir_all(&a_path).await.unwrap();
+        assert!(file_io.exists(&a_path).await.unwrap());
+
+        // Remove a not exist dir should be no-op.
+        file_io.remove_dir_all("not_exists/").await.unwrap();
+
+        // Remove a dir should remove all files in it.
         file_io.remove_dir_all(&sub_dir_path).await.unwrap();
         assert!(!file_io.exists(&b_path).await.unwrap());
         assert!(!file_io.exists(&c_path).await.unwrap());
