@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
+use std::sync::OnceLock;
 
-mod datafusion_table_provider;
-mod error;
-mod runtime;
-mod transform;
+use tokio::runtime::{Handle, Runtime};
 
-#[pymodule]
-fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    datafusion_table_provider::register_module(py, m)?;
-    transform::register_module(py, m)?;
-    Ok(())
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+pub fn runtime() -> Handle {
+    match Handle::try_current() {
+        Ok(h) => h.clone(),
+        _ => {
+            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
+            rt.handle().clone()
+        }
+    }
 }

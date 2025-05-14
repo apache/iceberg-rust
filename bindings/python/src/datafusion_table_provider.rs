@@ -27,12 +27,12 @@ use iceberg_datafusion::table::IcebergTableProvider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
-use tokio::runtime::Runtime;
+
+use crate::runtime::runtime;
 
 #[pyclass(name = "IcebergDataFusionTable")]
 pub struct PyIcebergDataFusionTable {
     inner: Arc<IcebergTableProvider>,
-    runtime: Arc<Runtime>,
 }
 
 #[pymethods]
@@ -57,8 +57,7 @@ impl PyIcebergDataFusionTable {
             .build()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
 
-        let runtime = Runtime::new()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {e}")))?;
+        let runtime = runtime();
 
         let provider = runtime.block_on(async {
             let static_table =
@@ -79,7 +78,6 @@ impl PyIcebergDataFusionTable {
 
         Ok(Self {
             inner: Arc::new(provider),
-            runtime: Arc::new(runtime),
         })
     }
 
@@ -90,11 +88,8 @@ impl PyIcebergDataFusionTable {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let capsule_name = CString::new("datafusion_table_provider").unwrap();
 
-        let ffi_provider = FFI_TableProvider::new(
-            self.inner.clone(),
-            false,
-            Some(self.runtime.handle().clone()),
-        );
+        let runtime = runtime();
+        let ffi_provider = FFI_TableProvider::new(self.inner.clone(), false, Some(runtime.clone()));
 
         PyCapsule::new(py, ffi_provider, Some(capsule_name))
     }
