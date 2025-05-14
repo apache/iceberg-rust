@@ -225,7 +225,7 @@ pub struct FileMetadata {
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 #[async_trait::async_trait]
-pub trait FileRead: Send + Unpin + 'static {
+pub trait FileRead: Send + Sync + Unpin + 'static {
     /// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.

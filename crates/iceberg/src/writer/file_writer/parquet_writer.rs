@@ -338,7 +338,7 @@ impl ParquetWriter {
             let reader = input_file.reader().await?;
 
             let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            let parquet_metadata = parquet_reader.get_metadata().await.map_err(|err| {
+            let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!("Error reading Parquet metadata: {}", err),
