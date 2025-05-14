@@ -70,7 +70,9 @@
 <a href="#69" id="69">69</a>
 <a href="#70" id="70">70</a>
 <a href="#71" id="71">71</a>
-<a href="#72" id="72">72</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -89,13 +91,15 @@
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
+<span class="kw">use </span>typed_builder::TypedBuilder;
+
 <span class="doccomment">/// A serialized form of a "compact" Theta sketch produced by the Apache DataSketches library.
 </span><span class="kw">pub const </span>APACHE_DATASKETCHES_THETA_V1: <span class="kw-2">&amp;</span>str = <span class="string">"apache-datasketches-theta-v1"</span>;
 <span class="doccomment">/// A serialized form of a deletion vector.
 </span><span class="kw">pub const </span>DELETION_VECTOR_V1: <span class="kw-2">&amp;</span>str = <span class="string">"deletion-vector-v1"</span>;
 
 <span class="doccomment">/// The blob
-</span><span class="attr">#[derive(Debug, PartialEq, Clone)]
+</span><span class="attr">#[derive(Debug, PartialEq, Clone, TypedBuilder)]
 </span><span class="kw">pub struct </span>Blob {
     <span class="kw">pub</span>(<span class="kw">crate</span>) r#type: String,
     <span class="kw">pub</span>(<span class="kw">crate</span>) fields: Vec&lt;i32&gt;,
