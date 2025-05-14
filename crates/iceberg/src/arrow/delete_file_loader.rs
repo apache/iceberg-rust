@@ -50,7 +50,6 @@ pub trait DeleteFileLoader {
 pub(crate) struct CachingDeleteFileLoader {
     file_io: FileIO,
     concurrency_limit_data_files: usize,
-    del_filter: DeleteFilter,
 }
 
 impl DeleteFileLoader for CachingDeleteFileLoader {
@@ -92,7 +91,6 @@ impl CachingDeleteFileLoader {
         CachingDeleteFileLoader {
             file_io,
             concurrency_limit_data_files,
-            del_filter: DeleteFilter::default(),
         }
     }
 
@@ -167,6 +165,7 @@ impl CachingDeleteFileLoader {
         schema: SchemaRef,
     ) -> Receiver<Result<DeleteFilter>> {
         let (tx, rx) = channel();
+        let del_filter = DeleteFilter::default();
 
         let stream_items = delete_file_entries
             .iter()
@@ -174,13 +173,13 @@ impl CachingDeleteFileLoader {
                 (
                     t.clone(),
                     self.file_io.clone(),
-                    self.del_filter.clone(),
+                    del_filter.clone(),
                     schema.clone(),
                 )
             })
             .collect::<Vec<_>>();
         let task_stream = futures::stream::iter(stream_items);
-        let del_filter = self.del_filter.clone();
+        let del_filter = del_filter.clone();
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         crate::runtime::spawn(async move {
             let result = async move {
