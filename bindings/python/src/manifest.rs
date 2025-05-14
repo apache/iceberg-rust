@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::spec::{DataContentType, DataFile, DataFileFormat, FieldSummary, FormatVersion, Literal, Manifest, ManifestContentType, ManifestEntry, ManifestFile, ManifestList, ManifestStatus, PrimitiveLiteral, StructType};
+use iceberg::spec::{DataContentType, DataFile, DataFileFormat, FieldSummary, FormatVersion, Literal, Manifest, ManifestContentType, ManifestEntry, ManifestFile, ManifestList, ManifestStatus, PrimitiveLiteral, StructType, Type};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use pyo3::types::PyAny;
-use iceberg::Error;
-use iceberg::ErrorKind;
+use iceberg::{Error, ErrorKind};
+
 #[pyclass]
 pub struct PyLiteral {
     inner: Literal,
@@ -66,6 +66,7 @@ impl PyDataFile {
             DataFileFormat::Avro => "avro",
             DataFileFormat::Orc => "orc",
             DataFileFormat::Parquet => "parquet",
+            DataFileFormat::Puffin => "puffin",
         }
     }
 
@@ -383,12 +384,21 @@ pub fn read_manifest_list(bs: &[u8], cb: &PartitionSpecProviderCallbackHolder) -
     let provider = move |_id| {
         let bound = cb.do_the_callback(_id).unwrap();
         let json = bound.as_str();
-        serde_json::from_str::<StructType>(json).map_err(|_|{
-            Error::new(
+
+        // I don't fully comprehend the deserializer here,
+        // it works for a Type, but not for a StructType
+        // So I had to do some awkward stuff to make it work
+        let res: Result<Type, _> = serde_json::from_str(json);
+
+        let result: Result<Option<StructType>, Error> = match res {
+            Ok(Type::Struct(s)) => Ok(Some(s)),
+            _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Invalid JSON: {}", json),
-            )
-        }).map(|v|Some(v))
+            ))
+        };
+
+        result
     };
 
     PyManifestList {
