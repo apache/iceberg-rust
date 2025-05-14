@@ -3510,7 +3510,7 @@ dependencies = [
  "arrow-string",
  "async-std",
  "async-trait",
- "base64 0.21.7",
+ "base64 0.22.1",
  "bimap",
  "bytes",
  "chrono",
