@@ -179,6 +179,7 @@ pub(crate) mod test {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let file_name_genertaor = super::DefaultFileNameGenerator::new(

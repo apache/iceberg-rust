@@ -55,6 +55,7 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
