@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["iceberg_datafusion",[["impl TableProvider for <a class=\"struct\" href=\"iceberg_datafusion/struct.IcebergTableProvider.html\" title=\"struct iceberg_datafusion::IcebergTableProvider\">IcebergTableProvider</a>"]]]]);
+    var implementors = Object.fromEntries([["iceberg_datafusion",[["impl TableProvider for <a class=\"struct\" href=\"iceberg_datafusion/table/struct.IcebergTableProvider.html\" title=\"struct iceberg_datafusion::table::IcebergTableProvider\">IcebergTableProvider</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[215]}
+//{"start":57,"fragment_lengths":[228]}
