@@ -119,6 +119,7 @@ spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) US
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (19)")
 spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bigint")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
+spark.sql("INSERT INTO rest.default.test_promote_column VALUES (null)")
 
 #  Create a table with various types
 spark.sql("""
