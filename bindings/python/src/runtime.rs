@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+use std::sync::OnceLock;
 
-mod error;
-pub use error::*;
+use tokio::runtime::{Handle, Runtime};
 
-mod physical_plan;
-mod schema;
-pub mod table;
-pub use table::table_provider_factory::IcebergTableProviderFactory;
-pub use table::*;
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+pub fn runtime() -> Handle {
+    match Handle::try_current() {
+        Ok(h) => h.clone(),
+        _ => {
+            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
+            rt.handle().clone()
+        }
+    }
+}

@@ -17,12 +17,15 @@
 
 use pyo3::prelude::*;
 
+mod datafusion_table_provider;
 mod error;
+mod runtime;
 mod transform;
 mod manifest;
 
 #[pymodule]
 fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    datafusion_table_provider::register_module(py, m)?;
     transform::register_module(py, m)?;
     manifest::register_module(py, m)?;
     Ok(())
