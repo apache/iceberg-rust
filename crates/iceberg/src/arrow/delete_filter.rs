@@ -192,7 +192,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::arrow::delete_file_loader::CachingDeleteFileLoader;
+    use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, Schema};
 
