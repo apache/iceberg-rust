@@ -633,7 +633,9 @@
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
 <a href="#634" id="634">634</a>
-<a href="#635" id="635">635</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -807,7 +809,7 @@
     ///
     /// - Errors from `validate_namespace` if the namespace identifier does not
     /// meet validation criteria.
-    /// - Errors from `convert_to_database` if the properties cannot be  
+    /// - Errors from `convert_to_database` if the properties cannot be
     /// successfully converted into a database configuration.
     /// - Errors from the underlying database creation process, converted using
     /// `from_sdk_error`.
@@ -894,7 +896,7 @@
     <span class="doccomment">/// Asynchronously updates properties of an existing namespace.
     ///
     /// Converts the given namespace identifier and properties into a database
-    /// representation and then attempts to update the corresponding namespace  
+    /// representation and then attempts to update the corresponding namespace
     /// in the Glue Catalog.
     ///
     /// # Returns
@@ -930,7 +932,7 @@
     /// # Returns
     /// A `Result&lt;()&gt;` indicating the outcome:
     /// - `Ok(())` signifies successful namespace deletion.
-    /// - `Err(...)` signifies failure to drop the namespace due to validation  
+    /// - `Err(...)` signifies failure to drop the namespace due to validation
     /// errors, connectivity issues, or Glue Catalog constraints.
     </span><span class="kw">async fn </span>drop_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>db_name = validate_namespace(namespace)<span class="question-mark">?</span>;
@@ -957,7 +959,7 @@
     /// A `Result&lt;Vec&lt;TableIdent&gt;&gt;`, which is:
     /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
     /// representing a table within the specified namespace.
-    /// - `Err(...)` if an error occurs during namespace validation or while  
+    /// - `Err(...)` if an error occurs during namespace validation or while
     /// querying the database.
     </span><span class="kw">async fn </span>list_tables(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TableIdent&gt;&gt; {
         <span class="kw">let </span>db_name = validate_namespace(namespace)<span class="question-mark">?</span>;
@@ -1010,7 +1012,7 @@
     </span><span class="kw">async fn </span>create_table(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
-        creation: TableCreation,
+        <span class="kw-2">mut </span>creation: TableCreation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
         <span class="kw">let </span>db_name = validate_namespace(namespace)<span class="question-mark">?</span>;
         <span class="kw">let </span>table_name = creation.name.clone();
@@ -1019,10 +1021,12 @@
             <span class="prelude-val">Some</span>(location) =&gt; location.clone(),
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>ns = <span class="self">self</span>.get_namespace(namespace).<span class="kw">await</span><span class="question-mark">?</span>;
-                get_default_table_location(<span class="kw-2">&amp;</span>ns, <span class="kw-2">&amp;</span>db_name, <span class="kw-2">&amp;</span>table_name, <span class="kw-2">&amp;</span><span class="self">self</span>.config.warehouse)
+                <span class="kw">let </span>location =
+                    get_default_table_location(<span class="kw-2">&amp;</span>ns, <span class="kw-2">&amp;</span>db_name, <span class="kw-2">&amp;</span>table_name, <span class="kw-2">&amp;</span><span class="self">self</span>.config.warehouse);
+                creation.location = <span class="prelude-val">Some</span>(location.clone());
+                location
             }
         };
-
         <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(creation)<span class="question-mark">?
             </span>.build()<span class="question-mark">?
             </span>.metadata;
