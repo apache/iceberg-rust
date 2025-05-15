@@ -172,7 +172,7 @@ impl Catalog for GlueCatalog {
     ///
     /// - Errors from `validate_namespace` if the namespace identifier does not
     /// meet validation criteria.
-    /// - Errors from `convert_to_database` if the properties cannot be  
+    /// - Errors from `convert_to_database` if the properties cannot be
     /// successfully converted into a database configuration.
     /// - Errors from the underlying database creation process, converted using
     /// `from_sdk_error`.
@@ -259,7 +259,7 @@ impl Catalog for GlueCatalog {
     /// Asynchronously updates properties of an existing namespace.
     ///
     /// Converts the given namespace identifier and properties into a database
-    /// representation and then attempts to update the corresponding namespace  
+    /// representation and then attempts to update the corresponding namespace
     /// in the Glue Catalog.
     ///
     /// # Returns
@@ -295,7 +295,7 @@ impl Catalog for GlueCatalog {
     /// # Returns
     /// A `Result<()>` indicating the outcome:
     /// - `Ok(())` signifies successful namespace deletion.
-    /// - `Err(...)` signifies failure to drop the namespace due to validation  
+    /// - `Err(...)` signifies failure to drop the namespace due to validation
     /// errors, connectivity issues, or Glue Catalog constraints.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let db_name = validate_namespace(namespace)?;
@@ -322,7 +322,7 @@ impl Catalog for GlueCatalog {
     /// A `Result<Vec<TableIdent>>`, which is:
     /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
     /// representing a table within the specified namespace.
-    /// - `Err(...)` if an error occurs during namespace validation or while  
+    /// - `Err(...)` if an error occurs during namespace validation or while
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let db_name = validate_namespace(namespace)?;
@@ -375,7 +375,7 @@ impl Catalog for GlueCatalog {
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
-        creation: TableCreation,
+        mut creation: TableCreation,
     ) -> Result<Table> {
         let db_name = validate_namespace(namespace)?;
         let table_name = creation.name.clone();
@@ -384,10 +384,12 @@ impl Catalog for GlueCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse)
+                let location =
+                    get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse);
+                creation.location = Some(location.clone());
+                location
             }
         };
-
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
