@@ -1251,22 +1251,20 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        if self.metadata.current_snapshot_id.is_some() {
-            let snapshot_id = self.metadata.current_snapshot_id.unwrap();
-            let mut cur_snapshot = self
-                .metadata
-                .snapshots
-                .remove(&snapshot_id)
-                .unwrap()
-                .as_ref()
-                .clone();
-            cur_snapshot.add_summary_properties(properties.clone());
-            self.metadata
-                .snapshots
-                .insert(snapshot_id, Arc::new(cur_snapshot));
-            self.changes
-                .push(TableUpdate::AddSnapshotSummaryProperties { properties });
-        }
+        let snapshot_id = self.metadata.current_snapshot_id.unwrap();
+        let mut cur_snapshot = self
+            .metadata
+            .snapshots
+            .remove(&snapshot_id)
+            .unwrap()
+            .as_ref()
+            .clone();
+        cur_snapshot.add_summary_properties(properties.clone());
+        self.metadata
+            .snapshots
+            .insert(snapshot_id, Arc::new(cur_snapshot));
+        self.changes
+            .push(TableUpdate::AddSnapshotSummaryProperties { properties });
 
         Ok(self)
     }
