@@ -1242,7 +1242,7 @@ impl TableMetadataBuilder {
         Ok(self)
     }
 
-    /// Add snapshot summary properties for the table metadata.
+    /// Add summary properties to the latest snapshot for the table metadata.
     pub fn add_snapshot_summary_properties(
         mut self,
         properties: HashMap<String, String>,
@@ -1251,8 +1251,22 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        self.changes
-            .push(TableUpdate::AddSnapshotSummaryProperties { properties });
+        if self.metadata.current_snapshot_id.is_some() {
+            let snapshot_id = self.metadata.current_snapshot_id.unwrap();
+            let mut cur_snapshot = self
+                .metadata
+                .snapshots
+                .remove(&snapshot_id)
+                .unwrap()
+                .as_ref()
+                .clone();
+            cur_snapshot.add_summary_properties(properties.clone());
+            self.metadata
+                .snapshots
+                .insert(snapshot_id, Arc::new(cur_snapshot));
+            self.changes
+                .push(TableUpdate::AddSnapshotSummaryProperties { properties });
+        }
 
         Ok(self)
     }
@@ -2527,16 +2541,13 @@ mod tests {
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap();
-        assert_eq!(
-            0,
-            table
-                .metadata()
-                .current_snapshot()
-                .unwrap()
-                .summary()
-                .additional_properties
-                .len()
-        );
+        assert!(table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties
+            .is_empty());
 
         let mut new_properties = HashMap::new();
         new_properties.insert("prop-key".to_string(), "prop-value".to_string());

@@ -214,6 +214,11 @@ impl Snapshot {
             snapshot_id: self.snapshot_id,
         }
     }
+
+    /// Add the given properties map to snapshot summary.
+    pub(crate) fn add_summary_properties(&mut self, props: HashMap<String, String>) {
+        self.summary.additional_properties.extend(props);
+    }
 }
 
 pub(super) mod _serde {
