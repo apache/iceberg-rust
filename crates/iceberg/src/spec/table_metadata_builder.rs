@@ -1241,6 +1241,21 @@ impl TableMetadataBuilder {
 
         Ok(self)
     }
+
+    /// Add snapshot summary properties for the table metadata.
+    pub fn add_snapshot_summary_properties(
+        mut self,
+        properties: HashMap<String, String>,
+    ) -> Result<Self> {
+        if properties.is_empty() {
+            return Ok(self);
+        }
+
+        self.changes
+            .push(TableUpdate::AddSnapshotSummaryProperties { properties });
+
+        Ok(self)
+    }
 }
 
 impl From<TableMetadataBuildResult> for TableMetadata {
@@ -2492,5 +2507,53 @@ mod tests {
                 unreachable!("Expected RemoveSchema change")
             };
         assert_eq!(remove_schema_ids, &[0]);
+    }
+
+    #[test]
+    fn test_add_snapshot_summary_properties() {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let table = Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap();
+        assert_eq!(
+            0,
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .additional_properties
+                .len()
+        );
+
+        let mut new_properties = HashMap::new();
+        new_properties.insert("prop-key".to_string(), "prop-value".to_string());
+
+        let mut meta_data_builder = table.metadata().clone().into_builder(None);
+        meta_data_builder = meta_data_builder
+            .add_snapshot_summary_properties(new_properties.clone())
+            .unwrap();
+        let build_result = meta_data_builder.build().unwrap();
+        assert_eq!(
+            build_result
+                .metadata
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .additional_properties,
+            new_properties
+        );
     }
 }
