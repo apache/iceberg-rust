@@ -45,7 +45,7 @@ pub(crate) struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: Option<DeleteFileIndex>,
+    delete_file_index: DeleteFileIndex,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -58,7 +58,7 @@ pub(crate) struct ManifestEntryContext {
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
-    pub delete_file_index: Option<DeleteFileIndex>,
+    pub delete_file_index: DeleteFileIndex,
 }
 
 impl ManifestFileContext {
@@ -105,16 +105,13 @@ impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
     pub(crate) async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        let deletes = if let Some(delete_file_index) = self.delete_file_index {
-            delete_file_index
-                .get_deletes_for_data_file(
-                    self.manifest_entry.data_file(),
-                    self.manifest_entry.sequence_number(),
-                )
-                .await?
-        } else {
-            vec![]
-        };
+        let deletes = self
+            .delete_file_index
+            .get_deletes_for_data_file(
+                self.manifest_entry.data_file(),
+                self.manifest_entry.sequence_number(),
+            )
+            .await?;
 
         Ok(FileScanTask {
             start: 0,
@@ -188,7 +185,8 @@ impl PlanContext {
         &self,
         manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
-        delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
+        delete_file_idx: DeleteFileIndex,
+        delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let manifest_files = manifest_list.entries().iter();
 
@@ -196,16 +194,10 @@ impl PlanContext {
         let mut filtered_mfcs = vec![];
 
         for manifest_file in manifest_files {
-            let (delete_file_idx, tx) = if manifest_file.content == ManifestContentType::Deletes {
-                let Some((delete_file_idx, tx)) = delete_file_idx_and_tx.as_ref() else {
-                    continue;
-                };
-                (Some(delete_file_idx.clone()), tx.clone())
+            let tx = if manifest_file.content == ManifestContentType::Deletes {
+                delete_file_tx.clone()
             } else {
-                (
-                    delete_file_idx_and_tx.as_ref().map(|x| x.0.clone()),
-                    tx_data.clone(),
-                )
+                tx_data.clone()
             };
 
             let partition_bound_predicate = if self.predicate.is_some() {
@@ -233,7 +225,7 @@ impl PlanContext {
                 manifest_file,
                 partition_bound_predicate,
                 tx,
-                delete_file_idx,
+                delete_file_idx.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -247,7 +239,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
-        delete_file_index: Option<DeleteFileIndex>,
+        delete_file_index: DeleteFileIndex,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =

@@ -64,7 +64,6 @@ pub struct ArrowReaderBuilder {
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
-    delete_file_support_enabled: bool,
 }
 
 impl ArrowReaderBuilder {
@@ -78,7 +77,6 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
-            delete_file_support_enabled: false,
         }
     }
 
@@ -107,12 +105,6 @@ impl ArrowReaderBuilder {
         self
     }
 
-    /// Determines whether to enable delete file support.
-    pub fn with_delete_file_support_enabled(mut self, delete_file_support_enabled: bool) -> Self {
-        self.delete_file_support_enabled = delete_file_support_enabled;
-        self
-    }
-
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
@@ -125,7 +117,6 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
-            delete_file_support_enabled: self.delete_file_support_enabled,
         }
     }
 }
@@ -142,7 +133,6 @@ pub struct ArrowReader {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
-    delete_file_support_enabled: bool,
 }
 
 impl ArrowReader {
@@ -154,7 +144,6 @@ impl ArrowReader {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
-        let delete_file_support_enabled = self.delete_file_support_enabled;
 
         let stream = tasks
             .map_ok(move |task| {
@@ -167,7 +156,6 @@ impl ArrowReader {
                     self.delete_file_loader.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
-                    delete_file_support_enabled,
                 )
             })
             .map_err(|err| {
@@ -187,26 +175,12 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
-        delete_file_support_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        if !delete_file_support_enabled && !task.deletes.is_empty() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Delete file support is not enabled",
-            ));
-        }
-
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
-        let delete_filter_rx = delete_file_loader.load_deletes(
-            if delete_file_support_enabled {
-                &task.deletes
-            } else {
-                &[]
-            },
-            task.schema.clone(),
-        );
+        let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
+
         let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
