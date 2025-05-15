@@ -73,13 +73,13 @@ struct DeleteFileFilterState {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct DeleteFilter {
+pub(crate) struct DeleteFilter {
     state: Arc<RwLock<DeleteFileFilterState>>,
 }
 
 impl DeleteFilter {
     /// Retrieve a delete vector for the data file associated with a given file scan task
-    pub fn get_delete_vector(
+    pub(crate) fn get_delete_vector(
         &self,
         file_scan_task: &FileScanTask,
     ) -> Option<Arc<Mutex<DeleteVector>>> {
@@ -87,7 +87,7 @@ impl DeleteFilter {
     }
 
     /// Retrieve a delete vector for a data file
-    pub fn get_delete_vector_for_path(
+    pub(crate) fn get_delete_vector_for_path(
         &self,
         delete_file_path: &str,
     ) -> Option<Arc<Mutex<DeleteVector>>> {
@@ -111,7 +111,7 @@ impl DeleteFilter {
     }
 
     /// Builds eq delete predicate for the provided task.
-    pub async fn build_equality_delete_predicate(
+    pub(crate) async fn build_equality_delete_predicate(
         &self,
         file_scan_task: &FileScanTask,
     ) -> Result<Option<BoundPredicate>> {
