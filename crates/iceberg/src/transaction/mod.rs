@@ -18,6 +18,7 @@
 //! This module contains transaction api.
 
 mod append;
+mod schema_update;
 mod snapshot;
 mod sort_order;
 
@@ -32,6 +33,7 @@ use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::schema_update::SchemaUpdateAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -148,6 +150,16 @@ impl<'a> Transaction<'a> {
             snapshot_id = generate_random_id();
         }
         snapshot_id
+    }
+
+    /// Get base table
+    pub fn current(&self) -> &Table {
+        &self.current_table
+    }
+
+    /// Update table's schema
+    pub fn update_schema(self) -> SchemaUpdateAction<'a> {
+        SchemaUpdateAction::new(self)
     }
 
     /// Creates a fast append action.

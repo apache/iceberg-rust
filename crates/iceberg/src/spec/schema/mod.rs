@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
-use self::index::{index_by_id, index_parents, IndexByName};
+pub use self::index::index_parents;
+use self::index::{index_by_id, IndexByName};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::Result;
@@ -374,6 +375,14 @@ impl Schema {
     #[inline]
     pub fn identifier_field_ids(&self) -> impl ExactSizeIterator<Item = i32> + '_ {
         self.identifier_field_ids.iter().copied()
+    }
+
+    /// Returns the set of identifier field names
+    pub fn identifier_field_names(&self) -> HashSet<String> {
+        self.identifier_field_ids
+            .iter()
+            .filter_map(|id| self.id_to_name.get(id).cloned())
+            .collect()
     }
 
     /// Get field id by full name.
