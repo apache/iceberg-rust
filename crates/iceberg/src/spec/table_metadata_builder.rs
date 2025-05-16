@@ -120,6 +120,7 @@ impl TableMetadataBuilder {
                 refs: HashMap::default(),
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
+                encryption_keys: HashMap::new(),
             },
             last_updated_ms: None,
             changes: vec![],

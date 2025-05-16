@@ -175,6 +175,8 @@ pub struct TableMetadata {
     pub(crate) statistics: HashMap<i64, StatisticsFile>,
     /// Mapping of snapshot ids to partition statistics files.
     pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
+    /// Encryption Keys
+    pub(crate) encryption_keys: HashMap<String, String>,
 }
 
 impl TableMetadata {
@@ -416,6 +418,18 @@ impl TableMetadata {
                     });
             }
         }
+    }
+
+    /// Iterate over all encryption keys
+    #[inline]
+    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = (&String, &String)> {
+        self.encryption_keys.iter()
+    }
+
+    /// Get the encryption key for a given key id
+    #[inline]
+    pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
+        self.encryption_keys.get(key_id)
     }
 
     /// Normalize this partition spec.
@@ -905,6 +919,7 @@ pub(super) mod _serde {
                 }),
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1061,6 +1076,7 @@ pub(super) mod _serde {
                 },
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1460,6 +1476,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1635,6 +1652,7 @@ mod tests {
             refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference { snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None } })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -1732,6 +1750,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -2262,6 +2281,7 @@ mod tests {
                     max_ref_age_ms: None,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -2396,6 +2416,7 @@ mod tests {
                     max_ref_age_ms: None,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -2557,6 +2578,7 @@ mod tests {
             })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2641,6 +2663,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2709,6 +2732,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
