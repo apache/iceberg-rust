@@ -37,8 +37,10 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+arrow-array = { version = "55" }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
+parquet = "55"
 regex = "1.10.5"
 sqlx = { version = "0.8.1", features = [
   "tls-rustls",
