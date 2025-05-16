@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::exceptions::PyValueError;
 use pyo3::PyErr;
+use pyo3::exceptions::PyValueError;
 
 /// Convert an iceberg error to a python error
 pub fn to_py_err(err: iceberg::Error) -> PyErr {

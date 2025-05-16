@@ -25,8 +25,8 @@ use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
-use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
+use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -80,14 +80,18 @@ impl HttpClient {
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
-            token_endpoint: (!cfg.get_token_endpoint().is_empty())
-                .then(|| cfg.get_token_endpoint())
-                .unwrap_or(self.token_endpoint),
+            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
+                cfg.get_token_endpoint()
+            } else {
+                self.token_endpoint
+            },
             credential: cfg.credential().or(self.credential),
             extra_headers,
-            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
-                .then(|| cfg.extra_oauth_params())
-                .unwrap_or(self.extra_oauth_params),
+            extra_oauth_params: if !cfg.extra_oauth_params().is_empty() {
+                cfg.extra_oauth_params()
+            } else {
+                self.extra_oauth_params
+            },
         })
     }
 

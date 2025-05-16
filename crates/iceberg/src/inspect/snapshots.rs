@@ -18,20 +18,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_array::builder::{MapBuilder, MapFieldNames, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMicrosecondType};
-use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::{schema_to_arrow_schema, DEFAULT_MAP_FIELD_NAME};
+use crate::Result;
+use crate::arrow::{DEFAULT_MAP_FIELD_NAME, schema_to_arrow_schema};
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{
-    MapType, NestedField, PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField, PrimitiveType, Type,
 };
 use crate::table::Table;
-use crate::Result;
 
 /// Snapshots table.
 pub struct SnapshotsTable<'a> {

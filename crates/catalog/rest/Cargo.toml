@@ -29,7 +29,6 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-# async-trait = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }

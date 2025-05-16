@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
-use crate::error::{timestamp_ms_to_utc, Result};
+use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
 use crate::{Error, ErrorKind};
@@ -226,8 +226,8 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{Operation, Snapshot, Summary};
-    use crate::spec::SchemaId;
     use crate::Error;
+    use crate::spec::SchemaId;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]

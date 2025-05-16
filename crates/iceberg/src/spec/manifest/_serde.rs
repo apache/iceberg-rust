@@ -310,11 +310,11 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
+    use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
-        read_data_files_from_avro, write_data_files_to_avro, DataContentType, DataFile,
-        DataFileFormat, Datum, FormatVersion, NestedField, PrimitiveType, Schema, Struct,
-        StructType, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, NestedField,
+        PrimitiveType, Schema, Struct, StructType, Type, read_data_files_from_avro,
+        write_data_files_to_avro,
     };
 
     #[test]

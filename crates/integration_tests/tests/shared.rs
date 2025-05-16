@@ -18,7 +18,7 @@
 use std::sync::{Arc, OnceLock};
 
 use ctor::dtor;
-use iceberg_integration_tests::{set_test_fixture, TestFixture};
+use iceberg_integration_tests::{TestFixture, set_test_fixture};
 
 pub mod shared_tests;
 
