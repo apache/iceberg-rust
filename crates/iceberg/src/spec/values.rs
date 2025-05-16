@@ -403,12 +403,26 @@ impl Datum {
                 }
             }
             PrimitiveType::Int => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
-            PrimitiveType::Long => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Long => {
+                if bytes.len() == 4 {
+                    // In the case of an evolved field
+                    PrimitiveLiteral::Long(i32::from_le_bytes(bytes.try_into()?) as i64)
+                } else {
+                    PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                }
+            }
             PrimitiveType::Float => {
                 PrimitiveLiteral::Float(OrderedFloat(f32::from_le_bytes(bytes.try_into()?)))
             }
             PrimitiveType::Double => {
-                PrimitiveLiteral::Double(OrderedFloat(f64::from_le_bytes(bytes.try_into()?)))
+                if bytes.len() == 4 {
+                    // In the case of an evolved field
+                    PrimitiveLiteral::Double(OrderedFloat(
+                        f32::from_le_bytes(bytes.try_into()?) as f64
+                    ))
+                } else {
+                    PrimitiveLiteral::Double(OrderedFloat(f64::from_le_bytes(bytes.try_into()?)))
+                }
             }
             PrimitiveType::Date => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Time => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
@@ -3173,6 +3187,13 @@ mod tests {
     }
 
     #[test]
+    fn avro_bytes_long_from_int() {
+        let bytes = vec![32u8, 0u8, 0u8, 0u8];
+
+        check_avro_bytes_serde(bytes, Datum::long(32), &PrimitiveType::Long);
+    }
+
+    #[test]
     fn avro_bytes_float() {
         let bytes = vec![0u8, 0u8, 128u8, 63u8];
 
@@ -3182,6 +3203,13 @@ mod tests {
     #[test]
     fn avro_bytes_double() {
         let bytes = vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 240u8, 63u8];
+
+        check_avro_bytes_serde(bytes, Datum::double(1.0), &PrimitiveType::Double);
+    }
+
+    #[test]
+    fn avro_bytes_double_from_float() {
+        let bytes = vec![0u8, 0u8, 128u8, 63u8];
 
         check_avro_bytes_serde(bytes, Datum::double(1.0), &PrimitiveType::Double);
     }

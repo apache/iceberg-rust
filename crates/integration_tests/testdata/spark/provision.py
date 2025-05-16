@@ -114,8 +114,8 @@ spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Python')")
 spark.sql("ALTER TABLE rest.default.test_rename_column RENAME COLUMN lang TO language")
 spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Java')")
 
-#  Create a table, and do some evolution
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) USING iceberg")
+#  Create a table, and do some evolution on a partition column
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) USING iceberg PARTITIONED BY (foo)")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (19)")
 spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bigint")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
