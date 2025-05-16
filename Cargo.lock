@@ -3604,6 +3604,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-catalog-loader"
+version = "0.4.0"
+dependencies = [
+ "iceberg",
+ "iceberg-catalog-rest",
+ "tokio",
+]
+
+[[package]]
 name = "iceberg-catalog-memory"
 version = "0.4.0"
 dependencies = [
