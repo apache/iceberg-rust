@@ -293,7 +293,7 @@ mod tests {
             new_snapshot.sequence_number()
         );
 
-        // check manifset
+        // check manifest
         let manifest = manifest_list.entries()[0]
             .load_manifest(table.file_io())
             .await
