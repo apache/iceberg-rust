@@ -41,6 +41,8 @@ storage-s3 = ["opendal/services-s3"]
 async-std = ["dep:async-std"]
 tokio = ["tokio/rt-multi-thread"]
 
+nightly = []
+
 [dependencies]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }

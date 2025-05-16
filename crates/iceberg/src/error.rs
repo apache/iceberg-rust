@@ -211,6 +211,13 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source.as_ref().map(|v| v.as_ref())
     }
+
+    #[cfg(feature = "nightly")]
+    fn provide<'a>(&'a self, request: &mut std::error::Request<'a>) {
+        if self.backtrace.status() == BacktraceStatus::Captured {
+            request.provide_ref::<Backtrace>(&self.backtrace);
+        }
+    }
 }
 
 impl Error {
