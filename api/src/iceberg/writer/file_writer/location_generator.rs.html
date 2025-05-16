@@ -231,7 +231,8 @@
 <a href="#230" id="230">230</a>
 <a href="#231" id="231">231</a>
 <a href="#232" id="232">232</a>
-<a href="#233" id="233">233</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -412,6 +413,7 @@
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         <span class="kw">let </span>file_name_genertaor = <span class="kw">super</span>::DefaultFileNameGenerator::new(

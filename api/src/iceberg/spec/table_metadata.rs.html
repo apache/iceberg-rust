@@ -2991,7 +2991,31 @@
 <a href="#2990" id="2990">2990</a>
 <a href="#2991" id="2991">2991</a>
 <a href="#2992" id="2992">2992</a>
-<a href="#2993" id="2993">2993</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2993" id="2993">2993</a>
+<a href="#2994" id="2994">2994</a>
+<a href="#2995" id="2995">2995</a>
+<a href="#2996" id="2996">2996</a>
+<a href="#2997" id="2997">2997</a>
+<a href="#2998" id="2998">2998</a>
+<a href="#2999" id="2999">2999</a>
+<a href="#3000" id="3000">3000</a>
+<a href="#3001" id="3001">3001</a>
+<a href="#3002" id="3002">3002</a>
+<a href="#3003" id="3003">3003</a>
+<a href="#3004" id="3004">3004</a>
+<a href="#3005" id="3005">3005</a>
+<a href="#3006" id="3006">3006</a>
+<a href="#3007" id="3007">3007</a>
+<a href="#3008" id="3008">3008</a>
+<a href="#3009" id="3009">3009</a>
+<a href="#3010" id="3010">3010</a>
+<a href="#3011" id="3011">3011</a>
+<a href="#3012" id="3012">3012</a>
+<a href="#3013" id="3013">3013</a>
+<a href="#3014" id="3014">3014</a>
+<a href="#3015" id="3015">3015</a>
+<a href="#3016" id="3016">3016</a>
+<a href="#3017" id="3017">3017</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -3168,6 +3192,8 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) statistics: HashMap&lt;i64, StatisticsFile&gt;,
     <span class="doccomment">/// Mapping of snapshot ids to partition statistics files.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_statistics: HashMap&lt;i64, PartitionStatisticsFile&gt;,
+    <span class="doccomment">/// Encryption Keys
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) encryption_keys: HashMap&lt;String, String&gt;,
 }
 
 <span class="kw">impl </span>TableMetadata {
@@ -3409,6 +3435,18 @@
                     });
             }
         }
+    }
+
+    <span class="doccomment">/// Iterate over all encryption keys
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>encryption_keys_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = (<span class="kw-2">&amp;</span>String, <span class="kw-2">&amp;</span>String)&gt; {
+        <span class="self">self</span>.encryption_keys.iter()
+    }
+
+    <span class="doccomment">/// Get the encryption key for a given key id
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>encryption_key(<span class="kw-2">&amp;</span><span class="self">self</span>, key_id: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>String&gt; {
+        <span class="self">self</span>.encryption_keys.get(key_id)
     }
 
     <span class="doccomment">/// Normalize this partition spec.
@@ -3898,6 +3936,7 @@
                 }),
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()<span class="question-mark">?</span>;
@@ -4054,6 +4093,7 @@
                 },
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()<span class="question-mark">?</span>;
@@ -4453,6 +4493,7 @@
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         <span class="kw">let </span>expected_json_value = serde_json::to_value(<span class="kw-2">&amp;</span>expected).unwrap();
@@ -4628,6 +4669,7 @@
             refs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="string">"main"</span>.to_string(), SnapshotReference { snapshot_id: <span class="number">638933773299822130</span>, retention: SnapshotRetention::Branch { min_snapshots_to_keep: <span class="prelude-val">None</span>, max_snapshot_age_ms: <span class="prelude-val">None</span>, max_ref_age_ms: <span class="prelude-val">None </span>} })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -4725,6 +4767,7 @@
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         <span class="kw">let </span>expected_json_value = serde_json::to_value(<span class="kw-2">&amp;</span>expected).unwrap();
@@ -5255,6 +5298,7 @@
                     max_ref_age_ms: <span class="prelude-val">None</span>,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -5389,6 +5433,7 @@
                     max_ref_age_ms: <span class="prelude-val">None</span>,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -5550,6 +5595,7 @@
             })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(<span class="kw-2">&amp;</span>metadata, expected);
@@ -5634,6 +5680,7 @@
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(<span class="kw-2">&amp;</span>metadata, expected);
@@ -5702,6 +5749,7 @@
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(<span class="kw-2">&amp;</span>metadata, expected);

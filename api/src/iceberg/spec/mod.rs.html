@@ -50,7 +50,9 @@
 <a href="#49" id="49">49</a>
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
-<a href="#52" id="52">52</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#52" id="52">52</a>
+<a href="#53" id="53">53</a>
+<a href="#54" id="54">54</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -70,6 +72,7 @@
 </span><span class="doccomment">//! Spec for Iceberg.
 
 </span><span class="kw">mod </span>datatypes;
+<span class="kw">mod </span>encrypted_key;
 <span class="kw">mod </span>manifest;
 <span class="kw">mod </span>manifest_list;
 <span class="kw">mod </span>name_mapping;
@@ -88,6 +91,7 @@
 <span class="kw">mod </span>view_version;
 
 <span class="kw">pub use </span>datatypes::<span class="kw-2">*</span>;
+<span class="kw">pub use </span>encrypted_key::<span class="kw-2">*</span>;
 <span class="kw">pub use </span>manifest::<span class="kw-2">*</span>;
 <span class="kw">pub use </span>manifest_list::<span class="kw-2">*</span>;
 <span class="kw">pub use </span>name_mapping::<span class="kw-2">*</span>;
