@@ -18,20 +18,20 @@
 //! This module contains memory catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use async_trait::async_trait;
-use futures::lock::Mutex;
+use futures::lock::{Mutex, MutexGuard};
 use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    TableIdent, TableRequirement, TableUpdate,
 };
 use itertools::Itertools;
-use uuid::Uuid;
 
-use crate::namespace_state::NamespaceState;
+use crate::namespace_state::{MetadataLocation, NamespaceState};
 
 /// namespace `location` property
 const LOCATION: &str = "location";
@@ -52,6 +52,139 @@ impl MemoryCatalog {
             file_io,
             warehouse_location,
         }
+    }
+
+    /// Loads a table from the locked namespace state.
+    async fn load_table_from_locked_state(
+        &self,
+        table_ident: &TableIdent,
+        root_namespace_state: &MutexGuard<'_, NamespaceState>,
+    ) -> Result<Table> {
+        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
+        let metadata = self.read_metadata(metadata_location).await?;
+
+        Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()
+    }
+
+    async fn update_table_in_locked_state(
+        &self,
+        mut commit: TableCommit,
+        locked_state: &MutexGuard<'_, NamespaceState>,
+    ) -> Result<(Table, MetadataLocation)> {
+        let current_table = self
+            .load_table_from_locked_state(commit.identifier(), locked_state)
+            .await?;
+
+        // Checks whether the commit's expectations are met by the current table state.
+        let location =
+            Self::check_current_table_state(&current_table, commit.take_requirements()).await?;
+
+        self.apply_table_updates_and_write_metadata(
+            &current_table,
+            &location,
+            commit.take_updates(),
+        )
+        .await
+    }
+
+    async fn apply_table_updates_and_write_metadata(
+        &self,
+        current_table: &Table,
+        current_location: &MetadataLocation,
+        updates: Vec<TableUpdate>,
+    ) -> Result<(Table, MetadataLocation)> {
+        let new_location = current_location.with_next_version();
+
+        // Build the new table metadata.
+        let new_metadata =
+            Self::apply_table_updates(current_table, current_location, &new_location, updates)?;
+
+        // Write the updated metadata to it's new location.
+        self.write_metadata(&new_metadata, &new_location).await?;
+
+        // Return a table representing the updated version.
+        let new_table = Table::builder()
+            .identifier(current_table.identifier().clone())
+            .metadata(new_metadata)
+            .metadata_location(new_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()?;
+
+        Ok((new_table, new_location))
+    }
+
+    async fn read_metadata(&self, location: &MetadataLocation) -> Result<TableMetadata> {
+        let input_file = self.file_io.new_input(location.to_string())?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        Ok(metadata)
+    }
+
+    async fn write_metadata(
+        &self,
+        metadata: &TableMetadata,
+        metadata_location: &MetadataLocation,
+    ) -> Result<()> {
+        self.file_io
+            .new_output(metadata_location.to_string())?
+            .write(serde_json::to_vec(metadata)?.into())
+            .await
+    }
+
+    /// Verifies that the a TableCommit's requirements are met by the current table state.
+    /// If not, there's a conflict and the client should retry the commit.
+    async fn check_current_table_state(
+        current_table: &Table,
+        requirements: Vec<TableRequirement>,
+    ) -> Result<MetadataLocation> {
+        let location =
+            MetadataLocation::from_str(current_table.metadata_location().ok_or(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Table metadata location is not set: {}",
+                    current_table.identifier()
+                ),
+            ))?)?;
+
+        // Check that the commit's point of view is still reflected by the current state of the table.
+        for requirement in requirements {
+            requirement
+                .check(Some(current_table.metadata()))
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Conflict: One or more requirements failed, the client my retry",
+                    )
+                    .with_source(e)
+                })?;
+        }
+
+        Ok(location)
+    }
+
+    fn apply_table_updates(
+        table: &Table,
+        current_location: &MetadataLocation,
+        new_location: &MetadataLocation,
+        updates: Vec<TableUpdate>,
+    ) -> Result<TableMetadata> {
+        let mut builder = TableMetadataBuilder::new_from_metadata(
+            table.metadata().clone(),
+            Some(current_location.to_string()),
+        )
+        .set_location(new_location.to_string());
+
+        for update in updates {
+            builder = update.apply(builder)?;
+        }
+
+        Ok(builder.build()?.metadata)
     }
 }
 
@@ -197,23 +330,15 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            &location,
-            0,
-            Uuid::new_v4()
-        );
+        let metadata_location = MetadataLocation::new(&location);
 
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(&metadata)?.into())
-            .await?;
+        self.write_metadata(&metadata, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
         Table::builder()
             .file_io(self.file_io.clone())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
             .build()
@@ -223,17 +348,8 @@ impl Catalog for MemoryCatalog {
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
-        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let input_file = self.file_io.new_input(metadata_location)?;
-        let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-
-        Table::builder()
-            .file_io(self.file_io.clone())
-            .metadata_location(metadata_location.clone())
-            .metadata(metadata)
-            .identifier(table_ident.clone())
-            .build()
+        self.load_table_from_locked_state(table_ident, &root_namespace_state)
+            .await
     }
 
     /// Drop a table from the catalog.
@@ -241,7 +357,7 @@ impl Catalog for MemoryCatalog {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
         let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
-        self.file_io.delete(&metadata_location).await
+        self.file_io.delete(metadata_location.to_string()).await
     }
 
     /// Check if a table exists in the catalog.
@@ -270,12 +386,23 @@ impl Catalog for MemoryCatalog {
         Ok(())
     }
 
-    /// Update a table to the catalog.
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "MemoryCatalog does not currently support updating tables.",
-        ))
+    /// Update a table in the catalog.
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let mut locked_namespace_state = self.root_namespace_state.lock().await;
+
+        // Updates the current table version and writes a new metadata file.
+        let (staged_updated_table, new_metadata_location) = self
+            .update_table_in_locked_state(commit, &locked_namespace_state)
+            .await?;
+
+        // Flip the pointer to reference the new metadata file.
+        locked_namespace_state
+            .commit_table_update(staged_updated_table.identifier(), new_metadata_location)?;
+
+        // After the update is committed, the table is now the current version.
+        let updated_table = staged_updated_table;
+
+        Ok(updated_table)
     }
 }
 
@@ -284,9 +411,13 @@ mod tests {
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
+    use std::vec;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::spec::{
+        NestedField, NullOrder, PartitionSpec, PrimitiveType, Schema, SortOrder, Type,
+    };
+    use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
 
@@ -332,8 +463,8 @@ mod tests {
             .unwrap()
     }
 
-    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
-        let _ = catalog
+    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) -> Table {
+        catalog
             .create_table(
                 &table_ident.namespace,
                 TableCreation::builder()
@@ -342,13 +473,21 @@ mod tests {
                     .build(),
             )
             .await
-            .unwrap();
+            .unwrap()
     }
 
     async fn create_tables<C: Catalog>(catalog: &C, table_idents: Vec<&TableIdent>) {
         for table_ident in table_idents {
             create_table(catalog, table_ident).await;
         }
+    }
+
+    async fn create_table_with_namespace<C: Catalog>(catalog: &C) -> Table {
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(catalog, &namespace_ident).await;
+
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        create_table(catalog, &table_ident).await
     }
 
     fn assert_table_eq(table: &Table, expected_table_ident: &TableIdent, expected_schema: &Schema) {
@@ -1673,9 +1812,118 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
+                "TableAlreadyExists => Cannot create table {:?}. Table already exists.",
                 &dst_table_ident
             ),
         );
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let catalog = new_memory_catalog();
+
+        let table = create_table_with_namespace(&catalog).await;
+
+        // Assert the table doesn't contain the update yet
+        assert!(!table.metadata().properties().contains_key("key"));
+
+        // Update table metadata
+        let updated_table = Transaction::new(&table)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated_table.metadata().properties().get("key").unwrap(),
+            "value"
+        );
+
+        assert_eq!(table.identifier(), updated_table.identifier());
+        assert_eq!(table.metadata().uuid(), updated_table.metadata().uuid());
+        assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
+        assert_ne!(table.metadata_location(), updated_table.metadata_location());
+        assert!(
+            table.metadata().metadata_log().len() < updated_table.metadata().metadata_log().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_fails_if_commit_conflicts() {
+        let catalog = new_memory_catalog();
+        let base_table = create_table_with_namespace(&catalog).await;
+
+        // Update the table by adding a new sort order.
+        let _sorted_table = Transaction::new(&base_table)
+            .replace_sort_order()
+            .asc("foo", NullOrder::First)
+            .unwrap()
+            .apply()
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        // Try to update the -now old- table again with a different sort order.
+        let err = Transaction::new(&base_table)
+            .replace_sort_order()
+            .desc("foo", NullOrder::Last)
+            .unwrap()
+            .apply()
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+
+        // The second transaction should fail because it didn't take the new update
+        // into account.
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().to_lowercase().contains("conflict"));
+    }
+
+    #[tokio::test]
+    async fn test_update_table_fails_if_table_doesnt_exist() {
+        let catalog = new_memory_catalog();
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // This table is not known to the catalog.
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        let table = build_table(table_ident);
+
+        let err = Transaction::new(&table)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    fn build_table(ident: TableIdent) -> Table {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table_creation = TableCreation::builder()
+            .name(ident.name().to_string())
+            .schema(simple_table_schema())
+            .location(location)
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .identifier(ident)
+            .metadata(metadata)
+            .file_io(file_io)
+            .build()
+            .unwrap()
     }
 }
