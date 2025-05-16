@@ -300,7 +300,7 @@ impl InputFile {
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    pub async fn reader(&self) -> crate::Result<impl FileRead> {
+    pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
@@ -399,13 +399,13 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir_all, File};
+    use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
 
     use bytes::Bytes;
-    use futures::io::AllowStdIo;
     use futures::AsyncReadExt;
+    use futures::io::AllowStdIo;
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
