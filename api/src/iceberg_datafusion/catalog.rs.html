@@ -1,197 +1,98 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/integrations/datafusion/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_datafusion" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0-nightly (b19329a37 2024-11-21)" data-channel="nightly" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_datafusion/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
-<a href="#1" id="1">1</a>
-<a href="#2" id="2">2</a>
-<a href="#3" id="3">3</a>
-<a href="#4" id="4">4</a>
-<a href="#5" id="5">5</a>
-<a href="#6" id="6">6</a>
-<a href="#7" id="7">7</a>
-<a href="#8" id="8">8</a>
-<a href="#9" id="9">9</a>
-<a href="#10" id="10">10</a>
-<a href="#11" id="11">11</a>
-<a href="#12" id="12">12</a>
-<a href="#13" id="13">13</a>
-<a href="#14" id="14">14</a>
-<a href="#15" id="15">15</a>
-<a href="#16" id="16">16</a>
-<a href="#17" id="17">17</a>
-<a href="#18" id="18">18</a>
-<a href="#19" id="19">19</a>
-<a href="#20" id="20">20</a>
-<a href="#21" id="21">21</a>
-<a href="#22" id="22">22</a>
-<a href="#23" id="23">23</a>
-<a href="#24" id="24">24</a>
-<a href="#25" id="25">25</a>
-<a href="#26" id="26">26</a>
-<a href="#27" id="27">27</a>
-<a href="#28" id="28">28</a>
-<a href="#29" id="29">29</a>
-<a href="#30" id="30">30</a>
-<a href="#31" id="31">31</a>
-<a href="#32" id="32">32</a>
-<a href="#33" id="33">33</a>
-<a href="#34" id="34">34</a>
-<a href="#35" id="35">35</a>
-<a href="#36" id="36">36</a>
-<a href="#37" id="37">37</a>
-<a href="#38" id="38">38</a>
-<a href="#39" id="39">39</a>
-<a href="#40" id="40">40</a>
-<a href="#41" id="41">41</a>
-<a href="#42" id="42">42</a>
-<a href="#43" id="43">43</a>
-<a href="#44" id="44">44</a>
-<a href="#45" id="45">45</a>
-<a href="#46" id="46">46</a>
-<a href="#47" id="47">47</a>
-<a href="#48" id="48">48</a>
-<a href="#49" id="49">49</a>
-<a href="#50" id="50">50</a>
-<a href="#51" id="51">51</a>
-<a href="#52" id="52">52</a>
-<a href="#53" id="53">53</a>
-<a href="#54" id="54">54</a>
-<a href="#55" id="55">55</a>
-<a href="#56" id="56">56</a>
-<a href="#57" id="57">57</a>
-<a href="#58" id="58">58</a>
-<a href="#59" id="59">59</a>
-<a href="#60" id="60">60</a>
-<a href="#61" id="61">61</a>
-<a href="#62" id="62">62</a>
-<a href="#63" id="63">63</a>
-<a href="#64" id="64">64</a>
-<a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a>
-<a href="#68" id="68">68</a>
-<a href="#69" id="69">69</a>
-<a href="#70" id="70">70</a>
-<a href="#71" id="71">71</a>
-<a href="#72" id="72">72</a>
-<a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a>
-<a href="#75" id="75">75</a>
-<a href="#76" id="76">76</a>
-<a href="#77" id="77">77</a>
-<a href="#78" id="78">78</a>
-<a href="#79" id="79">79</a>
-<a href="#80" id="80">80</a>
-<a href="#81" id="81">81</a>
-<a href="#82" id="82">82</a>
-<a href="#83" id="83">83</a>
-<a href="#84" id="84">84</a>
-<a href="#85" id="85">85</a>
-<a href="#86" id="86">86</a>
-<a href="#87" id="87">87</a>
-<a href="#88" id="88">88</a>
-<a href="#89" id="89">89</a>
-<a href="#90" id="90">90</a>
-<a href="#91" id="91">91</a>
-<a href="#92" id="92">92</a>
-<a href="#93" id="93">93</a>
-<a href="#94" id="94">94</a>
-<a href="#95" id="95">95</a>
-<a href="#96" id="96">96</a>
-<a href="#97" id="97">97</a>
-<a href="#98" id="98">98</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-</span><span class="kw">use </span>std::any::Any;
-<span class="kw">use </span>std::collections::HashMap;
-<span class="kw">use </span>std::sync::Arc;
-
-<span class="kw">use </span>datafusion::catalog::{CatalogProvider, SchemaProvider};
-<span class="kw">use </span>futures::future::try_join_all;
-<span class="kw">use </span>iceberg::{Catalog, NamespaceIdent, <span class="prelude-ty">Result</span>};
-
-<span class="kw">use </span><span class="kw">crate</span>::schema::IcebergSchemaProvider;
-
-<span class="doccomment">/// Provides an interface to manage and access multiple schemas
-/// within an Iceberg [`Catalog`].
-///
-/// Acts as a centralized catalog provider that aggregates
-/// multiple [`SchemaProvider`], each associated with distinct namespaces.
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>IcebergCatalogProvider {
-    <span class="doccomment">/// A `HashMap` where keys are namespace names
-    /// and values are dynamic references to objects implementing the
-    /// [`SchemaProvider`] trait.
-    </span>schemas: HashMap&lt;String, Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt;,
-}
-
-<span class="kw">impl </span>IcebergCatalogProvider {
-    <span class="doccomment">/// Asynchronously tries to construct a new [`IcebergCatalogProvider`]
-    /// using the given client to fetch and initialize schema providers for
-    /// each namespace in the Iceberg [`Catalog`].
-    ///
-    /// This method retrieves the list of namespace names
-    /// attempts to create a schema provider for each namespace, and
-    /// collects these providers into a `HashMap`.
-    </span><span class="kw">pub async fn </span>try_new(client: Arc&lt;<span class="kw">dyn </span>Catalog&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="comment">// TODO:
-        // Schemas and providers should be cached and evicted based on time
-        // As of right now; schemas might become stale.
-        </span><span class="kw">let </span>schema_names: Vec&lt;<span class="kw">_</span>&gt; = client
-            .list_namespaces(<span class="prelude-val">None</span>)
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.iter()
-            .flat_map(|ns| ns.as_ref().clone())
-            .collect();
-
-        <span class="kw">let </span>providers = try_join_all(
-            schema_names
-                .iter()
-                .map(|name| {
-                    IcebergSchemaProvider::try_new(
-                        client.clone(),
-                        NamespaceIdent::new(name.clone()),
-                    )
-                })
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-        )
-        .<span class="kw">await</span><span class="question-mark">?</span>;
-
-        <span class="kw">let </span>schemas: HashMap&lt;String, Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt; = schema_names
-            .into_iter()
-            .zip(providers.into_iter())
-            .map(|(name, provider)| {
-                <span class="kw">let </span>provider = Arc::new(provider) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;;
-                (name, provider)
-            })
-            .collect();
-
-        <span class="prelude-val">Ok</span>(IcebergCatalogProvider { schemas })
-    }
-}
-
-<span class="kw">impl </span>CatalogProvider <span class="kw">for </span>IcebergCatalogProvider {
-    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
-        <span class="self">self
-    </span>}
-
-    <span class="kw">fn </span>schema_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;String&gt; {
-        <span class="self">self</span>.schemas.keys().cloned().collect()
-    }
-
-    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt; {
-        <span class="self">self</span>.schemas.get(name).cloned()
-    }
-}
-</code></pre></div></section></main></body></html>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/integrations/datafusion/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_datafusion" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f280acf4c 2025-02-19)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-6dad6058.js" ><script src="../../static.files/storage-3a5871a4.js"></script><script defer src="../../static.files/src-script-b8d3f215.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5332ae0c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_datafusion/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-2"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
+<a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
+<a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
+<a href=#5 id=5 data-nosnippet>5</a>// to you under the Apache License, Version 2.0 (the
+<a href=#6 id=6 data-nosnippet>6</a>// "License"); you may not use this file except in compliance
+<a href=#7 id=7 data-nosnippet>7</a>// with the License.  You may obtain a copy of the License at
+<a href=#8 id=8 data-nosnippet>8</a>//
+<a href=#9 id=9 data-nosnippet>9</a>//   http://www.apache.org/licenses/LICENSE-2.0
+<a href=#10 id=10 data-nosnippet>10</a>//
+<a href=#11 id=11 data-nosnippet>11</a>// Unless required by applicable law or agreed to in writing,
+<a href=#12 id=12 data-nosnippet>12</a>// software distributed under the License is distributed on an
+<a href=#13 id=13 data-nosnippet>13</a>// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+<a href=#14 id=14 data-nosnippet>14</a>// KIND, either express or implied.  See the License for the
+<a href=#15 id=15 data-nosnippet>15</a>// specific language governing permissions and limitations
+<a href=#16 id=16 data-nosnippet>16</a>// under the License.
+<a href=#17 id=17 data-nosnippet>17</a>
+<a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">use </span>std::any::Any;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>std::collections::HashMap;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>std::sync::Arc;
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>datafusion::catalog::{CatalogProvider, SchemaProvider};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>futures::future::try_join_all;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>iceberg::{Catalog, NamespaceIdent, <span class="prelude-ty">Result</span>};
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::schema::IcebergSchemaProvider;
+<a href=#27 id=27 data-nosnippet>27</a>
+<a href=#28 id=28 data-nosnippet>28</a><span class="doccomment">/// Provides an interface to manage and access multiple schemas
+<a href=#29 id=29 data-nosnippet>29</a>/// within an Iceberg [`Catalog`].
+<a href=#30 id=30 data-nosnippet>30</a>///
+<a href=#31 id=31 data-nosnippet>31</a>/// Acts as a centralized catalog provider that aggregates
+<a href=#32 id=32 data-nosnippet>32</a>/// multiple [`SchemaProvider`], each associated with distinct namespaces.
+<a href=#33 id=33 data-nosnippet>33</a></span><span class="attr">#[derive(Debug)]
+<a href=#34 id=34 data-nosnippet>34</a></span><span class="kw">pub struct </span>IcebergCatalogProvider {
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="doccomment">/// A `HashMap` where keys are namespace names
+<a href=#36 id=36 data-nosnippet>36</a>    /// and values are dynamic references to objects implementing the
+<a href=#37 id=37 data-nosnippet>37</a>    /// [`SchemaProvider`] trait.
+<a href=#38 id=38 data-nosnippet>38</a>    </span>schemas: HashMap&lt;String, Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt;,
+<a href=#39 id=39 data-nosnippet>39</a>}
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a><span class="kw">impl </span>IcebergCatalogProvider {
+<a href=#42 id=42 data-nosnippet>42</a>    <span class="doccomment">/// Asynchronously tries to construct a new [`IcebergCatalogProvider`]
+<a href=#43 id=43 data-nosnippet>43</a>    /// using the given client to fetch and initialize schema providers for
+<a href=#44 id=44 data-nosnippet>44</a>    /// each namespace in the Iceberg [`Catalog`].
+<a href=#45 id=45 data-nosnippet>45</a>    ///
+<a href=#46 id=46 data-nosnippet>46</a>    /// This method retrieves the list of namespace names
+<a href=#47 id=47 data-nosnippet>47</a>    /// attempts to create a schema provider for each namespace, and
+<a href=#48 id=48 data-nosnippet>48</a>    /// collects these providers into a `HashMap`.
+<a href=#49 id=49 data-nosnippet>49</a>    </span><span class="kw">pub async fn </span>try_new(client: Arc&lt;<span class="kw">dyn </span>Catalog&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#50 id=50 data-nosnippet>50</a>        <span class="comment">// TODO:
+<a href=#51 id=51 data-nosnippet>51</a>        // Schemas and providers should be cached and evicted based on time
+<a href=#52 id=52 data-nosnippet>52</a>        // As of right now; schemas might become stale.
+<a href=#53 id=53 data-nosnippet>53</a>        </span><span class="kw">let </span>schema_names: Vec&lt;<span class="kw">_</span>&gt; = client
+<a href=#54 id=54 data-nosnippet>54</a>            .list_namespaces(<span class="prelude-val">None</span>)
+<a href=#55 id=55 data-nosnippet>55</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#56 id=56 data-nosnippet>56</a>            </span>.iter()
+<a href=#57 id=57 data-nosnippet>57</a>            .flat_map(|ns| ns.as_ref().clone())
+<a href=#58 id=58 data-nosnippet>58</a>            .collect();
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="kw">let </span>providers = try_join_all(
+<a href=#61 id=61 data-nosnippet>61</a>            schema_names
+<a href=#62 id=62 data-nosnippet>62</a>                .iter()
+<a href=#63 id=63 data-nosnippet>63</a>                .map(|name| {
+<a href=#64 id=64 data-nosnippet>64</a>                    IcebergSchemaProvider::try_new(
+<a href=#65 id=65 data-nosnippet>65</a>                        client.clone(),
+<a href=#66 id=66 data-nosnippet>66</a>                        NamespaceIdent::new(name.clone()),
+<a href=#67 id=67 data-nosnippet>67</a>                    )
+<a href=#68 id=68 data-nosnippet>68</a>                })
+<a href=#69 id=69 data-nosnippet>69</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#70 id=70 data-nosnippet>70</a>        )
+<a href=#71 id=71 data-nosnippet>71</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>schemas: HashMap&lt;String, Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt; = schema_names
+<a href=#74 id=74 data-nosnippet>74</a>            .into_iter()
+<a href=#75 id=75 data-nosnippet>75</a>            .zip(providers.into_iter())
+<a href=#76 id=76 data-nosnippet>76</a>            .map(|(name, provider)| {
+<a href=#77 id=77 data-nosnippet>77</a>                <span class="kw">let </span>provider = Arc::new(provider) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;;
+<a href=#78 id=78 data-nosnippet>78</a>                (name, provider)
+<a href=#79 id=79 data-nosnippet>79</a>            })
+<a href=#80 id=80 data-nosnippet>80</a>            .collect();
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a>        <span class="prelude-val">Ok</span>(IcebergCatalogProvider { schemas })
+<a href=#83 id=83 data-nosnippet>83</a>    }
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="kw">impl </span>CatalogProvider <span class="kw">for </span>IcebergCatalogProvider {
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="self">self
+<a href=#89 id=89 data-nosnippet>89</a>    </span>}
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">fn </span>schema_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;String&gt; {
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="self">self</span>.schemas.keys().cloned().collect()
+<a href=#93 id=93 data-nosnippet>93</a>    }
+<a href=#94 id=94 data-nosnippet>94</a>
+<a href=#95 id=95 data-nosnippet>95</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>SchemaProvider&gt;&gt; {
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="self">self</span>.schemas.get(name).cloned()
+<a href=#97 id=97 data-nosnippet>97</a>    }
+<a href=#98 id=98 data-nosnippet>98</a>}</code></pre></div></section></main></body></html>

@@ -597,11 +597,13 @@ example of how to create a <code>RestCatalog</code>:</p>
     println!(&quot;Table {TABLE_NAME} created!&quot;);
 <span class="boring">
 </span><span class="boring">    // Ensure that the table is under the correct namespace.
-</span><span class="boring">    assert!(catalog
-</span><span class="boring">        .list_tables(&amp;namespace_ident)
-</span><span class="boring">        .await
-</span><span class="boring">        .unwrap()
-</span><span class="boring">        .contains(&amp;table_ident));
+</span><span class="boring">    assert!(
+</span><span class="boring">        catalog
+</span><span class="boring">            .list_tables(&amp;namespace_ident)
+</span><span class="boring">            .await
+</span><span class="boring">            .unwrap()
+</span><span class="boring">            .contains(&amp;table_ident)
+</span><span class="boring">    );
 </span><span class="boring">
 </span><span class="boring">    // Load the table back from the catalog. It should be identical to the created table.
 </span><span class="boring">    let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
@@ -690,11 +692,13 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">    println!(&quot;Table {TABLE_NAME} created!&quot;);
 </span><span class="boring">
 </span>    // Ensure that the table is under the correct namespace.
-    assert!(catalog
-        .list_tables(&amp;namespace_ident)
-        .await
-        .unwrap()
-        .contains(&amp;table_ident));
+    assert!(
+        catalog
+            .list_tables(&amp;namespace_ident)
+            .await
+            .unwrap()
+            .contains(&amp;table_ident)
+    );
 
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
