@@ -22,8 +22,8 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
-use futures::channel::mpsc::{channel, Sender};
 use futures::StreamExt;
+use futures::channel::mpsc::{Sender, channel};
 
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};

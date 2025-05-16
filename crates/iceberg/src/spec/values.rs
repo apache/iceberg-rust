@@ -30,8 +30,8 @@ pub use _serde::RawLiteral;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::de::{
     MapAccess, {self},
 };
@@ -44,12 +44,12 @@ use uuid::Uuid;
 
 use super::datatypes::{PrimitiveType, Type};
 use crate::error::Result;
+use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
 use crate::spec::values::timestamp::microseconds_to_datetime;
 use crate::spec::values::timestamptz::{microseconds_to_datetimetz, nanoseconds_to_datetimetz};
-use crate::spec::MAX_DECIMAL_PRECISION;
-use crate::{ensure_data_valid, Error, ErrorKind};
+use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -2204,7 +2204,7 @@ mod _serde {
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
 
     use super::{Literal, Map, PrimitiveLiteral};
-    use crate::spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME};
+    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
     use crate::{Error, ErrorKind};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
@@ -2633,160 +2633,163 @@ mod _serde {
                     "bytes",
                     "todo: rust avro doesn't support deserialize any bytes representation now",
                 )),
-                RawLiteralEnum::List(v) => {
-                    match ty {
-                        Type::List(ty) => Ok(Some(Literal::List(
-                            v.list
-                                .into_iter()
-                                .map(|v| {
-                                    if let Some(v) = v {
-                                        v.try_into(&ty.element_field.field_type)
-                                    } else {
-                                        Ok(None)
+                RawLiteralEnum::List(v) => match ty {
+                    Type::List(ty) => Ok(Some(Literal::List(
+                        v.list
+                            .into_iter()
+                            .map(|v| {
+                                if let Some(v) = v {
+                                    v.try_into(&ty.element_field.field_type)
+                                } else {
+                                    Ok(None)
+                                }
+                            })
+                            .collect::<Result<_, Error>>()?,
+                    ))),
+                    Type::Map(map_ty) => {
+                        let key_ty = map_ty.key_field.field_type.as_ref();
+                        let value_ty = map_ty.value_field.field_type.as_ref();
+                        let mut map = Map::new();
+                        for k_v in v.list {
+                            let k_v = k_v.ok_or_else(|| invalid_err_with_reason("list","In deserialize, None will be represented as Some(RawLiteral::Null), all element in list must be valid"))?;
+                            if let RawLiteralEnum::Record(Record {
+                                required,
+                                optional: _,
+                            }) = k_v
+                            {
+                                if required.len() != 2 {
+                                    return Err(invalid_err_with_reason(
+                                        "list",
+                                        "Record must contains two element(key and value) of array",
+                                    ));
+                                }
+                                let mut key = None;
+                                let mut value = None;
+                                required.into_iter().for_each(|(k, v)| {
+                                    if k == MAP_KEY_FIELD_NAME {
+                                        key = Some(v);
+                                    } else if k == MAP_VALUE_FIELD_NAME {
+                                        value = Some(v);
                                     }
-                                })
-                                .collect::<Result<_, Error>>()?,
-                        ))),
-                        Type::Map(map_ty) => {
-                            let key_ty = map_ty.key_field.field_type.as_ref();
-                            let value_ty = map_ty.value_field.field_type.as_ref();
-                            let mut map = Map::new();
-                            for k_v in v.list {
-                                let k_v = k_v.ok_or_else(|| invalid_err_with_reason("list","In deserialize, None will be represented as Some(RawLiteral::Null), all element in list must be valid"))?;
-                                if let RawLiteralEnum::Record(Record {
-                                    required,
-                                    optional: _,
-                                }) = k_v
-                                {
-                                    if required.len() != 2 {
-                                        return Err(invalid_err_with_reason("list","Record must contains two element(key and value) of array"));
+                                });
+                                match (key, value) {
+                                    (Some(k), Some(v)) => {
+                                        let key = k.try_into(key_ty)?.ok_or_else(|| {
+                                            invalid_err_with_reason(
+                                                "list",
+                                                "Key element in Map must be valid",
+                                            )
+                                        })?;
+                                        let value = v.try_into(value_ty)?;
+                                        if map_ty.value_field.required && value.is_none() {
+                                            return Err(invalid_err_with_reason(
+                                                "list",
+                                                "Value element is required in this Map",
+                                            ));
+                                        }
+                                        map.insert(key, value);
                                     }
-                                    let mut key = None;
-                                    let mut value = None;
-                                    required.into_iter().for_each(|(k, v)| {
-                                        if k == MAP_KEY_FIELD_NAME {
-                                            key = Some(v);
-                                        } else if k == MAP_VALUE_FIELD_NAME {
-                                            value = Some(v);
-                                        }
-                                    });
-                                    match (key, value) {
-                                        (Some(k), Some(v)) => {
-                                            let key = k.try_into(key_ty)?.ok_or_else(|| {
-                                                invalid_err_with_reason(
-                                                    "list",
-                                                    "Key element in Map must be valid",
-                                                )
-                                            })?;
-                                            let value = v.try_into(value_ty)?;
-                                            if map_ty.value_field.required && value.is_none() {
-                                                return Err(invalid_err_with_reason(
-                                                    "list",
-                                                    "Value element is required in this Map",
-                                                ));
-                                            }
-                                            map.insert(key, value);
-                                        }
-                                        _ => return Err(invalid_err_with_reason(
+                                    _ => {
+                                        return Err(invalid_err_with_reason(
                                             "list",
                                             "The elements of record in list are not key and value",
-                                        )),
+                                        ));
                                     }
-                                } else {
-                                    return Err(invalid_err_with_reason(
-                                        "list",
-                                        "Map should represented as record array.",
-                                    ));
                                 }
-                            }
-                            Ok(Some(Literal::Map(map)))
-                        }
-                        Type::Primitive(PrimitiveType::Uuid) => {
-                            if v.list.len() != 16 {
+                            } else {
                                 return Err(invalid_err_with_reason(
                                     "list",
-                                    "The length of list should be 16",
+                                    "Map should represented as record array.",
                                 ));
                             }
-                            let mut bytes = [0u8; 16];
-                            for (i, v) in v.list.iter().enumerate() {
-                                if let Some(RawLiteralEnum::Long(v)) = v {
-                                    bytes[i] = *v as u8;
-                                } else {
-                                    return Err(invalid_err_with_reason(
-                                        "list",
-                                        "The element of list should be int",
-                                    ));
-                                }
-                            }
-                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
                         }
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: _,
-                            scale: _,
-                        }) => {
-                            if v.list.len() != 16 {
-                                return Err(invalid_err_with_reason(
-                                    "list",
-                                    "The length of list should be 16",
-                                ));
-                            }
-                            let mut bytes = [0u8; 16];
-                            for (i, v) in v.list.iter().enumerate() {
-                                if let Some(RawLiteralEnum::Long(v)) = v {
-                                    bytes[i] = *v as u8;
-                                } else {
-                                    return Err(invalid_err_with_reason(
-                                        "list",
-                                        "The element of list should be int",
-                                    ));
-                                }
-                            }
-                            Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
-                        }
-                        Type::Primitive(PrimitiveType::Binary) => {
-                            let bytes = v
-                                .list
-                                .into_iter()
-                                .map(|v| {
-                                    if let Some(RawLiteralEnum::Long(v)) = v {
-                                        Ok(v as u8)
-                                    } else {
-                                        Err(invalid_err_with_reason(
-                                            "list",
-                                            "The element of list should be int",
-                                        ))
-                                    }
-                                })
-                                .collect::<Result<Vec<_>, Error>>()?;
-                            Ok(Some(Literal::binary(bytes)))
-                        }
-                        Type::Primitive(PrimitiveType::Fixed(size)) => {
-                            if v.list.len() != *size as usize {
-                                return Err(invalid_err_with_reason(
-                                    "list",
-                                    "The length of list should be equal to size",
-                                ));
-                            }
-                            let bytes = v
-                                .list
-                                .into_iter()
-                                .map(|v| {
-                                    if let Some(RawLiteralEnum::Long(v)) = v {
-                                        Ok(v as u8)
-                                    } else {
-                                        Err(invalid_err_with_reason(
-                                            "list",
-                                            "The element of list should be int",
-                                        ))
-                                    }
-                                })
-                                .collect::<Result<Vec<_>, Error>>()?;
-                            Ok(Some(Literal::fixed(bytes)))
-                        }
-                        _ => Err(invalid_err("list")),
+                        Ok(Some(Literal::Map(map)))
                     }
-                }
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        if v.list.len() != 16 {
+                            return Err(invalid_err_with_reason(
+                                "list",
+                                "The length of list should be 16",
+                            ));
+                        }
+                        let mut bytes = [0u8; 16];
+                        for (i, v) in v.list.iter().enumerate() {
+                            if let Some(RawLiteralEnum::Long(v)) = v {
+                                bytes[i] = *v as u8;
+                            } else {
+                                return Err(invalid_err_with_reason(
+                                    "list",
+                                    "The element of list should be int",
+                                ));
+                            }
+                        }
+                        Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                    }
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: _,
+                        scale: _,
+                    }) => {
+                        if v.list.len() != 16 {
+                            return Err(invalid_err_with_reason(
+                                "list",
+                                "The length of list should be 16",
+                            ));
+                        }
+                        let mut bytes = [0u8; 16];
+                        for (i, v) in v.list.iter().enumerate() {
+                            if let Some(RawLiteralEnum::Long(v)) = v {
+                                bytes[i] = *v as u8;
+                            } else {
+                                return Err(invalid_err_with_reason(
+                                    "list",
+                                    "The element of list should be int",
+                                ));
+                            }
+                        }
+                        Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
+                    }
+                    Type::Primitive(PrimitiveType::Binary) => {
+                        let bytes = v
+                            .list
+                            .into_iter()
+                            .map(|v| {
+                                if let Some(RawLiteralEnum::Long(v)) = v {
+                                    Ok(v as u8)
+                                } else {
+                                    Err(invalid_err_with_reason(
+                                        "list",
+                                        "The element of list should be int",
+                                    ))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, Error>>()?;
+                        Ok(Some(Literal::binary(bytes)))
+                    }
+                    Type::Primitive(PrimitiveType::Fixed(size)) => {
+                        if v.list.len() != *size as usize {
+                            return Err(invalid_err_with_reason(
+                                "list",
+                                "The length of list should be equal to size",
+                            ));
+                        }
+                        let bytes = v
+                            .list
+                            .into_iter()
+                            .map(|v| {
+                                if let Some(RawLiteralEnum::Long(v)) = v {
+                                    Ok(v as u8)
+                                } else {
+                                    Err(invalid_err_with_reason(
+                                        "list",
+                                        "The element of list should be int",
+                                    ))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, Error>>()?;
+                        Ok(Some(Literal::fixed(bytes)))
+                    }
+                    _ => Err(invalid_err("list")),
+                },
                 RawLiteralEnum::Record(Record {
                     required,
                     optional: _,
@@ -2844,9 +2847,9 @@ mod tests {
 
     use super::*;
     use crate::avro::schema_to_avro_schema;
-    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
     use crate::spec::Schema;
     use crate::spec::Type::Primitive;
+    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();

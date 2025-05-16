@@ -26,7 +26,7 @@ use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::page_index::index::Index;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
@@ -371,13 +371,13 @@ impl<'a> PageIndexEvaluator<'a> {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "unsupported 'FIXED_LEN_BYTE_ARRAY' index type in column_index",
-                ))
+                ));
             }
             Index::INT96(_) => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "unsupported 'INT96' index type in column_index",
-                ))
+                ));
             }
         };
 
@@ -801,7 +801,7 @@ mod tests {
     use parquet::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
     };
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, thread_rng};
 
     use super::PageIndexEvaluator;
     use crate::expr::{Bind, Reference};
@@ -1122,8 +1122,8 @@ mod tests {
     }
 
     #[test]
-    fn eval_not_starts_with_pages_containing_value_except_pages_with_min_and_max_equal_to_prefix_and_all_null_pages(
-    ) -> Result<()> {
+    fn eval_not_starts_with_pages_containing_value_except_pages_with_min_and_max_equal_to_prefix_and_all_null_pages()
+    -> Result<()> {
         let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
         let (column_index, offset_index) = create_page_index()?;
 

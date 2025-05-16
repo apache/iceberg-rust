@@ -17,9 +17,9 @@
 
 use fnv::FnvHashSet;
 
+use crate::Result;
 use crate::expr::{BoundPredicate, BoundReference, PredicateOperator};
 use crate::spec::Datum;
-use crate::Result;
 
 /// A visitor for [`BoundPredicate`]s. Visits in post-order.
 pub trait BoundPredicateVisitor {
@@ -57,7 +57,7 @@ pub trait BoundPredicateVisitor {
 
     /// Called after a predicate with an `IsNan` operator is visited
     fn is_nan(&mut self, reference: &BoundReference, predicate: &BoundPredicate)
-        -> Result<Self::T>;
+    -> Result<Self::T>;
 
     /// Called after a predicate with a `NotNan` operator is visited
     fn not_nan(
@@ -234,7 +234,7 @@ mod tests {
 
     use fnv::FnvHashSet;
 
-    use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+    use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
     use crate::expr::{
         BinaryExpression, Bind, BoundPredicate, BoundReference, Predicate, PredicateOperator,
         Reference, SetExpression, UnaryExpression,

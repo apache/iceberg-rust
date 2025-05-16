@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::transaction::Transaction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
-use crate::transaction::Transaction;
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
 
@@ -213,10 +213,10 @@ impl SnapshotProduceOperation for FastAppendOperation {
 mod tests {
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
-    use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::Transaction;
+    use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableRequirement, TableUpdate};
 
     #[tokio::test]

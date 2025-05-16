@@ -26,7 +26,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_cli::exec;
 use datafusion_cli::print_format::PrintFormat;
 use datafusion_cli::print_options::{MaxRows, PrintOptions};
-use iceberg_cli::{IcebergCatalogList, ICEBERG_CLI_VERSION};
+use iceberg_cli::{ICEBERG_CLI_VERSION, IcebergCatalogList};
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
