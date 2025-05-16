@@ -39,7 +39,7 @@ async fn test_read_table_with_positional_deletes() {
 
     let scan = table
         .scan()
-        .with_delete_file_processing_enabled(true)
+        .with_delete_file_processing_enabled(false)
         .build()
         .unwrap();
     println!("{:?}", scan);
@@ -54,18 +54,50 @@ async fn test_read_table_with_positional_deletes() {
     println!("{:?}", plan);
 
     // Scan plan phase should include delete files in file plan
-    // when with_delete_file_processing_enabled == true
+    // even when with_delete_file_processing_enabled == false
     assert_eq!(plan[0].deletes.len(), 2);
 
-    // 😱 If we don't support positional deletes, we should fail when we try to read a table that
-    // has positional deletes. The table has 12 rows, and 2 are deleted, see provision.py
     let result = scan.to_arrow().await.unwrap().try_collect::<Vec<_>>().await;
 
+    // `delete_file_processing_enabled == false` is propagated to the reader. Since
+    // we have some delete files, this causes it to return an Err.
     assert!(result.is_err_and(|e| e.kind() == FeatureUnsupported));
+}
 
-    // When we get support for it:
-    // let batch_stream = scan.to_arrow().await.unwrap();
-    // let batches: Vec<_> = batch_stream.try_collect().await.is_err();
-    // let num_rows: usize = batches.iter().map(|v| v.num_rows()).sum();
-    // assert_eq!(num_rows, 10);
+#[tokio::test]
+async fn test_read_table_with_positional_deletes_with_delete_support_enabled() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+
+    let table = rest_catalog
+        .load_table(
+            &TableIdent::from_strs(["default", "test_positional_merge_on_read_double_deletes"])
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let scan = table
+        .scan()
+        .with_delete_file_processing_enabled(true)
+        .build()
+        .unwrap();
+    println!("{:?}", scan);
+
+    let plan: Vec<_> = scan
+        .plan_files()
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    println!("{:?}", plan);
+
+    assert_eq!(plan[0].deletes.len(), 2);
+
+    // we should see two rows deleted, returning 10 rows instead of 12
+    let batch_stream = scan.to_arrow().await.unwrap();
+    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+    let num_rows: usize = batches.iter().map(|v| v.num_rows()).sum();
+    assert_eq!(num_rows, 10);
 }
