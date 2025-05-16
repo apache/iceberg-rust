@@ -51,6 +51,7 @@
 //! }
 //! ```
 
+#![cfg_attr(feature = "nightly", feature(error_generic_member_access))]
 #![deny(missing_docs)]
 
 #[macro_use]
