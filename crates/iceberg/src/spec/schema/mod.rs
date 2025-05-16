@@ -381,7 +381,7 @@ impl Schema {
         self.name_to_id.get(name).copied()
     }
 
-    /// Get field id by full name.
+    /// Get full name by field id.
     pub fn name_by_field_id(&self, field_id: i32) -> Option<&str> {
         self.id_to_name.get(&field_id).map(String::as_str)
     }

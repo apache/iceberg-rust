@@ -98,14 +98,14 @@ pub(crate) fn uncompressed_metric_blob_0_metadata() -> BlobMetadata {
 }
 
 pub(crate) fn blob_0() -> Blob {
-    Blob {
-        r#type: METRIC_BLOB_0_TYPE.to_string(),
-        fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
-        snapshot_id: METRIC_BLOB_0_SNAPSHOT_ID,
-        sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
-        data: METRIC_BLOB_0_DATA.as_bytes().to_vec(),
-        properties: HashMap::new(),
-    }
+    Blob::builder()
+        .r#type(METRIC_BLOB_0_TYPE.to_string())
+        .fields(METRIC_BLOB_0_INPUT_FIELDS.to_vec())
+        .snapshot_id(METRIC_BLOB_0_SNAPSHOT_ID)
+        .sequence_number(METRIC_BLOB_0_SEQUENCE_NUMBER)
+        .data(METRIC_BLOB_0_DATA.as_bytes().to_vec())
+        .properties(HashMap::new())
+        .build()
 }
 
 pub(crate) const METRIC_BLOB_1_TYPE: &str = "some-other-blob";
@@ -142,14 +142,14 @@ pub(crate) fn zstd_compressed_metric_blob_1_metadata() -> BlobMetadata {
 }
 
 pub(crate) fn blob_1() -> Blob {
-    Blob {
-        r#type: METRIC_BLOB_1_TYPE.to_string(),
-        fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
-        snapshot_id: METRIC_BLOB_1_SNAPSHOT_ID,
-        sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
-        data: METRIC_BLOB_1_DATA.as_bytes().to_vec(),
-        properties: HashMap::new(),
-    }
+    Blob::builder()
+        .r#type(METRIC_BLOB_1_TYPE.to_string())
+        .fields(METRIC_BLOB_1_INPUT_FIELDS.to_vec())
+        .snapshot_id(METRIC_BLOB_1_SNAPSHOT_ID)
+        .sequence_number(METRIC_BLOB_1_SEQUENCE_NUMBER)
+        .data(METRIC_BLOB_1_DATA.as_bytes().to_vec())
+        .properties(HashMap::new())
+        .build()
 }
 
 pub(crate) const CREATED_BY_PROPERTY_VALUE: &str = "Test 1234";

@@ -28,6 +28,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// The operation was rejected because the system is not in a state required for the operation’s execution.
+    PreconditionFailed,
+
     /// Iceberg don't know what happened here, and no actions other than
     /// just returning it back. For example, iceberg returns an internal
     /// service error.
@@ -76,6 +79,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::TableNotFound => "TableNotFound",
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
+            ErrorKind::PreconditionFailed => "PreconditionFailed",
         }
     }
 }
