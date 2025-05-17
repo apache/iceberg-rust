@@ -487,33 +487,32 @@ mod tests {
                     })],
                 }),
                 Arc::new(MappedField {
-                        field_id: Some(6),
-                        names: vec!["quux".to_string()],
-                        fields: vec![
-                            Arc::new(MappedField {
-                                field_id: Some(7),
-                                names: vec![MAP_KEY_FIELD_NAME.to_string()],
-                                fields: vec![],
-                            }),
-                            Arc::new(MappedField {
-                                field_id: Some(8),
-                                names: vec![MAP_VALUE_FIELD_NAME.to_string()],
-                                fields: vec![
-                                    Arc::new(MappedField {
-                                        field_id: Some(9),
-                                        names: vec![MAP_KEY_FIELD_NAME.to_string()],
-                                        fields: vec![],
-                                    }),
-                                    Arc::new(MappedField {
-                                        field_id: Some(10),
-                                        names: vec![MAP_VALUE_FIELD_NAME.to_string()],
-                                        fields: vec![],
-                                    }),
-                                ],
-                            }),
-                        ],
-                    },
-                ),
+                    field_id: Some(6),
+                    names: vec!["quux".to_string()],
+                    fields: vec![
+                        Arc::new(MappedField {
+                            field_id: Some(7),
+                            names: vec![MAP_KEY_FIELD_NAME.to_string()],
+                            fields: vec![],
+                        }),
+                        Arc::new(MappedField {
+                            field_id: Some(8),
+                            names: vec![MAP_VALUE_FIELD_NAME.to_string()],
+                            fields: vec![
+                                Arc::new(MappedField {
+                                    field_id: Some(9),
+                                    names: vec![MAP_KEY_FIELD_NAME.to_string()],
+                                    fields: vec![],
+                                }),
+                                Arc::new(MappedField {
+                                    field_id: Some(10),
+                                    names: vec![MAP_VALUE_FIELD_NAME.to_string()],
+                                    fields: vec![],
+                                }),
+                            ],
+                        }),
+                    ],
+                }),
                 Arc::new(MappedField {
                     field_id: Some(11),
                     names: vec!["location".to_string()],
