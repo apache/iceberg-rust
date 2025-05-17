@@ -257,7 +257,7 @@ impl Reference {
         Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNull, self))
     }
 
-    /// Creates an is-in expression. For example, `a IS IN (5, 6)`.
+    /// Creates an is-in expression. For example, `a IN (5, 6)`.
     ///
     /// # Example
     ///
@@ -278,7 +278,7 @@ impl Reference {
         ))
     }
 
-    /// Creates an is-not-in expression. For example, `a IS NOT IN (5, 6)`.
+    /// Creates an is-not-in expression. For example, `a NOT IN (5, 6)`.
     ///
     /// # Example
     ///

@@ -15,24 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Puffin implementation.
+use std::sync::OnceLock;
 
-#![deny(missing_docs)]
+use tokio::runtime::{Handle, Runtime};
 
-mod blob;
-pub use blob::{APACHE_DATASKETCHES_THETA_V1, Blob, DELETION_VECTOR_V1};
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-mod compression;
-pub use compression::CompressionCodec;
-
-mod metadata;
-pub use metadata::{BlobMetadata, CREATED_BY_PROPERTY, FileMetadata};
-
-mod reader;
-pub use reader::PuffinReader;
-
-mod writer;
-pub use writer::PuffinWriter;
-
-#[cfg(test)]
-mod test_utils;
+pub fn runtime() -> Handle {
+    match Handle::try_current() {
+        Ok(h) => h.clone(),
+        _ => {
+            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
+            rt.handle().clone()
+        }
+    }
+}

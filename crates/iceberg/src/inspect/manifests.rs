@@ -18,19 +18,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_array::builder::{
     BooleanBuilder, GenericListBuilder, ListBuilder, PrimitiveBuilder, StringBuilder, StructBuilder,
 };
 use arrow_array::types::{Int32Type, Int64Type};
-use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 
+use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
-use crate::Result;
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
@@ -326,7 +326,7 @@ mod tests {
                 partition_summaries: ListArray
                 [
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                   valid,
                 ]

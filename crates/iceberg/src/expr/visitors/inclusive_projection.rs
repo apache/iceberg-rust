@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use fnv::FnvHashSet;
 
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference, Predicate};
 use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::{Error, ErrorKind};
@@ -102,11 +102,10 @@ impl BoundPredicateVisitor for InclusiveProjection {
     }
 
     fn not(&mut self, _inner: Self::T) -> crate::Result<Self::T> {
-        Err(
-            Error::new(
+        Err(Error::new(
             ErrorKind::Unexpected,
-            "InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it.",   )
-        )
+            "InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it.",
+        ))
     }
 
     fn is_null(

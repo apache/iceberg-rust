@@ -30,21 +30,21 @@ mod id_reassigner;
 mod index;
 mod prune_columns;
 use bimap::BiHashMap;
-use itertools::{zip_eq, Itertools};
+use itertools::{Itertools, zip_eq};
 use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
-use self::index::{index_by_id, index_parents, IndexByName};
+use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
-    ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FIELD_NAME,
-    MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
+    PrimitiveType, StructType, Type,
 };
-use crate::{ensure_data_valid, Error, ErrorKind};
+use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Type alias for schema id.
 pub type SchemaId = i32;
@@ -291,7 +291,12 @@ impl SchemaBuilder {
                     field.name,
                     parent_field
                 );
-                ensure_data_valid!(parent_field.required, "Cannot add field {} as an identifier field: must not be nested in an optional field {}", field.name, parent_field);
+                ensure_data_valid!(
+                    parent_field.required,
+                    "Cannot add field {} as an identifier field: must not be nested in an optional field {}",
+                    field.name,
+                    parent_field
+                );
                 cur_field_id = *parent;
             }
         }
@@ -382,7 +387,7 @@ impl Schema {
         self.name_to_id.get(name).copied()
     }
 
-    /// Get field id by full name.
+    /// Get full name by field id.
     pub fn name_by_field_id(&self, field_id: i32) -> Option<&str> {
         self.id_to_name.get(&field_id).map(String::as_str)
     }
@@ -614,10 +619,11 @@ table {
             ])
             .build();
 
-        assert!(ret
-            .unwrap_err()
-            .message()
-            .contains("Invalid schema: multiple fields for name baz"));
+        assert!(
+            ret.unwrap_err()
+                .message()
+                .contains("Invalid schema: multiple fields for name baz")
+        );
     }
 
     #[test]
@@ -1073,123 +1079,151 @@ table {
     #[test]
     fn test_identifier_field_ids() {
         // field in map
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![2])
-            .with_fields(vec![NestedField::required(
-                1,
-                "Map",
-                Type::Map(MapType::new(
-                    NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::map_value_element(
-                        3,
-                        Type::Primitive(PrimitiveType::Boolean),
-                        true,
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "Map",
+                        Type::Map(MapType::new(
+                            NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::map_value_element(
+                                3,
+                                Type::Primitive(PrimitiveType::Boolean),
+                                true,
+                            )
+                            .into(),
+                        )),
                     )
-                    .into(),
-                )),
-            )
-            .into()])
-            .build()
-            .is_err());
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![3])
-            .with_fields(vec![NestedField::required(
-                1,
-                "Map",
-                Type::Map(MapType::new(
-                    NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::map_value_element(
-                        3,
-                        Type::Primitive(PrimitiveType::Boolean),
-                        true,
+                    .into()
+                ])
+                .build()
+                .is_err()
+        );
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![3])
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "Map",
+                        Type::Map(MapType::new(
+                            NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::map_value_element(
+                                3,
+                                Type::Primitive(PrimitiveType::Boolean),
+                                true,
+                            )
+                            .into(),
+                        )),
                     )
-                    .into(),
-                )),
-            )
-            .into()])
-            .build()
-            .is_err());
+                    .into()
+                ])
+                .build()
+                .is_err()
+        );
 
         // field in list
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![2])
-            .with_fields(vec![NestedField::required(
-                1,
-                "List",
-                Type::List(ListType::new(
-                    NestedField::list_element(2, Type::Primitive(PrimitiveType::String), true)
-                        .into(),
-                )),
-            )
-            .into()])
-            .build()
-            .is_err());
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "List",
+                        Type::List(ListType::new(
+                            NestedField::list_element(
+                                2,
+                                Type::Primitive(PrimitiveType::String),
+                                true
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into()
+                ])
+                .build()
+                .is_err()
+        );
 
         // field in optional struct
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![2])
-            .with_fields(vec![NestedField::optional(
-                1,
-                "Struct",
-                Type::Struct(StructType::new(vec![
-                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(3, "age", Type::Primitive(PrimitiveType::Int)).into(),
-                ])),
-            )
-            .into()])
-            .build()
-            .is_err());
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "Struct",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                2,
+                                "name",
+                                Type::Primitive(PrimitiveType::String)
+                            )
+                            .into(),
+                            NestedField::optional(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into()
+                ])
+                .build()
+                .is_err()
+        );
 
         // float and double
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![1])
-            .with_fields(vec![NestedField::required(
-                1,
-                "Float",
-                Type::Primitive(PrimitiveType::Float),
-            )
-            .into()])
-            .build()
-            .is_err());
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![1])
-            .with_fields(vec![NestedField::required(
-                1,
-                "Double",
-                Type::Primitive(PrimitiveType::Double),
-            )
-            .into()])
-            .build()
-            .is_err());
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "Float", Type::Primitive(PrimitiveType::Float),)
+                        .into()
+                ])
+                .build()
+                .is_err()
+        );
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "Double", Type::Primitive(PrimitiveType::Double),)
+                        .into()
+                ])
+                .build()
+                .is_err()
+        );
 
         // optional field
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![1])
-            .with_fields(vec![NestedField::required(
-                1,
-                "Required",
-                Type::Primitive(PrimitiveType::String),
-            )
-            .into()])
-            .build()
-            .is_ok());
-        assert!(Schema::builder()
-            .with_schema_id(1)
-            .with_identifier_field_ids(vec![1])
-            .with_fields(vec![NestedField::optional(
-                1,
-                "Optional",
-                Type::Primitive(PrimitiveType::String),
-            )
-            .into()])
-            .build()
-            .is_err());
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "Required", Type::Primitive(PrimitiveType::String),)
+                        .into()
+                ])
+                .build()
+                .is_ok()
+        );
+        assert!(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::optional(1, "Optional", Type::Primitive(PrimitiveType::String),)
+                        .into()
+                ])
+                .build()
+                .is_err()
+        );
     }
 }

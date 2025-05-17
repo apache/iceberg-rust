@@ -36,7 +36,7 @@ use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
 use crate::client::{
-    deserialize_catalog_response, deserialize_unexpected_catalog_error, HttpClient,
+    HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
@@ -312,7 +312,7 @@ impl RestCatalog {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Unable to load file io, neither warehouse nor metadata location is set!",
-                ))?
+                ))?;
             }
         };
 
@@ -566,13 +566,13 @@ impl Catalog for RestCatalog {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to create a table under a namespace that does not exist",
-                ))
+                ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "The table already exists",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -628,7 +628,7 @@ impl Catalog for RestCatalog {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to load a table that does not exist",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -743,38 +743,36 @@ impl Catalog for RestCatalog {
         let http_response = context.client.query_catalog(request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response(http_response).await?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to update a table that does not exist",
-                ))
+                ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "CommitFailedException, one or more requirements failed. The client may retry.",
-                ))
+                ));
             }
             StatusCode::INTERNAL_SERVER_ERROR => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "An unknown server-side problem occurred; the commit state is unknown.",
-                ))
+                ));
             }
             StatusCode::BAD_GATEWAY => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
-                ))
+                ));
             }
             StatusCode::GATEWAY_TIMEOUT => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "A server-side gateway timeout occurred; the commit state is unknown.",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -1379,10 +1377,12 @@ mod tests {
 
         let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
-        assert!(catalog
-            .namespace_exists(&NamespaceIdent::new("ns1".to_string()))
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .namespace_exists(&NamespaceIdent::new("ns1".to_string()))
+                .await
+                .unwrap()
+        );
 
         config_mock.assert_async().await;
         get_ns_mock.assert_async().await;
@@ -1699,13 +1699,15 @@ mod tests {
 
         let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
-        assert!(catalog
-            .table_exists(&TableIdent::new(
-                NamespaceIdent::new("ns1".to_string()),
-                "table1".to_string(),
-            ))
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .table_exists(&TableIdent::new(
+                    NamespaceIdent::new("ns1".to_string()),
+                    "table1".to_string(),
+                ))
+                .await
+                .unwrap()
+        );
 
         config_mock.assert_async().await;
         check_table_exists_mock.assert_async().await;
@@ -1768,7 +1770,10 @@ mod tests {
             &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
             table.identifier()
         );
-        assert_eq!("s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json", table.metadata_location().unwrap());
+        assert_eq!(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+            table.metadata_location().unwrap()
+        );
         assert_eq!(FormatVersion::V1, table.metadata().format_version());
         assert_eq!("s3://warehouse/database/table", table.metadata().location());
         assert_eq!(
@@ -1919,11 +1924,13 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![UnboundPartitionField::builder()
-                        .source_id(1)
-                        .transform(Transform::Truncate(3))
-                        .name("id".to_string())
-                        .build()])
+                    .add_partition_fields(vec![
+                        UnboundPartitionField::builder()
+                            .source_id(1)
+                            .transform(Transform::Truncate(3))
+                            .name("id".to_string())
+                            .build(),
+                    ])
                     .unwrap()
                     .build(),
             )
@@ -2068,11 +2075,13 @@ mod tests {
             .await;
 
         assert!(table_result.is_err());
-        assert!(table_result
-            .err()
-            .unwrap()
-            .message()
-            .contains("already exists"));
+        assert!(
+            table_result
+                .err()
+                .unwrap()
+                .message()
+                .contains("already exists")
+        );
 
         config_mock.assert_async().await;
         create_table_mock.assert_async().await;
@@ -2248,11 +2257,13 @@ mod tests {
             .await;
 
         assert!(table_result.is_err());
-        assert!(table_result
-            .err()
-            .unwrap()
-            .message()
-            .contains("does not exist"));
+        assert!(
+            table_result
+                .err()
+                .unwrap()
+                .message()
+                .contains("does not exist")
+        );
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;

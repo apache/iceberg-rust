@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use opendal::services::MemoryConfig;
 use opendal::Operator;
+use opendal::services::MemoryConfig;
 
 use crate::Result;
 

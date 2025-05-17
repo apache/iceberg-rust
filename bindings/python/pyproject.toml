@@ -33,7 +33,7 @@ classifiers = [
 name = "pyiceberg-core"
 readme = "project-description.md"
 requires-python = "~=3.9"
-version = "0.4.0"
+version = "0.5.0"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -44,7 +44,7 @@ python-source = "python"
 ignore = ["F403", "F405"]
 
 [tool.hatch.envs.dev]
-dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0"]
+dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0", "datafusion>=45", "pyiceberg[sql-sqlite]>=0.9.1"]
 
 [tool.hatch.envs.dev.scripts]
 build = "maturin build --out dist --sdist"

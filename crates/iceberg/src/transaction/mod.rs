@@ -28,12 +28,12 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
-use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -188,6 +188,12 @@ impl<'a> Transaction<'a> {
         Ok(self)
     }
 
+    /// Set the location of table
+    pub fn set_location(mut self, location: String) -> Result<Self> {
+        self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
+        Ok(self)
+    }
+
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         let table_commit = TableCommit::builder()
@@ -338,6 +344,22 @@ mod tests {
             }],
             tx.updates
         );
+    }
+
+    #[test]
+    fn test_set_location() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .set_location(String::from("s3://bucket/prefix/new_table"))
+            .unwrap();
+
+        assert_eq!(
+            vec![TableUpdate::SetLocation {
+                location: String::from("s3://bucket/prefix/new_table")
+            }],
+            tx.updates
+        )
     }
 
     #[tokio::test]
