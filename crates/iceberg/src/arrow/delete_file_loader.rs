@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
 
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::ArrowReader;
+use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{Schema, SchemaRef};

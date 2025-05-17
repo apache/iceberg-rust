@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
-use tokio::sync::oneshot::{channel, Receiver};
+use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, EqDelFuture};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
@@ -70,30 +70,30 @@ impl CachingDeleteFileLoader {
     /// Returned future completes once all loading has finished.
     ///
     ///  * Create a single stream of all delete file tasks irrespective of type,
-    ///      so that we can respect the combined concurrency limit
+    ///    so that we can respect the combined concurrency limit
     ///  * We then process each in two phases: load and parse.
     ///  * for positional deletes the load phase instantiates an ArrowRecordBatchStream to
-    ///      stream the file contents out
+    ///    stream the file contents out
     ///  * for eq deletes, we first check if the EQ delete is already loaded or being loaded by
-    ///      another concurrently processing data file scan task. If it is, we return a future
-    ///      for the pre-existing task from the load phase. If not, we create such a future
-    ///      and store it in the state to prevent other data file tasks from starting to load
-    ///      the same equality delete file, and return a record batch stream from the load phase
-    ///      as per the other delete file types - only this time it is accompanied by a one-shot
-    ///      channel sender that we will eventually use to resolve the shared future that we stored
-    ///      in the state.
+    ///    another concurrently processing data file scan task. If it is, we return a future
+    ///    for the pre-existing task from the load phase. If not, we create such a future
+    ///    and store it in the state to prevent other data file tasks from starting to load
+    ///    the same equality delete file, and return a record batch stream from the load phase
+    ///    as per the other delete file types - only this time it is accompanied by a one-shot
+    ///    channel sender that we will eventually use to resolve the shared future that we stored
+    ///    in the state.
     ///  * When this gets updated to add support for delete vectors, the load phase will return
-    ///      a PuffinReader for them.
+    ///    a PuffinReader for them.
     ///  * The parse phase parses each record batch stream according to its associated data type.
-    ///      The result of this is a map of data file paths to delete vectors for the positional
-    ///      delete tasks (and in future for the delete vector tasks). For equality delete
-    ///      file tasks, this results in an unbound Predicate.
+    ///    The result of this is a map of data file paths to delete vectors for the positional
+    ///    delete tasks (and in future for the delete vector tasks). For equality delete
+    ///    file tasks, this results in an unbound Predicate.
     ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
-    ///      channel to store them in the right place in the delete file managers state.
+    ///    channel to store them in the right place in the delete file managers state.
     ///  * The results of all of these futures are awaited on in parallel with the specified
-    ///      level of concurrency and collected into a vec. We then combine all the delete
-    ///      vector maps that resulted from any positional delete or delete vector files into a
-    ///      single map and persist it in the state.
+    ///    level of concurrency and collected into a vec. We then combine all the delete
+    ///    vector maps that resulted from any positional delete or delete vector files into a
+    ///    single map and persist it in the state.
     ///
     ///
     ///  Conceptually, the data flow is like this:
