@@ -83,11 +83,13 @@ async fn main() {
 
     // ANCHOR: load_table
     // Ensure that the table is under the correct namespace.
-    assert!(catalog
-        .list_tables(&namespace_ident)
-        .await
-        .unwrap()
-        .contains(&table_ident));
+    assert!(
+        catalog
+            .list_tables(&namespace_ident)
+            .await
+            .unwrap()
+            .contains(&table_ident)
+    );
 
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();

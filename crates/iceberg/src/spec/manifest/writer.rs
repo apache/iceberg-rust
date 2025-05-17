@@ -17,7 +17,7 @@
 
 use std::cmp::min;
 
-use apache_avro::{to_value, Writer as AvroWriter};
+use apache_avro::{Writer as AvroWriter, to_value};
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -183,13 +183,13 @@ impl ManifestWriter {
                     && data_file.content != DataContentType::PositionDeletes
                 {
                     return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`",
-                        data_file.file_path(),
-                        data_file.content
-                    ),
-                ));
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`",
+                            data_file.file_path(),
+                            data_file.content
+                        ),
+                    ));
                 }
             }
         }
@@ -465,11 +465,7 @@ impl PartitionFieldStats {
         self.summary.upper_bound = Some(self.summary.upper_bound.take().map_or(
             value.clone(),
             |original| {
-                if value > original {
-                    value
-                } else {
-                    original
-                }
+                if value > original { value } else { original }
             },
         ));
 

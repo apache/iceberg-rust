@@ -2180,6 +2180,7 @@ dependencies = [
  "arrow-select",
  "arrow-string",
  "async-trait",
+ "base64",
  "bimap",
  "bytes",
  "chrono",

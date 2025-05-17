@@ -207,9 +207,11 @@ async fn test_create_table() -> Result<()> {
     let result = catalog.create_table(namespace.name(), creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
-    assert!(result
-        .metadata_location()
-        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        result
+            .metadata_location()
+            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
+    );
     assert!(
         catalog
             .file_io()

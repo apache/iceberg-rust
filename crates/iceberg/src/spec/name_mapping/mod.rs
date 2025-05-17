@@ -487,6 +487,16 @@ mod tests {
                     })],
                 }),
                 Arc::new(MappedField {
+                    fields: vec![
+                        MappedField {
+                            field_id: Some(5),
+                            names: vec!["element".to_string()],
+                            fields: vec![],
+                        }
+                        .into(),
+                    ],
+                },
+                MappedField {
                     field_id: Some(6),
                     names: vec!["quux".to_string()],
                     fields: vec![

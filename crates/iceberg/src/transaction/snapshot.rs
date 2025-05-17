@@ -24,11 +24,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    update_snapshot_summaries, DataFile, DataFileFormat, FormatVersion, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    MAIN_BRANCH, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestEntry, ManifestFile,
+    ManifestListWriter, ManifestWriterBuilder, Operation, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};

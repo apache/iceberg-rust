@@ -24,8 +24,8 @@ use typed_builder::TypedBuilder;
 use crate::avro::schema_to_avro_schema;
 use crate::error::Result;
 use crate::spec::{
-    DataContentType, DataFile, ListType, ManifestFile, MapType, NestedField, NestedFieldRef,
-    PrimitiveType, Schema, StructType, Type, INITIAL_SEQUENCE_NUMBER,
+    DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, ManifestFile, MapType,
+    NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
 };
 use crate::{Error, ErrorKind};
 

@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{make_array, ArrayRef, RecordBatch, StructArray};
+use arrow_array::{ArrayRef, RecordBatch, StructArray, make_array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
