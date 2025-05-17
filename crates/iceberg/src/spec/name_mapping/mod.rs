@@ -24,12 +24,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DefaultOnNull};
+use serde_with::{DefaultOnNull, serde_as};
 use visitor::NameMappingVisitor;
 
 use crate::spec::{
-    visit_schema, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, LIST_FIELD_NAME, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
+    PrimitiveType, Schema, SchemaVisitor, StructType, visit_schema,
 };
 use crate::{Error, Result};
 
@@ -279,7 +279,7 @@ impl SchemaVisitor for CreateMapping {
 mod tests {
 
     use super::*;
-    use crate::spec::{NestedField, Type, MAP_VALUE_FIELD_NAME};
+    use crate::spec::{MAP_VALUE_FIELD_NAME, NestedField, Type};
 
     fn make_field(
         field_id: Option<i32>,
@@ -487,42 +487,33 @@ mod tests {
                     })],
                 }),
                 Arc::new(MappedField {
-                    fields: vec![
-                        MappedField {
-                            field_id: Some(5),
-                            names: vec!["element".to_string()],
-                            fields: vec![],
-                        }
-                        .into(),
-                    ],
-                },
-                MappedField {
-                    field_id: Some(6),
-                    names: vec!["quux".to_string()],
-                    fields: vec![
-                        Arc::new(MappedField {
-                            field_id: Some(7),
-                            names: vec![MAP_KEY_FIELD_NAME.to_string()],
-                            fields: vec![],
-                        }),
-                        Arc::new(MappedField {
-                            field_id: Some(8),
-                            names: vec![MAP_VALUE_FIELD_NAME.to_string()],
-                            fields: vec![
-                                Arc::new(MappedField {
-                                    field_id: Some(9),
-                                    names: vec![MAP_KEY_FIELD_NAME.to_string()],
-                                    fields: vec![],
-                                }),
-                                Arc::new(MappedField {
-                                    field_id: Some(10),
-                                    names: vec![MAP_VALUE_FIELD_NAME.to_string()],
-                                    fields: vec![],
-                                }),
-                            ],
-                        }),
-                    ],
-                }),
+                        field_id: Some(6),
+                        names: vec!["quux".to_string()],
+                        fields: vec![
+                            Arc::new(MappedField {
+                                field_id: Some(7),
+                                names: vec![MAP_KEY_FIELD_NAME.to_string()],
+                                fields: vec![],
+                            }),
+                            Arc::new(MappedField {
+                                field_id: Some(8),
+                                names: vec![MAP_VALUE_FIELD_NAME.to_string()],
+                                fields: vec![
+                                    Arc::new(MappedField {
+                                        field_id: Some(9),
+                                        names: vec![MAP_KEY_FIELD_NAME.to_string()],
+                                        fields: vec![],
+                                    }),
+                                    Arc::new(MappedField {
+                                        field_id: Some(10),
+                                        names: vec![MAP_VALUE_FIELD_NAME.to_string()],
+                                        fields: vec![],
+                                    }),
+                                ],
+                            }),
+                        ],
+                    },
+                ),
                 Arc::new(MappedField {
                     field_id: Some(11),
                     names: vec!["location".to_string()],
