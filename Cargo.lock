@@ -738,22 +738,22 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.10.0"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3a8768e0f3ab98635dad919db49edfa99a516cea8c4893b762bb7c2f228dcf5"
+checksum = "7aeb8d50940ff852885f372f3099eeadc70f7d4917389b39f4c7a1b8e6c372bc"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.60.12",
+ "aws-smithy-http 0.62.1",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes",
+ "fastrand",
  "http 0.2.12",
- "once_cell",
  "regex-lite",
  "tracing",
 ]
