@@ -24,8 +24,9 @@ use arrow_array::types::{
     Decimal128Type, TimestampMicrosecondType, validate_decimal_precision_and_scale,
 };
 use arrow_array::{
-    BooleanArray, Date32Array, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
-    Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
+    BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int32Array, Int64Array, PrimitiveArray, Scalar, StringArray,
+    TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use num_bigint::BigInt;
@@ -680,6 +681,17 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
             PrimitiveArray::<TimestampMicrosecondType>::new(vec![*value; 1].into(), None)
                 .with_timezone("UTC"),
         ))),
+        (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(value)) => {
+            let array = Decimal128Array::from_value(*value, 1)
+                .with_precision_and_scale(*precision as _, *scale as _)
+                .unwrap();
+            Ok(Arc::new(Scalar::new(array)))
+        }
+        (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+            let bytes = Uuid::from_u128(*value).into_bytes();
+            let array = FixedSizeBinaryArray::try_from_iter(vec![bytes].into_iter()).unwrap();
+            Ok(Arc::new(Scalar::new(array)))
+        }
 
         (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
