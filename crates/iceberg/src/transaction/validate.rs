@@ -22,7 +22,7 @@ use crate::spec::{ManifestContentType, ManifestFile, Operation, SnapshotRef, Tab
 use crate::table::Table;
 
 pub(crate) trait SnapshotValidator {
-    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) -> () {}
+    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) {}
 
     #[allow(dead_code)]
     async fn validation_history(
@@ -42,13 +42,13 @@ pub(crate) trait SnapshotValidator {
             last_snapshot = Some(current_snapshot);
 
             if matching_operations.contains(&current_snapshot.summary().operation) {
-                new_snapshots.insert(current_snapshot.snapshot_id().clone());
+                new_snapshots.insert(current_snapshot.snapshot_id());
                 current_snapshot
                     .load_manifest_list(base.file_io(), base.metadata())
                     .await
                     .expect("Failed to load manifest list!")
                     .entries()
-                    .into_iter()
+                    .iter()
                     .for_each(|manifest| {
                         if manifest.content == manifest_content_type
                             && manifest.added_snapshot_id == current_snapshot.snapshot_id()
@@ -87,7 +87,7 @@ pub(crate) trait SnapshotValidator {
         let mut snapshots = Vec::new();
         let mut current_snapshot = to_snapshot;
         while let Some(snapshot) = current_snapshot {
-            snapshots.push(Arc::clone(&snapshot));
+            snapshots.push(Arc::clone(snapshot));
             match snapshot.parent_snapshot_id() {
                 Some(parent_snapshot_id)
                     if from_snapshot.is_some()
