@@ -716,22 +716,22 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.82.0"
+version = "1.94.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b191777917ee0a5bd853a6f209e33229f0fdd6a65f64ac6fcdb463c96a02ee0b"
+checksum = "0ad31af89bb8a038040caedf19234147203bc141744eb8954cbcf09578a910b6"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.60.12",
+ "aws-smithy-http 0.62.1",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes",
+ "fastrand",
  "http 0.2.12",
- "once_cell",
  "regex-lite",
  "tracing",
 ]
