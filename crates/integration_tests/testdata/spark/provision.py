@@ -114,12 +114,19 @@ spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Python')")
 spark.sql("ALTER TABLE rest.default.test_rename_column RENAME COLUMN lang TO language")
 spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Java')")
 
-#  Create a table, and do some evolution on a partition column
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) USING iceberg PARTITIONED BY (foo)")
+#  Create a table, and do some evolution
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) USING iceberg")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (19)")
 spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bigint")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
-spark.sql("INSERT INTO rest.default.test_promote_column VALUES (null)")
+
+#  Create a table, and do some evolution on a partition column
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_partition_column (foo int, bar float, baz decimal(4, 2)) USING iceberg")
+spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (19, 19.25, 19.25)")
+spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN foo TYPE bigint")
+spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN bar TYPE double")
+spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN baz TYPE decimal(6, 2)")
+spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (25, 22.25, 22.25)")
 
 #  Create a table with various types
 spark.sql("""

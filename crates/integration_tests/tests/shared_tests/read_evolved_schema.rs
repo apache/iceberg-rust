@@ -17,12 +17,13 @@
 
 //! Integration tests for rest catalog.
 
-use arrow_array::{Int64Array, StringArray};
+use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, TableIdent};
 use iceberg_catalog_rest::RestCatalog;
+use ordered_float::OrderedFloat;
 
 use crate::get_shared_containers;
 
@@ -98,4 +99,76 @@ async fn test_evolved_schema() {
     actual.sort();
 
     assert_eq!(actual, vec![19, 25]);
+
+    // Evolve a partitioned column
+    let table = rest_catalog
+        .load_table(&TableIdent::from_strs(["default", "test_promote_partition_column"]).unwrap())
+        .await
+        .unwrap();
+    let scan = table.scan().build();
+    let batch_stream = scan.unwrap().to_arrow().await.unwrap();
+
+    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+    let mut actual_foo = vec![
+        batches[0]
+            .column_by_name("foo")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        batches[1]
+            .column_by_name("foo")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+    ];
+
+    actual_foo.sort();
+
+    assert_eq!(actual_foo, vec![19, 25]);
+
+    let mut actual_bar = vec![
+       OrderedFloat( batches[0]
+            .column_by_name("bar")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0)),
+     OrderedFloat(   batches[1]
+            .column_by_name("bar")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0)),
+    ];
+
+    actual_bar.sort();
+
+    assert_eq!(actual_bar, vec![19.25, 22.25]);
+
+    let mut actual_baz = vec![
+        batches[0]
+            .column_by_name("baz")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap()
+            .value(0),
+        batches[1]
+            .column_by_name("baz")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap()
+            .value(0),
+    ];
+
+    actual_baz.sort();
+
+    assert_eq!(actual_baz, vec![1925, 2225]);
 }
