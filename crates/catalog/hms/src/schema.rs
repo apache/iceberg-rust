@@ -16,7 +16,7 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{visit_schema, PrimitiveType, Schema, SchemaVisitor};
+use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
@@ -134,7 +134,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Conversion from 'Timestamptz' is not supported",
-                ))
+                ));
             }
         };
 
@@ -144,8 +144,8 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::Schema;
     use iceberg::Result;
+    use iceberg::spec::Schema;
 
     use super::*;
 

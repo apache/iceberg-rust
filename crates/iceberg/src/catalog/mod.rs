@@ -41,7 +41,7 @@ use crate::{Error, ErrorKind, Result};
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+    -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -872,17 +872,18 @@ mod tests {
     use std::collections::HashMap;
     use std::fmt::Debug;
 
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use uuid::uuid;
 
     use super::ViewUpdate;
     use crate::spec::{
-        BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
-        ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
+        BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
+        StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 

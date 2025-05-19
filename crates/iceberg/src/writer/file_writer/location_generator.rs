@@ -17,8 +17,8 @@
 
 //! This module contains the location generator and file name generator for generating path of data file.
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use crate::spec::{DataFileFormat, TableMetadata};
 use crate::{Error, ErrorKind, Result};
@@ -179,6 +179,7 @@ pub(crate) mod test {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let file_name_genertaor = super::DefaultFileNameGenerator::new(

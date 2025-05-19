@@ -29,14 +29,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 homepage = "https://rust.iceberg.apache.org/"
 version = "0.4.0"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.84"
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
@@ -54,6 +54,7 @@ async-std = "1.12"
 async-trait = "0.1.88"
 aws-config = "1.6.1"
 aws-sdk-glue = "1.39"
+base64 = "0.22.1"
 bimap = "0.6"
 bytes = "1.10"
 chrono = "0.4.40"

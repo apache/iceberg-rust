@@ -37,7 +37,7 @@ use crate::utils::{
     create_sdk_config, get_default_table_location, get_metadata_location, validate_namespace,
 };
 use crate::{
-    with_catalog_id, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
 };
 
 #[derive(Debug, TypedBuilder)]

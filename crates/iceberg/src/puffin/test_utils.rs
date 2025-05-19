@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use super::blob::Blob;
 use crate::io::{FileIOBuilder, InputFile};
 use crate::puffin::compression::CompressionCodec;
-use crate::puffin::metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
+use crate::puffin::metadata::{BlobMetadata, CREATED_BY_PROPERTY, FileMetadata};
 
 const JAVA_TESTDATA: &str = "testdata/puffin/java-generated";
 const EMPTY_UNCOMPRESSED: &str = "empty-puffin-uncompressed.bin";

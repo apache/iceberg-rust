@@ -611,7 +611,10 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
+            FileMetadata::read(&input_file)
+                .await
+                .unwrap_err()
+                .to_string(),
             "DataInvalid => Footer is not a valid UTF-8 string, source: invalid utf-8 sequence of 1 bytes from index 1",
         )
     }
@@ -710,7 +713,10 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
+            FileMetadata::read(&input_file)
+                .await
+                .unwrap_err()
+                .to_string(),
             format!(
                 "DataInvalid => Given string is not valid JSON, source: missing field `blobs` at line 3 column 13"
             ),
@@ -730,8 +736,13 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
-            format!("DataInvalid => Given string is not valid JSON, source: invalid type: map, expected a sequence at line 2 column 26"),
+            FileMetadata::read(&input_file)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "DataInvalid => Given string is not valid JSON, source: invalid type: map, expected a sequence at line 2 column 26"
+            ),
         )
     }
 
@@ -867,7 +878,10 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
+            FileMetadata::read(&input_file)
+                .await
+                .unwrap_err()
+                .to_string(),
             format!(
                 "DataInvalid => Given string is not valid JSON, source: invalid value: integer `{}`, expected i32 at line 5 column 51",
                 out_of_i32_range_number
@@ -882,7 +896,10 @@ mod tests {
         let input_file = input_file_with_payload(&temp_dir, r#""blobs" = []"#).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().to_string(),
+            FileMetadata::read(&input_file)
+                .await
+                .unwrap_err()
+                .to_string(),
             "DataInvalid => Given string is not valid JSON, source: invalid type: string \"blobs\", expected struct FileMetadata at line 1 column 7",
         )
     }

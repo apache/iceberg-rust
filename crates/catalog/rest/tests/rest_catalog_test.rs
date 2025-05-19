@@ -136,12 +136,14 @@ async fn test_list_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
-        ))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(
+                &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
+            ))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -178,10 +180,12 @@ async fn test_list_empty_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(ns_apple.name()))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(ns_apple.name()))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -218,12 +222,14 @@ async fn test_list_root_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
-        ))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(
+                &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
+            ))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -375,10 +381,12 @@ async fn test_list_empty_multi_level_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(ns_apple.name()))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(ns_apple.name()))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog

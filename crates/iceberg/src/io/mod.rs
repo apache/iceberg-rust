@@ -22,8 +22,8 @@
 //! We provided a `FileIOBuilder` to build `FileIO` from scratch. For example:
 //!
 //! ```rust
-//! use iceberg::io::{FileIOBuilder, S3_REGION};
 //! use iceberg::Result;
+//! use iceberg::io::{FileIOBuilder, S3_REGION};
 //!
 //! # fn test() -> Result<()> {
 //! // Build a memory file io.
@@ -41,8 +41,8 @@
 //! Or you can pass a path to ask `FileIO` to infer schema for you:
 //!
 //! ```rust
-//! use iceberg::io::{FileIO, S3_REGION};
 //! use iceberg::Result;
+//! use iceberg::io::{FileIO, S3_REGION};
 //!
 //! # fn test() -> Result<()> {
 //! // Build a memory file io.

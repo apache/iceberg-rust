@@ -21,12 +21,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
-    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, TableMetadata, UnboundPartitionSpec,
-    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
-    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
+    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
+    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
+    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, PartitionSpec, PartitionSpecBuilder,
+    PartitionStatisticsFile, RESERVED_PROPERTIES, Schema, SchemaRef, Snapshot, SnapshotLog,
+    SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableMetadata, UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -120,6 +120,7 @@ impl TableMetadataBuilder {
                 refs: HashMap::default(),
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
+                encryption_keys: HashMap::new(),
             },
             last_updated_ms: None,
             changes: vec![],
@@ -351,7 +352,7 @@ impl TableMetadataBuilder {
                     "Cannot add snapshot with sequence number {} older than last sequence number {}",
                     snapshot.sequence_number(),
                     self.metadata.last_sequence_number
-                )
+                ),
             ));
         }
 
@@ -761,17 +762,19 @@ impl TableMetadataBuilder {
             ));
         }
 
-        let schemaless_spec =
-            self.metadata
-                .partition_specs
-                .get(&spec_id)
-                .ok_or_else(|| {
-                    Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set default partition spec to unknown spec with id: '{spec_id}'",),
-            )
-                })?
-                .clone();
+        let schemaless_spec = self
+            .metadata
+            .partition_specs
+            .get(&spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
+                    ),
+                )
+            })?
+            .clone();
         let spec = Arc::unwrap_or_clone(schemaless_spec);
         let spec_type = spec.partition_type(self.get_current_schema()?)?;
         self.metadata.default_spec = Arc::new(spec);
@@ -1256,6 +1259,7 @@ mod tests {
     use std::thread::sleep;
 
     use super::*;
+    use crate::TableIdent;
     use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
@@ -1263,7 +1267,6 @@ mod tests {
         UnboundPartitionField,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
     const LAST_ASSIGNED_COLUMN_ID: i32 = 3;
@@ -1408,12 +1411,10 @@ mod tests {
                 NestedField::required(
                     13,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        14,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(14, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(15, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1449,12 +1450,10 @@ mod tests {
                 NestedField::required(
                     3,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        5,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(5, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1966,19 +1965,21 @@ mod tests {
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
 
-        assert!(builder
-            .clone()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 10,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
-                },
-            })
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot set 'main' to unknown snapshot: '10'"));
+        assert!(
+            builder
+                .clone()
+                .set_ref(MAIN_BRANCH, SnapshotReference {
+                    snapshot_id: 10,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                })
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot set 'main' to unknown snapshot: '10'")
+        );
 
         let build_result = builder
             .set_ref(MAIN_BRANCH, SnapshotReference {
@@ -2160,9 +2161,10 @@ mod tests {
             .build()
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Cannot find partition source field"));
+        assert!(
+            err.to_string()
+                .contains("Cannot find partition source field")
+        );
     }
 
     #[test]
@@ -2281,9 +2283,10 @@ mod tests {
         let err = builder
             .set_branch_snapshot(snapshot, MAIN_BRANCH)
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Cannot add snapshot with sequence number"));
+        assert!(
+            err.to_string()
+                .contains("Cannot add snapshot with sequence number")
+        );
     }
 
     #[test]
