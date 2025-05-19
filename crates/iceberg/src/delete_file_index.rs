@@ -22,10 +22,10 @@ use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
+use crate::Result;
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
-use crate::Result;
 
 /// Index of delete files
 #[derive(Clone, Debug)]
