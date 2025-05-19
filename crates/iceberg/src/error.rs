@@ -288,6 +288,13 @@ impl Error {
     ///     }
     /// }
     /// ```
+    ///
+    /// Additionally, you can add a clippy lint to prevent usage of the original `iceberg::Error` type.
+    /// ```toml
+    /// disallowed-types = [
+    ///     { path = "iceberg::Error", reason = "Please use `my_crate::IcebergError` instead." },
+    /// ]
+    /// ```
     pub fn backtrace(&self) -> &Backtrace {
         &self.backtrace
     }
