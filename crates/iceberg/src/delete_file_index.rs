@@ -20,7 +20,7 @@ use std::fmt::{self, Debug};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, TryLockError};
 use std::task::{Context, Poll};
 
 use futures::StreamExt;
@@ -235,6 +235,10 @@ impl Future for DeletesForDataFile<'_> {
                     Poll::Pending
                 }
             },
+            Err(TryLockError::WouldBlock) => {
+                self.waker_set.insert(cx);
+                Poll::Pending
+            }
             Err(err) => Poll::Ready(Err(Error::new(ErrorKind::Unexpected, err.to_string()))),
         }
     }
