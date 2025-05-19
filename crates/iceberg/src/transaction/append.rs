@@ -16,15 +16,13 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use arrow_array::StringArray;
 use futures::TryStreamExt;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation, Snapshot, SnapshotRef};
-use crate::table::Table;
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::transaction::Transaction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,

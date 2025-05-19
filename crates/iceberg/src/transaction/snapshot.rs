@@ -29,8 +29,8 @@ use crate::spec::{
     PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
     SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
-use crate::transaction::validate::SnapshotValidator;
 use crate::transaction::Transaction;
+use crate::transaction::validate::SnapshotValidator;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";

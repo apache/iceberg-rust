@@ -22,7 +22,7 @@ use crate::spec::{ManifestContentType, ManifestFile, Operation, SnapshotRef, Tab
 use crate::table::Table;
 
 pub(crate) trait SnapshotValidator {
-    fn validate(&self, table: &Table, snapshot: Option<&SnapshotRef>) -> () {}
+    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) -> () {}
 
     #[allow(dead_code)]
     async fn validation_history(
@@ -63,13 +63,17 @@ pub(crate) trait SnapshotValidator {
             && last_snapshot.unwrap().parent_snapshot_id()
                 != from_snapshot.map(|snapshot| snapshot.snapshot_id())
         {
-            panic!("Cannot determine history between starting snapshot {} and the last known ancestor {}",
-                   from_snapshot.map_or_else(
-                       || "None".to_string(),
-                       |snapshot| snapshot.snapshot_id().to_string()),
-                   last_snapshot.map_or_else(
-                       || "None".to_string(),
-                       |snapshot| snapshot.parent_snapshot_id().unwrap().to_string()));
+            panic!(
+                "Cannot determine history between starting snapshot {} and the last known ancestor {}",
+                from_snapshot.map_or_else(
+                    || "None".to_string(),
+                    |snapshot| snapshot.snapshot_id().to_string()
+                ),
+                last_snapshot.map_or_else(
+                    || "None".to_string(),
+                    |snapshot| snapshot.parent_snapshot_id().unwrap().to_string()
+                )
+            );
         }
 
         (manifests, new_snapshots)
@@ -89,7 +93,7 @@ pub(crate) trait SnapshotValidator {
                     if from_snapshot.is_some()
                         && parent_snapshot_id == from_snapshot.unwrap().snapshot_id() =>
                 {
-                    break
+                    break;
                 }
                 Some(parent_snapshot_id) => {
                     current_snapshot = table_metadata.snapshot_by_id(parent_snapshot_id)
@@ -106,6 +110,7 @@ pub(crate) trait SnapshotValidator {
 mod tests {
     use std::collections::HashSet;
 
+    use crate::TableUpdate;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestContentType, Operation,
         SnapshotRef, Struct,
@@ -113,7 +118,6 @@ mod tests {
     use crate::transaction::tests::{make_v2_minimal_table, make_v2_table};
     use crate::transaction::validate::SnapshotValidator;
     use crate::transaction::{Table, Transaction};
-    use crate::TableUpdate;
 
     struct TestValidator {}
 
