@@ -23,11 +23,12 @@ use itertools::Itertools;
 
 use crate::error::Result;
 use crate::spec::{
-    ancestors_of, SnapshotReference, SnapshotRetention, MAIN_BRANCH, MAX_REF_AGE_MS,
-    MAX_REF_AGE_MS_DEFAULT, MAX_SNAPSHOT_AGE_MS, MAX_SNAPSHOT_AGE_MS_DEFAULT,
-    MIN_SNAPSHOTS_TO_KEEP, MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
+    SnapshotReference, SnapshotRetention, MAIN_BRANCH, MAX_REF_AGE_MS, MAX_REF_AGE_MS_DEFAULT,
+    MAX_SNAPSHOT_AGE_MS, MAX_SNAPSHOT_AGE_MS_DEFAULT, MIN_SNAPSHOTS_TO_KEEP,
+    MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
 };
 use crate::transaction::Transaction;
+use crate::utils::ancestors_of;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// RemoveSnapshotAction is a transaction action for removing snapshot.
@@ -345,9 +346,9 @@ impl<'a> RemoveSnapshotAction<'a> {
         min_snapshots_to_keep: usize,
     ) -> HashSet<i64> {
         let mut ids_to_retain = HashSet::new();
-        let table_meta = self.tx.current_table.metadata();
+        let table_meta = self.tx.current_table.metadata_ref();
         if let Some(snapshot) = table_meta.snapshot_by_id(snapshot_id) {
-            let ancestors = ancestors_of(snapshot.clone(), table_meta);
+            let ancestors = ancestors_of(&table_meta, snapshot.snapshot_id());
             for ancestor in ancestors {
                 if ids_to_retain.len() < min_snapshots_to_keep
                     || ancestor.timestamp_ms() >= expire_snapshots_older_than
@@ -377,8 +378,10 @@ impl<'a> RemoveSnapshotAction<'a> {
                     .metadata()
                     .snapshot_by_id(snapshot_ref.snapshot_id)
                 {
-                    let ancestors =
-                        ancestors_of(snapshot.clone(), self.tx.current_table.metadata());
+                    let ancestors = ancestors_of(
+                        &self.tx.current_table.metadata_ref(),
+                        snapshot.snapshot_id(),
+                    );
                     for ancestor in ancestors {
                         referenced_snapshots.insert(ancestor.snapshot_id());
                     }
