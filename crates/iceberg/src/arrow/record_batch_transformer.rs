@@ -434,7 +434,7 @@ impl RecordBatchTransformer {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("unexpected target column type {}", dt),
-                ))
+                ));
             }
         })
     }

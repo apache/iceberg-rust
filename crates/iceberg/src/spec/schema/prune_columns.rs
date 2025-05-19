@@ -182,9 +182,12 @@ impl SchemaVisitor for PruneColumn {
                 return Ok(Some(Type::List(list.clone())));
             } else {
                 return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
-                    ));
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot explicitly project List or Map types, List element {} of type {} was selected",
+                        list.element_field.id, list.element_field.field_type
+                    ),
+                ));
             }
         } else if let Some(result) = value {
             Ok(Some(Type::List(PruneColumn::project_list(list, result)?)))
@@ -213,9 +216,12 @@ impl SchemaVisitor for PruneColumn {
                 return Ok(Some(Type::Map(map.clone())));
             } else {
                 return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
-                    ));
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot explicitly project List or Map types, Map value {} of type {} was selected",
+                        map.value_field.id, map.value_field.field_type
+                    ),
+                ));
             }
         } else if let Some(value_result) = value {
             return Ok(Some(Type::Map(PruneColumn::project_map(
@@ -245,12 +251,9 @@ mod tests {
     fn test_schema_prune_columns_string() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    1,
-                    "foo",
-                    Type::Primitive(PrimitiveType::String),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -267,12 +270,9 @@ mod tests {
     fn test_schema_prune_columns_string_full() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    1,
-                    "foo",
-                    Type::Primitive(PrimitiveType::String),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -289,19 +289,21 @@ mod tests {
     fn test_schema_prune_columns_list() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    4,
-                    "qux",
-                    Type::List(ListType {
-                        element_field: NestedField::list_element(
-                            5,
-                            Type::Primitive(PrimitiveType::String),
-                            true,
-                        )
-                        .into(),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(
+                        4,
+                        "qux",
+                        Type::List(ListType {
+                            element_field: NestedField::list_element(
+                                5,
+                                Type::Primitive(PrimitiveType::String),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -326,19 +328,21 @@ mod tests {
     fn test_schema_prune_columns_list_full() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    4,
-                    "qux",
-                    Type::List(ListType {
-                        element_field: NestedField::list_element(
-                            5,
-                            Type::Primitive(PrimitiveType::String),
-                            true,
-                        )
-                        .into(),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(
+                        4,
+                        "qux",
+                        Type::List(ListType {
+                            element_field: NestedField::list_element(
+                                5,
+                                Type::Primitive(PrimitiveType::String),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -355,36 +359,38 @@ mod tests {
     fn test_prune_columns_map() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    6,
-                    "quux",
-                    Type::Map(MapType {
-                        key_field: NestedField::map_key_element(
-                            7,
-                            Type::Primitive(PrimitiveType::String),
-                        )
-                        .into(),
-                        value_field: NestedField::map_value_element(
-                            8,
-                            Type::Map(MapType {
-                                key_field: NestedField::map_key_element(
-                                    9,
-                                    Type::Primitive(PrimitiveType::String),
-                                )
-                                .into(),
-                                value_field: NestedField::map_value_element(
-                                    10,
-                                    Type::Primitive(PrimitiveType::Int),
-                                    true,
-                                )
-                                .into(),
-                            }),
-                            true,
-                        )
-                        .into(),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(
+                        6,
+                        "quux",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                7,
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                8,
+                                Type::Map(MapType {
+                                    key_field: NestedField::map_key_element(
+                                        9,
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                    value_field: NestedField::map_value_element(
+                                        10,
+                                        Type::Primitive(PrimitiveType::Int),
+                                        true,
+                                    )
+                                    .into(),
+                                }),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -409,36 +415,38 @@ mod tests {
     fn test_prune_columns_map_full() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    6,
-                    "quux",
-                    Type::Map(MapType {
-                        key_field: NestedField::map_key_element(
-                            7,
-                            Type::Primitive(PrimitiveType::String),
-                        )
-                        .into(),
-                        value_field: NestedField::map_value_element(
-                            8,
-                            Type::Map(MapType {
-                                key_field: NestedField::map_key_element(
-                                    9,
-                                    Type::Primitive(PrimitiveType::String),
-                                )
-                                .into(),
-                                value_field: NestedField::map_value_element(
-                                    10,
-                                    Type::Primitive(PrimitiveType::Int),
-                                    true,
-                                )
-                                .into(),
-                            }),
-                            true,
-                        )
-                        .into(),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(
+                        6,
+                        "quux",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                7,
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                8,
+                                Type::Map(MapType {
+                                    key_field: NestedField::map_key_element(
+                                        9,
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                    value_field: NestedField::map_value_element(
+                                        10,
+                                        Type::Primitive(PrimitiveType::Int),
+                                        true,
+                                    )
+                                    .into(),
+                                }),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -455,36 +463,38 @@ mod tests {
     fn test_prune_columns_map_key() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    6,
-                    "quux",
-                    Type::Map(MapType {
-                        key_field: NestedField::map_key_element(
-                            7,
-                            Type::Primitive(PrimitiveType::String),
-                        )
-                        .into(),
-                        value_field: NestedField::map_value_element(
-                            8,
-                            Type::Map(MapType {
-                                key_field: NestedField::map_key_element(
-                                    9,
-                                    Type::Primitive(PrimitiveType::String),
-                                )
-                                .into(),
-                                value_field: NestedField::map_value_element(
-                                    10,
-                                    Type::Primitive(PrimitiveType::Int),
-                                    true,
-                                )
-                                .into(),
-                            }),
-                            true,
-                        )
-                        .into(),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(
+                        6,
+                        "quux",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                7,
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                8,
+                                Type::Map(MapType {
+                                    key_field: NestedField::map_key_element(
+                                        9,
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                    value_field: NestedField::map_value_element(
+                                        10,
+                                        Type::Primitive(PrimitiveType::Int),
+                                        true,
+                                    )
+                                    .into(),
+                                }),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -501,17 +511,21 @@ mod tests {
     fn test_prune_columns_struct() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    15,
-                    "person",
-                    Type::Struct(StructType::new(vec![NestedField::optional(
-                        16,
-                        "name",
-                        Type::Primitive(PrimitiveType::String),
+                .with_fields(vec![
+                    NestedField::optional(
+                        15,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                16,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                        ])),
                     )
-                    .into()])),
-                )
-                .into()])
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -528,17 +542,21 @@ mod tests {
     fn test_prune_columns_struct_full() {
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    15,
-                    "person",
-                    Type::Struct(StructType::new(vec![NestedField::optional(
-                        16,
-                        "name",
-                        Type::Primitive(PrimitiveType::String),
+                .with_fields(vec![
+                    NestedField::optional(
+                        15,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                16,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                        ])),
                     )
-                    .into()])),
-                )
-                .into()])
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -554,22 +572,17 @@ mod tests {
     #[test]
     fn test_prune_columns_empty_struct() {
         let schema_with_empty_struct_field = Schema::builder()
-            .with_fields(vec![NestedField::optional(
-                15,
-                "person",
-                Type::Struct(StructType::new(vec![])),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![]))).into(),
+            ])
             .build()
             .unwrap();
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    15,
-                    "person",
-                    Type::Struct(StructType::new(vec![])),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                        .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -584,22 +597,17 @@ mod tests {
     #[test]
     fn test_prune_columns_empty_struct_full() {
         let schema_with_empty_struct_field = Schema::builder()
-            .with_fields(vec![NestedField::optional(
-                15,
-                "person",
-                Type::Struct(StructType::new(vec![])),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![]))).into(),
+            ])
             .build()
             .unwrap();
         let expected_type = Type::from(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    15,
-                    "person",
-                    Type::Struct(StructType::new(vec![])),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                        .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -615,30 +623,8 @@ mod tests {
     fn test_prune_columns_struct_in_map() {
         let schema_with_struct_in_map_field = Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                6,
-                "id_to_person",
-                Type::Map(MapType {
-                    key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
-                        .into(),
-                    value_field: NestedField::map_value_element(
-                        8,
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
-                                .into(),
-                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
-                        ])),
-                        true,
-                    )
-                    .into(),
-                }),
-            )
-            .into()])
-            .build()
-            .unwrap();
-        let expected_type = Type::from(
-            Schema::builder()
-                .with_fields(vec![NestedField::required(
+            .with_fields(vec![
+                NestedField::required(
                     6,
                     "id_to_person",
                     Type::Map(MapType {
@@ -649,18 +635,46 @@ mod tests {
                         .into(),
                         value_field: NestedField::map_value_element(
                             8,
-                            Type::Struct(StructType::new(vec![NestedField::required(
-                                11,
-                                "age",
-                                Primitive(PrimitiveType::Int),
-                            )
-                            .into()])),
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                    .into(),
+                                NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
                             true,
                         )
                         .into(),
                     }),
                 )
-                .into()])
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(
+                        6,
+                        "id_to_person",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                7,
+                                Type::Primitive(PrimitiveType::Int),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                8,
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                        .into(),
+                                ])),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()
@@ -675,30 +689,8 @@ mod tests {
     fn test_prune_columns_struct_in_map_full() {
         let schema = Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                6,
-                "id_to_person",
-                Type::Map(MapType {
-                    key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
-                        .into(),
-                    value_field: NestedField::map_value_element(
-                        8,
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
-                                .into(),
-                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
-                        ])),
-                        true,
-                    )
-                    .into(),
-                }),
-            )
-            .into()])
-            .build()
-            .unwrap();
-        let expected_type = Type::from(
-            Schema::builder()
-                .with_fields(vec![NestedField::required(
+            .with_fields(vec![
+                NestedField::required(
                     6,
                     "id_to_person",
                     Type::Map(MapType {
@@ -709,18 +701,46 @@ mod tests {
                         .into(),
                         value_field: NestedField::map_value_element(
                             8,
-                            Type::Struct(StructType::new(vec![NestedField::required(
-                                11,
-                                "age",
-                                Primitive(PrimitiveType::Int),
-                            )
-                            .into()])),
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                    .into(),
+                                NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
                             true,
                         )
                         .into(),
                     }),
                 )
-                .into()])
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(
+                        6,
+                        "id_to_person",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                7,
+                                Type::Primitive(PrimitiveType::Int),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                8,
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                        .into(),
+                                ])),
+                                true,
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap()
                 .as_struct()

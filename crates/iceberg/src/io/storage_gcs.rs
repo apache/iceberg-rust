@@ -18,8 +18,8 @@
 
 use std::collections::HashMap;
 
-use opendal::services::GcsConfig;
 use opendal::Operator;
+use opendal::services::GcsConfig;
 use url::Url;
 
 use crate::io::is_truthy;

@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use futures::channel::mpsc::{channel, Sender};
 use futures::StreamExt;
+use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
 use crate::runtime::spawn;

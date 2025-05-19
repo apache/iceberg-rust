@@ -24,11 +24,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    update_snapshot_summaries, DataFile, DataFileFormat, FormatVersion, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    MAIN_BRANCH, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestEntry, ManifestFile,
+    ManifestListWriter, ManifestWriterBuilder, Operation, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -172,6 +171,13 @@ impl<'a> SnapshotProduceAction<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
+        if added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added data files found when write a manifest file",
+            ));
+        }
+
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {

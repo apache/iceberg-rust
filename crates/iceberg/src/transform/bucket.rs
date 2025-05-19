@@ -224,7 +224,7 @@ impl TransformFunction for Bucket {
                         "Unsupported data type for bucket transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Arc::new(res))
@@ -258,7 +258,7 @@ impl TransformFunction for Bucket {
                         "Unsupported data type for bucket transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Some(Datum::int(val)))
@@ -273,6 +273,7 @@ mod test {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
     use super::Bucket;
+    use crate::Result;
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
@@ -280,9 +281,8 @@ mod test {
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
-    use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
     use crate::transform::TransformFunction;
-    use crate::Result;
+    use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
 
     #[test]
     fn test_bucket_transform() {
@@ -320,12 +320,9 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Int))),
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],

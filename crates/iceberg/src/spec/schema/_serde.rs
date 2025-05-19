@@ -26,7 +26,7 @@ use serde::Deserialize;
 /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
 use serde::Serialize;
 
-use super::{Schema, DEFAULT_SCHEMA_ID};
+use super::{DEFAULT_SCHEMA_ID, Schema};
 use crate::spec::StructType;
 use crate::{Error, Result};
 

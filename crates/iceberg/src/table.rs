@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
-use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
+use crate::io::object_cache::ObjectCache;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};

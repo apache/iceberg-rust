@@ -29,39 +29,40 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 homepage = "https://rust.iceberg.apache.org/"
 version = "0.4.0"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.84"
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
-arrow-arith = { version = "54.2.0" }
-arrow-array = { version = "54.2.0" }
-arrow-buffer = { version = "54.2.0" }
-arrow-cast = { version = "54.2.0" }
-arrow-ord = { version = "54.2.0" }
-arrow-schema = { version = "54.2.0" }
-arrow-select = { version = "54.2.0" }
-arrow-string = { version = "54.2.0" }
+arrow-arith = { version = "55" }
+arrow-array = { version = "55" }
+arrow-buffer = { version = "55" }
+arrow-cast = { version = "55" }
+arrow-ord = { version = "55" }
+arrow-schema = { version = "55" }
+arrow-select = { version = "55" }
+arrow-string = { version = "55" }
 async-std = "1.12"
-async-trait = "0.1.86"
-aws-config = "1.5"
+async-trait = "0.1.88"
+aws-config = "1.6.1"
 aws-sdk-glue = "1.39"
+base64 = "0.22.1"
 bimap = "0.6"
-bytes = "1.9"
-chrono = "0.4.38"
-clap = { version = "4.5.27", features = ["derive", "cargo"] }
+bytes = "1.10"
+chrono = "0.4.40"
+clap = { version = "4.5.35", features = ["derive", "cargo"] }
 ctor = "0.2.8"
-datafusion = "45"
-datafusion-cli = "45"
-datafusion-sqllogictest = "45"
+datafusion = "47"
+datafusion-cli = "47"
+datafusion-sqllogictest = "47"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
@@ -71,7 +72,7 @@ fnv = "1.0.7"
 fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.1"
-http = "1.1"
+http = "1.2"
 iceberg = { version = "0.4.0", path = "./crates/iceberg" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
@@ -82,12 +83,13 @@ linkedbytes = "0.1.8"
 metainfo = "0.7.14"
 mimalloc = "0.1.46"
 mockito = "1"
+motore-macros = "0.4.3"
 murmur3 = "0.5.2"
 num-bigint = "0.4.6"
 once_cell = "1.20"
 opendal = "0.53.0"
 ordered-float = "4"
-parquet = "54.2.0"
+parquet = "55"
 pilota = "0.11.2"
 port_scanner = "0.1.5"
 pretty_assertions = "1.4"
@@ -95,25 +97,25 @@ rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.10.12" }
-rust_decimal = "1.36"
-serde = { version = "1.0.204", features = ["rc"] }
+rust_decimal = "1.37.1"
+serde = { version = "1.0.210", features = ["rc"] }
 serde_bytes = "0.11.15"
-serde_derive = "1.0.204"
+serde_derive = "1.0.210"
 serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
-sqllogictest = "0.26.4"
+sqllogictest = "0.28"
 stacker = "0.1.20"
 tempfile = "3.18"
 tera = "1"
 thrift = "0.17.0"
 tokio = { version = "1.44", default-features = false }
 toml = "0.8"
-tracing = "0.1.37"
+tracing = "0.1.40"
 tracing-subscriber = "0.3.8"
 typed-builder = "0.20"
 url = "2.5.4"
-uuid = { version = "1.14", features = ["v7"] }
+uuid = { version = "1.16", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.6"
 zstd = "0.13.2"

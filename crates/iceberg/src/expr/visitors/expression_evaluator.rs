@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use super::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
@@ -86,7 +86,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     }
 
     fn not(&mut self, _inner: bool) -> Result<bool> {
-        Err(Error::new(ErrorKind::Unexpected, "The evaluation of expressions should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it."))
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            "The evaluation of expressions should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it.",
+        ))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
@@ -252,17 +255,17 @@ mod tests {
     use predicate::SetExpression;
 
     use super::ExpressionEvaluator;
+    use crate::Result;
     use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::{
-        predicate, BinaryExpression, Bind, BoundPredicate, Predicate, PredicateOperator, Reference,
-        UnaryExpression,
+        BinaryExpression, Bind, BoundPredicate, Predicate, PredicateOperator, Reference,
+        UnaryExpression, predicate,
     };
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
         PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
         UnboundPartitionField,
     };
-    use crate::Result;
 
     fn create_partition_spec(r#type: PrimitiveType) -> Result<(PartitionSpecRef, SchemaRef)> {
         let schema = Schema::builder()
