@@ -256,6 +256,42 @@ impl Error {
         self
     }
 
+    /// Return error's backtrace.
+    ///
+    /// Note: the standard way of exposing backtrace is the unstable feature [`error_generic_member_access`](https://github.com/rust-lang/rust/issues/99301).
+    /// We don't provide it as it requires nightly rust.
+    ///
+    /// If you just want to print error with backtrace, use `Debug`, like `format!("{err:?}")`.
+    ///
+    /// If you use nightly rust, and want to access `iceberg::Error`'s backtrace in the standard way, you can
+    /// implement a newtype like this:
+    ///
+    /// ```ignore
+    /// // assume you already have `#![feature(error_generic_member_access)]` on the top of your crate
+    ///
+    /// #[derive(::std::fmt::Debug)]
+    /// pub struct IcebergError(iceberg::Error);
+    ///
+    /// impl std::fmt::Display for IcebergError {
+    ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    ///         self.0.fmt(f)
+    ///     }
+    /// }
+    ///
+    /// impl std::error::Error for IcebergError {
+    ///     fn provide<'a>(&'a self, request: &mut std::error::Request<'a>) {
+    ///         request.provide_ref::<std::backtrace::Backtrace>(self.0.backtrace());
+    ///     }
+    ///
+    ///     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    ///         self.0.source()
+    ///     }
+    /// }
+    /// ```
+    pub fn backtrace(&self) -> &Backtrace {
+        &self.backtrace
+    }
+
     /// Return error's kind.
     ///
     /// Users can use this method to check error's kind and take actions.
