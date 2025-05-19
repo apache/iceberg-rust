@@ -20,6 +20,7 @@
 mod append;
 mod snapshot;
 mod sort_order;
+mod validate;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
