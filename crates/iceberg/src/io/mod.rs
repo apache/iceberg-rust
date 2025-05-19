@@ -78,6 +78,10 @@ use storage_memory::*;
 mod storage_s3;
 #[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
+#[cfg(feature = "storage-hdfs-native")]
+mod storage_hdfs_native;
+#[cfg(feature = "storage-hdfs-native")]
+pub use storage_hdfs_native::*;
 pub(crate) mod object_cache;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
