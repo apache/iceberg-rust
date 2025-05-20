@@ -27,6 +27,7 @@ mod sort_order;
 mod update_location;
 mod update_properties;
 mod upgrade_format_version;
+mod update_statistics;
 
 use std::sync::Arc;
 
@@ -38,6 +39,7 @@ use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
+use crate::transaction::update_statistics::UpdateStatistics;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -110,6 +112,11 @@ impl Transaction {
     /// Set the location of table
     pub fn update_location(&self) -> UpdateLocationAction {
         UpdateLocationAction::new()
+    }
+
+    /// Update the statistics of table
+    pub fn update_statistics(self) -> UpdateStatistics<'a> {
+        UpdateStatistics::new(self)
     }
 
     /// Commit transaction.
