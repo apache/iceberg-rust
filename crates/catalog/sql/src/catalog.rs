@@ -1927,10 +1927,10 @@ mod tests {
         let table = &catalog.load_table(&table_ident).await.unwrap();
 
         // Generate some rows to add to table.
-        let data_files = add_rows(&table, 10).await.unwrap();
+        let data_files = add_rows(table, 10).await.unwrap();
 
         // Append to the table in a transaction.
-        let mut transaction = Transaction::new(&table);
+        let mut transaction = Transaction::new(table);
         let mut fast_append = transaction
             .fast_append(Some(Uuid::new_v4()), vec![])
             .expect("Created");
