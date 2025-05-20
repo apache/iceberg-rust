@@ -24,7 +24,7 @@ use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::statistics::Statistics;
 
 use crate::arrow::{get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum};
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
@@ -528,12 +528,12 @@ mod tests {
     use parquet::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
     };
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, thread_rng};
 
     use super::RowGroupMetricsEvaluator;
+    use crate::Result;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
-    use crate::Result;
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {

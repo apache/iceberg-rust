@@ -125,11 +125,12 @@ async fn test_provider_plan_stream_schema() -> Result<()> {
     assert_eq!(plan.schema(), stream.schema());
     assert_eq!(
         stream.schema().as_ref(),
-        &ArrowSchema::new(vec![Field::new("foo2", DataType::Utf8, false)
-            .with_metadata(HashMap::from([(
+        &ArrowSchema::new(vec![
+            Field::new("foo2", DataType::Utf8, false).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "2".to_string(),
-            )]))]),
+            )]))
+        ]),
     );
 
     Ok(())
@@ -178,9 +179,11 @@ async fn test_provider_list_schema_names() -> Result<()> {
     let expected = ["test_provider_list_schema_names"];
     let result = provider.schema_names();
 
-    assert!(expected
-        .iter()
-        .all(|item| result.contains(&item.to_string())));
+    assert!(
+        expected
+            .iter()
+            .all(|item| result.contains(&item.to_string()))
+    );
     Ok(())
 }
 
@@ -244,9 +247,10 @@ async fn test_table_projection() -> Result<()> {
         .downcast_ref::<StringArray>()
         .unwrap();
     assert_eq!(2, s.len());
-    assert!(s
-        .value(1)
-        .contains("IcebergTableScan projection:[foo1,foo3]"));
+    assert!(
+        s.value(1)
+            .contains("IcebergTableScan projection:[foo1,foo3]")
+    );
 
     Ok(())
 }

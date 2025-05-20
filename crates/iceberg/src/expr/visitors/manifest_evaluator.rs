@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, FieldSummary, ManifestFile, PrimitiveLiteral, Type};
 use crate::{Error, ErrorKind, Result};
@@ -423,6 +423,7 @@ mod test {
 
     use fnv::FnvHashSet;
 
+    use crate::Result;
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
     use crate::expr::{
         BinaryExpression, Bind, Predicate, PredicateOperator, Reference, SetExpression,
@@ -432,7 +433,6 @@ mod test {
         Datum, FieldSummary, ManifestContentType, ManifestFile, NestedField, PrimitiveType, Schema,
         SchemaRef, Type,
     };
-    use crate::Result;
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;

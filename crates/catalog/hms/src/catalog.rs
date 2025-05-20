@@ -258,7 +258,7 @@ impl Catalog for HmsCatalog {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Database name must be specified",
-                ))
+                ));
             }
         };
 

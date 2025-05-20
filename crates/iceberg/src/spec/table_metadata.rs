@@ -33,10 +33,10 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef, SnapshotRef, SnapshotRetention,
-    SortOrder, SortOrderRef, StatisticsFile, StructType, DEFAULT_PARTITION_SPEC_ID,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
+    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
 };
-use crate::error::{timestamp_ms_to_utc, Result};
+use crate::error::{Result, timestamp_ms_to_utc};
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -175,6 +175,8 @@ pub struct TableMetadata {
     pub(crate) statistics: HashMap<i64, StatisticsFile>,
     /// Mapping of snapshot ids to partition statistics files.
     pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
+    /// Encryption Keys
+    pub(crate) encryption_keys: HashMap<String, String>,
 }
 
 impl TableMetadata {
@@ -418,6 +420,18 @@ impl TableMetadata {
         }
     }
 
+    /// Iterate over all encryption keys
+    #[inline]
+    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = (&String, &String)> {
+        self.encryption_keys.iter()
+    }
+
+    /// Get the encryption key for a given key id
+    #[inline]
+    pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
+        self.encryption_keys.get(key_id)
+    }
+
     /// Normalize this partition spec.
     ///
     /// This is an internal method
@@ -498,12 +512,12 @@ impl TableMetadata {
                 self.current_snapshot_id = None;
             } else if self.snapshot_by_id(current_snapshot_id).is_none() {
                 return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Snapshot for current snapshot id {} does not exist in the existing snapshots list",
-                            current_snapshot_id
-                        ),
-                    ));
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Snapshot for current snapshot id {} does not exist in the existing snapshots list",
+                        current_snapshot_id
+                    ),
+                ));
             }
         }
         Ok(())
@@ -657,8 +671,8 @@ pub(super) mod _serde {
     use uuid::Uuid;
 
     use super::{
-        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_PARTITION_SPEC_ID,
-        MAIN_BRANCH,
+        DEFAULT_PARTITION_SPEC_ID, FormatVersion, MAIN_BRANCH, MetadataLog, SnapshotLog,
+        TableMetadata,
     };
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
@@ -905,6 +919,7 @@ pub(super) mod _serde {
                 }),
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1061,6 +1076,7 @@ pub(super) mod _serde {
                 },
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
+                encryption_keys: HashMap::new(),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1310,13 +1326,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use crate::TableCreation;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PartitionStatisticsFile,
         PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
         SortField, SortOrder, StatisticsFile, Summary, Transform, Type, UnboundPartitionField,
     };
-    use crate::TableCreation;
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1460,6 +1476,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1635,6 +1652,7 @@ mod tests {
             refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference { snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None } })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -1732,6 +1750,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1842,9 +1861,10 @@ mod tests {
     "#;
 
         let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Current snapshot id does not match main branch"));
+        assert!(
+            err.to_string()
+                .contains("Current snapshot id does not match main branch")
+        );
     }
 
     #[test]
@@ -1933,9 +1953,10 @@ mod tests {
     "#;
 
         let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Current snapshot is not set, but main branch exists"));
+        assert!(
+            err.to_string()
+                .contains("Current snapshot is not set, but main branch exists")
+        );
     }
 
     #[test]
@@ -2028,9 +2049,11 @@ mod tests {
     "#;
 
         let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Snapshot for reference foo does not exist in the existing snapshots list"));
+        assert!(
+            err.to_string().contains(
+                "Snapshot for reference foo does not exist in the existing snapshots list"
+            )
+        );
     }
 
     #[test]
@@ -2262,6 +2285,7 @@ mod tests {
                     max_ref_age_ms: None,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -2396,6 +2420,7 @@ mod tests {
                     max_ref_age_ms: None,
                 },
             })]),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -2557,6 +2582,7 @@ mod tests {
             })]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2641,6 +2667,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2709,6 +2736,7 @@ mod tests {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);

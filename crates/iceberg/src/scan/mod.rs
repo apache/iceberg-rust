@@ -26,7 +26,7 @@ mod task;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use futures::channel::mpsc::{channel, Sender};
+use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
@@ -602,7 +602,7 @@ pub mod tests {
     use arrow_array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
-    use futures::{stream, TryStreamExt};
+    use futures::{TryStreamExt, stream};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
@@ -610,6 +610,7 @@ pub mod tests {
     use tera::{Context, Tera};
     use uuid::Uuid;
 
+    use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
@@ -620,7 +621,6 @@ pub mod tests {
         PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     pub struct TableTestFixture {
         pub table_location: String,

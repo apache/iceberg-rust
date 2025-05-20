@@ -26,8 +26,8 @@ use uuid::Uuid;
 
 use super::get_field_id;
 use crate::spec::{
-    visit_struct_with_partner, ListType, Literal, Map, MapType, NestedField, PartnerAccessor,
-    PrimitiveType, SchemaWithPartnerVisitor, Struct, StructType,
+    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
+    SchemaWithPartnerVisitor, Struct, StructType, visit_struct_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
 
