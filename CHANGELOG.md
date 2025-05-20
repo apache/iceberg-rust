@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.5.0] - 2025-05-17
+## [v0.5.0] - 2025-05-19
 * io: add support for role arn and external id s3 props by @mattheusv in https://github.com/apache/iceberg-rust/pull/553
 * fix: ensure S3 and GCS integ tests are conditionally compiled only when the storage-s3 and storage-gcs features are enabled by @sdd in https://github.com/apache/iceberg-rust/pull/552
 * docs: fix main iceberg example by @jdockerty in https://github.com/apache/iceberg-rust/pull/554
