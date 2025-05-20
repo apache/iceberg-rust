@@ -126,10 +126,13 @@ impl<'a> UpdateSchema<'a> {
 
         for name in &column_name {
             if name.contains('.') {
-                return Err(Error::new(ErrorKind::DataInvalid, format!(
-                    "Cannot add column with ambiguous name: {}, provide a vector of names without periods",
-                    name
-                )));
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot add column with ambiguous name: {}, provide a vector of names without periods",
+                        name
+                    ),
+                ));
             }
         }
 
@@ -209,7 +212,7 @@ impl<'a> UpdateSchema<'a> {
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to the column.
+    /// * `column_name` - The path to the column.
     ///
     /// # Returns
     ///
@@ -382,7 +385,7 @@ impl<'a> UpdateSchema<'a> {
         }
 
         if let Some(req) = required {
-            self.set_column_requirement(column_name, req)?;
+            self.make_column_optional(column_name, req)?;
         }
 
         Ok(self)
@@ -398,7 +401,7 @@ impl<'a> UpdateSchema<'a> {
     /// # Returns
     ///
     /// An empty Ok(()) on success.
-    pub fn set_column_requirement(
+    pub fn make_column_optional(
         &mut self,
         column_name: Vec<String>,
         required: bool,
