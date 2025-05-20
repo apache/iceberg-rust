@@ -19,11 +19,11 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 
+use crate::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
-use crate::Result;
 
 /// Puffin writer
 pub struct PuffinWriter {
@@ -148,6 +148,7 @@ mod tests {
 
     use tempfile::TempDir;
 
+    use crate::Result;
     use crate::io::{FileIOBuilder, InputFile, OutputFile};
     use crate::puffin::blob::Blob;
     use crate::puffin::compression::CompressionCodec;
@@ -160,7 +161,6 @@ mod tests {
         zstd_compressed_metric_file_metadata,
     };
     use crate::puffin::writer::PuffinWriter;
-    use crate::Result;
 
     async fn write_puffin_file(
         temp_dir: &TempDir,

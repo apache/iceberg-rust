@@ -74,12 +74,12 @@ mod test {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use crate::Result;
     use crate::expr::accessor::StructAccessor;
     use crate::expr::{
         BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
     };
     use crate::spec::{Datum, NestedField, NestedFieldRef, PrimitiveType, Transform, Type};
-    use crate::Result;
 
     /// A utitily struct, test fixture
     /// used for testing the projection on `Transform`

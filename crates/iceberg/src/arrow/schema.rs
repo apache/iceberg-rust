@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::types::{
-    validate_decimal_precision_and_scale, Decimal128Type, TimestampMicrosecondType,
+    Decimal128Type, TimestampMicrosecondType, validate_decimal_precision_and_scale,
 };
 use arrow_array::{
     BooleanArray, Date32Array, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
@@ -307,7 +307,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "List type must have list data type",
-                ))
+                ));
             }
         };
 
@@ -830,7 +830,7 @@ pub(crate) fn get_parquet_stat_min_as_datum(
         (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
             return Ok(stat
                 .min_bytes_opt()
-                .map(|bytes| Datum::binary(bytes.to_vec())))
+                .map(|bytes| Datum::binary(bytes.to_vec())));
         }
         _ => {
             return Ok(None);
@@ -977,7 +977,7 @@ pub(crate) fn get_parquet_stat_max_as_datum(
         (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
             return Ok(stat
                 .max_bytes_opt()
-                .map(|bytes| Datum::binary(bytes.to_vec())))
+                .map(|bytes| Datum::binary(bytes.to_vec())));
         }
         _ => {
             return Ok(None);

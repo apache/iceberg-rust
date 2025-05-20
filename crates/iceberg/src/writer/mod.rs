@@ -47,10 +47,10 @@
 //! use iceberg::spec::DataFile;
 //! use iceberg::transaction::Transaction;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
 //! use iceberg_catalog_memory::MemoryCatalog;
@@ -102,10 +102,10 @@
 //! use iceberg::io::FileIOBuilder;
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
 //! use iceberg_catalog_memory::MemoryCatalog;
@@ -198,8 +198,8 @@ pub mod file_writer;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFile;
 use crate::Result;
+use crate::spec::DataFile;
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;

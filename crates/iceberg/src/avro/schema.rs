@@ -18,19 +18,19 @@
 //! Conversion between iceberg and avro schema.
 use std::collections::BTreeMap;
 
+use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
     ArraySchema, DecimalSchema, FixedSchema, MapSchema, Name, RecordField as AvroRecordField,
     RecordFieldOrder, RecordSchema, UnionSchema,
 };
-use apache_avro::Schema as AvroSchema;
 use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 use crate::spec::{
-    visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
+    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type, visit_schema,
 };
-use crate::{ensure_data_valid, Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
 const ELEMENT_ID: &str = "element-id";
 const FILED_ID_PROP: &str = "field-id";
@@ -545,7 +545,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                                 format!(
                                     "Logical type {ty} is not support in iceberg primitive type.",
                                 ),
-                            ))
+                            ));
                         }
                     }
                 } else {
@@ -558,7 +558,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Unable to convert avro {schema} to iceberg primitive type.",
-                ))
+                ));
             }
         };
 
@@ -636,8 +636,8 @@ mod tests {
     use std::fs::read_to_string;
     use std::sync::Arc;
 
-    use apache_avro::schema::{Namespace, UnionSchema};
     use apache_avro::Schema as AvroSchema;
+    use apache_avro::schema::{Namespace, UnionSchema};
 
     use super::*;
     use crate::avro::schema::AvroSchemaToSchema;
@@ -783,20 +783,22 @@ mod tests {
 
         let iceberg_schema = {
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    100,
-                    "array_with_string",
-                    ListType {
-                        element_field: NestedField::list_element(
-                            101,
-                            PrimitiveType::String.into(),
-                            true,
-                        )
+                .with_fields(vec![
+                    NestedField::required(
+                        100,
+                        "array_with_string",
+                        ListType {
+                            element_field: NestedField::list_element(
+                                101,
+                                PrimitiveType::String.into(),
+                                true,
+                            )
+                            .into(),
+                        }
                         .into(),
-                    }
+                    )
                     .into(),
-                )
-                .into()])
+                ])
                 .build()
                 .unwrap()
         };
@@ -832,20 +834,22 @@ mod tests {
 
         let iceberg_schema = {
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    100,
-                    "array_with_string",
-                    ListType {
-                        element_field: NestedField::list_element(
-                            101,
-                            PrimitiveType::String.into(),
-                            true,
-                        )
+                .with_fields(vec![
+                    NestedField::required(
+                        100,
+                        "array_with_string",
+                        ListType {
+                            element_field: NestedField::list_element(
+                                101,
+                                PrimitiveType::String.into(),
+                                true,
+                            )
+                            .into(),
+                        }
                         .into(),
-                    }
+                    )
                     .into(),
-                )
-                .into()])
+                ])
                 .build()
                 .unwrap()
         };
@@ -895,34 +899,36 @@ mod tests {
 
         let iceberg_schema = {
             Schema::builder()
-                .with_fields(vec![NestedField::required(
-                    100,
-                    "array_with_record",
-                    ListType {
-                        element_field: NestedField::list_element(
-                            101,
-                            StructType::new(vec![
-                                NestedField::required(
-                                    102,
-                                    "contains_null",
-                                    PrimitiveType::Boolean.into(),
-                                )
+                .with_fields(vec![
+                    NestedField::required(
+                        100,
+                        "array_with_record",
+                        ListType {
+                            element_field: NestedField::list_element(
+                                101,
+                                StructType::new(vec![
+                                    NestedField::required(
+                                        102,
+                                        "contains_null",
+                                        PrimitiveType::Boolean.into(),
+                                    )
+                                    .into(),
+                                    NestedField::optional(
+                                        103,
+                                        "contains_nan",
+                                        PrimitiveType::Boolean.into(),
+                                    )
+                                    .into(),
+                                ])
                                 .into(),
-                                NestedField::optional(
-                                    103,
-                                    "contains_nan",
-                                    PrimitiveType::Boolean.into(),
-                                )
-                                .into(),
-                            ])
+                                true,
+                            )
                             .into(),
-                            true,
-                        )
+                        }
                         .into(),
-                    }
+                    )
                     .into(),
-                )
-                .into()])
+                ])
                 .build()
                 .unwrap()
         };

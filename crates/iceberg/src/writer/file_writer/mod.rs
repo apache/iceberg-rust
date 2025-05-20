@@ -21,8 +21,8 @@ use arrow_array::RecordBatch;
 use futures::Future;
 
 use super::CurrentFileStatus;
-use crate::spec::DataFileBuilder;
 use crate::Result;
+use crate::spec::DataFileBuilder;
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
