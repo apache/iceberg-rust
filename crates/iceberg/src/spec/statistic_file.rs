@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use crate::spec::{DataContentType, DataFile, Snapshot, Struct};
 use crate::{Error, ErrorKind};
 
+/// Represents a statistics file
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-/// Represents a statistics file
 pub struct StatisticsFile {
     /// The snapshot id of the statistics file.
     pub snapshot_id: i64,
@@ -43,9 +43,9 @@ pub struct StatisticsFile {
     pub blob_metadata: Vec<BlobMetadata>,
 }
 
+/// Represents a blob of metadata, which is a part of a statistics file
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-/// Represents a blob of metadata, which is a part of a statistics file
 pub struct BlobMetadata {
     /// Type of the blob.
     pub r#type: String,
@@ -60,9 +60,9 @@ pub struct BlobMetadata {
     pub properties: HashMap<String, String>,
 }
 
+/// Statistics file for a partition
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-/// Statistics file for a partition
 pub struct PartitionStatisticsFile {
     /// The snapshot id of the statistics file.
     pub snapshot_id: i64,
@@ -72,8 +72,8 @@ pub struct PartitionStatisticsFile {
     pub file_size_in_bytes: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// Statistics for partition pruning
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionStats {
     partition: Struct,
     spec_id: i32,
@@ -170,7 +170,7 @@ impl PartitionStats {
     }
 
     /// Updates the partition statistics based on the given `DataFile` and its corresponding `Snapshot`.
-    pub fn live_entry(&mut self, file: DataFile, snapshot: Snapshot) -> Result<(), Error> {
+    pub fn add_stats_for_file(&mut self, file: DataFile, snapshot: Snapshot) -> Result<(), Error> {
         if file.partition_spec_id != self.spec_id {
             return Err(Error::new(ErrorKind::Unexpected, "Spec IDs must match."));
         }
@@ -379,7 +379,7 @@ mod test {
             first_row_id: None,
             referenced_data_file: None,
         };
-        stats.live_entry(data_file, snapshot1.clone())?;
+        stats.add_stats_for_file(data_file, snapshot1.clone())?;
         assert_eq!(stats.data_record_count(), 1);
         assert_eq!(stats.data_file_count(), 1);
         assert_eq!(stats.total_data_file_size_in_bytes(), 874);
@@ -422,7 +422,7 @@ mod test {
             referenced_data_file: None,
         };
 
-        stats.live_entry(posdel_file, snapshot2.clone())?;
+        stats.add_stats_for_file(posdel_file, snapshot2.clone())?;
         assert_eq!(stats.position_delete_record_count(), 5);
         assert_eq!(stats.position_delete_file_count(), 1);
 
@@ -464,7 +464,7 @@ mod test {
             first_row_id: None,
             referenced_data_file: None,
         };
-        stats.live_entry(eqdel_file, snapshot3.clone())?;
+        stats.add_stats_for_file(eqdel_file, snapshot3.clone())?;
         assert_eq!(stats.equality_delete_record_count(), 3);
         assert_eq!(stats.equality_delete_file_count(), 1);
         assert_eq!(stats.last_updated_snapshot_id(), Some(3));
@@ -505,7 +505,7 @@ mod test {
             referenced_data_file: None,
         };
 
-        let result = stats.live_entry(wrong_file, snapshot4);
+        let result = stats.add_stats_for_file(wrong_file, snapshot4);
         assert!(result.is_err());
 
         Ok(())
