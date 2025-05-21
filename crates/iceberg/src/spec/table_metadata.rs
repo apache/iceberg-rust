@@ -124,12 +124,12 @@ pub struct TableMetadata {
     /// An integer; the highest assigned column ID for the table.
     pub(crate) last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    #[builder(setter(transform = |schemas: Vec<SchemaRef>| schemas.into_iter().map(|s| (s.schema_id(), s.into())).collect()))]
+    #[builder(setter(transform = |schemas: Vec<SchemaRef>| schemas.into_iter().map(|s| (s.schema_id(), s)).collect()))]
     pub(crate) schemas: HashMap<i32, SchemaRef>,
     /// ID of the table’s current schema.
     pub(crate) current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
-    #[builder(setter(transform = |specs: Vec<PartitionSpecRef>| specs.into_iter().map(|s| (s.spec_id(), s.into())).collect()))]
+    #[builder(setter(transform = |specs: Vec<PartitionSpecRef>| specs.into_iter().map(|s| (s.spec_id(), s)).collect()))]
     pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
     #[builder(setter(into))]
@@ -149,9 +149,7 @@ pub struct TableMetadata {
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    #[builder(setter(transform = |snapshots: Vec<SnapshotRef>| {
-        snapshots.into_iter().map(|s| (s.snapshot_id(), s.into())).collect()
-    }))]
+    #[builder(setter(transform = |snapshots: Vec<SnapshotRef>| snapshots.into_iter().map(|s| (s.snapshot_id(), s)).collect()))]
     pub(crate) snapshots: HashMap<i64, SnapshotRef>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
@@ -170,9 +168,7 @@ pub struct TableMetadata {
     pub(crate) metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
-    #[builder(setter(transform = |sort_orders: Vec<SortOrderRef>| {
-        sort_orders.into_iter().map(|s| (s.order_id, s.into())).collect()
-    }))]
+    #[builder(setter(transform = |sort_orders: Vec<SortOrderRef>| sort_orders.into_iter().map(|s| (s.order_id, s)).collect()))]
     pub(crate) sort_orders: HashMap<i64, SortOrderRef>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
