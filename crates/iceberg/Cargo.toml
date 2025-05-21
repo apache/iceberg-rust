@@ -30,6 +30,8 @@ repository = { workspace = true }
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
+rustls-tls = ["reqwest/rustls-tls"]
+rustls-tls-native-roots = ["reqwest/rustls-tls-native-roots"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
 storage-fs = ["opendal/services-fs"]
