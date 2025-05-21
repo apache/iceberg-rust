@@ -22,6 +22,7 @@ use crate::spec::{ManifestContentType, ManifestFile, Operation, SnapshotRef, Tab
 use crate::table::Table;
 
 pub(crate) trait SnapshotValidator {
+    #[allow(dead_code)]
     fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) {}
 
     #[allow(dead_code)]

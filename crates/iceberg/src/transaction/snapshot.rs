@@ -308,11 +308,6 @@ impl<'a> SnapshotProduceAction<'a> {
             .await?;
         let next_seq_num = self.tx.current_table.metadata().next_sequence_number();
 
-        snapshot_produce_operation.validate(
-            &self.tx.current_table,
-            self.tx.current_table.metadata().current_snapshot(),
-        );
-
         let summary = self
             .summary(&snapshot_produce_operation)
             .map_err(|err| {
