@@ -104,7 +104,7 @@ mod tests {
             .apply()
             .unwrap();
 
-        let TableUpdate::SetStatistics { statistics } = tx.updates.get(0).unwrap().clone() else {
+        let TableUpdate::SetStatistics { statistics } = tx.updates.first().unwrap().clone() else {
             panic!("The update should be a TableUpdate::SetStatistics!");
         };
         assert_eq!(statistics, statistics_file_1);
