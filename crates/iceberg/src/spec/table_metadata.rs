@@ -101,7 +101,10 @@ pub const RESERVED_PROPERTIES: [&str; 9] = [
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
-#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone, typed_builder::TypedBuilder)]
+#[builder(builder_method(name=declarative_builder))]
+#[builder(builder_type(name=TableMetadataDeclarativeBuilder, doc="Build a new [`TableMetadata`] in a declarative way. For imperative operations (e.g. `add_snapshot`) and creating new TableMetadata, use [`TableMetadataBuilder`] instead."))]
+#[builder(build_method(into = UnnormalizedTableMetadata))]
 #[serde(try_from = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 ///
@@ -121,12 +124,15 @@ pub struct TableMetadata {
     /// An integer; the highest assigned column ID for the table.
     pub(crate) last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
+    #[builder(setter(transform = |schemas: Vec<SchemaRef>| schemas.into_iter().map(|s| (s.schema_id(), s.into())).collect()))]
     pub(crate) schemas: HashMap<i32, SchemaRef>,
     /// ID of the table’s current schema.
     pub(crate) current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
+    #[builder(setter(transform = |specs: Vec<PartitionSpecRef>| specs.into_iter().map(|s| (s.spec_id(), s.into())).collect()))]
     pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
+    #[builder(setter(into))]
     pub(crate) default_spec: PartitionSpecRef,
     /// Partition type of the default partition spec.
     pub(crate) default_partition_type: StructType,
@@ -134,7 +140,7 @@ pub struct TableMetadata {
     pub(crate) last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
-    /// For example, commit.retry.num-retries is used to control the number of commit retries.
+    /// For example, commit.retry.num-retries is used to control the number of commit retries
     pub(crate) properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
@@ -143,6 +149,9 @@ pub struct TableMetadata {
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
+    #[builder(setter(transform = |snapshots: Vec<SnapshotRef>| {
+        snapshots.into_iter().map(|s| (s.snapshot_id(), s.into())).collect()
+    }))]
     pub(crate) snapshots: HashMap<i64, SnapshotRef>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
@@ -161,6 +170,9 @@ pub struct TableMetadata {
     pub(crate) metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
+    #[builder(setter(transform = |sort_orders: Vec<SortOrderRef>| {
+        sort_orders.into_iter().map(|s| (s.order_id, s.into())).collect()
+    }))]
     pub(crate) sort_orders: HashMap<i64, SortOrderRef>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
@@ -172,10 +184,18 @@ pub struct TableMetadata {
     /// even if the refs map is null.
     pub(crate) refs: HashMap<String, SnapshotReference>,
     /// Mapping of snapshot ids to statistics files.
+    #[builder(default, setter(transform = |stats: Vec<StatisticsFile>| {
+        stats.into_iter().map(|s| (s.snapshot_id, s)).collect()
+    }))]
     pub(crate) statistics: HashMap<i64, StatisticsFile>,
     /// Mapping of snapshot ids to partition statistics files.
+    #[builder(default)]
+    #[builder(setter(transform = |stats: Vec<PartitionStatisticsFile>| {
+        stats.into_iter().map(|s| (s.snapshot_id, s)).collect()
+    }))]
     pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
     /// Encryption Keys
+    #[builder(default)]
     pub(crate) encryption_keys: HashMap<String, String>,
 }
 
@@ -651,6 +671,33 @@ impl TableMetadata {
         }
 
         Ok(())
+    }
+}
+
+/// Unnormalized table metadata, used as an intermediate type
+/// to build table metadata in a declarative way.
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
+pub struct UnnormalizedTableMetadata(TableMetadata);
+
+impl UnnormalizedTableMetadata {
+    /// Try to normalize the table metadata.
+    pub fn try_normalize(self) -> Result<TableMetadata> {
+        let mut metadata = self.0;
+        metadata.try_normalize()?;
+        Ok(metadata)
+    }
+}
+
+impl UnnormalizedTableMetadata {
+    /// Build a new [`UnnormalizedTableMetadata`] using the [`TableMetadataDeclarativeBuilder`].
+    pub fn builder() -> TableMetadataDeclarativeBuilder {
+        TableMetadata::declarative_builder()
+    }
+}
+
+impl From<TableMetadata> for UnnormalizedTableMetadata {
+    fn from(value: TableMetadata) -> Self {
+        UnnormalizedTableMetadata(value)
     }
 }
 
@@ -1331,7 +1378,8 @@ mod tests {
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PartitionStatisticsFile,
         PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, StatisticsFile, Summary, Transform, Type, UnboundPartitionField,
+        SortField, SortOrder, StatisticsFile, StructType, Summary, Transform, Type,
+        UnboundPartitionField,
     };
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
@@ -3017,5 +3065,63 @@ mod tests {
                 })
             )])
         );
+    }
+
+    #[test]
+    fn test_build_declarative_table_metadata() {
+        let table_metadata = TableMetadata::declarative_builder()
+            .format_version(FormatVersion::V2)
+            .table_uuid(Uuid::nil())
+            .location("s3://db/table".to_string())
+            .last_sequence_number(1)
+            .last_updated_ms(1515100955770)
+            .last_column_id(0)
+            .schemas(vec![Arc::new(Schema::builder().build().unwrap())])
+            .current_schema_id(0)
+            .partition_specs(vec![Arc::new(PartitionSpec::unpartition_spec())])
+            .sort_orders(vec![Arc::new(SortOrder::unsorted_order())])
+            .default_spec(PartitionSpec::unpartition_spec())
+            .default_sort_order_id(0)
+            .last_partition_id(0)
+            .default_partition_type(StructType::new(vec![]))
+            .properties(HashMap::new())
+            .snapshots(vec![])
+            .current_snapshot_id(None)
+            .snapshot_log(vec![])
+            .metadata_log(vec![])
+            .refs(HashMap::new())
+            .build()
+            .try_normalize()
+            .unwrap();
+        assert_eq!(table_metadata.format_version, FormatVersion::V2);
+        assert_eq!(table_metadata.table_uuid, Uuid::nil());
+        assert_eq!(table_metadata.location, "s3://db/table");
+        assert_eq!(table_metadata.last_sequence_number, 1);
+        assert_eq!(table_metadata.last_updated_ms, 1515100955770);
+        assert_eq!(table_metadata.last_column_id, 0);
+        assert_eq!(table_metadata.schemas.len(), 1);
+        assert_eq!(
+            *table_metadata.schemas.values().next().unwrap(),
+            Arc::new(Schema::builder().build().unwrap())
+        );
+        assert_eq!(table_metadata.current_schema_id, 0);
+        assert_eq!(table_metadata.partition_specs.len(), 1);
+        assert_eq!(
+            table_metadata.partition_specs.get(&0),
+            Some(&Arc::new(PartitionSpec::unpartition_spec()))
+        );
+        assert_eq!(table_metadata.sort_orders.len(), 1);
+        assert_eq!(table_metadata.default_sort_order_id, 0);
+        assert_eq!(table_metadata.last_partition_id, 0);
+        assert_eq!(table_metadata.properties.len(), 0);
+        assert_eq!(table_metadata.snapshots.len(), 0);
+        assert_eq!(table_metadata.current_snapshot_id, None);
+        assert_eq!(table_metadata.snapshot_log.len(), 0);
+        assert_eq!(table_metadata.metadata_log.len(), 0);
+        assert_eq!(table_metadata.refs.len(), 0);
+        assert_eq!(table_metadata.encryption_keys.len(), 0);
+        assert_eq!(table_metadata.statistics.len(), 0);
+        assert_eq!(table_metadata.partition_statistics.len(), 0);
+        assert_eq!(table_metadata.encryption_keys.len(), 0);
     }
 }
