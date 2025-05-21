@@ -111,7 +111,7 @@ impl ManifestEntryContext {
                 self.manifest_entry.data_file(),
                 self.manifest_entry.sequence_number(),
             )
-            .await?;
+            .await;
 
         Ok(FileScanTask {
             start: 0,

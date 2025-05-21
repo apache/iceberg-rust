@@ -16,12 +16,10 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, RwLock};
 
-use futures::channel::oneshot;
+use tokio::sync::Notify;
+use tokio::sync::oneshot::Receiver;
 
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
@@ -30,46 +28,16 @@ use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
 use crate::spec::DataContentType;
 use crate::{Error, ErrorKind, Result};
 
-// Equality deletes may apply to more than one DataFile in a scan, and so
-// the same equality delete file may be present in more than one invocation of
-// DeleteFileManager::load_deletes in the same scan. We want to deduplicate these
-// to avoid having to load them twice, so we immediately store cloneable futures in the
-// state that can be awaited upon to get te EQ deletes. That way we can check to see if
-// a load of each Eq delete file is already in progress and avoid starting another one.
-#[derive(Debug, Clone)]
-pub(crate) struct EqDelFuture {
-    result: OnceLock<Predicate>,
-}
-
-impl EqDelFuture {
-    pub(crate) fn new() -> (oneshot::Sender<Predicate>, Self) {
-        let (tx, rx) = oneshot::channel();
-        let result = OnceLock::new();
-
-        crate::runtime::spawn({
-            let result = result.clone();
-            async move { result.set(rx.await.unwrap()) }
-        });
-
-        (tx, Self { result })
-    }
-}
-
-impl Future for EqDelFuture {
-    type Output = Predicate;
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.result.get() {
-            None => Poll::Pending,
-            Some(predicate) => Poll::Ready(predicate.clone()),
-        }
-    }
+#[derive(Debug)]
+enum EqDelState {
+    Loading(Arc<Notify>),
+    Loaded(Predicate),
 }
 
 #[derive(Debug, Default)]
 struct DeleteFileFilterState {
     delete_vectors: HashMap<String, Arc<Mutex<DeleteVector>>>,
-    equality_deletes: HashMap<String, EqDelFuture>,
+    equality_deletes: HashMap<String, EqDelState>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -97,17 +65,42 @@ impl DeleteFilter {
             .and_then(|st| st.delete_vectors.get(delete_file_path).cloned())
     }
 
+    pub(crate) fn try_start_eq_del_load(&self, file_path: &str) -> Option<Arc<Notify>> {
+        let mut state = self.state.write().unwrap();
+
+        if !state.equality_deletes.contains_key(file_path) {
+            return None;
+        }
+
+        let notifier = Arc::new(Notify::new());
+        state
+            .equality_deletes
+            .insert(file_path.to_string(), EqDelState::Loading(notifier.clone()));
+
+        Some(notifier)
+    }
+
     /// Retrieve the equality delete predicate for a given eq delete file path
-    pub(crate) fn get_equality_delete_predicate_for_delete_file_path(
+    pub(crate) async fn get_equality_delete_predicate_for_delete_file_path(
         &self,
         file_path: &str,
-    ) -> Option<EqDelFuture> {
-        self.state
-            .read()
-            .unwrap()
-            .equality_deletes
-            .get(file_path)
-            .cloned()
+    ) -> Option<Predicate> {
+        let notifier = {
+            match self.state.read().unwrap().equality_deletes.get(file_path) {
+                None => return None,
+                Some(EqDelState::Loading(notifier)) => notifier.clone(),
+                Some(EqDelState::Loaded(predicate)) => {
+                    return Some(predicate.clone());
+                }
+            }
+        };
+
+        notifier.notified().await;
+
+        match self.state.read().unwrap().equality_deletes.get(file_path) {
+            Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
+            _ => unreachable!("Cannot be any other state than loaded"),
+        }
     }
 
     /// Builds eq delete predicate for the provided task.
@@ -126,8 +119,9 @@ impl DeleteFilter {
                 continue;
             }
 
-            let Some(predicate) =
-                self.get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+            let Some(predicate) = self
+                .get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+                .await
             else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -138,7 +132,7 @@ impl DeleteFilter {
                 ));
             };
 
-            combined_predicate = combined_predicate.and(predicate.await);
+            combined_predicate = combined_predicate.and(predicate);
         }
 
         if combined_predicate == AlwaysTrue {
@@ -167,10 +161,32 @@ impl DeleteFilter {
         *entry.lock().unwrap() |= delete_vector;
     }
 
-    pub(crate) fn insert_equality_delete(&self, delete_file_path: String, eq_del: EqDelFuture) {
-        let mut state = self.state.write().unwrap();
+    pub(crate) fn insert_equality_delete(
+        &self,
+        delete_file_path: &str,
+        eq_del: Receiver<Predicate>,
+    ) {
+        let notify = Arc::new(Notify::new());
+        {
+            let mut state = self.state.write().unwrap();
+            state.equality_deletes.insert(
+                delete_file_path.to_string(),
+                EqDelState::Loading(notify.clone()),
+            );
+        }
 
-        state.equality_deletes.insert(delete_file_path, eq_del);
+        let state = self.state.clone();
+        let delete_file_path = delete_file_path.to_string();
+        crate::runtime::spawn(async move {
+            let eq_del = eq_del.await.unwrap();
+            {
+                let mut state = state.write().unwrap();
+                state
+                    .equality_deletes
+                    .insert(delete_file_path, EqDelState::Loaded(eq_del));
+            }
+            notify.notify_waiters();
+        });
     }
 }
 

@@ -85,7 +85,6 @@ tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-waker-set = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
