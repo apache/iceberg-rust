@@ -258,7 +258,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 lower_bound_bytes,
                 *reference.field().field_type.clone(),
             );
-            if datum > &lower_bound {
+            if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -268,7 +268,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 upper_bound_bytes,
                 *reference.field().field_type.clone(),
             );
-            if datum < &upper_bound {
+            if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -381,21 +381,21 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         }
 
         if let Some(lower_bound) = &field.lower_bound {
-            let d = ManifestFilterVisitor::bytes_to_datum(
+            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound,
                 *reference.field().clone().field_type,
             );
-            if literals.iter().all(|datum| &d < datum) {
+            if literals.iter().all(|datum| &lower_bound > datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            let d = ManifestFilterVisitor::bytes_to_datum(
+            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
                 upper_bound,
                 *reference.field().clone().field_type,
             );
-            if literals.iter().all(|datum| &d < datum) {
+            if literals.iter().all(|datum| &upper_bound < datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }

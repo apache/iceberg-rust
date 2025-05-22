@@ -1144,7 +1144,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: Some(vec![]),
+                partitions: None,
                 key_metadata: vec![],
             }]
         }.try_into().unwrap();

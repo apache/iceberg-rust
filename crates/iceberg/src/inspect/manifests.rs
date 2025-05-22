@@ -29,10 +29,7 @@ use futures::{StreamExt, stream};
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{
-    Datum, FieldSummary, ListType, NestedField, PartitionSpecRef, PrimitiveType, Schema,
-    StructType, Type,
-};
+use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
 
 /// Manifests table.
@@ -184,14 +181,19 @@ impl<'a> ManifestsTable<'a> {
                     .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
                 deleted_delete_files_count
                     .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+
+                let spec = self
+                    .table
+                    .metadata()
+                    .partition_spec_by_id(manifest.partition_spec_id)
+                    .unwrap();
+                let spec_struct = spec
+                    .partition_type(self.table.metadata().current_schema())
+                    .unwrap();
                 self.append_partition_summaries(
                     &mut partition_summaries,
                     &manifest.partitions.clone().unwrap_or_else(Vec::new),
-                    &self.schema(),
-                    &self
-                        .table
-                        .metadata()
-                        .partition_spec_by_id(manifest.partition_spec_id),
+                    spec_struct,
                 );
             }
         }
@@ -241,11 +243,10 @@ impl<'a> ManifestsTable<'a> {
         &self,
         builder: &mut GenericListBuilder<i32, StructBuilder>,
         partitions: &[FieldSummary],
-        schema: &Schema,
-        spec: &Option<&PartitionSpecRef>,
+        partition_struct: StructType,
     ) {
         let partition_summaries_builder = builder.values();
-        for (summary, field) in partitions.iter().zip(spec.unwrap().fields()) {
+        for (summary, field) in partitions.iter().zip(partition_struct.fields()) {
             partition_summaries_builder
                 .field_builder::<BooleanBuilder>(0)
                 .unwrap()
@@ -255,17 +256,11 @@ impl<'a> ManifestsTable<'a> {
                 .unwrap()
                 .append_option(summary.contains_nan);
 
-            let field_type = schema
-                .field_by_id(field.source_id)
-                .unwrap()
-                .field_type
-                .as_primitive_type()
-                .unwrap();
             partition_summaries_builder
                 .field_builder::<StringBuilder>(2)
                 .unwrap()
                 .append_option(summary.lower_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field_type.clone())
+                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
                         .unwrap()
                         .to_string()
                 }));
@@ -273,7 +268,7 @@ impl<'a> ManifestsTable<'a> {
                 .field_builder::<StringBuilder>(3)
                 .unwrap()
                 .append_option(summary.upper_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field_type.clone())
+                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
                         .unwrap()
                         .to_string()
                 }));
