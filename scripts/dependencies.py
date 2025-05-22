@@ -21,11 +21,23 @@ import subprocess
 import os
 
 
-def find_cargo_dirs(start_dir="."):
+def get_git_root():
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"])
+            .decode()
+            .strip()
+        )
+    except subprocess.CalledProcessError:
+        raise RuntimeError("Not a git repository (or git not installed)")
+
+
+def find_cargo_dirs():
+    repo_root = get_git_root()
     cargo_dirs = []
-    for root, dirs, files in os.walk(start_dir):
+    for root, dirs, files in os.walk(repo_root):
         # Skip the current directory
-        if os.path.abspath(root) == os.path.abspath(start_dir):
+        if os.path.abspath(root) == os.path.abspath(repo_root):
             continue
         if "Cargo.toml" in files:
             cargo_dirs.append(root)
