@@ -32,6 +32,12 @@ rc_version="${ICEBERG_VERSION_RC:-rc.1}"
 # Corresponding git repository branch
 git_branch=release-${release_version}-${rc_version}
 
+echo "> Check license"
+docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
+
+echo "> Run dependency license check using cargo-deny"
+python3 ./scripts/dependencies.py check
+
 rm -rf dist
 mkdir -p dist/
 
@@ -62,7 +68,3 @@ for i in *.tar.gz; do
 	echo "$i"
 	sha512sum --check "$i.sha512"
 done
-
-cd ..
-echo "> Check license"
-docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
