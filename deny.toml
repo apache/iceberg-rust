@@ -35,4 +35,5 @@ exceptions = [
   # https://www.apache.org/legal/resolved.html#category-b
   { allow = ["MPL-2.0"], crate = "webpki-roots" },
   { allow = ["MPL-2.0"], crate = "generational-arena" },
+  { allow = ["MPL-2.0"], crate = "option-ext" },
 ]
