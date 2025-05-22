@@ -36,7 +36,7 @@ def check_deps():
     cargo_dirs = DIRS
     for root in cargo_dirs:
         print(f"Checking dependencies of {root}")
-        subprocess.run(["cargo", "deny", "check", "license"], cwd=root)
+        subprocess.run(["cargo", "deny", "check", "license"], cwd=root, check=True)
 
 
 def generate_deps():
