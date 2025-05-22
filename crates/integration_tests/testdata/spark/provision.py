@@ -121,7 +121,7 @@ spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bi
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
 
 #  Create a table, and do some evolution on a partition column
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_partition_column (foo int, bar float, baz decimal(4, 2)) USING iceberg")
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_partition_column (foo int, bar float, baz decimal(4, 2)) USING iceberg PARTITIONED BY (foo)")
 spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (19, 19.25, 19.25)")
 spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN foo TYPE bigint")
 spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN bar TYPE double")
