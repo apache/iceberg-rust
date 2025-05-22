@@ -31,6 +31,10 @@ allow = [
 ]
 
 exceptions = [
+  # Boost Software License Version 1.0 is allowed (Category-A):
+  # https://www.apache.org/legal/resolved.html#category-a
+  { allow = ["BSL-1.0"], crate = "clipboard-win" }, 
+  { allow = ["BSL-1.0"], crate = "error-code" }, 
   # The MPL license is allowed (binary-only):
   # https://www.apache.org/legal/resolved.html#category-b
   { allow = ["MPL-2.0"], crate = "webpki-roots" },
