@@ -50,13 +50,13 @@
 <a href=#50 id=50 data-nosnippet>50</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>DefaultManifestProcess;
 <a href=#51 id=51 data-nosnippet>51</a>
 <a href=#52 id=52 data-nosnippet>52</a><span class="kw">impl </span>ManifestProcess <span class="kw">for </span>DefaultManifestProcess {
-<a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">fn </span>process_manifeset(<span class="kw-2">&amp;</span><span class="self">self</span>, manifests: Vec&lt;ManifestFile&gt;) -&gt; Vec&lt;ManifestFile&gt; {
+<a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">fn </span>process_manifests(<span class="kw-2">&amp;</span><span class="self">self</span>, manifests: Vec&lt;ManifestFile&gt;) -&gt; Vec&lt;ManifestFile&gt; {
 <a href=#54 id=54 data-nosnippet>54</a>        manifests
 <a href=#55 id=55 data-nosnippet>55</a>    }
 <a href=#56 id=56 data-nosnippet>56</a>}
 <a href=#57 id=57 data-nosnippet>57</a>
 <a href=#58 id=58 data-nosnippet>58</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>ManifestProcess: Send + Sync {
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">fn </span>process_manifeset(<span class="kw-2">&amp;</span><span class="self">self</span>, manifests: Vec&lt;ManifestFile&gt;) -&gt; Vec&lt;ManifestFile&gt;;
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">fn </span>process_manifests(<span class="kw-2">&amp;</span><span class="self">self</span>, manifests: Vec&lt;ManifestFile&gt;) -&gt; Vec&lt;ManifestFile&gt;;
 <a href=#60 id=60 data-nosnippet>60</a>}
 <a href=#61 id=61 data-nosnippet>61</a>
 <a href=#62 id=62 data-nosnippet>62</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SnapshotProduceAction&lt;<span class="lifetime">'a</span>&gt; {
@@ -229,7 +229,7 @@
 <a href=#229 id=229 data-nosnippet>229</a>
 <a href=#230 id=230 data-nosnippet>230</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>manifest_files = <span class="macro">vec!</span>[added_manifest];
 <a href=#231 id=231 data-nosnippet>231</a>        manifest_files.extend(existing_manifests);
-<a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>manifest_files = manifest_process.process_manifeset(manifest_files);
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>manifest_files = manifest_process.process_manifests(manifest_files);
 <a href=#233 id=233 data-nosnippet>233</a>        <span class="prelude-val">Ok</span>(manifest_files)
 <a href=#234 id=234 data-nosnippet>234</a>    }
 <a href=#235 id=235 data-nosnippet>235</a>
