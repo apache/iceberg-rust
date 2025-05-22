@@ -131,20 +131,24 @@ async fn test_evolved_schema() {
     assert_eq!(actual_foo, vec![19, 25]);
 
     let mut actual_bar = vec![
-       OrderedFloat( batches[0]
-            .column_by_name("bar")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .value(0)),
-     OrderedFloat(   batches[1]
-            .column_by_name("bar")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap()
-            .value(0)),
+        OrderedFloat(
+            batches[0]
+                .column_by_name("bar")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0),
+        ),
+        OrderedFloat(
+            batches[1]
+                .column_by_name("bar")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0),
+        ),
     ];
 
     actual_bar.sort();
