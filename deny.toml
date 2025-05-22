@@ -27,12 +27,13 @@ allow = [
   "Zlib",
   "CDLA-Permissive-2.0",
   # Category-A: https://issues.apache.org/jira/browse/LEGAL-660
-  "Unicode-3.0"
+  "Unicode-3.0",
+  # Boost Software License Version 1.0 is allowed (Category-A):
+  # https://www.apache.org/legal/resolved.html#category-a
+  "BSL-1.0"
 ]
 
 exceptions = [
-  # Boost Software License Version 1.0 is allowed (Category-A):
-  # https://www.apache.org/legal/resolved.html#category-a
   { allow = ["BSL-1.0"], crate = "clipboard-win" }, 
   { allow = ["BSL-1.0"], crate = "error-code" }, 
   # The MPL license is allowed (binary-only):
