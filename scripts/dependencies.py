@@ -20,27 +20,27 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter, REMAINDER
 import subprocess
 import os
 
-DIRS = [
-    "crates/iceberg",
-    "crates/catalog/glue",
-    "crates/catalog/hms",
-    "crates/catalog/memory",
-    "crates/catalog/rest",
-    "crates/catalog/sql",
-    "crates/integrations/datafusion",
-    "bindings/python",
-]
+
+def find_cargo_dirs(start_dir="."):
+    cargo_dirs = []
+    for root, dirs, files in os.walk(start_dir):
+        # Skip the current directory
+        if os.path.abspath(root) == os.path.abspath(start_dir):
+            continue
+        if "Cargo.toml" in files:
+            cargo_dirs.append(root)
+    return cargo_dirs
 
 
 def check_deps():
-    cargo_dirs = DIRS
+    cargo_dirs = find_cargo_dirs()
     for root in cargo_dirs:
         print(f"Checking dependencies of {root}")
         subprocess.run(["cargo", "deny", "check", "license"], cwd=root, check=True)
 
 
 def generate_deps():
-    cargo_dirs = DIRS
+    cargo_dirs = find_cargo_dirs()
     for root in cargo_dirs:
         print(f"Generating dependencies {root}")
         try:
