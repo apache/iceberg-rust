@@ -50,13 +50,13 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile> {
+    fn process_manifests(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile> {
         manifests
     }
 }
 
 pub(crate) trait ManifestProcess: Send + Sync {
-    fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
+    fn process_manifests(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
 }
 
 pub(crate) struct SnapshotProduceAction<'a> {
@@ -229,7 +229,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
         let mut manifest_files = vec![added_manifest];
         manifest_files.extend(existing_manifests);
-        let manifest_files = manifest_process.process_manifeset(manifest_files);
+        let manifest_files = manifest_process.process_manifests(manifest_files);
         Ok(manifest_files)
     }
 
