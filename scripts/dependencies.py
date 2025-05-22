@@ -20,27 +20,39 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter, REMAINDER
 import subprocess
 import os
 
-DIRS = [
-    "crates/iceberg",
-    "crates/catalog/glue",
-    "crates/catalog/hms",
-    "crates/catalog/memory",
-    "crates/catalog/rest",
-    "crates/catalog/sql",
-    "crates/integrations/datafusion",
-    "bindings/python",
-]
+
+def get_git_root():
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"])
+            .decode()
+            .strip()
+        )
+    except subprocess.CalledProcessError:
+        raise RuntimeError("Not a git repository (or git not installed)")
+
+
+def find_cargo_dirs():
+    repo_root = get_git_root()
+    cargo_dirs = []
+    for root, dirs, files in os.walk(repo_root):
+        # Skip the current directory
+        if os.path.abspath(root) == os.path.abspath(repo_root):
+            continue
+        if "Cargo.toml" in files:
+            cargo_dirs.append(root)
+    return cargo_dirs
 
 
 def check_deps():
-    cargo_dirs = DIRS
+    cargo_dirs = find_cargo_dirs()
     for root in cargo_dirs:
         print(f"Checking dependencies of {root}")
         subprocess.run(["cargo", "deny", "check", "license"], cwd=root, check=True)
 
 
 def generate_deps():
-    cargo_dirs = DIRS
+    cargo_dirs = find_cargo_dirs()
     for root in cargo_dirs:
         print(f"Generating dependencies {root}")
         try:
