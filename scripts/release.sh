@@ -32,22 +32,25 @@ rc_version="${ICEBERG_VERSION_RC:-rc.1}"
 # Corresponding git repository branch
 git_branch=release-${release_version}-${rc_version}
 
-echo "> Check license"
-docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
-
-echo "> Run dependency license check using cargo-deny"
-python3 ./scripts/dependencies.py check
-
 rm -rf dist
 mkdir -p dist/
 
 echo "> Checkout version branch"
 git checkout -B "${git_branch}"
 
+# Run a few checks
+echo "> Check license"
+docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
+
+echo "> Run dependency license check using cargo-deny"
+python3 ./scripts/dependencies.py check
+
+# Generate and verify artifacts
 echo "> Start package"
 git archive --format=tar.gz --output="dist/apache-iceberg-rust-$release_version-src.tar.gz" --prefix="apache-iceberg-rust-$release_version-src/" --add-file=Cargo.toml "$git_branch"
 
 cd dist
+
 echo "> Generate signature"
 for i in *.tar.gz; do
 	echo "$i"
