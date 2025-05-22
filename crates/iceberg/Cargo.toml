@@ -30,8 +30,9 @@ repository = { workspace = true }
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
-storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs", "storage-azdls"]
 
+storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]

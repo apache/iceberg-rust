@@ -35,12 +35,13 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// Supported storages:
 ///
-/// | Storage            | Feature Flag     | Schemes    |
-/// |--------------------|-------------------|------------|
-/// | Local file system  | `storage-fs`      | `file`     |
-/// | Memory             | `storage-memory`  | `memory`   |
-/// | S3                 | `storage-s3`      | `s3`, `s3a`|
-/// | GCS                | `storage-gcs`     | `gs`, `gcs`|
+/// | Storage            | Feature Flag      | Schemes         |
+/// |--------------------|-------------------|-----------------|
+/// | Local file system  | `storage-fs`      | `file`          |
+/// | Memory             | `storage-memory`  | `memory`        |
+/// | S3                 | `storage-s3`      | `s3`, `s3a`     |
+/// | GCS                | `storage-gcs`     | `gs`, `gcs`     |
+/// | Azure Datalake     | `storage-azdls`   | `adfs`, `adfss` |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
