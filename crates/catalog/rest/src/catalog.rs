@@ -19,13 +19,14 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, CatalogLoader, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -317,6 +318,22 @@ impl RestCatalog {
         };
 
         Ok(file_io)
+    }
+}
+
+#[async_trait]
+impl CatalogLoader for RestCatalog {
+    async fn load(mut properties: HashMap<String, String>) -> Result<Arc<dyn Catalog>> {
+        let uri = properties
+            .remove("uri")
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Missing required property `uri`"))?;
+
+        let config = RestCatalogConfig::builder()
+            .uri(uri)
+            .props(properties)
+            .build();
+
+        Ok(Arc::new(RestCatalog::new(config)))
     }
 }
 
