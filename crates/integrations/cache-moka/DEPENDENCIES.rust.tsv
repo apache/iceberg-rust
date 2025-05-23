@@ -50,13 +50,10 @@ const-random-macro@0.1.16		X							X
 core-foundation-sys@0.8.7		X							X				
 core2@0.4.0		X							X				
 cpufeatures@0.2.17		X							X				
-crc@3.2.1		X							X				
-crc-catalog@2.4.0		X							X				
 crc32c@0.6.8		X							X				
 crc32fast@1.4.2		X							X				
 crossbeam-channel@0.5.15		X							X				
 crossbeam-epoch@0.9.18		X							X				
-crossbeam-queue@0.3.12		X							X				
 crossbeam-utils@0.8.21		X							X				
 crunchy@0.2.3									X				
 crypto-common@0.1.6		X							X				
@@ -70,21 +67,17 @@ derive_builder_macro@0.20.2		X							X
 digest@0.10.7		X							X				
 displaydoc@0.2.5		X							X				
 either@1.15.0		X							X				
-equivalent@1.0.2		X							X				
 event-listener@5.4.0		X							X				
 event-listener-strategy@0.5.3		X							X				
 fastrand@2.3.0		X							X				
 flatbuffers@25.2.10		X											
 flate2@1.1.1		X							X				
-flume@0.11.1		X							X				
 fnv@1.0.7		X							X				
-foldhash@0.1.4													X
 form_urlencoded@1.2.1		X							X				
 futures@0.3.31		X							X				
 futures-channel@0.3.31		X							X				
 futures-core@0.3.31		X							X				
 futures-executor@0.3.31		X							X				
-futures-intrusive@0.5.0		X							X				
 futures-io@0.3.31		X							X				
 futures-macro@0.3.31		X							X				
 futures-sink@0.3.31		X							X				
@@ -99,7 +92,6 @@ gloo-timers@0.3.0		X							X
 half@2.6.0		X							X				
 hashbrown@0.14.5		X							X				
 hashbrown@0.15.2		X							X				
-hashlink@0.10.0		X							X				
 heck@0.5.0		X							X				
 hermit-abi@0.3.9		X							X				
 hex@0.4.3		X							X				
@@ -115,8 +107,8 @@ hyper-util@0.1.10									X
 iana-time-zone@0.1.61		X							X				
 iana-time-zone-haiku@0.1.2		X							X				
 iceberg@0.5.0		X											
+iceberg-cache-moka@0.5.0		X											
 iceberg-catalog-memory@0.5.0		X											
-iceberg-catalog-sql@0.5.0		X											
 iceberg_test_utils@0.5.0		X											
 icu_collections@1.5.0											X		
 icu_locid@1.5.0											X		
@@ -131,7 +123,6 @@ icu_provider_macros@1.5.0											X
 ident_case@1.0.1		X							X				
 idna@1.0.3		X							X				
 idna_adapter@1.2.0		X							X				
-indexmap@2.9.0		X							X				
 integer-encoding@3.0.4									X				
 ipnet@2.11.0		X							X				
 itertools@0.13.0		X							X				
@@ -149,7 +140,6 @@ libc@0.2.171		X							X
 libflate@2.1.0									X				
 libflate_lz77@2.1.0									X				
 libm@0.2.11		X							X				
-libsqlite3-sys@0.30.1									X				
 libz-rs-sys@0.5.0													X
 litemap@0.7.4											X		
 lock_api@0.4.12		X							X				
@@ -239,10 +229,6 @@ slab@0.4.9									X
 smallvec@1.14.0		X							X				
 snap@1.1.1					X								
 socket2@0.5.8		X							X				
-spin@0.9.8									X				
-sqlx@0.8.3		X							X				
-sqlx-core@0.8.3		X							X				
-sqlx-sqlite@0.8.3		X							X				
 stable_deref_trait@1.2.0		X							X				
 static_assertions@1.1.0		X							X				
 strsim@0.11.1									X				
@@ -254,9 +240,7 @@ sync_wrapper@1.0.2		X
 synstructure@0.13.1									X				
 tagptr@0.2.0		X							X				
 thiserror@1.0.69		X							X				
-thiserror@2.0.12		X							X				
 thiserror-impl@1.0.69		X							X				
-thiserror-impl@2.0.12		X							X				
 thread_local@1.1.8		X							X				
 threadpool@1.8.1		X							X				
 thrift@0.17.0		X											
@@ -265,7 +249,6 @@ tinystr@0.7.6											X
 tokio@1.45.0									X				
 tokio-macros@2.5.0									X				
 tokio-rustls@0.26.1		X							X				
-tokio-stream@0.1.17									X				
 tokio-util@0.7.15									X				
 tower@0.5.2									X				
 tower-layer@0.3.3									X				
@@ -289,7 +272,6 @@ url@2.5.4		X							X
 utf16_iter@1.0.5		X							X				
 utf8_iter@1.0.4		X							X				
 uuid@1.16.0		X							X				
-vcpkg@0.2.15		X							X				
 version_check@0.9.5		X							X				
 want@0.3.1									X				
 wasi@0.11.0+wasi-snapshot-preview1		X	X						X				
