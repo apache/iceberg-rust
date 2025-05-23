@@ -29,7 +29,7 @@ pub(crate) trait SnapshotValidator {
     async fn validation_history(
         &self,
         base: &Table,
-        to_snapshot: Option<&SnapshotRef>,
+        to_snapshot: &SnapshotRef,
         from_snapshot: Option<&SnapshotRef>,
         matching_operations: HashSet<Operation>,
         manifest_content_type: ManifestContentType,
@@ -80,13 +80,15 @@ pub(crate) trait SnapshotValidator {
         (manifests, new_snapshots)
     }
 
+    /// find ancestors in (from_snapshot, to_snapshot]
+    /// TODO: Return an iterator instead of a vector
     fn ancestors_between(
-        to_snapshot: Option<&SnapshotRef>,
+        to_snapshot: &SnapshotRef,
         from_snapshot: Option<&SnapshotRef>,
         table_metadata: &TableMetadata,
     ) -> Vec<SnapshotRef> {
         let mut snapshots = Vec::new();
-        let mut current_snapshot = to_snapshot;
+        let mut current_snapshot = Some(to_snapshot);
         while let Some(snapshot) = current_snapshot {
             snapshots.push(Arc::clone(snapshot));
             match snapshot.parent_snapshot_id() {
@@ -180,7 +182,7 @@ mod tests {
         let (manifests, snapshots) = test_validator
             .validation_history(
                 &table,
-                Some(&current_snapshot),
+                &current_snapshot,
                 Some(&parent_snapshot),
                 HashSet::from([Operation::Append]),
                 ManifestContentType::Data,
@@ -204,7 +206,7 @@ mod tests {
 
         // not specifying from_snapshot, listing all ancestors
         let all_ancestors =
-            TestValidator::ancestors_between(current_snapshot, None, table.metadata());
+            TestValidator::ancestors_between(current_snapshot.unwrap(), None, table.metadata());
         assert_eq!(
             vec![
                 current_snapshot.unwrap().snapshot_id(),
@@ -218,7 +220,7 @@ mod tests {
 
         // specifying from_snapshot, listing only 1 snapshot
         let ancestors =
-            TestValidator::ancestors_between(current_snapshot, parent_snapshot, table.metadata());
+            TestValidator::ancestors_between(current_snapshot.unwrap(), parent_snapshot, table.metadata());
         assert_eq!(
             vec![current_snapshot.unwrap().snapshot_id()],
             ancestors
