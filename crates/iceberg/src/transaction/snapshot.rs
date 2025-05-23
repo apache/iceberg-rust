@@ -89,6 +89,8 @@ pub(crate) struct SnapshotProduceAction<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
+
+    new_data_file_sequence_number: Option<i64>,
 }
 
 impl<'a> SnapshotProduceAction<'a> {
@@ -112,6 +114,7 @@ impl<'a> SnapshotProduceAction<'a> {
             removed_delete_file_paths: HashSet::new(),
             manifest_counter: (0..),
             key_metadata,
+            new_data_file_sequence_number: None,
         })
     }
 
@@ -252,6 +255,7 @@ impl<'a> SnapshotProduceAction<'a> {
     async fn write_added_manifest(
         &mut self,
         added_data_files: Vec<DataFile>,
+        data_seq: Option<i64>,
     ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
@@ -279,7 +283,9 @@ impl<'a> SnapshotProduceAction<'a> {
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
-                .data_file(data_file);
+                .data_file(data_file)
+                .sequence_number_opt(data_seq);
+
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
             } else {
@@ -362,13 +368,18 @@ impl<'a> SnapshotProduceAction<'a> {
         let mut manifest_files = vec![];
         let data_files = std::mem::take(&mut self.added_data_files);
         let added_delete_files = std::mem::take(&mut self.added_delete_files);
+
         if !data_files.is_empty() {
-            let added_manifest = self.write_added_manifest(data_files).await?;
+            let added_manifest = self
+                .write_added_manifest(data_files, self.new_data_file_sequence_number)
+                .await?;
             manifest_files.push(added_manifest);
         }
 
         if !added_delete_files.is_empty() {
-            let added_delete_manifest = self.write_added_manifest(added_delete_files).await?;
+            let added_delete_manifest = self
+                .write_added_manifest(added_delete_files, self.new_data_file_sequence_number)
+                .await?;
             manifest_files.push(added_delete_manifest);
         }
 
@@ -478,6 +489,10 @@ impl<'a> SnapshotProduceAction<'a> {
             ],
         )?;
         Ok(self.tx)
+    }
+
+    pub fn set_new_data_file_sequence_number(&mut self, new_data_file_sequence_number: i64) {
+        self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
     }
 }
 

@@ -34,6 +34,9 @@ use crate::spec::{
     Operation,
 };
 
+pub const USE_STARTING_SEQUENCE_NUMBER: &str = "use-starting-sequence-number";
+pub const USE_STARTING_SEQUENCE_NUMBER_DEFAULT: bool = true;
+
 /// Transaction action for rewriting files.
 pub struct RewriteFilesAction<'a> {
     snapshot_produce_action: SnapshotProduceAction<'a>,
@@ -74,15 +77,40 @@ impl<'a> RewriteFilesAction<'a> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(MANIFEST_MERGE_ENABLED_DEFAULT);
 
+        // If the compaction should use the sequence number of the snapshot at compaction start time for
+        // new data files, instead of using the sequence number of the newly produced snapshot.
+        // This avoids commit conflicts with updates that add newer equality deletes at a higher sequence number.
+        let use_starting_sequence_number = tx
+            .current_table
+            .metadata()
+            .properties()
+            .get(USE_STARTING_SEQUENCE_NUMBER)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(USE_STARTING_SEQUENCE_NUMBER_DEFAULT);
+
+        let mut snapshot_produce_action = SnapshotProduceAction::new(
+            tx,
+            snapshot_id,
+            key_metadata,
+            commit_uuid,
+            snapshot_properties,
+        )
+        .unwrap();
+
+        if use_starting_sequence_number {
+            if let Some(snapshot) = snapshot_produce_action
+                .tx
+                .base_table
+                .metadata()
+                .current_snapshot()
+            {
+                snapshot_produce_action
+                    .set_new_data_file_sequence_number(snapshot.sequence_number());
+            }
+        }
+
         Ok(Self {
-            snapshot_produce_action: SnapshotProduceAction::new(
-                tx,
-                snapshot_id,
-                key_metadata,
-                commit_uuid,
-                snapshot_properties,
-            )
-            .unwrap(),
+            snapshot_produce_action,
             target_size_bytes,
             min_count_to_merge,
             merge_enabled,
@@ -92,18 +120,18 @@ impl<'a> RewriteFilesAction<'a> {
     /// Add data files to the snapshot.
 
     pub fn add_data_files(
-        &mut self,
+        mut self,
         data_files: impl IntoIterator<Item = DataFile>,
-    ) -> Result<&mut Self> {
+    ) -> Result<Self> {
         self.snapshot_produce_action.add_data_files(data_files)?;
         Ok(self)
     }
 
     /// Add remove files to the snapshot.
     pub fn delete_files(
-        &mut self,
+        mut self,
         remove_data_files: impl IntoIterator<Item = DataFile>,
-    ) -> Result<&mut Self> {
+    ) -> Result<Self> {
         self.snapshot_produce_action
             .delete_files(remove_data_files)?;
         Ok(self)
@@ -122,6 +150,13 @@ impl<'a> RewriteFilesAction<'a> {
                 .apply(RewriteFilesOperation, DefaultManifestProcess)
                 .await
         }
+    }
+
+    pub fn new_data_file_sequence_number(mut self, seq: i64) -> Result<Self> {
+        self.snapshot_produce_action
+            .set_new_data_file_sequence_number(seq);
+
+        Ok(self)
     }
 }
 
