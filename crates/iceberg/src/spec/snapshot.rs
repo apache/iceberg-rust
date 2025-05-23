@@ -42,6 +42,7 @@ pub type SnapshotRef = Arc<Snapshot>;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
+#[derive(Hash)]
 pub enum Operation {
     /// Only data files were added and no files were removed.
     Append,
