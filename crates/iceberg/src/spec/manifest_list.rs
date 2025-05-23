@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
-use apache_avro::{from_value, Reader, Writer};
+use apache_avro::{Reader, Writer, from_value};
 use bytes::Bytes;
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
@@ -703,9 +703,9 @@ pub(super) mod _serde {
     use serde_derive::{Deserialize, Serialize};
 
     use super::ManifestFile;
+    use crate::Error;
     use crate::error::Result;
     use crate::spec::{Datum, PrimitiveType, StructType};
-    use crate::Error;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(transparent)]

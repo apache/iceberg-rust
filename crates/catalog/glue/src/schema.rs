@@ -25,7 +25,7 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
-use iceberg::spec::{visit_schema, PrimitiveType, SchemaVisitor, TableMetadata};
+use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
@@ -177,7 +177,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Conversion from 'Timestamptz' is not supported",
-                ))
+                ));
             }
         };
 
@@ -187,8 +187,8 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{Schema, TableMetadataBuilder};
     use iceberg::TableCreation;
+    use iceberg::spec::{Schema, TableMetadataBuilder};
 
     use super::*;
 

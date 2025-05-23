@@ -26,7 +26,7 @@ use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
 use iceberg_catalog_glue::{
-    GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GlueCatalog, GlueCatalogConfig,
 };
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -231,9 +231,11 @@ async fn test_create_table() -> Result<()> {
     let result = catalog.create_table(&namespace, creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
-    assert!(result
-        .metadata_location()
-        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        result
+            .metadata_location()
+            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
+    );
     assert!(
         catalog
             .file_io()

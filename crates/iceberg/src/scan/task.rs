@@ -18,9 +18,9 @@
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{DataContentType, DataFileFormat, ManifestEntryRef, Schema, SchemaRef};
-use crate::Result;
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;

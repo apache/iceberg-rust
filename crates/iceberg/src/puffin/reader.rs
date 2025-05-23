@@ -17,10 +17,10 @@
 
 use tokio::sync::OnceCell;
 
+use crate::Result;
 use crate::io::{FileRead, InputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
-use crate::Result;
 
 /// Puffin reader
 pub struct PuffinReader {

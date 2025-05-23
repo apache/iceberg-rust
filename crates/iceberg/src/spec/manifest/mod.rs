@@ -26,7 +26,7 @@ pub use metadata::*;
 mod writer;
 use std::sync::Arc;
 
-use apache_avro::{from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value};
 pub use writer::*;
 
 use super::{
