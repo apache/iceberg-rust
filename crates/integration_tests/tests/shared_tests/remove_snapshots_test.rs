@@ -20,6 +20,8 @@
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
+use iceberg::spec::DataFile;
+use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -134,4 +136,246 @@ async fn test_expire_snapshots_by_count() {
         .unwrap();
     let t = remove_action.commit(&rest_catalog).await.unwrap();
     assert_eq!(5, t.metadata().snapshots().count());
+}
+
+#[tokio::test]
+async fn test_clean_expired_files() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = random_ns().await;
+    let schema = test_schema();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let mut table = rest_catalog
+        .create_table(ns.name(), table_creation)
+        .await
+        .unwrap();
+
+    // Create the writer and write the data
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+
+    // commit result
+    let mut data_files_vec = Vec::default();
+
+    async fn build_data_file_f(
+        schema: Arc<arrow_schema::Schema>,
+        table: &Table,
+        location_generator: DefaultLocationGenerator,
+        file_name_generator: DefaultFileNameGenerator,
+    ) -> DataFile {
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            table.metadata().current_schema().clone(),
+            table.file_io().clone(),
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+        let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+        let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+        let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(col1) as ArrayRef,
+            Arc::new(col2) as ArrayRef,
+            Arc::new(col3) as ArrayRef,
+        ])
+        .unwrap();
+        data_file_writer.write(batch.clone()).await.unwrap();
+        data_file_writer.close().await.unwrap()[0].clone()
+    }
+
+    for _ in 0..10 {
+        let data_file = build_data_file_f(
+            schema.clone(),
+            &table,
+            location_generator.clone(),
+            file_name_generator.clone(),
+        )
+        .await;
+        data_files_vec.push(data_file.clone());
+        let tx = Transaction::new(&table);
+        let mut append_action = tx.fast_append(None, None, vec![]).unwrap();
+        append_action.add_data_files(vec![data_file]).unwrap();
+        let tx = append_action.apply().await.unwrap();
+        table = tx.commit(&rest_catalog).await.unwrap();
+    }
+
+    // check snapshot count
+
+    let snapshot_counts = table.metadata().snapshots().count();
+    assert_eq!(10, snapshot_counts);
+
+    let old_snapshots = table.metadata().snapshots().collect::<Vec<_>>();
+    let tx = Transaction::new(&table);
+    let now = chrono::Utc::now().timestamp_millis();
+    let remove_action = tx
+        .expire_snapshot()
+        .retain_last(5)
+        .expire_older_than(now)
+        .clear_expired_files(true)
+        .apply()
+        .await
+        .unwrap();
+    let mut t = remove_action.commit(&rest_catalog).await.unwrap();
+    let new_snapshots = t.metadata().snapshots().collect::<Vec<_>>();
+    assert_eq!(5, new_snapshots.len());
+
+    // check files still referenced by the new snapshots
+    // but the manifest list should be deleted
+    for snapshot in old_snapshots {
+        // check if the snapshot is expired
+        if new_snapshots
+            .iter()
+            .any(|s| s.snapshot_id() == snapshot.snapshot_id())
+        {
+            continue;
+        }
+        // check if the manifest list is deleted
+        let manifest_list = snapshot.manifest_list();
+        // file io read failure means the file is deleted
+        let result = table
+            .file_io()
+            .new_input(manifest_list)
+            .unwrap()
+            .read()
+            .await;
+        assert!(result.is_err());
+    }
+
+    for data_file in &data_files_vec {
+        // check if the data file is deleted
+        let result = table
+            .file_io()
+            .new_input(data_file.file_path())
+            .unwrap()
+            .read()
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // remove the data files by RewriteAction
+    for data_file in &data_files_vec {
+        let tx = Transaction::new(&t);
+        let mut rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
+        rewrite_action = rewrite_action
+            .delete_files(vec![data_file.clone()])
+            .unwrap();
+        let tx = rewrite_action.apply().await.unwrap();
+        t = tx.commit(&rest_catalog).await.unwrap();
+    }
+
+    // exired snapshot and check if the data file is deleted
+    let now = chrono::Utc::now().timestamp_millis();
+    let tx = Transaction::new(&t);
+    let remove_action = tx
+        .expire_snapshot()
+        .retain_last(5)
+        .expire_older_than(now)
+        .clear_expired_files(true)
+        .apply()
+        .await
+        .unwrap();
+    let t = remove_action.commit(&rest_catalog).await.unwrap();
+    let new_snapshots = t.metadata().snapshots().collect::<Vec<_>>();
+    assert_eq!(5, new_snapshots.len());
+
+    for data_file in data_files_vec.iter().take(5) {
+        // check if the data file is deleted
+        let result = t
+            .file_io()
+            .new_input(data_file.file_path())
+            .unwrap()
+            .read()
+            .await;
+        assert!(result.is_err());
+    }
+
+    for data_file in data_files_vec.iter().take(10).skip(5) {
+        // check if the data file is deleted
+        let result = t
+            .file_io()
+            .new_input(data_file.file_path())
+            .unwrap()
+            .read()
+            .await;
+        assert!(result.is_ok());
+    }
+
+    let data_file = build_data_file_f(
+        schema.clone(),
+        &table,
+        location_generator.clone(),
+        file_name_generator.clone(),
+    )
+    .await;
+
+    let tx = Transaction::new(&t);
+    let mut rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
+    rewrite_action = rewrite_action
+        .add_data_files(vec![data_file.clone()])
+        .unwrap();
+    let tx = rewrite_action.apply().await.unwrap();
+    let t = tx.commit(&rest_catalog).await.unwrap();
+
+    // expired snapshot and check if the data file is deleted
+    let old_snapshots = t.metadata().snapshots().collect::<Vec<_>>();
+    let now = chrono::Utc::now().timestamp_millis();
+    let tx = Transaction::new(&t);
+    let remove_action = tx
+        .expire_snapshot()
+        .retain_last(1)
+        .expire_older_than(now)
+        .clear_expired_files(true)
+        .apply()
+        .await
+        .unwrap();
+    let t = remove_action.commit(&rest_catalog).await.unwrap();
+    let new_snapshots = t.metadata().snapshots().collect::<Vec<_>>();
+    assert_eq!(1, new_snapshots.len());
+
+    // check if the data file is deleted
+    for data_file in &data_files_vec {
+        // check if the data file is deleted
+        let result = t
+            .file_io()
+            .new_input(data_file.file_path())
+            .unwrap()
+            .read()
+            .await;
+        assert!(result.is_err());
+    }
+
+    // check old manifest list is deleted
+    for snapshot in old_snapshots {
+        // check if the snapshot is expired
+        if new_snapshots
+            .iter()
+            .any(|s| s.snapshot_id() == snapshot.snapshot_id())
+        {
+            continue;
+        }
+        // check if the manifest list is deleted
+        let manifest_list = snapshot.manifest_list();
+        // file io read failure means the file is deleted
+        let result = t.file_io().new_input(manifest_list).unwrap().read().await;
+        assert!(result.is_err());
+    }
 }

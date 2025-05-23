@@ -273,13 +273,16 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 })
                 .collect();
 
-            if found_deleted_files.is_empty() {
+            if found_deleted_files.is_empty()
+                && (manifest_file.has_added_files() || manifest_file.has_existing_files())
+            {
                 existing_files.push(manifest_file.clone());
             } else {
                 // Rewrite the manifest file without the deleted data files
                 if manifest
                     .entries()
                     .iter()
+                    .filter(|entry| entry.status() != ManifestStatus::Deleted)
                     .any(|entry| !found_deleted_files.contains(entry.data_file().file_path()))
                 {
                     let mut manifest_writer = snapshot_produce.new_manifest_writer(

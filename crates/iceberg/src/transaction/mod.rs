@@ -22,6 +22,7 @@ mod remove_snapshots;
 mod rewrite_files;
 mod snapshot;
 mod sort_order;
+mod utils;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
