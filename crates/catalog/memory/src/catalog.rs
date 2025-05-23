@@ -53,6 +53,30 @@ impl MemoryCatalog {
             warehouse_location,
         }
     }
+
+    fn new_metadata_location(&self, location: &str) -> String {
+        format!("{}/metadata/{}.metadata.json", location, Uuid::new_v4())
+    }
+
+    async fn commit_table(
+        &self,
+        table_ident: &TableIdent,
+        next_metadata: TableMetadata,
+    ) -> Result<()> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let table_metadata_dir =
+            root_namespace_state.get_existing_table_metadata_dir(table_ident)?;
+        let metadata_location = self.new_metadata_location(table_metadata_dir);
+        self.file_io
+            .new_output(&metadata_location)?
+            .write(serde_json::to_vec(&next_metadata)?.into())
+            .await?;
+
+        root_namespace_state.update_table(table_ident, metadata_location)?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -203,19 +227,14 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            &location,
-            0,
-            Uuid::new_v4()
-        );
+        let metadata_location = self.new_metadata_location(&location);
 
         self.file_io
             .new_output(&metadata_location)?
             .write(serde_json::to_vec(&metadata)?.into())
             .await?;
 
-        root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
+        root_namespace_state.insert_new_table(&table_ident, location, metadata_location.clone())?;
 
         Table::builder()
             .file_io(self.file_io.clone())
@@ -269,19 +288,39 @@ impl Catalog for MemoryCatalog {
         let metadata_location = new_root_namespace_state
             .get_existing_table_location(src_table_ident)?
             .clone();
+        let metadata_dir = new_root_namespace_state
+            .get_existing_table_metadata_dir(src_table_ident)?
+            .clone();
         new_root_namespace_state.remove_existing_table(src_table_ident)?;
-        new_root_namespace_state.insert_new_table(dst_table_ident, metadata_location)?;
+        new_root_namespace_state.insert_new_table(
+            dst_table_ident,
+            metadata_dir,
+            metadata_location,
+        )?;
         *root_namespace_state = new_root_namespace_state;
 
         Ok(())
     }
 
     /// Update a table to the catalog.
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "MemoryCatalog does not currently support updating tables.",
-        ))
+    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+        // Apply the update to get the new metadata.
+        let table = self.load_table(commit.identifier()).await?;
+        let requirements = commit.take_requirements();
+        let updates = commit.take_updates();
+        let metadata = table.metadata().clone();
+        for requirement in requirements {
+            requirement.check(Some(&metadata))?;
+        }
+        let mut metadata_builder = metadata.into_builder(None);
+        for update in updates {
+            metadata_builder = update.apply(metadata_builder)?;
+        }
+
+        self.commit_table(commit.identifier(), metadata_builder.build()?.metadata)
+            .await?;
+
+        self.load_table(commit.identifier()).await
     }
 }
 
@@ -293,6 +332,7 @@ mod tests {
 
     use iceberg::io::FileIOBuilder;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
 
@@ -1050,7 +1090,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/{}.metadata.json$",
             namespace_location, UUID_REGEX_STR,
         );
 
@@ -1103,7 +1143,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/{}.metadata.json$",
             nested_namespace_location, UUID_REGEX_STR,
         );
 
@@ -1144,7 +1184,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/tbl1/metadata/{}.metadata.json$",
             warehouse_location, UUID_REGEX_STR
         );
 
@@ -1192,7 +1232,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/b/tbl1/metadata/{}.metadata.json$",
             warehouse_location, UUID_REGEX_STR
         );
 
@@ -1695,6 +1735,73 @@ mod tests {
                 "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let catalog = new_memory_catalog();
+        let namespace_ident = NamespaceIdent::new("n1".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
+        create_table(&catalog, &table_ident).await;
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert!(table.metadata().properties().is_empty());
+
+        let transaction = Transaction::new(&table);
+        let transaction = transaction
+            .set_properties(HashMap::from_iter(vec![("k".to_string(), "v".to_string())]))
+            .unwrap();
+        transaction.commit(&catalog).await.unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert_eq!(
+            table.metadata().properties(),
+            &HashMap::from_iter(vec![("k".to_string(), "v".to_string())])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_rename_table() {
+        let catalog = new_memory_catalog();
+        let namespace_ident = NamespaceIdent::new("n1".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
+        create_table(&catalog, &table_ident).await;
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert!(table.metadata().properties().is_empty());
+
+        let transaction = Transaction::new(&table);
+        let transaction = transaction
+            .set_properties(HashMap::from_iter(vec![("k".to_string(), "v".to_string())]))
+            .unwrap();
+        transaction.commit(&catalog).await.unwrap();
+
+        let dst_table_ident = TableIdent::new(namespace_ident.clone(), "tbl2".into());
+        catalog
+            .rename_table(&table_ident, &dst_table_ident)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&dst_table_ident).await.unwrap();
+        let transaction = Transaction::new(&table);
+        let transaction = transaction
+            .set_properties(HashMap::from_iter(vec![(
+                "k1".to_string(),
+                "v2".to_string(),
+            )]))
+            .unwrap();
+        transaction.commit(&catalog).await.unwrap();
+
+        let table = catalog.load_table(&dst_table_ident).await.unwrap();
+        assert_eq!(
+            table.metadata().properties(),
+            &HashMap::from_iter(vec![
+                ("k".to_string(), "v".to_string()),
+                ("k1".to_string(), "v2".to_string())
+            ])
         );
     }
 }
