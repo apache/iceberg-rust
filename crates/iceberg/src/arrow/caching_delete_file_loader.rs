@@ -1,0 +1,512 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::collections::{HashMap, HashSet};
+use std::ops::Not;
+
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+};
+use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
+use tokio::sync::oneshot::{Receiver, channel};
+
+use super::delete_filter::DeleteFilter;
+use crate::arrow::arrow_schema_to_schema;
+use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::delete_vector::DeleteVector;
+use crate::expr::Predicate::AlwaysTrue;
+use crate::expr::{Predicate, Reference};
+use crate::io::FileIO;
+use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
+use crate::spec::{DataContentType, Datum, NestedFieldRef, PrimitiveType, SchemaRef};
+use crate::{Error, ErrorKind, Result};
+
+#[derive(Clone, Debug)]
+pub(crate) struct CachingDeleteFileLoader {
+    basic_delete_file_loader: BasicDeleteFileLoader,
+    concurrency_limit_data_files: usize,
+}
+
+// Intermediate context during processing of a delete file task.
+enum DeleteFileContext {
+    // TODO: Delete Vector loader from Puffin files
+    ExistingEqDel,
+    PosDels(ArrowRecordBatchStream),
+    FreshEqDel {
+        batch_stream: ArrowRecordBatchStream,
+        equality_ids: HashSet<i32>,
+        sender: tokio::sync::oneshot::Sender<Predicate>,
+    },
+}
+
+// Final result of the processing of a delete file task before
+// results are fully merged into the DeleteFileManager's state
+enum ParsedDeleteFileContext {
+    DelVecs(HashMap<String, DeleteVector>),
+    EqDel,
+}
+
+#[allow(unused_variables)]
+impl CachingDeleteFileLoader {
+    pub(crate) fn new(file_io: FileIO, concurrency_limit_data_files: usize) -> Self {
+        CachingDeleteFileLoader {
+            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io),
+            concurrency_limit_data_files,
+        }
+    }
+
+    /// Initiates loading of all deletes for all the specified tasks
+    ///
+    /// Returned future completes once all positional deletes and delete vectors
+    /// have loaded. EQ deletes are not waited for in this method but the returned
+    /// DeleteFilter will await their loading when queried for them.
+    ///
+    ///  * Create a single stream of all delete file tasks irrespective of type,
+    ///    so that we can respect the combined concurrency limit
+    ///  * We then process each in two phases: load and parse.
+    ///  * for positional deletes the load phase instantiates an ArrowRecordBatchStream to
+    ///    stream the file contents out
+    ///  * for eq deletes, we first check if the EQ delete is already loaded or being loaded by
+    ///    another concurrently processing data file scan task. If it is, we skip it.
+    ///    If not, the DeleteFilter is updated to contain a notifier to prevent other data file
+    ///    tasks from starting to load the same equality delete file. We spawn a task to load
+    ///    the EQ delete's record batch stream, convert it to a predicate, update the delete filter,
+    ///    and notify any task that was waiting for it.
+    ///  * When this gets updated to add support for delete vectors, the load phase will return
+    ///    a PuffinReader for them.
+    ///  * The parse phase parses each record batch stream according to its associated data type.
+    ///    The result of this is a map of data file paths to delete vectors for the positional
+    ///    delete tasks (and in future for the delete vector tasks). For equality delete
+    ///    file tasks, this results in an unbound Predicate.
+    ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
+    ///    channel to store them in the right place in the delete file managers state.
+    ///  * The results of all of these futures are awaited on in parallel with the specified
+    ///    level of concurrency and collected into a vec. We then combine all the delete
+    ///    vector maps that resulted from any positional delete or delete vector files into a
+    ///    single map and persist it in the state.
+    ///
+    ///
+    ///  Conceptually, the data flow is like this:
+    /// ```none
+    ///                                          FileScanTaskDeleteFile
+    ///                                                     |
+    ///                                             Skip Started EQ Deletes
+    ///                                                     |
+    ///                                                     |
+    ///                                       [load recordbatch stream / puffin]
+    ///                                             DeleteFileContext
+    ///                                                     |
+    ///                                                     |
+    ///                       +-----------------------------+--------------------------+
+    ///                     Pos Del           Del Vec (Not yet Implemented)         EQ Del
+    ///                       |                             |                          |
+    ///              [parse pos del stream]         [parse del vec puffin]       [parse eq del]
+    ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
+    ///                       |                             |                          |
+    ///                       |                             |                 [persist to state]
+    ///                       |                             |                          ()
+    ///                       |                             |                          |
+    ///                       +-----------------------------+--------------------------+
+    ///                                                     |
+    ///                                             [buffer unordered]
+    ///                                                     |
+    ///                                            [combine del vectors]
+    ///                                        HashMap<String, RoaringTreeMap>
+    ///                                                     |
+    ///                                        [persist del vectors to state]
+    ///                                                    ()
+    ///                                                    |
+    ///                                                    |
+    ///                                                 [join!]
+    /// ```
+    pub(crate) fn load_deletes(
+        &self,
+        delete_file_entries: &[FileScanTaskDeleteFile],
+        schema: SchemaRef,
+    ) -> Receiver<Result<DeleteFilter>> {
+        let (tx, rx) = channel();
+        let del_filter = DeleteFilter::default();
+
+        let stream_items = delete_file_entries
+            .iter()
+            .map(|t| {
+                (
+                    t.clone(),
+                    self.basic_delete_file_loader.clone(),
+                    del_filter.clone(),
+                    schema.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let task_stream = futures::stream::iter(stream_items);
+
+        let del_filter = del_filter.clone();
+        let concurrency_limit_data_files = self.concurrency_limit_data_files;
+        let basic_delete_file_loader = self.basic_delete_file_loader.clone();
+        crate::runtime::spawn(async move {
+            let result = async move {
+                let mut del_filter = del_filter;
+                let basic_delete_file_loader = basic_delete_file_loader.clone();
+
+                let results: Vec<ParsedDeleteFileContext> = task_stream
+                    .map(move |(task, file_io, del_filter, schema)| {
+                        let basic_delete_file_loader = basic_delete_file_loader.clone();
+                        async move {
+                            Self::load_file_for_task(
+                                &task,
+                                basic_delete_file_loader.clone(),
+                                del_filter,
+                                schema,
+                            )
+                            .await
+                        }
+                    })
+                    .map(move |ctx| {
+                        Ok(async { Self::parse_file_content_for_task(ctx.await?).await })
+                    })
+                    .try_buffer_unordered(concurrency_limit_data_files)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+
+                for item in results {
+                    if let ParsedDeleteFileContext::DelVecs(hash_map) = item {
+                        for (data_file_path, delete_vector) in hash_map.into_iter() {
+                            del_filter.upsert_delete_vector(data_file_path, delete_vector);
+                        }
+                    }
+                }
+
+                Ok(del_filter)
+            }
+            .await;
+
+            let _ = tx.send(result);
+        });
+
+        rx
+    }
+
+    async fn load_file_for_task(
+        task: &FileScanTaskDeleteFile,
+        basic_delete_file_loader: BasicDeleteFileLoader,
+        del_filter: DeleteFilter,
+        schema: SchemaRef,
+    ) -> Result<DeleteFileContext> {
+        match task.file_type {
+            DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
+                basic_delete_file_loader
+                    .parquet_to_batch_stream(&task.file_path)
+                    .await?,
+            )),
+
+            DataContentType::EqualityDeletes => {
+                let Some(notify) = del_filter.try_start_eq_del_load(&task.file_path) else {
+                    return Ok(DeleteFileContext::ExistingEqDel);
+                };
+
+                let (sender, receiver) = channel();
+                del_filter.insert_equality_delete(&task.file_path, receiver);
+
+                Ok(DeleteFileContext::FreshEqDel {
+                    batch_stream: BasicDeleteFileLoader::evolve_schema(
+                        basic_delete_file_loader
+                            .parquet_to_batch_stream(&task.file_path)
+                            .await?,
+                        schema,
+                    )
+                    .await?,
+                    sender,
+                    equality_ids: HashSet::from_iter(task.equality_ids.clone()),
+                })
+            }
+
+            DataContentType::Data => Err(Error::new(
+                ErrorKind::Unexpected,
+                "tasks with files of type Data not expected here",
+            )),
+        }
+    }
+
+    async fn parse_file_content_for_task(
+        ctx: DeleteFileContext,
+    ) -> Result<ParsedDeleteFileContext> {
+        match ctx {
+            DeleteFileContext::ExistingEqDel => Ok(ParsedDeleteFileContext::EqDel),
+            DeleteFileContext::PosDels(batch_stream) => {
+                let del_vecs =
+                    Self::parse_positional_deletes_record_batch_stream(batch_stream).await?;
+                Ok(ParsedDeleteFileContext::DelVecs(del_vecs))
+            }
+            DeleteFileContext::FreshEqDel {
+                sender,
+                batch_stream,
+                equality_ids,
+            } => {
+                let predicate =
+                    Self::parse_equality_deletes_record_batch_stream(batch_stream, equality_ids)
+                        .await?;
+
+                sender
+                    .send(predicate)
+                    .map_err(|err| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "Could not send eq delete predicate to state",
+                        )
+                    })
+                    .map(|_| ParsedDeleteFileContext::EqDel)
+            }
+        }
+    }
+
+    /// Parses a record batch stream coming from positional delete files
+    ///
+    /// Returns a map of data file path to a delete vector
+    async fn parse_positional_deletes_record_batch_stream(
+        stream: ArrowRecordBatchStream,
+    ) -> Result<HashMap<String, DeleteVector>> {
+        // TODO
+
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "parsing of positional deletes is not yet supported",
+        ))
+    }
+
+    async fn parse_equality_deletes_record_batch_stream(
+        mut stream: ArrowRecordBatchStream,
+        equality_ids: HashSet<i32>,
+    ) -> Result<Predicate> {
+        let mut result_predicate = AlwaysTrue;
+
+        while let Some(record_batch) = stream.next().await {
+            let record_batch = record_batch?;
+
+            if record_batch.num_columns() == 0 {
+                return Ok(AlwaysTrue);
+            }
+
+            let batch_schema_arrow = record_batch.schema();
+            let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
+
+            let mut datum_columns_with_names: Vec<_> = record_batch
+                .columns()
+                .iter()
+                .zip(batch_schema_iceberg.as_struct().fields())
+                // only use columns that are in the set of equality_ids for this delete file
+                .filter(|(field, value)| equality_ids.contains(&value.id))
+                .map(|(column, field)| {
+                    let col_as_datum_vec = arrow_array_to_datum_iterator(column, field);
+                    col_as_datum_vec.map(|c| (c, field.name.to_string()))
+                })
+                .try_collect()?;
+
+            // consume all the iterators in lockstep, creating per-row predicates that get combined
+            // into a single final predicate
+            while datum_columns_with_names[0].0.len() > 0 {
+                let mut row_predicate = AlwaysTrue;
+                for &mut (ref mut column, ref field_name) in &mut datum_columns_with_names {
+                    if let Some(item) = column.next() {
+                        if let Some(datum) = item? {
+                            row_predicate = row_predicate
+                                .and(Reference::new(field_name.clone()).equal_to(datum.clone()));
+                        }
+                    }
+                }
+                result_predicate = result_predicate.and(row_predicate.not());
+            }
+        }
+        Ok(result_predicate.rewrite_not())
+    }
+}
+
+macro_rules! prim_to_datum {
+    ($column:ident, $arr:ty, $dat:path) => {{
+        let arr = $column.as_any().downcast_ref::<$arr>().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("could not downcast ArrayRef to {}", stringify!($arr)),
+        ))?;
+        Ok(Box::new(arr.iter().map(|val| Ok(val.map($dat)))))
+    }};
+}
+
+fn eq_col_unsupported(ty: &str) -> Error {
+    Error::new(
+        ErrorKind::FeatureUnsupported,
+        format!(
+            "Equality deletes where a predicate acts upon a {} column are not yet supported",
+            ty
+        ),
+    )
+}
+
+fn arrow_array_to_datum_iterator<'a>(
+    column: &'a ArrayRef,
+    field: &NestedFieldRef,
+) -> Result<Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>> + 'a>> {
+    match field.field_type.as_primitive_type() {
+        Some(primitive_type) => match primitive_type {
+            PrimitiveType::Int => prim_to_datum!(column, Int32Array, Datum::int),
+            PrimitiveType::Boolean => {
+                prim_to_datum!(column, BooleanArray, Datum::bool)
+            }
+            PrimitiveType::Long => prim_to_datum!(column, Int64Array, Datum::long),
+            PrimitiveType::Float => {
+                prim_to_datum!(column, Float32Array, Datum::float)
+            }
+            PrimitiveType::Double => {
+                prim_to_datum!(column, Float64Array, Datum::double)
+            }
+            PrimitiveType::String => {
+                prim_to_datum!(column, StringArray, Datum::string)
+            }
+            PrimitiveType::Date => prim_to_datum!(column, Date32Array, Datum::date),
+            PrimitiveType::Timestamp => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamp_micros)
+            }
+            PrimitiveType::Timestamptz => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamptz_micros)
+            }
+            PrimitiveType::TimestampNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamp_nanos)
+            }
+            PrimitiveType::TimestamptzNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamptz_nanos)
+            }
+            PrimitiveType::Time => {
+                let arr = column
+                    .as_any()
+                    .downcast_ref::<Time64MicrosecondArray>()
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "could not downcast ArrayRef to Time64MicrosecondArray",
+                    ))?;
+                Ok(Box::new(arr.iter().map(|val| match val {
+                    None => Ok(None),
+                    Some(val) => Datum::time_micros(val).map(Some),
+                })))
+            }
+            PrimitiveType::Decimal { .. } => Err(eq_col_unsupported("Decimal")),
+            PrimitiveType::Uuid => Err(eq_col_unsupported("Uuid")),
+            PrimitiveType::Fixed(_) => Err(eq_col_unsupported("Fixed")),
+            PrimitiveType::Binary => Err(eq_col_unsupported("Binary")),
+        },
+        None => Err(eq_col_unsupported(
+            "non-primitive (i.e. Struct, List, or Map)",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::sync::Arc;
+
+    use arrow_array::{Int64Array, RecordBatch, StringArray};
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_delete_file_loader_parse_equality_deletes() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
+
+        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let record_batch_stream = basic_delete_file_loader
+            .parquet_to_batch_stream(&eq_delete_file_path)
+            .await
+            .expect("could not get batch stream");
+
+        let eq_ids = HashSet::from_iter(vec![2, 3, 4]);
+
+        let parsed_eq_delete = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            record_batch_stream,
+            eq_ids,
+        )
+        .await
+        .expect("error parsing batch stream");
+        println!("{}", parsed_eq_delete);
+
+        let expected = "(((y != 1) OR (z != 100)) OR (a != \"HELP\")) AND (y != 2)".to_string();
+
+        assert_eq!(parsed_eq_delete.to_string(), expected);
+    }
+
+    fn setup_write_equality_delete_file_1(table_location: &str) -> String {
+        let col_y_vals = vec![1, 2];
+        let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
+
+        let col_z_vals = vec![Some(100), None];
+        let col_z = Arc::new(Int64Array::from(col_z_vals)) as ArrayRef;
+
+        let col_a_vals = vec![Some("HELP"), None];
+        let col_a = Arc::new(StringArray::from(col_a_vals)) as ArrayRef;
+
+        let equality_delete_schema = {
+            let fields = vec![
+                arrow_schema::Field::new("y", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                ),
+                arrow_schema::Field::new("z", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+                ),
+                arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let equality_deletes_to_write =
+            RecordBatch::try_new(equality_delete_schema.clone(), vec![col_y, col_z, col_a])
+                .unwrap();
+
+        let path = format!("{}/equality-deletes-1.parquet", &table_location);
+
+        let file = File::create(&path).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file,
+            equality_deletes_to_write.schema(),
+            Some(props.clone()),
+        )
+        .unwrap();
+
+        writer
+            .write(&equality_deletes_to_write)
+            .expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        path
+    }
+}
