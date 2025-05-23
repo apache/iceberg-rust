@@ -933,7 +933,7 @@
 <a href=#933 id=933 data-nosnippet>933</a>    </span><span class="kw">fn </span>bound_reference(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reference: <span class="kw-2">&amp;</span>BoundReference) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;usize&gt;&gt; {
 <a href=#934 id=934 data-nosnippet>934</a>        <span class="comment">// The leaf column's index in Parquet schema.
 <a href=#935 id=935 data-nosnippet>935</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(column_idx) = <span class="self">self</span>.column_map.get(<span class="kw-2">&amp;</span>reference.field().id) {
-<a href=#936 id=936 data-nosnippet>936</a>            <span class="kw">if </span><span class="self">self</span>.parquet_schema.get_column_root_idx(<span class="kw-2">*</span>column_idx) != <span class="kw-2">*</span>column_idx {
+<a href=#936 id=936 data-nosnippet>936</a>            <span class="kw">if </span><span class="self">self</span>.parquet_schema.get_column_root(<span class="kw-2">*</span>column_idx).is_group() {
 <a href=#937 id=937 data-nosnippet>937</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#938 id=938 data-nosnippet>938</a>                    ErrorKind::DataInvalid,
 <a href=#939 id=939 data-nosnippet>939</a>                    <span class="macro">format!</span>(
