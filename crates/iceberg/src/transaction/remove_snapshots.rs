@@ -24,9 +24,10 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::error::Result;
-use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, ancestors_of};
+use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadataRef};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::utils::ancestors_of;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Default value for max snapshot age in milliseconds.
@@ -103,7 +104,7 @@ impl RemoveSnapshotAction {
     fn compute_retained_refs(
         &self,
         snapshot_refs: &HashMap<String, SnapshotReference>,
-        table_meta: &TableMetadata,
+        table_meta: &TableMetadataRef,
     ) -> HashMap<String, SnapshotReference> {
         let mut retained_refs = HashMap::new();
 
@@ -144,7 +145,7 @@ impl RemoveSnapshotAction {
     fn compute_all_branch_snapshots_to_retain(
         &self,
         refs: impl Iterator<Item = SnapshotReference>,
-        table_meta: &TableMetadata,
+        table_meta: &TableMetadataRef,
     ) -> HashSet<i64> {
         let mut branch_snapshots_to_retain = HashSet::new();
         for snapshot_ref in refs {
@@ -192,11 +193,11 @@ impl RemoveSnapshotAction {
         snapshot_id: i64,
         expire_snapshots_older_than: i64,
         min_snapshots_to_keep: usize,
-        table_meta: &TableMetadata,
+        table_meta: &TableMetadataRef,
     ) -> HashSet<i64> {
         let mut ids_to_retain = HashSet::new();
         if let Some(snapshot) = table_meta.snapshot_by_id(snapshot_id) {
-            let ancestors = ancestors_of(snapshot.clone(), table_meta);
+            let ancestors = ancestors_of(table_meta, snapshot.snapshot_id());
             for ancestor in ancestors {
                 if ids_to_retain.len() < min_snapshots_to_keep
                     || ancestor.timestamp_ms() >= expire_snapshots_older_than
@@ -214,7 +215,7 @@ impl RemoveSnapshotAction {
     fn unreferenced_snapshots_to_retain(
         &self,
         refs: impl Iterator<Item = SnapshotReference>,
-        table_meta: &TableMetadata,
+        table_meta: &TableMetadataRef,
     ) -> HashSet<i64> {
         let mut ids_to_retain = HashSet::new();
         let mut referenced_snapshots = HashSet::new();
@@ -222,7 +223,7 @@ impl RemoveSnapshotAction {
         for snapshot_ref in refs {
             if snapshot_ref.is_branch() {
                 if let Some(snapshot) = table_meta.snapshot_by_id(snapshot_ref.snapshot_id) {
-                    let ancestors = ancestors_of(snapshot.clone(), table_meta);
+                    let ancestors = ancestors_of(table_meta, snapshot.snapshot_id());
                     for ancestor in ancestors {
                         referenced_snapshots.insert(ancestor.snapshot_id());
                     }
@@ -251,7 +252,7 @@ impl TransactionAction for RemoveSnapshotAction {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
 
-        let table_meta = table.metadata().clone();
+        let table_meta = table.metadata_ref();
 
         let mut ids_to_retain = HashSet::new();
         let retained_refs = self.compute_retained_refs(&table_meta.refs, &table_meta);
