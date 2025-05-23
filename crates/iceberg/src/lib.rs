@@ -61,10 +61,9 @@ mod error;
 pub use error::{Error, ErrorKind, Result};
 
 mod catalog;
-
 pub use catalog::{
-    Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement,
-    TableUpdate, ViewCreation,
+    Catalog, CatalogLoader, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
+    TableRequirement, TableUpdate, ViewCreation,
 };
 
 pub mod table;

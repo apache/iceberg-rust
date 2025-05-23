@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
@@ -36,7 +37,19 @@ use crate::spec::{
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 
+/// The CatalogLoader trait is used to load a catalog from a given name and properties.
+#[async_trait]
+pub trait CatalogLoader: Debug + Send + Sync {
+    /// Load a catalog from the given name and properties.
+    async fn load(properties: HashMap<String, String>) -> Result<Arc<dyn Catalog>>;
+}
+
 /// The catalog API for Iceberg Rust.
+///
+/// Users will have two ways to construct a catalog:
+///
+/// - Use `CatalogLoeader` to load a catalog from a name and properties.
+/// - Use `CatalogBuilder` provided by the catalog implementer to build a catalog in a strong typed way.
 #[async_trait]
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
@@ -2091,7 +2104,7 @@ mod tests {
                 {
                     "action": "remove-schemas",
                     "schema-ids": [1, 2]
-                }        
+                }
             "#,
             TableUpdate::RemoveSchemas {
                 schema_ids: vec![1, 2],
