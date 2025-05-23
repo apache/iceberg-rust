@@ -91,6 +91,8 @@ pub(crate) struct SnapshotProducer<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
+
+    new_data_file_sequence_number: Option<i64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -127,6 +129,7 @@ impl<'a> SnapshotProducer<'a> {
             removed_data_file_paths,
             removed_delete_file_paths,
             manifest_counter: (0..),
+            new_data_file_sequence_number: None,
         }
     }
 
@@ -287,7 +290,11 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self, added_files: Vec<DataFile>) -> Result<ManifestFile> {
+    async fn write_added_manifest(
+        &mut self,
+        added_files: Vec<DataFile>,
+        data_seq: Option<i64>,
+    ) -> Result<ManifestFile> {
         if added_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
@@ -325,7 +332,9 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_entries = added_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
-                .data_file(data_file);
+                .data_file(data_file)
+                .sequence_number_opt(data_seq);
+
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
             } else {
@@ -423,13 +432,17 @@ impl<'a> SnapshotProducer<'a> {
         // Process added entries.
         if !self.added_data_files.is_empty() {
             let added_data_files = std::mem::take(&mut self.added_data_files);
-            let added_manifest = self.write_added_manifest(added_data_files).await?;
+            let added_manifest = self
+                .write_added_manifest(added_data_files, self.new_data_file_sequence_number)
+                .await?;
             manifest_files.push(added_manifest);
         }
 
         if !self.added_delete_files.is_empty() {
             let added_delete_files = std::mem::take(&mut self.added_delete_files);
-            let added_manifest = self.write_added_manifest(added_delete_files).await?;
+            let added_manifest = self
+                .write_added_manifest(added_delete_files, self.new_data_file_sequence_number)
+                .await?;
             manifest_files.push(added_manifest);
         }
 
@@ -600,6 +613,10 @@ impl<'a> SnapshotProducer<'a> {
         ];
 
         Ok(ActionCommit::new(updates, requirements))
+    }
+
+    pub fn set_new_data_file_sequence_number(&mut self, new_data_file_sequence_number: i64) {
+        self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
     }
 }
 

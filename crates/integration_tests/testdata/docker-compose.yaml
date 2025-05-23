@@ -22,12 +22,6 @@ services:
   rest:
     image: apache/iceberg-rest-fixture:1.10.0
     environment:
-      - http_proxy=
-      - https_proxy=
-      - HTTP_PROXY=
-      - HTTPS_PROXY=
-      - NO_PROXY=localhost,127.0.0.1,minio
-      - no_proxy=localhost,127.0.0.1,minio
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
@@ -48,12 +42,6 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-05-24T17-08-30Z
     environment:
-      - http_proxy=
-      - https_proxy=
-      - HTTP_PROXY=
-      - HTTPS_PROXY=
-      - NO_PROXY=localhost,127.0.0.1,minio
-      - no_proxy=localhost,127.0.0.1,minio
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=minio
@@ -73,12 +61,6 @@ services:
       - minio
     image: minio/mc:RELEASE.2025-05-21T01-59-54Z
     environment:
-      - http_proxy=
-      - https_proxy=
-      - HTTP_PROXY=
-      - HTTPS_PROXY=
-      - NO_PROXY=localhost,127.0.0.1,minio
-      - no_proxy=localhost,127.0.0.1,minio
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
@@ -95,12 +77,6 @@ services:
       - rest
       - minio
     environment:
-      - http_proxy=
-      - https_proxy=
-      - HTTP_PROXY=
-      - HTTPS_PROXY=
-      - NO_PROXY=localhost,127.0.0.1,minio
-      - no_proxy=localhost,127.0.0.1,minio
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1

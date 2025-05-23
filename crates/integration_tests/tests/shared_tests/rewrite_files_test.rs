@@ -357,3 +357,99 @@ async fn test_rewrite_nonexistent_file() {
         .delete_files(nonexistent_data_file);
     // No commit since removing a nonexistent file would not create a valid snapshot under new semantics
 }
+
+#[tokio::test]
+async fn test_sequence_number_in_manifest_entry() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
+    let ns = random_ns().await;
+    let schema = test_schema();
+
+    let table_creation = TableCreation::builder()
+        .name("t3".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let table = rest_catalog
+        .create_table(ns.name(), table_creation)
+        .await
+        .unwrap();
+
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator,
+        file_name_generator,
+    );
+
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+    let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+    let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(col1) as ArrayRef,
+        Arc::new(col2) as ArrayRef,
+        Arc::new(col3) as ArrayRef,
+    ])
+    .unwrap();
+    data_file_writer.write(batch.clone()).await.unwrap();
+    let data_file1 = data_file_writer.close().await.unwrap();
+
+    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    data_file_writer.write(batch.clone()).await.unwrap();
+    let data_file2 = data_file_writer.close().await.unwrap();
+
+    // Commit with sequence number
+
+    let tx = Transaction::new(&table);
+    let rewrite_action = tx
+        .clone()
+        .rewrite_files()
+        .add_data_files(data_file1.clone())
+        .add_data_files(data_file2.clone());
+    // Set sequence number to 12345
+    let rewrite_action = rewrite_action
+        .set_new_data_file_sequence_number(12345)
+        .unwrap();
+    let tx = rewrite_action.apply(tx).unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    // Verify manifest entry has correct sequence number
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+
+    assert_eq!(manifest_list.entries().len(), 1);
+
+    for manifest_file in manifest_list.entries() {
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        for entry in manifest.entries() {
+            assert_eq!(entry.sequence_number(), Some(12345));
+        }
+    }
+}

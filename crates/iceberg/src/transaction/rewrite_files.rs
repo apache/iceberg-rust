@@ -53,6 +53,8 @@ pub struct RewriteFilesAction {
     removed_data_files: Vec<DataFile>,
     removed_delete_files: Vec<DataFile>,
     snapshot_id: Option<i64>,
+
+    new_data_file_sequence_number: Option<i64>,
 }
 
 struct RewriteFilesOperation;
@@ -72,6 +74,7 @@ impl RewriteFilesAction {
             removed_data_files: Vec::new(),
             removed_delete_files: Vec::new(),
             snapshot_id: None,
+            new_data_file_sequence_number: None,
         }
     }
 
@@ -121,6 +124,7 @@ impl RewriteFilesAction {
         self.min_count_to_merge = min_count_to_merge;
         self.merge_enabled = merge_enabled;
         self.snapshot_properties = properties;
+
         self
     }
 
@@ -140,6 +144,12 @@ impl RewriteFilesAction {
     pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self
+    }
+
+    pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Result<Self> {
+        self.new_data_file_sequence_number = Some(seq);
+
+        Ok(self)
     }
 }
 
@@ -277,7 +287,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
 #[async_trait::async_trait]
 impl TransactionAction for RewriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
+        let mut snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
@@ -298,6 +308,10 @@ impl TransactionAction for RewriteFilesAction {
             snapshot_producer
                 .validate_duplicate_files(&self.added_delete_files)
                 .await?;
+        }
+
+        if let Some(seq) = self.new_data_file_sequence_number {
+            snapshot_producer.set_new_data_file_sequence_number(seq);
         }
 
         if self.merge_enabled {
