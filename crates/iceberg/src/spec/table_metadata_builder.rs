@@ -2542,13 +2542,15 @@ mod tests {
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap();
-        assert!(table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .summary()
-            .additional_properties
-            .is_empty());
+        assert!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .additional_properties
+                .is_empty()
+        );
 
         let mut new_properties = HashMap::new();
         new_properties.insert("prop-key".to_string(), "prop-value".to_string());
