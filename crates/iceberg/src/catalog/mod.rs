@@ -495,6 +495,12 @@ pub enum TableUpdate {
         /// Schema IDs to remove.
         schema_ids: Vec<i32>,
     },
+    /// Add snapshot summary properties.
+    #[serde(rename_all = "kebab-case")]
+    AddSnapshotSummaryProperties {
+        /// Additional properties to add.
+        properties: HashMap<String, String>,
+    },
 }
 
 impl TableUpdate {
@@ -539,6 +545,9 @@ impl TableUpdate {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
             TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
+            TableUpdate::AddSnapshotSummaryProperties { properties } => {
+                builder.add_snapshot_summary_properties(properties)
+            }
         }
     }
 }
@@ -2095,6 +2104,26 @@ mod tests {
             "#,
             TableUpdate::RemoveSchemas {
                 schema_ids: vec![1, 2],
+            },
+        );
+    }
+
+    #[test]
+    fn test_add_snapshot_summary_properties() {
+        let mut expected_properties = HashMap::new();
+        expected_properties.insert("prop-key".to_string(), "prop-value".to_string());
+
+        test_serde_json(
+            r#"
+                {
+                    "action": "add-snapshot-summary-properties",
+                    "properties": {
+                            "prop-key": "prop-value"
+                    }
+                }        
+            "#,
+            TableUpdate::AddSnapshotSummaryProperties {
+                properties: expected_properties,
             },
         );
     }
