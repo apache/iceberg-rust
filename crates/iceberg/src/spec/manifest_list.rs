@@ -814,7 +814,6 @@ pub(super) mod _serde {
 
     impl ManifestFileV2 {
         /// Converts the [ManifestFileV2] into a [ManifestFile].
-        /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
         pub fn try_into(self) -> Result<ManifestFile> {
             Ok(ManifestFile {
                 manifest_path: self.manifest_path,
