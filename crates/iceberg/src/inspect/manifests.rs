@@ -29,7 +29,7 @@ use futures::{StreamExt, stream};
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
 
 /// Manifests table.
@@ -181,7 +181,20 @@ impl<'a> ManifestsTable<'a> {
                     .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
                 deleted_delete_files_count
                     .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
-                self.append_partition_summaries(&mut partition_summaries, &manifest.partitions);
+
+                let spec = self
+                    .table
+                    .metadata()
+                    .partition_spec_by_id(manifest.partition_spec_id)
+                    .unwrap();
+                let spec_struct = spec
+                    .partition_type(self.table.metadata().current_schema())
+                    .unwrap();
+                self.append_partition_summaries(
+                    &mut partition_summaries,
+                    &manifest.partitions.clone().unwrap_or_else(Vec::new),
+                    spec_struct,
+                );
             }
         }
 
@@ -230,9 +243,10 @@ impl<'a> ManifestsTable<'a> {
         &self,
         builder: &mut GenericListBuilder<i32, StructBuilder>,
         partitions: &[FieldSummary],
+        partition_struct: StructType,
     ) {
         let partition_summaries_builder = builder.values();
-        for summary in partitions {
+        for (summary, field) in partitions.iter().zip(partition_struct.fields()) {
             partition_summaries_builder
                 .field_builder::<BooleanBuilder>(0)
                 .unwrap()
@@ -241,14 +255,23 @@ impl<'a> ManifestsTable<'a> {
                 .field_builder::<BooleanBuilder>(1)
                 .unwrap()
                 .append_option(summary.contains_nan);
+
             partition_summaries_builder
                 .field_builder::<StringBuilder>(2)
                 .unwrap()
-                .append_option(summary.lower_bound.as_ref().map(|v| v.to_string()));
+                .append_option(summary.lower_bound.as_ref().map(|v| {
+                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
+                        .unwrap()
+                        .to_string()
+                }));
             partition_summaries_builder
                 .field_builder::<StringBuilder>(3)
                 .unwrap()
-                .append_option(summary.upper_bound.as_ref().map(|v| v.to_string()));
+                .append_option(summary.upper_bound.as_ref().map(|v| {
+                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
+                        .unwrap()
+                        .to_string()
+                }));
             partition_summaries_builder.append(true);
         }
         builder.append(true);
