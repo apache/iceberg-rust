@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
 
@@ -94,6 +95,22 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+}
+
+/// Common interface for all catalog builders.
+pub trait CatalogBuilder: Default + Debug + Send + Sync {
+    /// The catalog type that this builder creates.
+    type C: Catalog;
+    /// Configure name of the catalog.
+    fn name(self, name: impl Into<String>) -> Self;
+    /// Configure uri of the catalog.
+    fn uri(self, uri: impl Into<String>) -> Self;
+    /// Configure warehouse location of the catalog.
+    fn warehouse(self, warehouse: impl Into<String>) -> Self;
+    /// Configure properties of the catalog.
+    fn with_prop(self, key: impl Into<String>, value: impl Into<String>) -> Self;
+    /// Create the catalog
+    fn build(self) -> impl Future<Output = Result<Self::C>>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
