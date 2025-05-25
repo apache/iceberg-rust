@@ -1167,10 +1167,17 @@ mod tests {
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
-        catalog.update_namespace(&namespace_ident, HashMap::new()).await.unwrap();
-        
+        catalog
+            .update_namespace(&namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+
         assert_eq!(
-            *catalog.get_namespace(&namespace_ident).await.unwrap().properties(), 
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
             HashMap::from_iter([("exists".to_string(), "true".to_string())])
         )
     }
@@ -1184,15 +1191,22 @@ mod tests {
 
         let mut props = HashMap::from_iter([
             ("prop1".to_string(), "val1".to_string()),
-            ("prop2".into(), "val2".into())
+            ("prop2".into(), "val2".into()),
         ]);
 
-        catalog.update_namespace(&namespace_ident, props.clone()).await.unwrap();
+        catalog
+            .update_namespace(&namespace_ident, props.clone())
+            .await
+            .unwrap();
 
         props.insert("exists".into(), "true".into());
-        
+
         assert_eq!(
-            *catalog.get_namespace(&namespace_ident).await.unwrap().properties(), 
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
             props
         )
     }
@@ -1206,15 +1220,22 @@ mod tests {
 
         let mut props = HashMap::from_iter([
             ("prop1".to_string(), "val1".to_string()),
-            ("prop2".into(), "val2".into())
+            ("prop2".into(), "val2".into()),
         ]);
 
-        catalog.update_namespace(&namespace_ident, props.clone()).await.unwrap();
+        catalog
+            .update_namespace(&namespace_ident, props.clone())
+            .await
+            .unwrap();
 
         props.insert("exists".into(), "true".into());
-        
+
         assert_eq!(
-            *catalog.get_namespace(&namespace_ident).await.unwrap().properties(), 
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
             props
         )
     }
@@ -1227,10 +1248,13 @@ mod tests {
 
         let props = HashMap::from_iter([
             ("prop1".to_string(), "val1".to_string()),
-            ("prop2".into(), "val2".into())
+            ("prop2".into(), "val2".into()),
         ]);
 
-        let err = catalog.update_namespace(&namespace_ident, props).await.unwrap_err();
+        let err = catalog
+            .update_namespace(&namespace_ident, props)
+            .await
+            .unwrap_err();
 
         assert_eq!(
             err.message(),
@@ -1246,10 +1270,13 @@ mod tests {
 
         let props = HashMap::from_iter([
             ("prop1".to_string(), "val1".to_string()),
-            ("prop2".into(), "val2".into())
+            ("prop2".into(), "val2".into()),
         ]);
 
-        let err = catalog.update_namespace(&namespace_ident, props).await.unwrap_err();
+        let err = catalog
+            .update_namespace(&namespace_ident, props)
+            .await
+            .unwrap_err();
 
         assert_eq!(
             err.message(),
