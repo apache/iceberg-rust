@@ -45,6 +45,8 @@ use crate::types::{
     RenameTableRequest,
 };
 
+const REST_CATALOG_PROP_URI: &str = "uri";
+const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
@@ -245,27 +247,22 @@ impl Default for RestCatalogBuilder {
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
-    fn name(&mut self, name: impl Into<String>) -> &mut Self {
+    fn load(mut self, name: impl Into<String>, props: HashMap<String, String>) -> impl Future<Output=Result<Self::C>> {
         self.0.name = Some(name.into());
-        self
-    }
+        if props.contains_key(REST_CATALOG_PROP_URI) {
+            self.0.uri = props
+                .get(REST_CATALOG_PROP_URI)
+                .cloned()
+                .unwrap_or_default();
+        }
+        
+        if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
+            self.0.warehouse = props
+                .get(REST_CATALOG_PROP_WAREHOUSE)
+                .cloned()
+                .map(|s| s.into());
+        }
 
-    fn uri(&mut self, uri: impl Into<String>) -> &mut Self {
-        self.0.uri = uri.into();
-        self
-    }
-
-    fn warehouse(&mut self, warehouse: impl Into<String>) -> &mut Self {
-        self.0.warehouse = Some(warehouse.into());
-        self
-    }
-
-    fn with_prop(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
-        self.0.props.insert(key.into(), value.into());
-        self
-    }
-
-    fn build(self) -> impl Future<Output = Result<Self::C>> {
         let result = {
             if self.0.name.is_none() {
                 Err(Error::new(
@@ -283,6 +280,7 @@ impl CatalogBuilder for RestCatalogBuilder {
         };
 
         std::future::ready(result)
+        
     }
 }
 
@@ -2332,12 +2330,12 @@ mod tests {
     #[tokio::test]
     async fn test_create_rest_catalog() {
         let mut builder = RestCatalogBuilder::default();
-        builder
-            .name("test")
-            .uri("http://localhost:8080")
-            .with_client(Client::new())
-            .with_prop("a", "b");
-        let catalog = builder.build().await;
+        builder.with_client(Client::new());
+        
+        let catalog = builder.load("test", HashMap::from([
+            ("uri".to_string(), "http://localhost:8080".to_string()),
+            ("a".to_string(), "b".to_string()),
+        ])).await;
 
         assert!(catalog.is_ok());
     }

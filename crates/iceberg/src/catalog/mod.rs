@@ -101,16 +101,8 @@ pub trait Catalog: Debug + Sync + Send {
 pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// The catalog type that this builder creates.
     type C: Catalog;
-    /// Configure the name of the catalog.
-    fn name(&mut self, name: impl Into<String>) -> &mut Self;
-    /// Configure uri of the catalog.
-    fn uri(&mut self, uri: impl Into<String>) -> &mut Self;
-    /// Configure the warehouse location of the catalog.
-    fn warehouse(&mut self, warehouse: impl Into<String>) -> &mut Self;
-    /// Configure properties of the catalog.
-    fn with_prop(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self;
-    /// Create the catalog
-    fn build(self) -> impl Future<Output = Result<Self::C>>;
+    /// Create a new catalog instance.
+    fn load(self, name: impl Into<String>, props: HashMap<String, String>) -> impl Future<Output = Result<Self::C>>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
