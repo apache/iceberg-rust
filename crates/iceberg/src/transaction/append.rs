@@ -74,7 +74,7 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     ///
-    /// Note: This API is not yet fully supported in version 0.5.0.  
+    /// Note: This API is not yet fully supported in version 0.5.x.  
     /// It is currently incomplete and should not be used in production.
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.

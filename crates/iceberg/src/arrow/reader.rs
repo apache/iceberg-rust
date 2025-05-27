@@ -933,7 +933,7 @@ impl PredicateConverter<'_> {
     fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
-            if self.parquet_schema.get_column_root_idx(*column_idx) != *column_idx {
+            if self.parquet_schema.get_column_root(*column_idx).is_group() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
