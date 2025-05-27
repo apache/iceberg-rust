@@ -168,8 +168,8 @@ hyper-rustls@0.27.5		X							X		X
 hyper-util@0.1.11											X					
 iana-time-zone@0.1.63		X									X					
 iana-time-zone-haiku@0.1.2		X									X					
-iceberg@0.5.0		X														
-iceberg-datafusion@0.5.0		X														
+iceberg@0.5.1		X														
+iceberg-datafusion@0.5.1		X														
 icu_collections@2.0.0														X		
 icu_locale_core@2.0.0														X		
 icu_normalizer@2.0.0														X		
@@ -256,7 +256,7 @@ proc-macro2@1.0.95		X									X
 prost@0.13.5		X														
 prost-derive@0.13.5		X														
 psm@0.1.26		X									X					
-pyiceberg_core_rust@0.5.0		X														
+pyiceberg_core_rust@0.5.1		X														
 pyo3@0.24.2		X									X					
 pyo3-build-config@0.24.2		X									X					
 pyo3-ffi@0.24.2		X									X					
