@@ -1831,6 +1831,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_then_load() {
+        let catalog = new_memory_catalog();
+        let table = setup_simple_table(&catalog).await;
+
+        let new_location = format!("{}{}", table.metadata().location(), "updatedLocation");
+        Transaction::new(&table)
+            .set_location(new_location.clone())
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let updated_table = catalog.load_table(table.identifier()).await.unwrap();
+        let metadata_log = updated_table.metadata().metadata_log();
+        assert_eq!(updated_table.metadata().location(), new_location);
+        assert_eq!(
+            metadata_log.first().unwrap().metadata_file,
+            table.metadata_location().unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn test_multiple_updates_single_call() {
         let catalog = new_memory_catalog();
         let table = setup_simple_table(&catalog).await;
@@ -1841,7 +1863,7 @@ mod tests {
 
         let new_location = format!("{}{}", table.metadata().location(), "updatedLocation");
         let properties = HashMap::from([(String::from("a"), String::from("1"))]);
-        let updated_table = Transaction::new(&table)
+        Transaction::new(&table)
             .set_location(new_location.clone())
             .unwrap()
             .set_properties(properties.clone())
@@ -1849,8 +1871,9 @@ mod tests {
             .commit(&catalog)
             .await
             .unwrap();
-        let metadata_log = updated_table.metadata().metadata_log();
 
+        let updated_table = catalog.load_table(table.identifier()).await.unwrap();
+        let metadata_log = updated_table.metadata().metadata_log();
         assert_eq!(updated_table.metadata().location(), new_location);
         assert_eq!(updated_table.metadata().properties().clone(), properties);
         assert_eq!(
@@ -1869,12 +1892,13 @@ mod tests {
         );
 
         let v2_properties = HashMap::from([(String::from("a"), String::from("1"))]);
-        let table_v2 = Transaction::new(&table_v1)
+        Transaction::new(&table_v1)
             .set_properties(v2_properties.clone())
             .unwrap()
             .commit(&catalog)
             .await
             .unwrap();
+        let table_v2 = catalog.load_table(table_v1.identifier()).await.unwrap();
         let metadata_log_v2 = table_v2.metadata().metadata_log();
         assert_eq!(table_v2.metadata().properties().clone(), v2_properties);
         assert_eq!(
@@ -1883,12 +1907,13 @@ mod tests {
         );
 
         let mut v3_properties = HashMap::from([(String::from("b"), String::from("2"))]);
-        let table_v3 = Transaction::new(&table_v2)
+        Transaction::new(&table_v2)
             .set_properties(v3_properties.clone())
             .unwrap()
             .commit(&catalog)
             .await
             .unwrap();
+        let table_v3 = catalog.load_table(table_v1.identifier()).await.unwrap();
         let metadata_log_v3 = table_v3.metadata().metadata_log();
         v3_properties.extend(v2_properties);
         assert_eq!(table_v3.metadata().properties().clone(), v3_properties);
