@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3159,7 +3159,7 @@ dependencies = [
 
 [[package]]
 name = "pyiceberg_core_rust"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "arrow",
  "datafusion-ffi",
