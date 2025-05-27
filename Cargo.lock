@@ -3499,7 +3499,6 @@ dependencies = [
  "expect-test",
  "fnv",
  "futures",
- "iceberg-catalog-memory",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "moka",
