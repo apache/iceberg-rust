@@ -122,6 +122,15 @@ impl<'a> SnapshotProduceAction<'a> {
         Ok(())
     }
 
+    /// Set snapshot summary properties.
+    pub fn set_snapshot_properties(
+        &mut self,
+        snapshot_properties: HashMap<String, String>,
+    ) -> Result<&mut Self> {
+        self.snapshot_properties = snapshot_properties;
+        Ok(self)
+    }
+
     /// Add data files to the snapshot.
     pub fn add_data_files(
         &mut self,
