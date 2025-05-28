@@ -37,11 +37,7 @@ async fn test_read_table_with_positional_deletes() {
         .await
         .unwrap();
 
-    let scan = table
-        .scan()
-        .with_delete_file_processing_enabled(true)
-        .build()
-        .unwrap();
+    let scan = table.scan().build().unwrap();
     println!("{:?}", scan);
 
     let plan: Vec<_> = scan
