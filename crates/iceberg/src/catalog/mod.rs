@@ -102,7 +102,11 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// The catalog type that this builder creates.
     type C: Catalog;
     /// Create a new catalog instance.
-    fn load(self, name: impl Into<String>, props: HashMap<String, String>) -> impl Future<Output = Result<Self::C>> + Send;
+    fn load(
+        self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
