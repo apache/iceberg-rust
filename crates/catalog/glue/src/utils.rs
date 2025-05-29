@@ -336,12 +336,9 @@ mod tests {
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "foo",
-                Type::Primitive(PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
             .build()?;
 
         let metadata = create_metadata(schema)?;

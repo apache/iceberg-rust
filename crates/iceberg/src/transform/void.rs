@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{new_null_array, ArrayRef};
+use arrow_array::{ArrayRef, new_null_array};
 
 use super::TransformFunction;
 use crate::Result;
@@ -84,18 +84,12 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(TimestampNs))),
                 (Primitive(TimestamptzNs), Some(Primitive(TimestamptzNs))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    Some(Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()]))),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
+                    Some(Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ]))),
                 ),
             ],
         };
@@ -140,12 +134,9 @@ mod test {
                 (Primitive(Timestamp), Some(Primitive(StringType))),
                 (Primitive(Timestamptz), Some(Primitive(StringType))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     Some(Primitive(StringType)),
                 ),
             ],

@@ -107,8 +107,8 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::transaction::tests::make_v2_table;
     use crate::transaction::Transaction;
+    use crate::transaction::tests::make_v2_table;
     use crate::{TableRequirement, TableUpdate};
 
     #[test]

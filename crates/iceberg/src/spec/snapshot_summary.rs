@@ -729,11 +729,13 @@ mod tests {
 
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
-                .add_unbound_fields(vec![UnboundPartitionField::builder()
-                    .source_id(2)
-                    .name("year".to_string())
-                    .transform(Transform::Identity)
-                    .build()])
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
                 .unwrap()
                 .with_spec_id(1)
                 .build()
@@ -846,7 +848,7 @@ mod tests {
             added_rows_count: Some(100),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(50),
-            partitions: Vec::new(),
+            partitions: Some(Vec::new()),
             key_metadata: Vec::new(),
         };
 
@@ -876,11 +878,13 @@ mod tests {
 
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
-                .add_unbound_fields(vec![UnboundPartitionField::builder()
-                    .source_id(2)
-                    .name("year".to_string())
-                    .transform(Transform::Identity)
-                    .build()])
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
                 .unwrap()
                 .with_spec_id(1)
                 .build()
@@ -968,7 +972,7 @@ mod tests {
             added_rows_count: Some(5),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(0),
-            partitions: Vec::new(),
+            partitions: Some(Vec::new()),
             key_metadata: Vec::new(),
         });
 
@@ -1005,8 +1009,10 @@ mod tests {
 
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "6");
-        assert!(props
-            .iter()
-            .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX)));
+        assert!(
+            props
+                .iter()
+                .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX))
+        );
     }
 }

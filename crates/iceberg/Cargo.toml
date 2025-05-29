@@ -55,6 +55,7 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -89,7 +90,6 @@ zstd = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 expect-test = { workspace = true }
-iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }

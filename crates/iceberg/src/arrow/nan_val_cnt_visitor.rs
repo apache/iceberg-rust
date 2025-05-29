@@ -17,19 +17,19 @@
 
 //! The module contains the visitor for calculating NaN values in give arrow record batch.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, StructArray};
 use arrow_schema::DataType;
 
+use crate::Result;
 use crate::arrow::ArrowArrayAccessor;
 use crate::spec::{
-    visit_struct_with_partner, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef,
-    SchemaWithPartnerVisitor, StructType,
+    ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor,
+    StructType, visit_struct_with_partner,
 };
-use crate::Result;
 
 macro_rules! cast_and_update_cnt_map {
     ($t:ty, $col:ident, $self:ident, $field_id:ident) => {

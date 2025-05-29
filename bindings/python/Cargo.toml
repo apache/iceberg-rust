@@ -16,11 +16,11 @@
 # under the License.
 
 [package]
-edition = "2021"
+edition = "2024"
 homepage = "https://rust.iceberg.apache.org"
 name = "pyiceberg_core_rust"
-rust-version = "1.84"
-version = "0.4.0"
+rust-version = "1.85"
+version = "0.5.1"
 # This crate is used to build python bindings, we don't want to publish it
 publish = false
 

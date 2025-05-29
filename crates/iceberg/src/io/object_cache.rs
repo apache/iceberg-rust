@@ -190,13 +190,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::TableIdent;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     struct TableTestFixture {
         table_location: String,

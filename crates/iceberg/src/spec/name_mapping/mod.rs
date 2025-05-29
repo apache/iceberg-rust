@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DefaultOnNull};
+use serde_with::{DefaultOnNull, serde_as};
 
 /// Property name for name mapping.
 pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
@@ -275,12 +275,14 @@ mod tests {
                 MappedField {
                     field_id: Some(4),
                     names: vec!["qux".to_string()],
-                    fields: vec![MappedField {
-                        field_id: Some(5),
-                        names: vec!["element".to_string()],
-                        fields: vec![],
-                    }
-                    .into()],
+                    fields: vec![
+                        MappedField {
+                            field_id: Some(5),
+                            names: vec!["element".to_string()],
+                            fields: vec![],
+                        }
+                        .into(),
+                    ],
                 },
                 MappedField {
                     field_id: Some(6),
@@ -316,25 +318,27 @@ mod tests {
                 MappedField {
                     field_id: Some(11),
                     names: vec!["location".to_string()],
-                    fields: vec![MappedField {
-                        field_id: Some(12),
-                        names: vec!["element".to_string()],
-                        fields: vec![
-                            MappedField {
-                                field_id: Some(13),
-                                names: vec!["latitude".to_string()],
-                                fields: vec![],
-                            }
-                            .into(),
-                            MappedField {
-                                field_id: Some(14),
-                                names: vec!["longitude".to_string()],
-                                fields: vec![],
-                            }
-                            .into(),
-                        ],
-                    }
-                    .into()],
+                    fields: vec![
+                        MappedField {
+                            field_id: Some(12),
+                            names: vec!["element".to_string()],
+                            fields: vec![
+                                MappedField {
+                                    field_id: Some(13),
+                                    names: vec!["latitude".to_string()],
+                                    fields: vec![],
+                                }
+                                .into(),
+                                MappedField {
+                                    field_id: Some(14),
+                                    names: vec!["longitude".to_string()],
+                                    fields: vec![],
+                                }
+                                .into(),
+                            ],
+                        }
+                        .into(),
+                    ],
                 },
                 MappedField {
                     field_id: Some(15),

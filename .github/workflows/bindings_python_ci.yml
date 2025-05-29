@@ -35,8 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check format
+        working-directory: "bindings/python"
         run: cargo fmt --all -- --check
       - name: Check clippy
+        working-directory: "bindings/python"
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   check-python:

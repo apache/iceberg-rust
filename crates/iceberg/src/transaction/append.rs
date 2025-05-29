@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::transaction::Transaction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
-use crate::transaction::Transaction;
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
 
@@ -72,9 +72,19 @@ impl<'a> FastAppendAction<'a> {
         Ok(self)
     }
 
+    /// Set snapshot summary properties.
+    pub fn set_snapshot_properties(
+        &mut self,
+        snapshot_properties: HashMap<String, String>,
+    ) -> Result<&mut Self> {
+        self.snapshot_produce_action
+            .set_snapshot_properties(snapshot_properties)?;
+        Ok(self)
+    }
+
     /// Adds existing parquet files
     ///
-    /// Note: This API is not yet fully supported in version 0.5.0.  
+    /// Note: This API is not yet fully supported in version 0.5.x.  
     /// It is currently incomplete and should not be used in production.
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
@@ -211,12 +221,14 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
-    use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::Transaction;
+    use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableRequirement, TableUpdate};
 
     #[tokio::test]
@@ -226,6 +238,44 @@ mod tests {
         let mut action = tx.fast_append(None, vec![]).unwrap();
         action.add_data_files(vec![]).unwrap();
         assert!(action.apply().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_set_snapshot_properties() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let mut action = tx.fast_append(None, vec![]).unwrap();
+
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("key".to_string(), "val".to_string());
+        action.set_snapshot_properties(snapshot_properties).unwrap();
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+        action.add_data_files(vec![data_file]).unwrap();
+        let tx = action.apply().await.unwrap();
+
+        // Check customized properties is contained in snapshot summary properties.
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &tx.updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        assert_eq!(
+            new_snapshot
+                .summary()
+                .additional_properties
+                .get("key")
+                .unwrap(),
+            "val"
+        );
     }
 
     #[tokio::test]
@@ -293,7 +343,7 @@ mod tests {
             new_snapshot.sequence_number()
         );
 
-        // check manifset
+        // check manifest
         let manifest = manifest_list.entries()[0]
             .load_manifest(table.file_io())
             .await

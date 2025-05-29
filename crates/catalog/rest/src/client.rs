@@ -25,8 +25,8 @@ use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
-use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
+use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -80,14 +80,18 @@ impl HttpClient {
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
-            token_endpoint: (!cfg.get_token_endpoint().is_empty())
-                .then(|| cfg.get_token_endpoint())
-                .unwrap_or(self.token_endpoint),
+            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
+                cfg.get_token_endpoint()
+            } else {
+                self.token_endpoint
+            },
             credential: cfg.credential().or(self.credential),
             extra_headers,
-            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
-                .then(|| cfg.extra_oauth_params())
-                .unwrap_or(self.extra_oauth_params),
+            extra_oauth_params: if !cfg.extra_oauth_params().is_empty() {
+                cfg.extra_oauth_params()
+            } else {
+                self.extra_oauth_params
+            },
         })
     }
 
@@ -154,12 +158,18 @@ impl HttpClient {
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         );
 
-        let auth_req = self
+        let mut auth_req = self
             .request(Method::POST, &self.token_endpoint)
             .form(&params)
             .build()?;
+        // extra headers add content-type application/json header it's necessary to override it with proper type
+        // note that form call doesn't add content-type header if already present
+        auth_req.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
         let auth_url = auth_req.url().clone();
-        let auth_resp = self.execute(auth_req).await?;
+        let auth_resp = self.client.execute(auth_req).await?;
 
         let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
             let text = auth_resp
