@@ -67,32 +67,36 @@
 //! - `new_output`: Create output file for writing.
 
 mod file_io;
-pub use file_io::*;
-
 mod storage;
-#[cfg(feature = "storage-memory")]
-mod storage_memory;
-#[cfg(feature = "storage-memory")]
-use storage_memory::*;
-#[cfg(feature = "storage-s3")]
-mod storage_s3;
-#[cfg(feature = "storage-s3")]
-pub use storage_s3::*;
+
+pub use file_io::*;
 pub(crate) mod object_cache;
+
+#[cfg(feature = "storage-azdls")]
+mod storage_azdls;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
+#[cfg(feature = "storage-gcs")]
+mod storage_gcs;
+#[cfg(feature = "storage-memory")]
+mod storage_memory;
+#[cfg(feature = "storage-oss")]
+mod storage_oss;
+#[cfg(feature = "storage-s3")]
+mod storage_s3;
 
+#[cfg(feature = "storage-azdls")]
+pub use storage_azdls::*;
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
-mod storage_gcs;
-#[cfg(feature = "storage-gcs")]
 pub use storage_gcs::*;
-
-#[cfg(feature = "storage-oss")]
-mod storage_oss;
+#[cfg(feature = "storage-memory")]
+use storage_memory::*;
 #[cfg(feature = "storage-oss")]
 pub use storage_oss::*;
+#[cfg(feature = "storage-s3")]
+pub use storage_s3::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

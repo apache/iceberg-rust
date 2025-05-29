@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use opendal::layers::RetryLayer;
+#[cfg(feature = "storage-azdls")]
+use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
 #[cfg(feature = "storage-oss")]
@@ -43,10 +45,17 @@ pub(crate) enum Storage {
         scheme_str: String,
         config: Arc<S3Config>,
     },
-    #[cfg(feature = "storage-oss")]
-    Oss { config: Arc<OssConfig> },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
+    #[cfg(feature = "storage-oss")]
+    Oss { config: Arc<OssConfig> },
+    #[cfg(feature = "storage-azdls")]
+    Azdls {
+        /// Azdls storage may have `abfs://` or `abfss://`.
+        /// Storing the scheme string here to return the correct path.
+        scheme_str: String,
+        config: Arc<AzdlsConfig>,
+    },
 }
 
 impl Storage {
@@ -72,6 +81,10 @@ impl Storage {
             #[cfg(feature = "storage-oss")]
             Scheme::Oss => Ok(Self::Oss {
                 config: super::oss_config_parse(props)?.into(),
+            }),
+            Scheme::Azdls => Ok(Self::Azdls {
+                scheme_str,
+                config: super::azdls_config_parse(props)?.into(),
             }),
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
@@ -133,7 +146,6 @@ impl Storage {
                     ))
                 }
             }
-
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
@@ -162,11 +174,28 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-azdls")]
+            Storage::Azdls { scheme_str, config } => {
+                let op = super::azdls_config_build(config, path)?;
+
+                let filesystem = op.info().name();
+                let prefix = format!("{}://{}", scheme_str, filesystem);
+
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid azdls url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
-                not(feature = "storage-oss")
+                not(feature = "storage-oss"),
+                not(feature = "storage-azdls"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -188,6 +217,7 @@ impl Storage {
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
             "gs" | "gcs" => Ok(Scheme::Gcs),
+            "abfs" | "abfss" => Ok(Scheme::Azdls),
             "oss" => Ok(Scheme::Oss),
             s => Ok(s.parse::<Scheme>()?),
         }
