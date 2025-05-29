@@ -27,6 +27,7 @@ use crate::transaction::Transaction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
+use crate::transaction::validate::SnapshotValidator;
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
 
@@ -218,6 +219,8 @@ impl SnapshotProduceOperation for FastAppendOperation {
             .collect())
     }
 }
+
+impl SnapshotValidator for FastAppendOperation {}
 
 #[cfg(test)]
 mod tests {
