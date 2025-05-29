@@ -95,9 +95,31 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    #[deprecated(note = "use remove_dir_all instead", since = "0.4.0")]
     pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         Ok(op.remove_all(relative_path).await?)
+    }
+
+    /// Remove the path and all nested dirs and files recursively.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Behavior
+    ///
+    /// - If the path is a file or not exist, this function will be no-op.
+    /// - If the path is a empty directory, this function will remove the directory itself.
+    /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
+    pub async fn remove_dir_all(&self, path: impl AsRef<str>) -> Result<()> {
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
     }
 
     /// Check file exists.
@@ -220,7 +242,7 @@ pub struct FileMetadata {
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 #[async_trait::async_trait]
-pub trait FileRead: Send + Unpin + 'static {
+pub trait FileRead: Send + Sync + Unpin + 'static {
     /// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
@@ -278,7 +300,7 @@ impl InputFile {
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    pub async fn reader(&self) -> crate::Result<impl FileRead> {
+    pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
@@ -377,13 +399,13 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir_all, File};
+    use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
 
     use bytes::Bytes;
-    use futures::io::AllowStdIo;
     use futures::AsyncReadExt;
+    use futures::io::AllowStdIo;
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
@@ -441,7 +463,15 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(file_io.exists(&a_path).await.unwrap());
 
-        file_io.remove_all(&sub_dir_path).await.unwrap();
+        // Remove a file should be no-op.
+        file_io.remove_dir_all(&a_path).await.unwrap();
+        assert!(file_io.exists(&a_path).await.unwrap());
+
+        // Remove a not exist dir should be no-op.
+        file_io.remove_dir_all("not_exists/").await.unwrap();
+
+        // Remove a dir should remove all files in it.
+        file_io.remove_dir_all(&sub_dir_path).await.unwrap();
         assert!(!file_io.exists(&b_path).await.unwrap());
         assert!(!file_io.exists(&c_path).await.unwrap());
         assert!(file_io.exists(&a_path).await.unwrap());
@@ -460,7 +490,7 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(!file_io.exists(&full_path).await.unwrap());
         assert!(file_io.delete(&full_path).await.is_ok());
-        assert!(file_io.remove_all(&full_path).await.is_ok());
+        assert!(file_io.remove_dir_all(&full_path).await.is_ok());
     }
 
     #[tokio::test]

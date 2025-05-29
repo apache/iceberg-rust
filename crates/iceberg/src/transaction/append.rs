@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::transaction::Transaction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
-use crate::transaction::Transaction;
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
 
@@ -74,7 +74,7 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     ///
-    /// Note: This API is not yet fully supported in version 0.5.0.  
+    /// Note: This API is not yet fully supported in version 0.5.x.  
     /// It is currently incomplete and should not be used in production.
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
@@ -213,11 +213,20 @@ impl SnapshotProduceOperation for FastAppendOperation {
 mod tests {
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
-    use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::Transaction;
+    use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableRequirement, TableUpdate};
+
+    #[tokio::test]
+    async fn test_empty_data_append_action() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let mut action = tx.fast_append(None, vec![]).unwrap();
+        action.add_data_files(vec![]).unwrap();
+        assert!(action.apply().await.is_err());
+    }
 
     #[tokio::test]
     async fn test_fast_append_action() {
@@ -284,7 +293,7 @@ mod tests {
             new_snapshot.sequence_number()
         );
 
-        // check manifset
+        // check manifest
         let manifest = manifest_list.entries()[0]
             .load_manifest(table.file_io())
             .await

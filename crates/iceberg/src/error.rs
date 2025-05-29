@@ -28,6 +28,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// The operation was rejected because the system is not in a state required for the operation’s execution.
+    PreconditionFailed,
+
     /// Iceberg don't know what happened here, and no actions other than
     /// just returning it back. For example, iceberg returns an internal
     /// service error.
@@ -40,6 +43,19 @@ pub enum ErrorKind {
     ///
     /// The table could be invalid or corrupted.
     DataInvalid,
+
+    /// Iceberg namespace already exists at creation.
+    NamespaceAlreadyExists,
+
+    /// Iceberg table already exists at creation.
+    TableAlreadyExists,
+
+    /// Iceberg namespace already exists at creation.
+    NamespaceNotFound,
+
+    /// Iceberg table already exists at creation.
+    TableNotFound,
+
     /// Iceberg feature is not supported.
     ///
     /// This error is returned when given iceberg feature is not supported.
@@ -59,6 +75,11 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
+            ErrorKind::TableAlreadyExists => "TableAlreadyExists",
+            ErrorKind::TableNotFound => "TableNotFound",
+            ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
+            ErrorKind::NamespaceNotFound => "NamespaceNotFound",
+            ErrorKind::PreconditionFailed => "PreconditionFailed",
         }
     }
 }
@@ -233,6 +254,49 @@ impl Error {
     fn with_backtrace(mut self, backtrace: Backtrace) -> Self {
         self.backtrace = backtrace;
         self
+    }
+
+    /// Return error's backtrace.
+    ///
+    /// Note: the standard way of exposing backtrace is the unstable feature [`error_generic_member_access`](https://github.com/rust-lang/rust/issues/99301).
+    /// We don't provide it as it requires nightly rust.
+    ///
+    /// If you just want to print error with backtrace, use `Debug`, like `format!("{err:?}")`.
+    ///
+    /// If you use nightly rust, and want to access `iceberg::Error`'s backtrace in the standard way, you can
+    /// implement a newtype like this:
+    ///
+    /// ```ignore
+    /// // assume you already have `#![feature(error_generic_member_access)]` on the top of your crate
+    ///
+    /// #[derive(::std::fmt::Debug)]
+    /// pub struct IcebergError(iceberg::Error);
+    ///
+    /// impl std::fmt::Display for IcebergError {
+    ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    ///         self.0.fmt(f)
+    ///     }
+    /// }
+    ///
+    /// impl std::error::Error for IcebergError {
+    ///     fn provide<'a>(&'a self, request: &mut std::error::Request<'a>) {
+    ///         request.provide_ref::<std::backtrace::Backtrace>(self.0.backtrace());
+    ///     }
+    ///
+    ///     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    ///         self.0.source()
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Additionally, you can add a clippy lint to prevent usage of the original `iceberg::Error` type.
+    /// ```toml
+    /// disallowed-types = [
+    ///     { path = "iceberg::Error", reason = "Please use `my_crate::IcebergError` instead." },
+    /// ]
+    /// ```
+    pub fn backtrace(&self) -> &Backtrace {
+        &self.backtrace
     }
 
     /// Return error's kind.

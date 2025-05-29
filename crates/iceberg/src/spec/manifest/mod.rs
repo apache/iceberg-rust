@@ -26,7 +26,7 @@ pub use metadata::*;
 mod writer;
 use std::sync::Arc;
 
-use apache_avro::{from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value};
 pub use writer::*;
 
 use super::{
@@ -215,7 +215,7 @@ mod tests {
                     snapshot_id: None,
                     sequence_number: None,
                     file_sequence_number: None,
-                    data_file: DataFile {content:DataContentType::Data,file_path:"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:1,file_size_in_bytes:5442,column_sizes:HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),value_counts:HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),null_value_counts:HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:None,split_offsets:vec![4],equality_ids:Vec::new(),sort_order_id:None, partition_spec_id: 0 }
+                    data_file: DataFile {content:DataContentType::Data,file_path:"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:1,file_size_in_bytes:5442,column_sizes:HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),value_counts:HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),null_value_counts:HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:None,split_offsets:vec![4],equality_ids:Vec::new(),sort_order_id:None, partition_spec_id: 0,first_row_id: None,referenced_data_file: None,content_offset: None,content_size_in_bytes: None }
                 }
             ];
 
@@ -396,7 +396,11 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
-                    partition_spec_id: 0
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
                 },
             }];
 
@@ -489,7 +493,11 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: Some(0),
-                    partition_spec_id: 0
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
                 }
             }];
 
@@ -593,7 +601,11 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: vec![],
                         sort_order_id: Some(0),
-                        partition_spec_id: 0
+                        partition_spec_id: 0,
+                        first_row_id: None,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
                     },
                 }
             ];
@@ -615,14 +627,15 @@ mod tests {
             writer.add_entry(entry.clone()).unwrap();
         }
         let manifest_file = writer.write_manifest_file().await.unwrap();
-        assert_eq!(manifest_file.partitions.len(), 1);
+        let partitions = manifest_file.partitions.unwrap();
+        assert_eq!(partitions.len(), 1);
         assert_eq!(
-            manifest_file.partitions[0].lower_bound,
-            Some(Datum::string("x"))
+            partitions[0].clone().lower_bound.unwrap(),
+            Datum::string("x").to_bytes().unwrap()
         );
         assert_eq!(
-            manifest_file.partitions[0].upper_bound,
-            Some(Datum::string("x"))
+            partitions[0].clone().upper_bound.unwrap(),
+            Datum::string("x").to_bytes().unwrap()
         );
 
         // read back the manifest file and check the content
@@ -697,7 +710,11 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
-                    partition_spec_id: 0
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
                 },
             }];
 
@@ -784,7 +801,11 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
-                    partition_spec_id: 0
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
                 },
             })],
         };
@@ -834,6 +855,41 @@ mod tests {
             format_version: FormatVersion::V2,
         };
         let entries = vec![
+            ManifestEntry {
+                status: ManifestStatus::Added,
+                snapshot_id: None,
+                sequence_number: None,
+                file_sequence_number: None,
+                data_file: DataFile {
+                    content: DataContentType::Data,
+                    file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                    file_format: DataFileFormat::Parquet,
+                    partition: Struct::from_iter(
+                        vec![
+                            Some(Literal::int(2021)),
+                            Some(Literal::float(1.0)),
+                            Some(Literal::double(2.0)),
+                        ]
+                    ),
+                    record_count: 1,
+                    file_size_in_bytes: 5442,
+                    column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                    value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                    null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                    nan_value_counts: HashMap::new(),
+                    lower_bounds: HashMap::new(),
+                    upper_bounds: HashMap::new(),
+                    key_metadata: None,
+                    split_offsets: vec![4],
+                    equality_ids: Vec::new(),
+                    sort_order_id: None,
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
+                }
+            },
                 ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: None,
@@ -845,9 +901,9 @@ mod tests {
                         file_format: DataFileFormat::Parquet,
                         partition: Struct::from_iter(
                             vec![
-                                Some(Literal::int(2021)),
-                                Some(Literal::float(1.0)),
-                                Some(Literal::double(2.0)),
+                                Some(Literal::int(1111)),
+                                Some(Literal::float(15.5)),
+                                Some(Literal::double(25.5)),
                             ]
                         ),
                         record_count: 1,
@@ -862,103 +918,84 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
-                        partition_spec_id: 0
+                        partition_spec_id: 0,
+                        first_row_id: None,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
                     }
                 },
-                    ManifestEntry {
-                        status: ManifestStatus::Added,
-                        snapshot_id: None,
-                        sequence_number: None,
-                        file_sequence_number: None,
-                        data_file: DataFile {
-                            content: DataContentType::Data,
-                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
-                            file_format: DataFileFormat::Parquet,
-                            partition: Struct::from_iter(
-                                vec![
-                                    Some(Literal::int(1111)),
-                                    Some(Literal::float(15.5)),
-                                    Some(Literal::double(25.5)),
-                                ]
-                            ),
-                            record_count: 1,
-                            file_size_in_bytes: 5442,
-                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
-                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
-                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
-                            nan_value_counts: HashMap::new(),
-                            lower_bounds: HashMap::new(),
-                            upper_bounds: HashMap::new(),
-                            key_metadata: None,
-                            split_offsets: vec![4],
-                            equality_ids: Vec::new(),
-                            sort_order_id: None,
-                            partition_spec_id: 0
-                        }
-                    },
-                    ManifestEntry {
-                        status: ManifestStatus::Added,
-                        snapshot_id: None,
-                        sequence_number: None,
-                        file_sequence_number: None,
-                        data_file: DataFile {
-                            content: DataContentType::Data,
-                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
-                            file_format: DataFileFormat::Parquet,
-                            partition: Struct::from_iter(
-                                vec![
-                                    Some(Literal::int(1211)),
-                                    Some(Literal::float(f32::NAN)),
-                                    Some(Literal::double(1.0)),
-                                ]
-                            ),
-                            record_count: 1,
-                            file_size_in_bytes: 5442,
-                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
-                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
-                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
-                            nan_value_counts: HashMap::new(),
-                            lower_bounds: HashMap::new(),
-                            upper_bounds: HashMap::new(),
-                            key_metadata: None,
-                            split_offsets: vec![4],
-                            equality_ids: Vec::new(),
-                            sort_order_id: None,
-                            partition_spec_id: 0
-                        }
-                    },
-                    ManifestEntry {
-                        status: ManifestStatus::Added,
-                        snapshot_id: None,
-                        sequence_number: None,
-                        file_sequence_number: None,
-                        data_file: DataFile {
-                            content: DataContentType::Data,
-                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
-                            file_format: DataFileFormat::Parquet,
-                            partition: Struct::from_iter(
-                                vec![
-                                    Some(Literal::int(1111)),
-                                    None,
-                                    Some(Literal::double(11.0)),
-                                ]
-                            ),
-                            record_count: 1,
-                            file_size_in_bytes: 5442,
-                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
-                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
-                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
-                            nan_value_counts: HashMap::new(),
-                            lower_bounds: HashMap::new(),
-                            upper_bounds: HashMap::new(),
-                            key_metadata: None,
-                            split_offsets: vec![4],
-                            equality_ids: Vec::new(),
-                            sort_order_id: None,
-                            partition_spec_id: 0
-                        }
-                    },
-            ];
+                ManifestEntry {
+                    status: ManifestStatus::Added,
+                    snapshot_id: None,
+                    sequence_number: None,
+                    file_sequence_number: None,
+                    data_file: DataFile {
+                        content: DataContentType::Data,
+                        file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                        file_format: DataFileFormat::Parquet,
+                        partition: Struct::from_iter(
+                            vec![
+                                Some(Literal::int(1211)),
+                                Some(Literal::float(f32::NAN)),
+                                Some(Literal::double(1.0)),
+                            ]
+                        ),
+                        record_count: 1,
+                        file_size_in_bytes: 5442,
+                        column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                        value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                        null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                        nan_value_counts: HashMap::new(),
+                        lower_bounds: HashMap::new(),
+                        upper_bounds: HashMap::new(),
+                        key_metadata: None,
+                        split_offsets: vec![4],
+                        equality_ids: Vec::new(),
+                        sort_order_id: None,
+                        partition_spec_id: 0,
+                        first_row_id: None,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
+                    }
+                },
+                ManifestEntry {
+                    status: ManifestStatus::Added,
+                    snapshot_id: None,
+                    sequence_number: None,
+                    file_sequence_number: None,
+                    data_file: DataFile {
+                        content: DataContentType::Data,
+                        file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                        file_format: DataFileFormat::Parquet,
+                        partition: Struct::from_iter(
+                            vec![
+                                Some(Literal::int(1111)),
+                                None,
+                                Some(Literal::double(11.0)),
+                            ]
+                        ),
+                        record_count: 1,
+                        file_size_in_bytes: 5442,
+                        column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                        value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                        null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                        nan_value_counts: HashMap::new(),
+                        lower_bounds: HashMap::new(),
+                        upper_bounds: HashMap::new(),
+                        key_metadata: None,
+                        split_offsets: vec![4],
+                        equality_ids: Vec::new(),
+                        sort_order_id: None,
+                        partition_spec_id: 0,
+                        first_row_id: None,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
+                    }
+                },
+        ];
 
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
@@ -978,20 +1015,40 @@ mod tests {
         }
         let res = writer.write_manifest_file().await.unwrap();
 
-        assert_eq!(res.partitions.len(), 3);
-        assert_eq!(res.partitions[0].lower_bound, Some(Datum::int(1111)));
-        assert_eq!(res.partitions[0].upper_bound, Some(Datum::int(2021)));
-        assert!(!res.partitions[0].contains_null);
-        assert_eq!(res.partitions[0].contains_nan, Some(false));
+        let partitions = res.partitions.unwrap();
 
-        assert_eq!(res.partitions[1].lower_bound, Some(Datum::float(1.0)));
-        assert_eq!(res.partitions[1].upper_bound, Some(Datum::float(15.5)));
-        assert!(res.partitions[1].contains_null);
-        assert_eq!(res.partitions[1].contains_nan, Some(true));
+        assert_eq!(partitions.len(), 3);
+        assert_eq!(
+            partitions[0].clone().lower_bound.unwrap(),
+            Datum::int(1111).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[0].clone().upper_bound.unwrap(),
+            Datum::int(2021).to_bytes().unwrap()
+        );
+        assert!(!partitions[0].clone().contains_null);
+        assert_eq!(partitions[0].clone().contains_nan, Some(false));
 
-        assert_eq!(res.partitions[2].lower_bound, Some(Datum::double(1.0)));
-        assert_eq!(res.partitions[2].upper_bound, Some(Datum::double(25.5)));
-        assert!(!res.partitions[2].contains_null);
-        assert_eq!(res.partitions[2].contains_nan, Some(false));
+        assert_eq!(
+            partitions[1].clone().lower_bound.unwrap(),
+            Datum::float(1.0).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[1].clone().upper_bound.unwrap(),
+            Datum::float(15.5).to_bytes().unwrap()
+        );
+        assert!(partitions[1].clone().contains_null);
+        assert_eq!(partitions[1].clone().contains_nan, Some(true));
+
+        assert_eq!(
+            partitions[2].clone().lower_bound.unwrap(),
+            Datum::double(1.0).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[2].clone().upper_bound.unwrap(),
+            Datum::double(25.5).to_bytes().unwrap()
+        );
+        assert!(!partitions[2].clone().contains_null);
+        assert_eq!(partitions[2].clone().contains_nan, Some(false));
     }
 }

@@ -17,11 +17,15 @@
 
 use std::collections::HashMap;
 
+use typed_builder::TypedBuilder;
+
 /// A serialized form of a "compact" Theta sketch produced by the Apache DataSketches library.
 pub const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
+/// A serialized form of a deletion vector.
+pub const DELETION_VECTOR_V1: &str = "deletion-vector-v1";
 
 /// The blob
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, TypedBuilder)]
 pub struct Blob {
     pub(crate) r#type: String,
     pub(crate) fields: Vec<i32>,

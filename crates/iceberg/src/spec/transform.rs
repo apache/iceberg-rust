@@ -25,15 +25,15 @@ use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Datum, PrimitiveLiteral};
+use crate::ErrorKind;
 use crate::error::{Error, Result};
 use crate::expr::{
     BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
     SetExpression, UnaryExpression,
 };
-use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::spec::Literal;
-use crate::transform::{create_transform_function, BoxedTransformFunction};
-use crate::ErrorKind;
+use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::{BoxedTransformFunction, create_transform_function};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -384,7 +384,7 @@ impl Transform {
                                         "Expected a string or binary literal, got: {:?}",
                                         expr.literal()
                                     ),
-                                ))
+                                ));
                             }
                         };
                         match len.cmp(&(*width as usize)) {
@@ -411,7 +411,7 @@ impl Transform {
                                         "Expected a string or binary literal, got: {:?}",
                                         expr.literal()
                                     ),
-                                ))
+                                ));
                             }
                         };
                         match len.cmp(&(*width as usize)) {
@@ -770,7 +770,7 @@ impl Transform {
                             // An ugly hack to fix. Refine the increment and decrement logic later.
                             match self {
                                 Transform::Day => {
-                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)))
+                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)));
                                 }
                                 _ => {
                                     return Some(AdjustedProjection::Single(Datum::int(v + 1)));
@@ -1031,7 +1031,7 @@ impl FromStr for Transform {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!("transform {v:?} is invalid"),
-                ))
+                ));
             }
         };
 

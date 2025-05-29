@@ -23,7 +23,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
+use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{
     ArrowError, DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
@@ -32,12 +33,12 @@ use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
 use futures::future::BoxFuture;
-use futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
@@ -46,7 +47,7 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
@@ -328,12 +329,15 @@ impl ArrowReader {
         let parquet_file = file_io.new_input(data_file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
+            .with_preload_column_index(true)
+            .with_preload_offset_index(true)
+            .with_preload_page_index(should_load_page_index);
 
         // Create the record batch stream builder, which wraps the parquet file reader
         let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+            ArrowReaderOptions::new(),
         )
         .await?;
         Ok(record_batch_stream_builder)
@@ -929,7 +933,7 @@ impl PredicateConverter<'_> {
     fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
-            if self.parquet_schema.get_column_root_idx(*column_idx) != *column_idx {
+            if self.parquet_schema.get_column_root(*column_idx).is_group() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
@@ -1103,6 +1107,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
             }))
         } else {
@@ -1122,6 +1127,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
             }))
         } else {
@@ -1141,6 +1147,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
             }))
         } else {
@@ -1160,6 +1167,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
             }))
         } else {
@@ -1179,6 +1187,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
             }))
         } else {
@@ -1198,6 +1207,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
             }))
         } else {
@@ -1217,6 +1227,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 starts_with(&left, literal.as_ref())
             }))
         } else {
@@ -1236,7 +1247,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
-
+                let literal = try_cast_literal(&literal, left.data_type())?;
                 // update here if arrow ever adds a native not_starts_with
                 not(&starts_with(&left, literal.as_ref())?)
             }))
@@ -1261,8 +1272,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
                 let left = project_column(&batch, idx)?;
+
                 let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
                 for literal in &literals {
+                    let literal = try_cast_literal(literal, left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
                 }
 
@@ -1291,6 +1304,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 let left = project_column(&batch, idx)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
                 for literal in &literals {
+                    let literal = try_cast_literal(literal, left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
                 }
 
@@ -1308,6 +1322,7 @@ pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
     preload_column_index: bool,
     preload_offset_index: bool,
+    preload_page_index: bool,
     metadata_size_hint: Option<usize>,
     r: R,
 }
@@ -1319,6 +1334,7 @@ impl<R: FileRead> ArrowFileReader<R> {
             meta,
             preload_column_index: false,
             preload_offset_index: false,
+            preload_page_index: false,
             metadata_size_hint: None,
             r,
         }
@@ -1336,6 +1352,12 @@ impl<R: FileRead> ArrowFileReader<R> {
         self
     }
 
+    /// Enable or disable preloading of the page index
+    pub fn with_preload_page_index(mut self, preload: bool) -> Self {
+        self.preload_page_index = preload;
+        self
+    }
+
     /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
     ///
     /// This hint can help reduce the number of fetch requests. For more details see the
@@ -1347,27 +1369,54 @@ impl<R: FileRead> ArrowFileReader<R> {
 }
 
 impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r
-                .read(range.start as _..range.end as _)
+                .read(range.start..range.end)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
+    // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
+    fn get_metadata(
+        &mut self,
+        _options: Option<&'_ ArrowReaderOptions>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 .with_column_indexes(self.preload_column_index)
+                .with_page_indexes(self.preload_page_index)
                 .with_offset_indexes(self.preload_offset_index);
-            let size = self.meta.size as usize;
+            let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
             Ok(Arc::new(meta))
         }
         .boxed()
     }
+}
+
+/// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
+/// that Iceberg uses for literals - but they are effectively the same logical type,
+/// i.e. LargeUtf8 and Utf8 or Utf8View and Utf8 or Utf8View and LargeUtf8.
+///
+/// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
+/// into the type of the batch we read from Parquet before sending it to the compute kernel.
+fn try_cast_literal(
+    literal: &Arc<dyn ArrowDatum + Send + Sync>,
+    column_type: &DataType,
+) -> std::result::Result<Arc<dyn ArrowDatum + Send + Sync>, ArrowError> {
+    let literal_array = literal.get().0;
+
+    // No cast required
+    if literal_array.data_type() == column_type {
+        return Ok(Arc::clone(literal));
+    }
+
+    let literal_array = cast(literal_array, column_type)?;
+    Ok(Arc::new(Scalar::new(literal_array)))
 }
 
 #[cfg(test)]
@@ -1377,7 +1426,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -1390,6 +1439,7 @@ mod tests {
     use roaring::RoaringTreemap;
     use tempfile::TempDir;
 
+    use crate::ErrorKind;
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::delete_vector::DeleteVector;
@@ -1400,7 +1450,6 @@ mod tests {
     use crate::spec::{
         DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
     };
-    use crate::ErrorKind;
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -1573,7 +1622,8 @@ message schema {
         // Expected: [NULL, "foo"].
         let expected = vec![None, Some("foo".to_string())];
 
-        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let (file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::Utf8);
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
@@ -1594,12 +1644,86 @@ message schema {
         // Expected: ["bar"].
         let expected = vec![Some("bar".to_string())];
 
-        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let (file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::Utf8);
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
         assert_eq!(result_data, expected);
+    }
+
+    #[tokio::test]
+    async fn test_predicate_cast_literal() {
+        let predicates = vec![
+            // a == 'foo'
+            (Reference::new("a").equal_to(Datum::string("foo")), vec![
+                Some("foo".to_string()),
+            ]),
+            // a != 'foo'
+            (
+                Reference::new("a").not_equal_to(Datum::string("foo")),
+                vec![Some("bar".to_string())],
+            ),
+            // STARTS_WITH(a, 'foo')
+            (Reference::new("a").starts_with(Datum::string("f")), vec![
+                Some("foo".to_string()),
+            ]),
+            // NOT STARTS_WITH(a, 'foo')
+            (
+                Reference::new("a").not_starts_with(Datum::string("f")),
+                vec![Some("bar".to_string())],
+            ),
+            // a < 'foo'
+            (Reference::new("a").less_than(Datum::string("foo")), vec![
+                Some("bar".to_string()),
+            ]),
+            // a <= 'foo'
+            (
+                Reference::new("a").less_than_or_equal_to(Datum::string("foo")),
+                vec![Some("foo".to_string()), Some("bar".to_string())],
+            ),
+            // a > 'foo'
+            (
+                Reference::new("a").greater_than(Datum::string("bar")),
+                vec![Some("foo".to_string())],
+            ),
+            // a >= 'foo'
+            (
+                Reference::new("a").greater_than_or_equal_to(Datum::string("foo")),
+                vec![Some("foo".to_string())],
+            ),
+            // a IN ('foo', 'bar')
+            (
+                Reference::new("a").is_in([Datum::string("foo"), Datum::string("baz")]),
+                vec![Some("foo".to_string())],
+            ),
+            // a NOT IN ('foo', 'bar')
+            (
+                Reference::new("a").is_not_in([Datum::string("foo"), Datum::string("baz")]),
+                vec![Some("bar".to_string())],
+            ),
+        ];
+
+        // Table data: ["foo", "bar"]
+        let data_for_col_a = vec![Some("foo".to_string()), Some("bar".to_string())];
+
+        let (file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::LargeUtf8);
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        for (predicate, expected) in predicates {
+            println!("testing predicate {predicate}");
+            let result_data = test_perform_read(
+                predicate.clone(),
+                schema.clone(),
+                table_location.clone(),
+                reader.clone(),
+            )
+            .await;
+
+            assert_eq!(result_data, expected, "predicate={predicate}");
+        }
     }
 
     async fn test_perform_read(
@@ -1644,36 +1768,35 @@ message schema {
 
     fn setup_kleene_logic(
         data_for_col_a: Vec<Option<String>>,
+        col_a_type: DataType,
     ) -> (FileIO, SchemaRef, String, TempDir) {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
-                .with_fields(vec![NestedField::optional(
-                    1,
-                    "a",
-                    Type::Primitive(PrimitiveType::String),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(1, "a", Type::Primitive(PrimitiveType::String)).into(),
+                ])
                 .build()
                 .unwrap(),
         );
 
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "a",
-            DataType::Utf8,
-            true,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "1".to_string(),
-        )]))]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", col_a_type.clone(), true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
 
         let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
 
-        let col = Arc::new(StringArray::from(data_for_col_a)) as ArrayRef;
+        let col = match col_a_type {
+            DataType::Utf8 => Arc::new(StringArray::from(data_for_col_a)) as ArrayRef,
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(data_for_col_a)) as ArrayRef,
+            _ => panic!("unexpected col_a_type"),
+        };
 
         let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
 

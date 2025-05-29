@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{hash_map, HashMap};
+use std::collections::{HashMap, hash_map};
 
 use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use itertools::Itertools;
@@ -33,21 +33,21 @@ pub(crate) struct NamespaceState {
 
 fn no_such_namespace_err<T>(namespace_ident: &NamespaceIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::NamespaceNotFound,
         format!("No such namespace: {:?}", namespace_ident),
     ))
 }
 
 fn no_such_table_err<T>(table_ident: &TableIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableNotFound,
         format!("No such table: {:?}", table_ident),
     ))
 }
 
 fn namespace_already_exists_err<T>(namespace_ident: &NamespaceIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::NamespaceAlreadyExists,
         format!(
             "Cannot create namespace {:?}. Namespace already exists.",
             namespace_ident
@@ -57,7 +57,7 @@ fn namespace_already_exists_err<T>(namespace_ident: &NamespaceIdent) -> Result<T
 
 fn table_already_exists_err<T>(table_ident: &TableIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableAlreadyExists,
         format!(
             "Cannot create table {:?}. Table already exists.",
             table_ident

@@ -42,7 +42,7 @@ use crate::{Error, ErrorKind, Result};
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+    -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -68,7 +68,7 @@ pub trait Catalog: Debug + Sync + Send {
         properties: HashMap<String, String>,
     ) -> Result<()>;
 
-    /// Drop a namespace from the catalog.
+    /// Drop a namespace from the catalog, or returns error if it doesn't exist.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()>;
 
     /// List tables from namespace.
@@ -84,7 +84,7 @@ pub trait Catalog: Debug + Sync + Send {
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
-    /// Drop a table from the catalog.
+    /// Drop a table from the catalog, or returns error if it doesn't exist.
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
@@ -277,6 +277,10 @@ pub struct TableCreation {
 }
 
 /// TableCommit represents the commit of a table in the catalog.
+///
+/// The builder is marked as private since it's dangerous and error-prone to construct
+/// [`TableCommit`] directly.
+/// Users are supposed to use [`crate::transaction::Transaction`] to update table.
 #[derive(Debug, TypedBuilder)]
 #[builder(build_method(vis = "pub(crate)"))]
 pub struct TableCommit {
@@ -877,17 +881,18 @@ mod tests {
     use std::collections::HashMap;
     use std::fmt::Debug;
 
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use uuid::uuid;
 
     use super::ViewUpdate;
     use crate::spec::{
-        BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
-        ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
+        BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
+        StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
