@@ -1,21 +1,21 @@
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
 use iceberg_catalog_rest::RestCatalogBuilder;
 
-type BoxedCatalogBuilderFuture = Pin<Box<dyn Future<Output = Result<Arc<dyn Catalog>>>>>;
-
+#[async_trait]
 pub trait BoxedCatalogBuilder {
-    fn load(self: Box<Self>, name: String, props: HashMap<String, String>) -> BoxedCatalogBuilderFuture;
+    async fn load(self: Box<Self>, name: String, props: HashMap<String, String>) -> Result<Arc<dyn Catalog>>;
 }
 
+#[async_trait]
 impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
-    fn load(self: Box<Self>, name: String, props: HashMap<String, String>) -> BoxedCatalogBuilderFuture {
+    async fn load(self: Box<Self>, name: String, props: HashMap<String, String>) -> Result<Arc<dyn Catalog>> {
         let builder = *self;
-        Box::pin(async move { Ok(Arc::new(builder.load(name, props).await.unwrap()) as Arc<dyn Catalog>) })
+        Ok(Arc::new(builder.load(name, props).await.unwrap()) as Arc<dyn Catalog>) 
     }
 }
 
@@ -36,7 +36,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load() {
-        let mut catalog = load("rest").unwrap();
+        let catalog = load("rest").unwrap();
         catalog.load("rest".to_string(), HashMap::from(
             [("key".to_string(), "value".to_string())]
         )).await.unwrap();
