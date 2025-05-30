@@ -65,7 +65,7 @@ pub struct ArrowReaderBuilder {
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
-    pub(crate) fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO) -> Self {
         let num_cpus = available_parallelism().get();
 
         ArrowReaderBuilder {
