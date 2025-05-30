@@ -39,7 +39,8 @@ const DEFAULT_DATA_DIR: &str = "/data";
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
-    dir_path: String,
+    /// The data dir path of the table.
+    pub dir_path: String,
 }
 
 impl DefaultLocationGenerator {

@@ -1523,6 +1523,7 @@ message schema {
                 deletes: vec![],
                 sequence_number: 0,
                 equality_ids: vec![],
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;

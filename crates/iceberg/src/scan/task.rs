@@ -63,6 +63,9 @@ pub struct FileScanTask {
     pub sequence_number: i64,
     /// equality ids
     pub equality_ids: Vec<i32>,
+
+    /// The size of the file in bytes.
+    pub file_size_in_bytes: u64,
 }
 
 impl FileScanTask {
@@ -127,6 +130,7 @@ impl From<&DeleteFileContext> for FileScanTask {
             deletes: vec![],
             sequence_number: ctx.manifest_entry.sequence_number().unwrap_or(0),
             equality_ids: ctx.manifest_entry.data_file().equality_ids().to_vec(),
+            file_size_in_bytes: ctx.manifest_entry.data_file().file_size_in_bytes(),
         }
     }
 }
