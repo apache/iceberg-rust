@@ -17,8 +17,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use arrow_array::StringArray;
-use futures::TryStreamExt;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -129,32 +127,19 @@ impl<'a> FastAppendAction<'a> {
                 .map(|df| df.file_path.as_str())
                 .collect();
 
-            let mut manifest_stream = self
-                .snapshot_produce_action
-                .tx
-                .current_table
-                .inspect()
-                .manifests()
-                .scan()
-                .await?;
             let mut referenced_files = Vec::new();
-
-            while let Some(batch) = manifest_stream.try_next().await? {
-                let file_path_array = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Failed to downcast file_path column to StringArray",
-                        )
-                    })?;
-
-                for i in 0..batch.num_rows() {
-                    let file_path = file_path_array.value(i);
-                    if new_files.contains(file_path) {
-                        referenced_files.push(file_path.to_string());
+            let table = &self.snapshot_produce_action.tx.current_table;
+            if let Some(current_snapshot) = table.metadata().current_snapshot() {
+                let manifest_list = current_snapshot
+                    .load_manifest_list(table.file_io(), &table.metadata_ref())
+                    .await?;
+                for manifest_list_entry in manifest_list.entries() {
+                    let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
+                    for entry in manifest.entries() {
+                        let file_path = entry.file_path();
+                        if new_files.contains(file_path) && entry.is_alive() {
+                            referenced_files.push(file_path.to_string());
+                        }
                     }
                 }
             }
@@ -379,6 +364,7 @@ mod tests {
 
         // Attempt to add the existing Parquet files with fast append.
         let new_tx = fast_append_action
+            .with_check_duplicate(false)
             .add_parquet_files(file_paths.clone())
             .await
             .expect("Adding existing Parquet files should succeed");
@@ -440,5 +426,42 @@ mod tests {
         for path in file_paths {
             assert!(manifest_paths.contains(&path));
         }
+    }
+
+    #[tokio::test]
+    async fn test_add_duplicated_parquet_files_to_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+        let tx = crate::transaction::Transaction::new(&fixture.table);
+
+        let file_paths = vec![
+            format!("{}/1.parquet", &fixture.table_location),
+            format!("{}/3.parquet", &fixture.table_location),
+        ];
+
+        let fast_append_action = tx.fast_append(None, vec![]).unwrap();
+
+        // Attempt to add duplicated Parquet files with fast append.
+        assert!(
+            fast_append_action
+                .add_parquet_files(file_paths.clone())
+                .await
+                .is_err(),
+            "file already in table"
+        );
+
+        let file_paths = vec![format!("{}/2.parquet", &fixture.table_location)];
+
+        let tx = crate::transaction::Transaction::new(&fixture.table);
+        let fast_append_action = tx.fast_append(None, vec![]).unwrap();
+
+        // Attempt to add Parquet file which was deleted from table.
+        assert!(
+            fast_append_action
+                .add_parquet_files(file_paths.clone())
+                .await
+                .is_ok(),
+            "file not in table"
+        );
     }
 }
