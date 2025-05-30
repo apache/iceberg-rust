@@ -266,7 +266,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 {
                     let mut manifest_writer = snapshot_produce.new_manifest_writer(
                         ManifestContentType::Data,
-                        table_metadata_ref.default_partition_spec_id(),
+                        manifest_file.partition_spec_id,
                     )?;
 
                     for entry in manifest.entries() {
