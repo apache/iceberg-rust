@@ -323,6 +323,7 @@ pub(crate) mod tests {
             deletes: vec![],
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         let file_scan_tasks = vec![
@@ -339,6 +340,7 @@ pub(crate) mod tests {
                 deletes: vec![make_pos_del_task(1).into(), make_pos_del_task(2).into()],
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             },
             FileScanTask {
                 start: 0,
@@ -353,6 +355,7 @@ pub(crate) mod tests {
                 deletes: vec![make_pos_del_task(3).into()],
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             },
         ];
 

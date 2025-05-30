@@ -1969,6 +1969,7 @@ message schema {
                 deletes: vec![],
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2290,6 +2291,7 @@ message schema {
             data_file_content: DataContentType::Data,
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         // Task 2: read the second and third row groups
@@ -2306,6 +2308,7 @@ message schema {
             data_file_content: DataContentType::Data,
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2433,6 +2436,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2609,12 +2613,14 @@ message schema {
                     data_file_content: DataContentType::PositionDeletes,
                     sequence_number: 0,
                     equality_ids: None,
+                    file_size_in_bytes: 0,
                 }
                 .into(),
             ],
             data_file_content: DataContentType::Data,
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2838,12 +2844,14 @@ message schema {
                     data_file_content: DataContentType::PositionDeletes,
                     sequence_number: 0,
                     equality_ids: None,
+                    file_size_in_bytes: 0,
                 }
                 .into(),
             ],
             data_file_content: DataContentType::Data,
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3060,12 +3068,14 @@ message schema {
                     data_file_content: DataContentType::PositionDeletes,
                     sequence_number: 0,
                     equality_ids: None,
+                    file_size_in_bytes: 0,
                 }
                 .into(),
             ],
             data_file_content: DataContentType::Data,
             sequence_number: 0,
             equality_ids: None,
+            file_size_in_bytes: 0,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3169,6 +3179,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3266,6 +3277,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3352,6 +3364,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3452,6 +3465,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3581,6 +3595,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3677,6 +3692,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3786,6 +3802,7 @@ message schema {
                 data_file_content: DataContentType::Data,
                 sequence_number: 0,
                 equality_ids: None,
+                file_size_in_bytes: 0,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
