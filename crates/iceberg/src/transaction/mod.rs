@@ -183,7 +183,7 @@ impl Transaction {
     }
 
     /// Creates rewrite files action.
-    pub fn rewrite_files(self) -> RewriteFilesAction {
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
         RewriteFilesAction::new()
     }
 

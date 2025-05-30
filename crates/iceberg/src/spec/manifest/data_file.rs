@@ -274,6 +274,12 @@ impl DataFile {
     pub fn referenced_data_file(&self) -> Option<String> {
         self.referenced_data_file.clone()
     }
+
+    /// Get the partition spec id of the data file.
+    pub fn partition_spec_id(&self) -> i32 {
+        self.partition_spec_id
+    }
+
     /// Get the offset in the file where the blob content starts.
     /// Only meaningful for puffin blobs, and required for deletion vectors.
     pub fn content_offset(&self) -> Option<i64> {
