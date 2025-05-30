@@ -236,6 +236,11 @@ impl DataFile {
         self.sort_order_id
     }
 
+    /// Get the partition spec id of the data file.
+    pub fn partition_spec_id(&self) -> i32 {
+        self.partition_spec_id
+    }
+
     pub(crate) fn rewrite_partition(&mut self, partition: Struct) {
         self.partition = partition;
     }

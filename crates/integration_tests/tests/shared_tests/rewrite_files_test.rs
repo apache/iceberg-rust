@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
+use iceberg::spec::DataFile;
+use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -456,5 +458,113 @@ async fn test_sequence_number_in_manifest_entry() {
         for entry in manifest.entries() {
             assert_eq!(entry.sequence_number(), Some(12345));
         }
+    }
+}
+
+#[tokio::test]
+async fn test_partition_spec_id_in_manifest() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = random_ns().await;
+    let schema = test_schema();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let mut table = rest_catalog
+        .create_table(ns.name(), table_creation)
+        .await
+        .unwrap();
+
+    // Create the writer and write the data
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+
+    // commit result
+    let mut data_files_vec = Vec::default();
+
+    async fn build_data_file_f(
+        schema: Arc<arrow_schema::Schema>,
+        table: &Table,
+        location_generator: DefaultLocationGenerator,
+        file_name_generator: DefaultFileNameGenerator,
+    ) -> DataFile {
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            table.metadata().current_schema().clone(),
+            table.file_io().clone(),
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+        let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+        let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+        let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(col1) as ArrayRef,
+            Arc::new(col2) as ArrayRef,
+            Arc::new(col3) as ArrayRef,
+        ])
+        .unwrap();
+        data_file_writer.write(batch.clone()).await.unwrap();
+        data_file_writer.close().await.unwrap()[0].clone()
+    }
+
+    for _ in 0..10 {
+        let data_file = build_data_file_f(
+            schema.clone(),
+            &table,
+            location_generator.clone(),
+            file_name_generator.clone(),
+        )
+        .await;
+        data_files_vec.push(data_file.clone());
+        let tx = Transaction::new(&table);
+        let mut append_action = tx.fast_append(None, None, vec![]).unwrap();
+        append_action.add_data_files(vec![data_file]).unwrap();
+        let tx = append_action.apply().await.unwrap();
+        table = tx.commit(&rest_catalog).await.unwrap();
+    }
+
+    let last_data_files = data_files_vec.last().unwrap();
+    let partition_spec_id = last_data_files.partition_spec_id();
+
+    // remove the data files by RewriteAction
+    for data_file in &data_files_vec {
+        let tx = Transaction::new(&table);
+        let mut rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
+        rewrite_action = rewrite_action
+            .delete_files(vec![data_file.clone()])
+            .unwrap();
+        let tx = rewrite_action.apply().await.unwrap();
+        table = tx.commit(&rest_catalog).await.unwrap();
+    }
+
+    // TODO: test update partition spec
+    // Verify that the partition spec ID is correctly set
+
+    let last_snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = last_snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+    assert_eq!(manifest_list.entries().len(), 1);
+    for manifest_file in manifest_list.entries() {
+        assert_eq!(manifest_file.partition_spec_id, partition_spec_id);
     }
 }
