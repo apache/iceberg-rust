@@ -262,6 +262,24 @@ impl NamespaceState {
         }
     }
 
+    /// TODO fix this
+    pub(crate) fn update_existing_table_location(
+        &mut self,
+        table_ident: &TableIdent,
+        new_metadata_location: Option<&str>,
+    ) -> Result<()> {
+        if new_metadata_location.is_none() {
+            return Ok(());
+        }
+
+        let mut namespace = self.get_mut_namespace(table_ident.namespace())?;
+        namespace
+            .table_metadata_locations
+            .entry(table_ident.name().to_string())
+            .insert_entry(new_metadata_location.unwrap().into_string());
+        Ok(())
+    }
+
     // Inserts the given table or returns an error if it already exists
     pub(crate) fn insert_new_table(
         &mut self,

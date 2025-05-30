@@ -17,6 +17,7 @@
 
 //! This module contains transaction api.
 
+mod action;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -32,6 +33,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
+use crate::transaction::action::{ActionElement, SetLocation};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -40,6 +42,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction<'a> {
     base_table: &'a Table,
     current_table: Table,
+    _actions: Vec<ActionElement<'a>>, // TODO unused for now, should we use this to reapply actions?
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -50,6 +53,7 @@ impl<'a> Transaction<'a> {
         Self {
             base_table: table,
             current_table: table.clone(),
+            _actions: vec![],
             updates: vec![],
             requirements: vec![],
         }
@@ -67,6 +71,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    // TODO deprecate this and move the logic to TransactionAction
     fn apply(
         &mut self,
         updates: Vec<TableUpdate>,
@@ -184,9 +189,8 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set the location of table
-    pub fn set_location(mut self, location: String) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
-        Ok(self)
+    pub fn set_location(self) -> Result<SetLocation<'a>> {
+        Ok(SetLocation::new(self))
     }
 
     /// Commit transaction.
@@ -196,6 +200,20 @@ impl<'a> Transaction<'a> {
             .updates(self.updates)
             .requirements(self.requirements)
             .build();
+        if self.base_table.metadata() == self.current_table.metadata() {
+            return Ok(self.current_table);
+        }
+
+        // TODO add refresh() in catalog?
+        let refreshed_table = catalog
+            .load_table(table_commit.identifier())
+            .await
+            .expect(format!("Failed to refresh table {}", table_commit.identifier()).as_str());
+
+        if self.base_table.metadata() != refreshed_table.metadata() {
+            // TODO raise a real error and retry
+            panic!("Stale base table!")
+        }
 
         catalog.update_table(table_commit).await
     }
@@ -212,6 +230,7 @@ mod tests {
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableUpdate};
+    use crate::transaction::action::TransactionAction;
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -345,9 +364,12 @@ mod tests {
     fn test_set_location() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
-        let tx = tx
-            .set_location(String::from("s3://bucket/prefix/new_table"))
-            .unwrap();
+        let set_location = tx
+            .set_location()
+            .unwrap()
+            .set_location(String::from("s3://bucket/prefix/new_table"));
+        
+        let tx = set_location.commit().unwrap();
 
         assert_eq!(
             vec![TableUpdate::SetLocation {

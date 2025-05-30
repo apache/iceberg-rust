@@ -26,7 +26,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    TableIdent, TableRequirement, TableUpdate,
 };
 use itertools::Itertools;
 use uuid::Uuid;
@@ -277,7 +277,28 @@ impl Catalog for MemoryCatalog {
     }
 
     /// Update a table to the catalog.
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        // TODO persist the updated metadata
+        // let mut root_namespace_state = self.root_namespace_state.lock().await;
+        // let current_table = self.load_table(commit.identifier()).await?;
+        // let updated_staged_table = update_and_stage_table(Some(&current_table), &commit)?;
+        //
+        // if current_table.metadata() == updated_staged_table.metadata() {
+        //     // no changes
+        //     return Ok(current_table);
+        // }
+        //
+        // // write metadata
+        // self.file_io
+        //     .new_output(&updated_staged_table.metadata_location())?
+        //     .write(serde_json::to_vec(updated_staged_table.metadata())?.into())
+        //     .await?;
+        //
+        // root_namespace_state.update_existing_table_location(
+        //     commit.identifier(),
+        //     updated_staged_table.metadata_location(),
+        // )?;
+        // Ok(updated_staged_table)
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "MemoryCatalog does not currently support updating tables.",
