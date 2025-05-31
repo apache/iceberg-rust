@@ -16,7 +16,6 @@
 # under the License.
 
 [workspace]
-exclude = ["bindings/python"]
 members = [
   "crates/catalog/*",
   "crates/examples",
@@ -25,6 +24,7 @@ members = [
   "crates/integrations/*",
   "crates/sqllogictest",
   "crates/test_utils",
+  "bindings/python"
 ]
 resolver = "2"
 
