@@ -99,6 +99,11 @@ impl Manifest {
         &self.entries
     }
 
+    /// Get metadata.
+    pub fn metadata(&self) -> &ManifestMetadata {
+        &self.metadata
+    }
+
     /// Consume this Manifest, returning its constituent parts
     pub fn into_parts(self) -> (Vec<ManifestEntryRef>, ManifestMetadata) {
         let Self { entries, metadata } = self;
