@@ -262,7 +262,28 @@ impl NamespaceState {
         }
     }
 
-    /// TODO fix this
+    pub(crate) fn check_metadata_location(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: Option<&str>,
+    ) -> Result<()> {
+        let namespace = self.get_namespace(table_ident.namespace())?;
+
+        if namespace
+            .table_metadata_locations
+            .get(table_ident.name())
+            .map(|s| s.as_str())
+            != metadata_location
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Metadata location does not match for table: {table_ident}!"),
+            ));
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn update_existing_table_location(
         &mut self,
         table_ident: &TableIdent,

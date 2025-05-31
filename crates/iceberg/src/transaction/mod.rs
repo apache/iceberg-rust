@@ -71,7 +71,6 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    // TODO deprecate this and move the logic to TransactionAction
     fn apply(
         &mut self,
         updates: Vec<TableUpdate>,
@@ -193,29 +192,52 @@ impl<'a> Transaction<'a> {
         Ok(SetLocation::new(self))
     }
 
+    fn refresh(&mut self, refreshed: Table) {
+        self.base_table = &refreshed;
+        self.current_table = refreshed.clone();
+    }
+
     /// Commit transaction.
-    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
-        let table_commit = TableCommit::builder()
-            .ident(self.base_table.identifier().clone())
-            .updates(self.updates)
-            .requirements(self.requirements)
-            .build();
+    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+        // let table_commit = TableCommit::builder()
+        //     .ident(self.base_table.identifier().clone())
+        //     .updates(self.updates)
+        //     .requirements(self.requirements)
+        //     .build();
         if self.base_table.metadata() == self.current_table.metadata() {
             return Ok(self.current_table);
         }
 
         // TODO add refresh() in catalog?
-        let refreshed_table = catalog
-            .load_table(table_commit.identifier())
+        let refreshed = catalog
+            .load_table(self.base_table.identifier())
             .await
-            .expect(format!("Failed to refresh table {}", table_commit.identifier()).as_str());
+            .expect(format!("Failed to refresh table {}", self.base_table.identifier()).as_str());
 
-        if self.base_table.metadata() != refreshed_table.metadata() {
-            // TODO raise a real error and retry
-            panic!("Stale base table!")
+        if self.base_table.metadata() != refreshed.metadata()
+            || self.base_table.metadata_location() != refreshed.metadata_location()
+        {
+            self.refresh(refreshed);
+            self.apply(self.updates, self.requirements) // TODO need create new requirements based on the refreshed table
+                .expect("Failed to re-apply updates"); // re-apply updates
+            // TODO retry on this error
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot commit: stale base table metadata".to_string(),
+            ));
         }
 
-        catalog.update_table(table_commit).await
+        if self.base_table.metadata() == self.current_table.metadata()
+            && self.base_table.metadata_location() == self.current_table.metadata_location()
+        {
+            // nothing to commit, return current table
+            return Ok(self.current_table);
+        }
+
+        catalog
+            .commit_table(self.base_table, self.current_table)
+            .await
+        // catalog.update_table(table_commit).await
     }
 }
 
@@ -229,8 +251,8 @@ mod tests {
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
-    use crate::{TableIdent, TableUpdate};
     use crate::transaction::action::TransactionAction;
+    use crate::{TableIdent, TableUpdate};
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -368,7 +390,7 @@ mod tests {
             .set_location()
             .unwrap()
             .set_location(String::from("s3://bucket/prefix/new_table"));
-        
+
         let tx = set_location.commit().unwrap();
 
         assert_eq!(

@@ -94,6 +94,8 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+
+    async fn commit_table(&self, base: &Table, current: Table) -> Result<Table>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
