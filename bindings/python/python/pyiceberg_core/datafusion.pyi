@@ -8,17 +8,8 @@ class IcebergDataFusionTable:
         identifier: list[str],
         metadata_location: str,
         storage_options: dict[str, str] | None,
-    ) -> None: ...
-    def __datafusion_table_provider__(self) -> Any:
-        """Return the DataFusion table provider PyCapsule interface.
-
-        To support DataFusion features such as push down filtering, this function will return a PyCapsule
-        interface that conforms to the FFI Table Provider required by DataFusion. From an end user perspective
-        you should not need to call this function directly. Instead you can use ``register_table_provider`` in
-        the DataFusion SessionContext.
-
-        Returns:
-            A PyCapsule DataFusion TableProvider interface.
+    ) -> None:
+        """Create Iceberg table that can be registered as a datafusion table provider
 
         Example:
             ```python
@@ -41,4 +32,16 @@ class IcebergDataFusionTable:
             | 5  | 4  | c  |
             +----+----+----+
             ```
+        """
+
+    def __datafusion_table_provider__(self) -> Any:
+        """Return the DataFusion table provider PyCapsule interface.
+
+        To support DataFusion features such as push down filtering, this function will return a PyCapsule
+        interface that conforms to the FFI Table Provider required by DataFusion. From an end user perspective
+        you should not need to call this function directly. Instead you can use ``register_table_provider`` in
+        the DataFusion SessionContext.
+
+        Returns:
+            A PyCapsule DataFusion TableProvider interface.
         """
