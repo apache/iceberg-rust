@@ -38,7 +38,9 @@
 //! own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)
 //!
 //! # Simple example for the data file writer used parquet physical format:
-//! ```rust, no_run
+//! ```rust, ignore
+//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
+//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::sync::Arc;
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
@@ -95,7 +97,9 @@
 //! ```
 //!
 //! # Custom writer to record latency
-//! ```rust, no_run
+//! ```rust, ignore
+//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
+//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::time::Instant;
 //!
 //! use arrow_array::RecordBatch;

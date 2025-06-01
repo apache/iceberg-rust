@@ -158,12 +158,18 @@ impl HttpClient {
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         );
 
-        let auth_req = self
+        let mut auth_req = self
             .request(Method::POST, &self.token_endpoint)
             .form(&params)
             .build()?;
+        // extra headers add content-type application/json header it's necessary to override it with proper type
+        // note that form call doesn't add content-type header if already present
+        auth_req.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
         let auth_url = auth_req.url().clone();
-        let auth_resp = self.execute(auth_req).await?;
+        let auth_resp = self.client.execute(auth_req).await?;
 
         let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
             let text = auth_resp

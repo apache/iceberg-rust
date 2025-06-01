@@ -106,9 +106,9 @@ hyper-rustls@0.27.5		X						X	X
 hyper-util@0.1.10									X				
 iana-time-zone@0.1.61		X							X				
 iana-time-zone-haiku@0.1.2		X							X				
-iceberg@0.5.0		X											
-iceberg-catalog-memory@0.5.0		X											
-iceberg_test_utils@0.5.0		X											
+iceberg@0.5.1		X											
+iceberg-catalog-memory@0.5.1		X											
+iceberg_test_utils@0.5.1		X											
 icu_collections@1.5.0											X		
 icu_locid@1.5.0											X		
 icu_locid_transform@1.5.0											X		
@@ -270,7 +270,7 @@ untrusted@0.9.0								X
 url@2.5.4		X							X				
 utf16_iter@1.0.5		X							X				
 utf8_iter@1.0.4		X							X				
-uuid@1.16.0		X							X				
+uuid@1.17.0		X							X				
 version_check@0.9.5		X							X				
 want@0.3.1									X				
 wasi@0.11.0+wasi-snapshot-preview1		X	X						X				
