@@ -28,7 +28,9 @@ use opendal::services::OssConfig;
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
 
-use super::{AzureStorageScheme, FileIOBuilder};
+#[cfg(feature = "storage-azdls")]
+use super::AzureStorageScheme;
+use super::FileIOBuilder;
 use crate::{Error, ErrorKind};
 
 /// The storage carries all supported storage services in iceberg
