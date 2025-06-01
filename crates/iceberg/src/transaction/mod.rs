@@ -33,7 +33,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{ActionElement, SetLocation};
+use crate::transaction::action::{SetLocation, TransactionAction, PendingAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -42,7 +42,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction<'a> {
     base_table: &'a Table,
     current_table: Table,
-    _actions: Vec<ActionElement<'a>>, // TODO unused for now, should we use this to reapply actions?
+    actions: Vec<PendingAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -53,10 +53,19 @@ impl<'a> Transaction<'a> {
         Self {
             base_table: table,
             current_table: table.clone(),
-            _actions: vec![],
+            actions: vec![],
             updates: vec![],
             requirements: vec![],
         }
+    }
+
+    pub fn refresh(old_tx: Transaction<'a>, refreshed: Table) -> Result<Self> {
+        let mut new_tx = Transaction::new(&refreshed.clone());
+        for action in &old_tx.actions {
+            new_tx = action.commit(new_tx)?
+        }
+        
+        Ok(new_tx)
     }
 
     fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
@@ -188,17 +197,12 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set the location of table
-    pub fn set_location(self) -> Result<SetLocation<'a>> {
-        Ok(SetLocation::new(self))
-    }
-
-    fn refresh(&mut self, refreshed: Table) {
-        self.base_table = &refreshed;
-        self.current_table = refreshed.clone();
+    pub fn set_location(self, location: String) -> Result<Transaction<'a>> {
+        Ok(SetLocation::new().set_location(location).commit(self)?)
     }
 
     /// Commit transaction.
-    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(mut self: Transaction<'a>, catalog: &dyn Catalog) -> Result<Table> {
         // let table_commit = TableCommit::builder()
         //     .ident(self.base_table.identifier().clone())
         //     .updates(self.updates)
@@ -217,14 +221,14 @@ impl<'a> Transaction<'a> {
         if self.base_table.metadata() != refreshed.metadata()
             || self.base_table.metadata_location() != refreshed.metadata_location()
         {
-            self.refresh(refreshed);
-            self.apply(self.updates, self.requirements) // TODO need create new requirements based on the refreshed table
-                .expect("Failed to re-apply updates"); // re-apply updates
-            // TODO retry on this error
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot commit: stale base table metadata".to_string(),
-            ));
+            // refresh table
+            let new_tx = Transaction::refresh(self, refreshed)?;
+            return new_tx.commit(catalog).await
+            // TODO instead of refreshing directly, retry on this error
+            // return Err(Error::new(
+            //     ErrorKind::DataInvalid,
+            //     "Cannot commit: stale base table metadata".to_string(),
+            // ));
         }
 
         if self.base_table.metadata() == self.current_table.metadata()
@@ -386,12 +390,9 @@ mod tests {
     fn test_set_location() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
-        let set_location = tx
-            .set_location()
-            .unwrap()
-            .set_location(String::from("s3://bucket/prefix/new_table"));
-
-        let tx = set_location.commit().unwrap();
+        let tx = tx
+            .set_location(String::from("s3://bucket/prefix/new_table"))
+            .unwrap();
 
         assert_eq!(
             vec![TableUpdate::SetLocation {
