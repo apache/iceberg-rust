@@ -175,13 +175,6 @@ fn match_path_with_config(
         path.scheme
     );
 
-    ensure_data_valid!(
-        path.filesystem == config.filesystem,
-        "Storage::Azdls: Filesystem name mismatch: configured: {}, path: {}",
-        config.filesystem,
-        path.filesystem
-    );
-
     if let Some(ref configured_account_name) = config.account_name {
         ensure_data_valid!(
             &path.account_name == configured_account_name,
@@ -400,6 +393,7 @@ mod tests {
             let config = azdls_config_parse(properties);
             match expected {
                 Some(expected_config) => {
+                    assert!(config.is_ok(), "Test case {} failed: {:?}", name, config);
                     assert_eq!(config.unwrap(), expected_config, "Test case: {}", name);
                 }
                 None => {
@@ -465,20 +459,6 @@ mod tests {
                 None,
             ),
             (
-                "different filesystem",
-                (
-                    "abfss://somefs@myaccount.dfs.core.windows.net/path/to/file.parquet",
-                    AzdlsConfig {
-                        filesystem: "myfs".to_string(),
-                        account_name: Some("myaccount".to_string()),
-                        endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
-                        ..Default::default()
-                    },
-                    AzureStorageScheme::Abfss,
-                ),
-                None,
-            ),
-            (
                 "different endpoint suffix",
                 (
                     "abfss://somefs@myaccount.dfs.core.windows.net/path/to/file.parquet",
@@ -511,6 +491,8 @@ mod tests {
             let result = azdls_create_operator(input.0, &input.1, &input.2);
             match expected {
                 Some((expected_filesystem, expected_path)) => {
+                    assert!(result.is_ok(), "Test case {} failed: {:?}", name, result);
+
                     let (op, relative_path) = result.unwrap();
                     assert_eq!(op.info().name(), expected_filesystem);
                     assert_eq!(relative_path, expected_path);
@@ -558,6 +540,7 @@ mod tests {
             let result = input.parse::<AzureStoragePath>();
             match expected {
                 Some(expected_path) => {
+                    assert!(result.is_ok(), "Test case {} failed: {:?}", name, result);
                     assert_eq!(result.unwrap(), expected_path, "Test case: {}", name);
                 }
                 None => {
