@@ -33,7 +33,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{SetLocation, TransactionAction, PendingAction};
+use crate::transaction::action::{PendingAction, SetLocation, TransactionAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -64,7 +64,7 @@ impl<'a> Transaction<'a> {
         for action in &old_tx.actions {
             new_tx = action.commit(new_tx)?
         }
-        
+
         Ok(new_tx)
     }
 
@@ -223,7 +223,7 @@ impl<'a> Transaction<'a> {
         {
             // refresh table
             let new_tx = Transaction::refresh(self, refreshed)?;
-            return new_tx.commit(catalog).await
+            return new_tx.commit(catalog).await;
             // TODO instead of refreshing directly, retry on this error
             // return Err(Error::new(
             //     ErrorKind::DataInvalid,

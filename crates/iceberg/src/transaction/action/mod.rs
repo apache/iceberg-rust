@@ -21,7 +21,8 @@ use crate::{Result, TableUpdate};
 pub type PendingAction = Box<dyn TransactionAction>;
 
 pub(crate) trait TransactionAction: Sync {
-    /// Commit the changes and apply the changes to the transaction, return the updated transaction
+    /// Commit the changes and apply the changes to the transaction,
+    /// return the transaction with the updated current_table
     fn commit(self, tx: Transaction) -> Result<Transaction>;
 }
 
