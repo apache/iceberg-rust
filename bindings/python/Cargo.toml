@@ -34,7 +34,6 @@ crate-type = ["cdylib"]
 arrow = { version = "55", features = ["pyarrow", "chrono-tz"] }
 iceberg = { path = "../../crates/iceberg" }
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
-serde_json = "1.0.138"
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
 datafusion-ffi = { version = "47" }
 tokio = { version = "1.44", default-features = false }

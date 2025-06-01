@@ -15,24 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::spec::{DataFile, DataFileFormat, FieldSummary, FormatVersion, Literal, Manifest, ManifestEntry, ManifestFile, ManifestList, ManifestStatus, PrimitiveLiteral, StructType, Type};
-use iceberg::{Error, ErrorKind};
-use pyo3::prelude::*;
-use pyo3::types::PyAny;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[pyclass]
-pub struct PyLiteral {
-    inner: Literal,
-}
+use iceberg::spec::{
+    DataFile, DataFileFormat, FieldSummary, FormatVersion, Manifest, ManifestEntry, ManifestFile,
+    ManifestList, ManifestStatus, PrimitiveLiteral,
+};
+use pyo3::prelude::*;
 
-
 #[pyclass]
+#[allow(dead_code)]
 pub struct PyPrimitiveLiteral {
-    inner: PrimitiveLiteral,
+    inner: Option<PrimitiveLiteral>,
 }
-
 
 #[pyclass]
 pub struct PyDataFile {
@@ -41,7 +37,6 @@ pub struct PyDataFile {
 
 #[pymethods]
 impl PyDataFile {
-
     #[getter]
     fn content(&self) -> i32 {
         self.inner.content_type() as i32
@@ -63,11 +58,14 @@ impl PyDataFile {
     }
 
     #[getter]
-    fn partition(&self) -> Vec<Option<PyLiteral>> {
-        self.inner.partition().fields().iter().map(|p| match p {
-            Some(lit) => Some(PyLiteral { inner: lit.clone() }),
-            _ => None
-        } ).collect()
+    fn partition(&self) -> Vec<PyPrimitiveLiteral> {
+        self.inner
+            .partition()
+            .iter()
+            .map(|lit| PyPrimitiveLiteral {
+                inner: lit.map(|l| l.as_primitive_literal().unwrap()),
+            })
+            .collect()
     }
 
     #[getter]
@@ -102,16 +100,24 @@ impl PyDataFile {
 
     #[getter]
     fn upper_bounds(&self) -> HashMap<i32, Vec<u8>> {
-        self.inner.upper_bounds().into_iter().map(|(k, v)| (k.clone(), v.to_bytes().unwrap().to_vec())).collect()
+        self.inner
+            .upper_bounds()
+            .iter()
+            .map(|(k, v)| (*k, v.to_bytes().unwrap().to_vec()))
+            .collect()
     }
 
     #[getter]
     fn lower_bounds(&self) -> HashMap<i32, Vec<u8>> {
-        self.inner.lower_bounds().into_iter().map(|(k, v)| (k.clone(), v.to_bytes().unwrap().to_vec())).collect()
+        self.inner
+            .lower_bounds()
+            .iter()
+            .map(|(k, v)| (*k, v.to_bytes().unwrap().to_vec()))
+            .collect()
     }
 
     #[getter]
-    fn key_metadata(&self) ->  Option<&[u8]> {
+    fn key_metadata(&self) -> Option<&[u8]> {
         self.inner.key_metadata()
     }
 
@@ -129,14 +135,12 @@ impl PyDataFile {
     fn sort_order_id(&self) -> Option<i32> {
         self.inner.sort_order_id()
     }
-
 }
 
 #[pyclass]
 pub struct PyManifest {
     inner: Manifest,
 }
-
 
 #[pymethods]
 impl PyManifest {
@@ -145,20 +149,23 @@ impl PyManifest {
         // that are the ones that are either ADDED or EXISTING
         // so we can add a boolean to skip the DELETED entries right away before
         // moving it into the Python world
-        self.inner.entries().iter().map(|entry| PyManifestEntry { inner: entry.clone() }).collect()
+        self.inner
+            .entries()
+            .iter()
+            .map(|entry| PyManifestEntry {
+                inner: entry.clone(),
+            })
+            .collect()
     }
 }
-
 
 #[pyclass]
 pub struct PyFieldSummary {
     inner: FieldSummary,
 }
 
-
 #[pymethods]
 impl crate::manifest::PyFieldSummary {
-
     #[getter]
     fn contains_null(&self) -> bool {
         self.inner.contains_null
@@ -170,24 +177,20 @@ impl crate::manifest::PyFieldSummary {
     }
 
     #[getter]
-    fn lower_bound(&self) -> Option<PyPrimitiveLiteral> {
-        self.inner.lower_bound.clone().map(|v| PyPrimitiveLiteral{ inner: v.literal().clone() })
+    fn lower_bound(&self) -> Option<Vec<u8>> {
+        self.inner.lower_bound.clone().map(|b| b.to_vec())
     }
 
     #[getter]
-    fn upper_bound(&self) -> Option<PyPrimitiveLiteral> {
-        self.inner.upper_bound.clone().map(|v| PyPrimitiveLiteral{ inner: v.literal().clone() })
+    fn upper_bound(&self) -> Option<Vec<u8>> {
+        self.inner.upper_bound.clone().map(|b| b.to_vec())
     }
-
-
-
 }
 
 #[pyclass]
 pub struct PyManifestFile {
     inner: ManifestFile,
 }
-
 
 #[pymethods]
 impl crate::manifest::PyManifestFile {
@@ -214,7 +217,6 @@ impl crate::manifest::PyManifestFile {
         self.inner.sequence_number
     }
 
-
     #[getter]
     fn min_sequence_number(&self) -> i64 {
         self.inner.min_sequence_number
@@ -224,7 +226,6 @@ impl crate::manifest::PyManifestFile {
     fn added_snapshot_id(&self) -> i64 {
         self.inner.added_snapshot_id
     }
-
 
     #[getter]
     fn added_files_count(&self) -> Option<u32> {
@@ -258,16 +259,19 @@ impl crate::manifest::PyManifestFile {
 
     #[getter]
     fn partitions(&self) -> Vec<PyFieldSummary> {
-        self.inner.partitions.iter().map(|s| PyFieldSummary {
-            inner: s.clone()
-        }).collect()
+        self.inner
+            .partitions
+            .clone()
+            .unwrap()
+            .iter()
+            .map(|s| PyFieldSummary { inner: s.clone() })
+            .collect()
     }
 
     #[getter]
     fn key_metadata(&self) -> Vec<u8> {
         self.inner.key_metadata.clone()
     }
-
 }
 
 #[pyclass]
@@ -277,7 +281,6 @@ pub struct PyManifestEntry {
 
 #[pymethods]
 impl PyManifestEntry {
-
     #[getter]
     fn status(&self) -> i32 {
         ManifestStatus::Existing as i32
@@ -301,17 +304,16 @@ impl PyManifestEntry {
     #[getter]
     fn data_file(&self) -> PyDataFile {
         PyDataFile {
-            inner: self.inner.data_file.clone()
+            inner: self.inner.data_file.clone(),
         }
     }
 }
-
 
 #[pyfunction]
 pub fn read_manifest_entries(bs: &[u8]) -> PyManifest {
     // TODO: Some error handling
     PyManifest {
-        inner: Manifest::parse_avro(bs).unwrap()
+        inner: Manifest::parse_avro(bs).unwrap(),
     }
 }
 
@@ -320,19 +322,23 @@ pub struct PyManifestList {
     inner: ManifestList,
 }
 
-
 #[pymethods]
 impl crate::manifest::PyManifestList {
     fn entries(&self) -> Vec<PyManifestFile> {
-        self.inner.entries().iter().map(|file| PyManifestFile { inner: file.clone() }).collect()
+        self.inner
+            .entries()
+            .iter()
+            .map(|file| PyManifestFile {
+                inner: file.clone(),
+            })
+            .collect()
     }
 }
-
 
 #[pyfunction]
 pub fn read_manifest_list(bs: &[u8]) -> PyManifestList {
     PyManifestList {
-        inner: ManifestList::parse_with_version(bs, FormatVersion::V2).unwrap()
+        inner: ManifestList::parse_with_version(bs, FormatVersion::V2).unwrap(),
     }
 }
 
