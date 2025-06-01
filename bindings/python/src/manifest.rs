@@ -316,36 +316,6 @@ pub fn read_manifest_entries(bs: &[u8]) -> PyManifest {
 }
 
 #[pyclass]
-// #[derive(Clone)]
-pub struct PartitionSpecProviderCallbackHolder {
-    callback: Py<PyAny>,
-}
-
-#[pymethods]
-impl PartitionSpecProviderCallbackHolder {
-    #[new]
-    fn new(callback: Py<PyAny>) -> Self {
-        Self { callback }
-    }
-
-    fn trigger_from_python(&self, id: i32) -> PyResult<String> {
-        Self::do_the_callback(self, id)
-    }
-}
-
-impl PartitionSpecProviderCallbackHolder {
-    /// Simulate calling the Python callback from "pure Rust"
-    pub fn do_the_callback(&self, id: i32) -> PyResult<String> {
-        Python::with_gil(|py| {
-            let result = self.callback.call1(py, (id,))?;         // Call the Python function
-            let string = result.extract::<String>(py)?;      // Try converting the result to a Rust String
-            Ok(string)
-        })
-    }
-}
-
-
-#[pyclass]
 pub struct PyManifestList {
     inner: ManifestList,
 }
@@ -360,30 +330,9 @@ impl crate::manifest::PyManifestList {
 
 
 #[pyfunction]
-pub fn read_manifest_list(bs: &[u8], cb: &PartitionSpecProviderCallbackHolder) -> PyManifestList {
-    // TODO: Some error handling
-    let provider = move |_id| {
-        let bound = cb.do_the_callback(_id).unwrap();
-        let json = bound.as_str();
-
-        // I don't fully comprehend the deserializer here,
-        // it works for a Type, but not for a StructType
-        // So I had to do some awkward stuff to make it work
-        let res: Result<Type, _> = serde_json::from_str(json);
-
-        let result: Result<Option<StructType>, Error> = match res {
-            Ok(Type::Struct(s)) => Ok(Some(s)),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid JSON: {}", json),
-            ))
-        };
-
-        result
-    };
-
+pub fn read_manifest_list(bs: &[u8]) -> PyManifestList {
     PyManifestList {
-        inner: ManifestList::parse_with_version(bs, FormatVersion::V2, provider).unwrap()
+        inner: ManifestList::parse_with_version(bs, FormatVersion::V2).unwrap()
     }
 }
 
@@ -392,7 +341,6 @@ pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
 
     this.add_function(wrap_pyfunction!(read_manifest_entries, &this)?)?;
     this.add_function(wrap_pyfunction!(read_manifest_list, &this)?)?;
-    this.add_class::<PartitionSpecProviderCallbackHolder>()?;
 
     m.add_submodule(&this)?;
     py.import("sys")?
