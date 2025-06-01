@@ -189,7 +189,7 @@ impl Storage {
             Storage::Azdls {
                 configured_scheme,
                 config,
-            } => super::azdls_create_operator(&path, config, &configured_scheme),
+            } => super::azdls_create_operator(path, config, configured_scheme),
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),

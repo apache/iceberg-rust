@@ -126,7 +126,7 @@ pub(crate) enum AzureStorageScheme {
 
 impl AzureStorageScheme {
     // Returns the respective encrypted or plain-text HTTP scheme.
-    pub fn into_http_scheme(&self) -> &str {
+    pub fn as_http_scheme(&self) -> &str {
         match self {
             AzureStorageScheme::Abfs | AzureStorageScheme::Wasb => "http",
             AzureStorageScheme::Abfss | AzureStorageScheme::Wasbs => "https",
@@ -192,7 +192,7 @@ fn match_path_with_config(
     }
 
     if let Some(ref configured_endpoint) = config.endpoint {
-        let passed_http_scheme = path.scheme.into_http_scheme();
+        let passed_http_scheme = path.scheme.as_http_scheme();
         ensure_data_valid!(
             configured_endpoint.starts_with(passed_http_scheme),
             "Storage::Azdls: Endpoint {} does not use the expected http scheme {}.",
@@ -219,7 +219,7 @@ fn azdls_config_build(config: &AzdlsConfig, path: &AzureStoragePath) -> Result<o
 
     if config.endpoint.is_none() {
         // If no endpoint is provided, we construct it from the fully-qualified path.
-        builder = builder.endpoint(&path.into_endpoint());
+        builder = builder.endpoint(&path.as_endpoint());
     }
     builder = builder.filesystem(&path.filesystem);
 
@@ -254,10 +254,10 @@ impl AzureStoragePath {
     /// Converts the AzureStoragePath into a full endpoint URL.
     ///
     /// This is possible because the path is fully qualified.
-    fn into_endpoint(&self) -> String {
+    fn as_endpoint(&self) -> String {
         format!(
             "{}://{}.{}.{}",
-            self.scheme.into_http_scheme(),
+            self.scheme.as_http_scheme(),
             self.account_name,
             self.storage_service,
             self.endpoint_suffix
