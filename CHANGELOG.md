@@ -439,6 +439,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Add support for evolving a partition column by @Fokko in https://github.com/apache/iceberg-rust/pull/1334
 * Run dependency license check in release script by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1367
 * Make `dependencies.py` check all subdirectories for cargo toml files by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1370
+* add new commits to changelog for 0.5.0 by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1371
+* fix: add support for `Decimal` and `Uuid` datum conversion by @burmecia in https://github.com/apache/iceberg-rust/pull/1346
+* fix: check leaf column is root column in Parquet schema by @burmecia in https://github.com/apache/iceberg-rust/pull/1347
+* chore(deps): Bump aws-sdk-s3tables from 1.20.0 to 1.22.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/1377
+* test: Add missing tests for update_namespace method in sql catalog by @kyteware in https://github.com/apache/iceberg-rust/pull/1373
+* chore(deps): Bump aws-sdk-glue from 1.94.0 to 1.97.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/1376
+* chore(deps): Bump uuid from 1.16.0 to 1.17.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/1375
+* fix 0.5.x release `cargo publish` by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1379
 
 ## [v0.4.0] - 2024-12-16
 * io: add support for role arn and external id s3 props by @mattheusv in https://github.com/apache/iceberg-rust/pull/553
