@@ -18,12 +18,12 @@
 use crate::transaction::Transaction;
 use crate::{Result, TableUpdate};
 
-pub type PendingAction = Box<dyn TransactionAction>;
+pub type PendingAction<'a> = Box<dyn TransactionAction<'a>>;
 
-pub(crate) trait TransactionAction: Sync {
+pub(crate) trait TransactionAction<'a>: Sync {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
-    fn commit(self, tx: Transaction) -> Result<Transaction>;
+    fn commit(self: Box<Self>, tx: Transaction<'a>) -> Result<Transaction>;
 }
 
 pub struct SetLocation {
@@ -41,12 +41,12 @@ impl SetLocation {
     }
 }
 
-impl TransactionAction for SetLocation {
-    fn commit(self, mut tx: Transaction) -> Result<Transaction> {
+impl<'a> TransactionAction<'a> for SetLocation {
+    fn commit(self: Box<Self>, mut tx: Transaction<'a>) -> Result<Transaction<'a>> {
         if let Some(location) = self.location.clone() {
             tx.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
         }
-        tx.actions.push(Box::new(self));
+        tx.actions.push(self);
 
         Ok(tx)
     }

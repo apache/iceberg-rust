@@ -42,7 +42,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction<'a> {
     base_table: &'a Table,
     current_table: Table,
-    actions: Vec<PendingAction>,
+    actions: Vec<PendingAction<'a>>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -60,8 +60,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn refresh(old_tx: Transaction<'a>, refreshed: Table) -> Result<Self> {
-        let mut new_tx = Transaction::new(&refreshed.clone());
-        for action in &old_tx.actions {
+        let refreshed_clone = refreshed.clone();
+        let mut new_tx = Transaction::new(&refreshed_clone);
+        for action in old_tx.actions {
             new_tx = action.commit(new_tx)?
         }
 
@@ -198,7 +199,9 @@ impl<'a> Transaction<'a> {
 
     /// Set the location of table
     pub fn set_location(self, location: String) -> Result<Transaction<'a>> {
-        Ok(SetLocation::new().set_location(location).commit(self)?)
+        let set_location = SetLocation::new().set_location(location);
+        let tx = Box::new(set_location).commit(self)?;
+        Ok(tx)
     }
 
     /// Commit transaction.
