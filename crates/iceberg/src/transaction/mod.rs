@@ -59,16 +59,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn refresh(old_tx: Transaction<'a>, refreshed: Table) -> Result<Self> {
-        let refreshed_clone = refreshed.clone();
-        let mut new_tx = Transaction::new(&refreshed_clone);
-        for action in old_tx.actions {
-            new_tx = action.commit(new_tx)?
-        }
-
-        Ok(new_tx)
-    }
-
     fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
         let mut metadata_builder = self.current_table.metadata().clone().into_builder(None);
         for update in updates {
@@ -198,53 +188,55 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set the location of table
-    pub fn set_location(self, location: String) -> Result<Transaction<'a>> {
+    pub fn set_location(mut self, location: String) -> Result<Transaction<'a>> {
         let set_location = SetLocation::new().set_location(location);
-        let tx = Box::new(set_location).commit(self)?;
-        Ok(tx)
+        let _commit = Box::new(set_location).commit(&mut self)?;
+        Ok(self)
     }
 
     /// Commit transaction.
-    pub async fn commit(mut self: Transaction<'a>, catalog: &dyn Catalog) -> Result<Table> {
-        // let table_commit = TableCommit::builder()
-        //     .ident(self.base_table.identifier().clone())
-        //     .updates(self.updates)
-        //     .requirements(self.requirements)
-        //     .build();
-        if self.base_table.metadata() == self.current_table.metadata() {
+    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+        let base_table_identifier = self.base_table.identifier().to_owned();
+
+        if self.actions.is_empty()
+            || (self.base_table.metadata() == self.current_table.metadata()
+                && self.base_table.metadata_location() == self.current_table.metadata_location())
+        {
+            // nothing to commit
             return Ok(self.current_table);
         }
 
-        // TODO add refresh() in catalog?
-        let refreshed = catalog
-            .load_table(self.base_table.identifier())
-            .await
-            .expect(format!("Failed to refresh table {}", self.base_table.identifier()).as_str());
+        // TODO use an actual retry
+        for _attempt in 0..3 {
+            let refreshed = catalog
+                .load_table(&base_table_identifier.clone())
+                .await
+                .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
 
-        if self.base_table.metadata() != refreshed.metadata()
-            || self.base_table.metadata_location() != refreshed.metadata_location()
-        {
-            // refresh table
-            let new_tx = Transaction::refresh(self, refreshed)?;
-            return new_tx.commit(catalog).await;
-            // TODO instead of refreshing directly, retry on this error
-            // return Err(Error::new(
-            //     ErrorKind::DataInvalid,
-            //     "Cannot commit: stale base table metadata".to_string(),
-            // ));
+            if self.base_table.metadata() != refreshed.metadata()
+                || self.base_table.metadata_location() != refreshed.metadata_location()
+            {
+                // current base is stale, use refreshed as base and re-apply transaction actions
+                self.base_table = &refreshed.clone();
+                self.current_table = refreshed.clone();
+
+                let pending_actions = self.actions.clone();
+
+                for action in pending_actions {
+                    action.commit(&mut self)?;
+                }
+            }
+
+            let table_commit = TableCommit::builder()
+                .ident(base_table_identifier.clone())
+                .updates(self.updates)
+                .requirements(self.requirements)
+                .build();
+
+            return catalog.update_table(table_commit).await;
         }
 
-        if self.base_table.metadata() == self.current_table.metadata()
-            && self.base_table.metadata_location() == self.current_table.metadata_location()
-        {
-            // nothing to commit, return current table
-            return Ok(self.current_table);
-        }
-
-        catalog
-            .commit_table(self.base_table, self.current_table)
-            .await
-        // catalog.update_table(table_commit).await
+        Err(Error::new(ErrorKind::DataInvalid, "Failed to commit!"))
     }
 }
 
@@ -258,7 +250,6 @@ mod tests {
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
-    use crate::transaction::action::TransactionAction;
     use crate::{TableIdent, TableUpdate};
 
     fn make_v1_table() -> Table {

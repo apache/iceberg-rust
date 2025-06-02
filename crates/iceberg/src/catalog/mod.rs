@@ -30,8 +30,8 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
-    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder, UnboundPartitionSpec,
-    ViewFormatVersion, ViewRepresentations, ViewVersion,
+    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuildResult, TableMetadataBuilder,
+    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -301,6 +301,23 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
+    }
+
+    /// Apply updates to a table
+    pub fn apply(&mut self, table: &Table) -> Result<TableMetadataBuildResult> {
+        // 1. check requirements
+        for requirement in self.requirements {
+            requirement.check(Some(table.metadata()))?;
+        }
+
+        // 2. Apply updates to metadata builder
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
+
+        for update in self.updates {
+            metadata_builder = update.apply(metadata_builder)?;
+        }
+
+        metadata_builder.build()
     }
 }
 
