@@ -33,7 +33,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{PendingAction, SetLocation, TransactionAction};
+use crate::transaction::action::{PendingAction, SetLocation, TransactionAction, TransactionActionCommitResult};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -42,7 +42,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction<'a> {
     base_table: &'a Table,
     current_table: Table,
-    actions: Vec<PendingAction<'a>>,
+    actions: Vec<PendingAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -69,6 +69,12 @@ impl<'a> Transaction<'a> {
             .with_metadata(Arc::new(metadata_builder.build()?.metadata));
 
         Ok(())
+    }
+    
+    fn apply_commit_result(&mut self,
+                           mut tx_commit_res: TransactionActionCommitResult) -> Result<()> {
+        self.actions.push(tx_commit_res.take_action().unwrap());
+        self.apply(tx_commit_res.take_updates(), tx_commit_res.take_requirements())
     }
 
     fn apply(
@@ -188,14 +194,14 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set the location of table
-    pub fn set_location(mut self, location: String) -> Result<Transaction<'a>> {
+    pub fn set_location(mut self, location: String) -> Result<Self> {
         let set_location = SetLocation::new().set_location(location);
-        let _commit = Box::new(set_location).commit(&mut self)?;
+        self.apply_commit_result(Box::new(set_location).commit()?).expect("Some error msg");
         Ok(self)
     }
 
     /// Commit transaction.
-    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
         let base_table_identifier = self.base_table.identifier().to_owned();
 
         if self.actions.is_empty()
@@ -203,7 +209,7 @@ impl<'a> Transaction<'a> {
                 && self.base_table.metadata_location() == self.current_table.metadata_location())
         {
             // nothing to commit
-            return Ok(self.current_table);
+            return Ok(self.current_table.clone());
         }
 
         // TODO use an actual retry
@@ -220,17 +226,17 @@ impl<'a> Transaction<'a> {
                 self.base_table = &refreshed.clone();
                 self.current_table = refreshed.clone();
 
-                let pending_actions = self.actions.clone();
+                // let pending_actions = self.actions.clone();
 
-                for action in pending_actions {
-                    action.commit(&mut self)?;
+                for action in self.actions {
+                    action.commit()?;
                 }
             }
 
             let table_commit = TableCommit::builder()
                 .ident(base_table_identifier.clone())
-                .updates(self.updates)
-                .requirements(self.requirements)
+                .updates(self.updates.clone())
+                .requirements(self.requirements.clone())
                 .build();
 
             return catalog.update_table(table_commit).await;

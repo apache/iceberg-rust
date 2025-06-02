@@ -15,20 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::take;
 use crate::transaction::Transaction;
-use crate::{Result, TableUpdate};
+use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
-pub type PendingAction<'a> = Box<dyn TransactionAction<'a>>;
+pub type PendingAction = Box<dyn TransactionAction>;
 
-pub(crate) trait TransactionAction<'a>: Sync {
+pub(crate) trait TransactionAction: Sync {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
-    fn commit(self: Box<Self>, tx: &'a mut Transaction<'a>) -> Result<()>;
+    fn commit(self: Box<Self>) -> Result<TransactionActionCommitResult>;
 }
 
-impl<'a> Clone for PendingAction<'a> {
-    fn clone(&self) -> Self {
-        Box::new(self)
+pub struct TransactionActionCommitResult {
+    action: Option<PendingAction>,
+    updates: Vec<TableUpdate>,
+    requirements: Vec<TableRequirement>,
+}
+
+impl TransactionActionCommitResult {
+    pub fn take_action(&mut self) -> Option<PendingAction> {
+        take(&mut self.action)
+    }
+    
+    pub fn take_updates(&mut self) -> Vec<TableUpdate> {
+        take(&mut self.updates)
+    }
+    
+    pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
+        take(&mut self.requirements)
     }
 }
 
@@ -47,13 +62,21 @@ impl SetLocation {
     }
 }
 
-impl<'a> TransactionAction<'a> for SetLocation {
-    fn commit(self: Box<Self>, tx: &'a mut Transaction<'a>) -> Result<()> {
+impl TransactionAction for SetLocation {
+    fn commit(self: Box<Self>) -> Result<TransactionActionCommitResult> {
+        let updates: Vec<TableUpdate>;
+        let requirements: Vec<TableRequirement>;
         if let Some(location) = self.location.clone() {
-            tx.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
+            updates = vec![TableUpdate::SetLocation { location }];
+            requirements = vec![];
+        } else {
+            return Err(Error::new(ErrorKind::DataInvalid, "TODO error msg"))
         }
-        tx.actions.push(self);
 
-        Ok(())
+        Ok(TransactionActionCommitResult {
+            action: Some(self),
+            updates,
+            requirements
+        })
     }
 }
