@@ -33,7 +33,9 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{PendingAction, SetLocation, TransactionAction, TransactionActionCommitResult};
+use crate::transaction::action::{
+    PendingAction, SetLocation, TransactionAction, TransactionActionCommitResult,
+};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -70,11 +72,20 @@ impl<'a> Transaction<'a> {
 
         Ok(())
     }
-    
-    fn apply_commit_result(&mut self,
-                           mut tx_commit_res: TransactionActionCommitResult) -> Result<()> {
-        self.actions.push(tx_commit_res.take_action().unwrap());
-        self.apply(tx_commit_res.take_updates(), tx_commit_res.take_requirements())
+
+    fn apply_commit_result(
+        &mut self,
+        mut tx_commit_res: TransactionActionCommitResult,
+    ) -> Result<()> {
+        if let Some(action) = tx_commit_res.take_action() {
+            self.actions.push(action);
+            return self.apply(
+                tx_commit_res.take_updates(),
+                tx_commit_res.take_requirements(),
+            );
+        }
+
+        Err(Error::new(ErrorKind::DataInvalid, "Action cannot be none!"))
     }
 
     fn apply(
@@ -196,7 +207,8 @@ impl<'a> Transaction<'a> {
     /// Set the location of table
     pub fn set_location(mut self, location: String) -> Result<Self> {
         let set_location = SetLocation::new().set_location(location);
-        self.apply_commit_result(Box::new(set_location).commit()?).expect("Some error msg");
+        self.apply_commit_result(Box::new(set_location).commit()?)
+            .expect("Some error msg");
         Ok(self)
     }
 
@@ -226,10 +238,9 @@ impl<'a> Transaction<'a> {
                 self.base_table = &refreshed.clone();
                 self.current_table = refreshed.clone();
 
-                // let pending_actions = self.actions.clone();
-
                 for action in self.actions {
-                    action.commit()?;
+                    self.apply_commit_result(action.commit()?)
+                        .expect("Failed to apply updates!");
                 }
             }
 

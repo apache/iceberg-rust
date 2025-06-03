@@ -16,7 +16,7 @@
 // under the License.
 
 use std::mem::take;
-use crate::transaction::Transaction;
+
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 pub type PendingAction = Box<dyn TransactionAction>;
@@ -37,11 +37,11 @@ impl TransactionActionCommitResult {
     pub fn take_action(&mut self) -> Option<PendingAction> {
         take(&mut self.action)
     }
-    
+
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
     }
-    
+
     pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
         take(&mut self.requirements)
     }
@@ -70,13 +70,16 @@ impl TransactionAction for SetLocation {
             updates = vec![TableUpdate::SetLocation { location }];
             requirements = vec![];
         } else {
-            return Err(Error::new(ErrorKind::DataInvalid, "TODO error msg"))
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Location is not set for SetLocation!",
+            ));
         }
 
         Ok(TransactionActionCommitResult {
             action: Some(self),
             updates,
-            requirements
+            requirements,
         })
     }
 }

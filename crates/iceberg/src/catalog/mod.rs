@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
@@ -30,7 +31,7 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
-    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuildResult, TableMetadataBuilder,
+    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
     UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
@@ -304,20 +305,24 @@ impl TableCommit {
     }
 
     /// Apply updates to a table
-    pub fn apply(&mut self, table: &Table) -> Result<TableMetadataBuildResult> {
+    pub fn apply(&mut self, mut table: Table) -> Result<Table> {
         // 1. check requirements
-        for requirement in self.requirements {
+        let requirements = self.take_requirements();
+        for requirement in requirements {
             requirement.check(Some(table.metadata()))?;
         }
 
         // 2. Apply updates to metadata builder
         let mut metadata_builder = table.metadata().clone().into_builder(None);
 
-        for update in self.updates {
+        let updates = self.take_updates();
+        for update in updates {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        metadata_builder.build()
+        table.with_metadata(Arc::new(metadata_builder.build()?.metadata));
+
+        Ok(table)
     }
 }
 
