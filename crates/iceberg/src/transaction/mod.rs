@@ -24,17 +24,18 @@ mod sort_order;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::mem::discriminant;
+use std::mem::{discriminant, take};
 use std::sync::Arc;
-
 use uuid::Uuid;
+use tokio_retry2::{Retry, RetryError};
+use tokio_retry2::strategy::ExponentialBackoff;
 
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::{
-    PendingAction, SetLocation, TransactionAction, TransactionActionCommitResult,
+    PendingAction, SetLocation, TransactionAction, TransactionActionCommit,
 };
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
@@ -73,10 +74,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    fn apply_commit_result(
-        &mut self,
-        mut tx_commit_res: TransactionActionCommitResult,
-    ) -> Result<()> {
+    fn apply_commit_result(&mut self, mut tx_commit_res: TransactionActionCommit) -> Result<()> {
         if let Some(action) = tx_commit_res.take_action() {
             self.actions.push(action);
             return self.apply(
@@ -214,8 +212,6 @@ impl<'a> Transaction<'a> {
 
     /// Commit transaction.
     pub async fn commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
-        let base_table_identifier = self.base_table.identifier().to_owned();
-
         if self.actions.is_empty()
             || (self.base_table.metadata() == self.current_table.metadata()
                 && self.base_table.metadata_location() == self.current_table.metadata_location())
@@ -224,36 +220,58 @@ impl<'a> Transaction<'a> {
             return Ok(self.current_table.clone());
         }
 
-        // TODO use an actual retry
-        for _attempt in 0..3 {
-            let refreshed = catalog
-                .load_table(&base_table_identifier.clone())
-                .await
-                .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
+        // TODO revisit the retry config
+        let retry_strategy = ExponentialBackoff::from_millis(10)
+            .take(3);    // limit to 3 retries
 
-            if self.base_table.metadata() != refreshed.metadata()
-                || self.base_table.metadata_location() != refreshed.metadata_location()
-            {
-                // current base is stale, use refreshed as base and re-apply transaction actions
-                self.base_table = &refreshed.clone();
-                self.current_table = refreshed.clone();
+        Retry::spawn(retry_strategy,
+            || {
+                let catalog = catalog.clone();
+                self.do_commit(catalog)
+        } ).await
+    }
 
-                for action in self.actions {
-                    self.apply_commit_result(action.commit()?)
-                        .expect("Failed to apply updates!");
-                }
+    async fn do_commit(&mut self, catalog: &dyn Catalog) -> std::result::Result<Table, RetryError<Error>> {
+        let base_table_identifier = self.base_table.identifier().to_owned();
+
+        let refreshed = catalog
+            .load_table(&base_table_identifier.clone())
+            .await
+            .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
+
+        if self.base_table.metadata() != refreshed.metadata()
+            || self.base_table.metadata_location() != refreshed.metadata_location()
+        {
+            // current base is stale, use refreshed as base and re-apply transaction actions
+            self.base_table = &refreshed.clone();
+            self.current_table = refreshed.clone();
+
+            let pending_actions = take(&mut self.actions);
+
+            for action in pending_actions {
+                self.apply_commit_result(action.commit()?)
+                    .expect("Failed to apply updates!");
             }
-
-            let table_commit = TableCommit::builder()
-                .ident(base_table_identifier.clone())
-                .updates(self.updates.clone())
-                .requirements(self.requirements.clone())
-                .build();
-
-            return catalog.update_table(table_commit).await;
         }
 
-        Err(Error::new(ErrorKind::DataInvalid, "Failed to commit!"))
+        let table_commit = TableCommit::builder()
+            .ident(base_table_identifier.clone())
+            .updates(self.updates.clone())
+            .requirements(self.requirements.clone())
+            .build();
+        
+        let result = catalog
+            .update_table(table_commit)
+            .await;
+
+        match result {
+            Ok(table) => Ok(table),
+            // TODO revisit the error kind
+            Err(e) if e.kind() == ErrorKind::DataInvalid => {
+                Err(RetryError::transient(e))
+            }
+            Err(e) => Err(RetryError::permanent(e))
+        }
     }
 }
 

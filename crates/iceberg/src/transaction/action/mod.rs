@@ -24,16 +24,16 @@ pub type PendingAction = Box<dyn TransactionAction>;
 pub(crate) trait TransactionAction: Sync {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
-    fn commit(self: Box<Self>) -> Result<TransactionActionCommitResult>;
+    fn commit(self: Box<Self>) -> Result<TransactionActionCommit>;
 }
 
-pub struct TransactionActionCommitResult {
+pub struct TransactionActionCommit {
     action: Option<PendingAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
-impl TransactionActionCommitResult {
+impl TransactionActionCommit {
     pub fn take_action(&mut self) -> Option<PendingAction> {
         take(&mut self.action)
     }
@@ -63,7 +63,7 @@ impl SetLocation {
 }
 
 impl TransactionAction for SetLocation {
-    fn commit(self: Box<Self>) -> Result<TransactionActionCommitResult> {
+    fn commit(self: Box<Self>) -> Result<TransactionActionCommit> {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;
         if let Some(location) = self.location.clone() {
@@ -76,7 +76,7 @@ impl TransactionAction for SetLocation {
             ));
         }
 
-        Ok(TransactionActionCommitResult {
+        Ok(TransactionActionCommit {
             action: Some(self),
             updates,
             requirements,
