@@ -19,7 +19,7 @@ use std::mem::take;
 
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
-pub type PendingAction = Box<dyn TransactionAction>;
+pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
 pub(crate) trait TransactionAction: Sync {
     /// Commit the changes and apply the changes to the transaction,
