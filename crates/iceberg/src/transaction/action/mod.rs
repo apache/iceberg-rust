@@ -16,8 +16,10 @@
 // under the License.
 
 use std::mem::take;
-
+use std::sync::Arc;
+use async_trait::async_trait;
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
+use crate::transaction::Transaction;
 
 pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
@@ -25,17 +27,18 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 pub(crate) trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
-    fn commit(self: Arc<Self>, tx:  &Transaction) -> Result<TransactionActionCommit>;
+    fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
 }
 
 pub struct TransactionActionCommit {
-    action: Option<PendingAction>,
+    action: Option<BoxedTransactionAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
+// TODO probably we don't need this?
 impl TransactionActionCommit {
-    pub fn take_action(&mut self) -> Option<PendingAction> {
+    pub fn take_action(&mut self) -> Option<BoxedTransactionAction> {
         take(&mut self.action)
     }
 
@@ -64,7 +67,7 @@ impl SetLocation {
 }
 
 impl TransactionAction for SetLocation {
-    fn commit(self: Box<Self>) -> Result<TransactionActionCommit> {
+    fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;
         if let Some(location) = self.location.clone() {
@@ -76,11 +79,9 @@ impl TransactionAction for SetLocation {
                 "Location is not set for SetLocation!",
             ));
         }
-
-        Ok(TransactionActionCommit {
-            action: Some(self),
-            updates,
-            requirements,
-        })
+        
+        tx.actions.push(self);
+        
+        tx.apply(updates, requirements)
     }
 }
