@@ -21,10 +21,11 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
-pub(crate) trait TransactionAction: Sync {
+#[async_trait]
+pub(crate) trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
-    fn commit(self: Box<Self>) -> Result<TransactionActionCommit>;
+    fn commit(self: Arc<Self>, tx:  &Transaction) -> Result<TransactionActionCommit>;
 }
 
 pub struct TransactionActionCommit {
