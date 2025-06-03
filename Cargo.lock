@@ -738,9 +738,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.22.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c845ea2d9c2168620c3ca6ab6561e248d3d3818770f98737bb1fe81113b6ef"
+checksum = "928c4211711b8278e5274cf53f2c8b9c33624819eb6611410265af8ef5d5fdfe"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
