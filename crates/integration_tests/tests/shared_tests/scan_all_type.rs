@@ -312,7 +312,7 @@ async fn test_scan_all_type() {
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
     let mut tx = append_action.apply().await.unwrap();
-    let table = tx.commit(Arc::new(rest_catalog)).await.unwrap();
+    let table = tx.commit(Arc::new(&rest_catalog)).await.unwrap();
 
     // check result
     let batch_stream = table

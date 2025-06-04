@@ -31,13 +31,13 @@ pub(crate) trait TransactionAction: Sync + Send {
     fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
 }
 
-pub struct SetLocation {
+pub struct SetLocationAction {
     pub location: Option<String>,
 }
 
-impl SetLocation {
+impl SetLocationAction {
     pub fn new() -> Self {
-        SetLocation { location: None }
+        SetLocationAction { location: None }
     }
 
     pub fn set_location(mut self, location: String) -> Self {
@@ -46,7 +46,7 @@ impl SetLocation {
     }
 }
 
-impl TransactionAction for SetLocation {
+impl TransactionAction for SetLocationAction {
     fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;

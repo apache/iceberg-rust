@@ -37,7 +37,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{BoxedTransactionAction, SetLocation, TransactionAction};
+use crate::transaction::action::{BoxedTransactionAction, SetLocationAction, TransactionAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -195,7 +195,7 @@ impl Transaction {
 
     /// Set the location of table
     pub fn set_location(mut self, location: String) -> Result<Self> {
-        let set_location = SetLocation::new().set_location(location);
+        let set_location = SetLocationAction::new().set_location(location);
         Arc::new(set_location).commit(&mut self)?;
         Ok(self)
     }

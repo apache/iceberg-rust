@@ -92,7 +92,7 @@ async fn test_append_data_file_conflict() {
     let tx1 = Transaction::new(table.clone());
     let mut append_action = tx1.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx1 = append_action.apply().await.unwrap();
+    let mut tx1 = append_action.apply().await.unwrap();
 
     let tx2 = Transaction::new(table.clone());
     let mut append_action = tx2.fast_append(None, vec![]).unwrap();
@@ -117,5 +117,5 @@ async fn test_append_data_file_conflict() {
     assert_eq!(batches[0], batch);
 
     // another commit should fail
-    assert!(tx1.commit(&rest_catalog).await.is_err());
+    assert!(tx1.commit(Arc::new(&rest_catalog)).await.is_err());
 }
