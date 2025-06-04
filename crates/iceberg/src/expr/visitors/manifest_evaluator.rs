@@ -16,6 +16,7 @@
 // under the License.
 
 use fnv::FnvHashSet;
+use serde_bytes::ByteBuf;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
@@ -42,13 +43,13 @@ impl ManifestEvaluator {
     /// see if this `ManifestFile` could possibly contain data that matches
     /// the scan's filter.
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> Result<bool> {
-        if manifest_file.partitions.is_empty() {
-            return Ok(true);
+        match &manifest_file.partitions {
+            Some(p) if !p.is_empty() => {
+                let mut evaluator = ManifestFilterVisitor::new(p);
+                visit(&mut evaluator, &self.partition_filter)
+            }
+            _ => Ok(true),
         }
-
-        let mut evaluator = ManifestFilterVisitor::new(&manifest_file.partitions);
-
-        visit(&mut evaluator, &self.partition_filter)
     }
 }
 
@@ -154,9 +155,19 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
+
         match &field.lower_bound {
-            Some(bound) if datum <= bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum <= &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -169,8 +180,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.lower_bound {
-            Some(bound) if datum < bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum < &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -183,8 +203,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.upper_bound {
-            Some(bound) if datum >= bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum >= &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -197,8 +226,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.upper_bound {
-            Some(bound) if datum > bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum > &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -215,14 +253,22 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_CANNOT_MATCH;
         }
 
-        if let Some(lower_bound) = &field.lower_bound {
-            if lower_bound > datum {
+        if let Some(lower_bound_bytes) = &field.lower_bound {
+            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
+                lower_bound_bytes,
+                *reference.field().field_type.clone(),
+            );
+            if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
-        if let Some(upper_bound) = &field.upper_bound {
-            if upper_bound < datum {
+        if let Some(upper_bound_bytes) = &field.upper_bound {
+            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
+                upper_bound_bytes,
+                *reference.field().field_type.clone(),
+            );
+            if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -260,23 +306,15 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         let prefix_len = prefix.len();
 
         if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound_str = ManifestFilterVisitor::datum_as_str(
-                lower_bound,
-                "Cannot perform starts_with on non-string lower bound",
-            )?;
-            let min_len = lower_bound_str.len().min(prefix_len);
-            if prefix.as_bytes().lt(&lower_bound_str.as_bytes()[..min_len]) {
+            let min_len = lower_bound.len().min(prefix_len);
+            if prefix.as_bytes().lt(&lower_bound[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            let upper_bound_str = ManifestFilterVisitor::datum_as_str(
-                upper_bound,
-                "Cannot perform starts_with on non-string upper bound",
-            )?;
-            let min_len = upper_bound_str.len().min(prefix_len);
-            if prefix.as_bytes().gt(&upper_bound_str.as_bytes()[..min_len]) {
+            let min_len = upper_bound.len().min(prefix_len);
+            if prefix.as_bytes().gt(&upper_bound[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -305,35 +343,19 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         // not_starts_with will match unless all values must start with the prefix. This happens when
         // the lower and upper bounds both start with the prefix.
         if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound_str = ManifestFilterVisitor::datum_as_str(
-                lower_bound,
-                "Cannot perform not_starts_with on non-string lower bound",
-            )?;
-
             // if lower is shorter than the prefix then lower doesn't start with the prefix
-            if prefix_len > lower_bound_str.len() {
+            if prefix_len > lower_bound.len() {
                 return ROWS_MIGHT_MATCH;
             }
 
-            if prefix
-                .as_bytes()
-                .eq(&lower_bound_str.as_bytes()[..prefix_len])
-            {
+            if prefix.as_bytes().eq(&lower_bound[..prefix_len]) {
                 if let Some(upper_bound) = &field.upper_bound {
-                    let upper_bound_str = ManifestFilterVisitor::datum_as_str(
-                        upper_bound,
-                        "Cannot perform not_starts_with on non-string upper bound",
-                    )?;
-
                     // if upper is shorter than the prefix then upper can't start with the prefix
-                    if prefix_len > upper_bound_str.len() {
+                    if prefix_len > upper_bound.len() {
                         return ROWS_MIGHT_MATCH;
                     }
 
-                    if prefix
-                        .as_bytes()
-                        .eq(&upper_bound_str.as_bytes()[..prefix_len])
-                    {
+                    if prefix.as_bytes().eq(&upper_bound[..prefix_len]) {
                         return ROWS_CANNOT_MATCH;
                     }
                 }
@@ -359,13 +381,21 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         }
 
         if let Some(lower_bound) = &field.lower_bound {
-            if literals.iter().all(|datum| lower_bound > datum) {
+            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
+                lower_bound,
+                *reference.field().clone().field_type,
+            );
+            if literals.iter().all(|datum| &lower_bound > datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            if literals.iter().all(|datum| upper_bound < datum) {
+            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
+                upper_bound,
+                *reference.field().clone().field_type,
+            );
+            if literals.iter().all(|datum| &upper_bound < datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -413,6 +443,11 @@ impl ManifestFilterVisitor<'_> {
             return Err(Error::new(ErrorKind::Unexpected, err_msg));
         };
         Ok(bound)
+    }
+
+    fn bytes_to_datum(bytes: &ByteBuf, t: Type) -> Datum {
+        let p = t.as_primitive_type().unwrap();
+        Datum::try_from_bytes(bytes, p.clone()).unwrap()
     }
 }
 
@@ -520,8 +555,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::int(INT_MIN_VALUE)),
-                upper_bound: Some(Datum::int(INT_MAX_VALUE)),
+                lower_bound: Some(Datum::int(INT_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::int(INT_MAX_VALUE).to_bytes().unwrap()),
             },
             // all_nulls_missing_nan
             FieldSummary {
@@ -534,22 +569,22 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE).to_bytes().unwrap()),
             },
             // no_nulls
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE).to_bytes().unwrap()),
             },
             // float
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::float(0.0)),
-                upper_bound: Some(Datum::float(20.0)),
+                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
             },
             // all_nulls_double
             FieldSummary {
@@ -583,8 +618,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: Some(false),
-                lower_bound: Some(Datum::float(0.0)),
-                upper_bound: Some(Datum::float(20.0)),
+                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
             },
             // all_nulls_missing_nan_float
             FieldSummary {
@@ -597,15 +632,15 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
             },
             // no_nulls_same_value_a
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
             },
         ]
     }
@@ -625,7 +660,7 @@ mod test {
             added_rows_count: None,
             existing_rows_count: None,
             deleted_rows_count: None,
-            partitions,
+            partitions: Some(partitions),
             key_metadata: vec![],
         }
     }

@@ -107,6 +107,7 @@ hyper-util@0.1.10									X
 iana-time-zone@0.1.61		X							X				
 iana-time-zone-haiku@0.1.2		X							X				
 iceberg@0.5.1		X											
+iceberg-cache-moka@0.5.1		X											
 iceberg_test_utils@0.5.1		X											
 icu_collections@1.5.0											X		
 icu_locid@1.5.0											X		
