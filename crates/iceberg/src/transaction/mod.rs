@@ -24,24 +24,26 @@ mod sort_order;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::mem::{discriminant, take};
+use std::mem::discriminant;
 use std::sync::Arc;
+use std::time::Duration;
+
+use backon::{BackoffBuilder, ExponentialBuilder, RetryableWithContext};
+// use tokio_retry2::strategy::ExponentialBackoff;
+// use tokio_retry2::{Retry, RetryError};
 use uuid::Uuid;
-use tokio_retry2::{Retry, RetryError};
-use tokio_retry2::strategy::ExponentialBackoff;
 
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{
-    BoxedTransactionAction, SetLocation, TransactionAction, TransactionActionCommit,
-};
+use crate::transaction::action::{BoxedTransactionAction, SetLocation, TransactionAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
+#[derive(Clone)]
 pub struct Transaction {
     base_table: Table,
     current_table: Table,
@@ -74,19 +76,8 @@ impl Transaction {
         Ok(())
     }
 
-    fn apply_commit_result(&mut self, mut tx_commit_res: TransactionActionCommit) -> Result<()> {
-        if let Some(action) = tx_commit_res.take_action() {
-            self.actions.push(action);
-            return self.apply(
-                tx_commit_res.take_updates(),
-                tx_commit_res.take_requirements(),
-            );
-        }
-
-        Err(Error::new(ErrorKind::DataInvalid, "Action cannot be none!"))
-    }
-
-    fn apply(
+    /// TODO documentation
+    pub fn apply(
         &mut self,
         updates: Vec<TableUpdate>,
         requirements: Vec<TableRequirement>,
@@ -210,7 +201,7 @@ impl Transaction {
     }
 
     /// Commit transaction.
-    pub async fn commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(&mut self, catalog: Arc<&dyn Catalog>) -> Result<Table> {
         if self.actions.is_empty()
             || (self.base_table.metadata() == self.current_table.metadata()
                 && self.base_table.metadata_location() == self.current_table.metadata_location())
@@ -219,18 +210,57 @@ impl Transaction {
             return Ok(self.current_table.clone());
         }
 
-        // TODO revisit the retry config
-        let retry_strategy = ExponentialBackoff::from_millis(10)
-            .take(3);    // limit to 3 retries
+        // let retry_strategy = ExponentialBackoff::from_millis(10)
+        //     .take(3);    // limit to 3 retries
 
-        Retry::spawn(retry_strategy,
-            || {
-                let catalog = catalog.clone();
-                self.do_commit(catalog)
-        } ).await
+        // Retry::spawn(retry_strategy,
+        //             || {
+        //             async {
+        //                 Transaction::do_commit(
+        //                     &mut self.clone(),
+        //                     catalog.clone()).await
+        //             }
+        //         }).await
+
+        let tx = self.clone();
+        // TODO try backon: RetryableWithContext
+        (|mut tx: Transaction| async {
+            let result = tx.do_commit(catalog.clone()).await;
+            (tx, result)
+        })
+        .retry(
+            ExponentialBuilder::new()
+                // TODO retry strategy should be configurable
+                .with_min_delay(Duration::from_millis(100))
+                .with_max_delay(Duration::from_millis(60 * 1000))
+                .with_total_delay(Some(Duration::from_millis(30 * 60 * 1000)))
+                .with_max_times(4)
+                .with_factor(2.0)
+                .build(),
+        )
+        .context(tx)
+        .sleep(tokio::time::sleep)
+        .when(|e| {
+            if let Some(err) = e.downcast_ref::<Error>() {
+                err.kind() == ErrorKind::DataInvalid // TODO add retryable error kind
+            } else {
+                false
+            }
+        })
+        .await
+        .1
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Failed to commit transaction! caused by: {e}"),
+            )
+        })
     }
 
-    async fn do_commit(&mut self, catalog: &dyn Catalog) -> std::result::Result<Table, RetryError<Error>> {
+    async fn do_commit(
+        &mut self,
+        catalog: Arc<&dyn Catalog>,
+    ) -> std::result::Result<Table, anyhow::Error> {
         let base_table_identifier = self.base_table.identifier().to_owned();
 
         let refreshed = catalog
@@ -244,10 +274,10 @@ impl Transaction {
             // current base is stale, use refreshed as base and re-apply transaction actions
             self.base_table = refreshed.clone();
             self.current_table = refreshed.clone();
+            self.updates = vec![];
+            self.requirements = vec![];
 
-            let pending_actions = take(&mut self.actions);
-
-            for action in pending_actions {
+            for action in self.actions.clone() {
                 action.commit(self).expect("Failed to apply updates!");
             }
         }
@@ -257,19 +287,20 @@ impl Transaction {
             .updates(self.updates.clone())
             .requirements(self.requirements.clone())
             .build();
-        
-        let result = catalog
-            .update_table(table_commit)
-            .await;
 
-        match result {
-            Ok(table) => Ok(table),
-            // TODO revisit the error kind
-            Err(e) if e.kind() == ErrorKind::DataInvalid => {
-                Err(RetryError::transient(e))
-            }
-            Err(e) => Err(RetryError::permanent(e))
-        }
+        catalog
+            .update_table(table_commit)
+            .await
+            .map_err(anyhow::Error::from)
+
+        // match result {
+        //     Ok(table) => Ok(table),
+        //
+        //     Err(e) if e.kind() == ErrorKind::DataInvalid => {
+        //         Err(RetryError::transient(e))
+        //     }
+        //     Err(e) => Err(RetryError::permanent(e))
+        // }
     }
 }
 

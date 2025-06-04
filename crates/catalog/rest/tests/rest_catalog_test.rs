@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
@@ -347,10 +347,10 @@ async fn test_update_table() {
     );
 
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
+    let table2 = Transaction::new(table)
         .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
         .unwrap()
-        .commit(&catalog)
+        .commit(Arc::new(catalog))
         .await
         .unwrap();
 

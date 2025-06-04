@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::take;
 use std::sync::Arc;
+
 use async_trait::async_trait;
-use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
+
 use crate::transaction::Transaction;
+use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
@@ -28,27 +29,6 @@ pub(crate) trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction,
     /// return the transaction with the updated current_table
     fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
-}
-
-pub struct TransactionActionCommit {
-    action: Option<BoxedTransactionAction>,
-    updates: Vec<TableUpdate>,
-    requirements: Vec<TableRequirement>,
-}
-
-// TODO probably we don't need this?
-impl TransactionActionCommit {
-    pub fn take_action(&mut self) -> Option<BoxedTransactionAction> {
-        take(&mut self.action)
-    }
-
-    pub fn take_updates(&mut self) -> Vec<TableUpdate> {
-        take(&mut self.updates)
-    }
-
-    pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
-        take(&mut self.requirements)
-    }
 }
 
 pub struct SetLocation {
@@ -79,9 +59,9 @@ impl TransactionAction for SetLocation {
                 "Location is not set for SetLocation!",
             ));
         }
-        
+
         tx.actions.push(self);
-        
+
         tx.apply(updates, requirements)
     }
 }

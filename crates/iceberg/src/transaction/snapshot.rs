@@ -359,29 +359,30 @@ impl SnapshotProduceAction {
             .with_timestamp_ms(commit_ts)
             .build();
 
-        self.tx.apply(
-            vec![
-                TableUpdate::AddSnapshot {
-                    snapshot: new_snapshot,
-                },
-                TableUpdate::SetSnapshotRef {
-                    ref_name: MAIN_BRANCH.to_string(),
-                    reference: SnapshotReference::new(
-                        self.snapshot_id,
-                        SnapshotRetention::branch(None, None, None),
-                    ),
-                },
-            ],
-            vec![
-                TableRequirement::UuidMatch {
-                    uuid: self.tx.current_table.metadata().uuid(),
-                },
-                TableRequirement::RefSnapshotIdMatch {
-                    r#ref: MAIN_BRANCH.to_string(),
-                    snapshot_id: self.tx.current_table.metadata().current_snapshot_id(),
-                },
-            ],
-        )?;
+        let updates = vec![
+            TableUpdate::AddSnapshot {
+                snapshot: new_snapshot,
+            },
+            TableUpdate::SetSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string(),
+                reference: SnapshotReference::new(
+                    self.snapshot_id,
+                    SnapshotRetention::branch(None, None, None),
+                ),
+            },
+        ];
+
+        let requirements = vec![
+            TableRequirement::UuidMatch {
+                uuid: self.tx.current_table.metadata().uuid(),
+            },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: MAIN_BRANCH.to_string(),
+                snapshot_id: self.tx.current_table.metadata().current_snapshot_id(),
+            },
+        ];
+
+        self.tx.apply(updates, requirements)?;
 
         Ok(self.tx)
     }

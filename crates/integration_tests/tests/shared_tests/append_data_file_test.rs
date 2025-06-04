@@ -111,11 +111,11 @@ async fn test_append_data_file() {
     assert_eq!(field_ids, vec![1, 2, 3]);
 
     // commit result
-    let tx = Transaction::new(&table);
+    let tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
+    let mut tx = append_action.apply().await.unwrap();
+    let table = tx.commit(Arc::new(rest_catalog)).await.unwrap();
 
     // check result
     let batch_stream = table
@@ -131,11 +131,11 @@ async fn test_append_data_file() {
     assert_eq!(batches[0], batch);
 
     // commit result again
-    let tx = Transaction::new(&table);
+    let tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
+    let mut tx = append_action.apply().await.unwrap();
+    let table = tx.commit(Arc::new(rest_catalog)).await.unwrap();
 
     // check result again
     let batch_stream = table

@@ -26,10 +26,9 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent, TableRequirement, TableUpdate,
+    TableIdent,
 };
 use itertools::Itertools;
-use regex::Regex;
 use uuid::Uuid;
 
 use crate::namespace_state::NamespaceState;
@@ -278,75 +277,50 @@ impl Catalog for MemoryCatalog {
     }
 
     /// Update a table to the catalog.
-    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "MemoryCatalog does not currently support updating tables.",
         ))
     }
 
-    async fn commit_table(&self, base: &Table, current: Table) -> Result<Table> {
-        if base.metadata() == current.metadata() {
-            // no change
-            return Ok(current);
-        }
-
-        let mut root_namespace_state = self.root_namespace_state.lock().await;
-        // TODO: caller needs to retry on the error below
-        let _ = root_namespace_state
-            .check_metadata_location(base.identifier(), base.metadata_location())?;
-
-        let next_metadata_version = if let Some(base_metadata_location) = base.metadata_location() {
-            self.parse_metadata_version(base_metadata_location) + 1
-        } else {
-            0
-        };
-
-        // write metadata
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            current.metadata().location(),
-            next_metadata_version,
-            Uuid::new_v4()
-        );
-
-        // TODO instead of using current.metadata(), build a new metadata with some properties like last_updated_ms updated
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(current.metadata())?.into())
-            .await?;
-
-        root_namespace_state
-            .update_existing_table_location(current.identifier(), current.metadata_location())?;
-
-        // TODO same here, need to update the metadata location
-        Ok(current)
-    }
-}
-
-// todo move this to metadata?
-fn parse_metadata_version(metadata_location: &str) -> Result<i32> {
-    let pattern = r"(\d+)-([\w-]{36})(?:\.\w+)?\.metadata\.json"; // todo make this constant
-
-    if let Some(metadata_file_name) = metadata_location.split('/').last() {
-        let re = Regex::new(pattern).expect("Failed to parse regex for metadata file!");
-        if let Some(caps) = re.captures(metadata_file_name) {
-            let metadata_version_str = &caps[1];
-            let uuid_str = &caps[2];
-
-            let metadata_version = metadata_version_str
-                .parse()
-                .expect(format!("Invalid metadata version: {metadata_version_str}").as_str());
-            let uuid = Uuid::parse_str(uuid_str)?;
-
-            return Ok(metadata_version);
-        }
-    }
-
-    Err(Error::new(
-        ErrorKind::Unexpected,
-        format!("Unrecognizable metadata location: {metadata_location}"),
-    ))
+    // async fn commit_table(&self, base: &Table, current: Table) -> Result<Table> {
+    //     if base.metadata() == current.metadata() {
+    //         // no change
+    //         return Ok(current);
+    //     }
+    //
+    //     let mut root_namespace_state = self.root_namespace_state.lock().await;
+    //     // TODO: caller needs to retry on the error below
+    //     let _ = root_namespace_state
+    //         .check_metadata_location(base.identifier(), base.metadata_location())?;
+    //
+    //     let next_metadata_version = if let Some(base_metadata_location) = base.metadata_location() {
+    //         self.parse_metadata_version(base_metadata_location) + 1
+    //     } else {
+    //         0
+    //     };
+    //
+    //     // write metadata
+    //     let metadata_location = format!(
+    //         "{}/metadata/{}-{}.metadata.json",
+    //         current.metadata().location(),
+    //         next_metadata_version,
+    //         Uuid::new_v4()
+    //     );
+    //
+    //     // TODO instead of using current.metadata(), build a new metadata with some properties like last_updated_ms updated
+    //     self.file_io
+    //         .new_output(&metadata_location)?
+    //         .write(serde_json::to_vec(current.metadata())?.into())
+    //         .await?;
+    //
+    //     root_namespace_state
+    //         .update_existing_table_location(current.identifier(), current.metadata_location())?;
+    //
+    //     // TODO same here, need to update the metadata location
+    //     Ok(current)
+    // }
 }
 
 #[cfg(test)]

@@ -293,11 +293,11 @@ impl NamespaceState {
             return Ok(());
         }
 
-        let mut namespace = self.get_mut_namespace(table_ident.namespace())?;
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
         namespace
             .table_metadata_locations
             .entry(table_ident.name().to_string())
-            .insert_entry(new_metadata_location.unwrap().into_string());
+            .insert_entry(new_metadata_location.unwrap().to_string());
         Ok(())
     }
 

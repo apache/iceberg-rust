@@ -308,11 +308,11 @@ async fn test_scan_all_type() {
     let data_file = data_file_writer.close().await.unwrap();
 
     // commit result
-    let tx = Transaction::new(&table);
+    let tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
+    let mut tx = append_action.apply().await.unwrap();
+    let table = tx.commit(Arc::new(rest_catalog)).await.unwrap();
 
     // check result
     let batch_stream = table

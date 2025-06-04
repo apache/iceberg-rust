@@ -2104,7 +2104,9 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
+        let catalog = Arc::new(RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+        ));
 
         let table1 = {
             let file = File::open(format!(
@@ -2125,10 +2127,10 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
+        let table = Transaction::new(table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
-            .commit(&catalog)
+            .commit(catalog)
             .await
             .unwrap();
 
@@ -2229,7 +2231,9 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
+        let catalog = Arc::new(RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+        ));
 
         let table1 = {
             let file = File::open(format!(
@@ -2253,7 +2257,7 @@ mod tests {
         let table_result = Transaction::new(&table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
-            .commit(&catalog)
+            .commit(catalog)
             .await;
 
         assert!(table_result.is_err());
