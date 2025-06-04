@@ -2104,9 +2104,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-        );
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table1 = {
             let file = File::open(format!(
@@ -2231,9 +2229,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-        );
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table1 = {
             let file = File::open(format!(
