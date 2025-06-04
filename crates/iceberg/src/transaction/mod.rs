@@ -223,7 +223,6 @@ impl Transaction {
         //         }).await
 
         let tx = self.clone();
-        // TODO try backon: RetryableWithContext
         (|mut tx: Transaction| async {
             let result = tx.do_commit(catalog.clone()).await;
             (tx, result)
