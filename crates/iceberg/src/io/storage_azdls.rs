@@ -230,9 +230,6 @@ struct AzureStoragePath {
 
     account_name: String,
 
-    /// Either `blob` or `dfs` for Blob Storage and ADLSv2 respectively.
-    storage_service: String,
-
     /// The endpoint suffix, e.g., `core.windows.net` for the public cloud
     /// endpoint.
     endpoint_suffix: String,
@@ -277,7 +274,6 @@ impl FromStr for AzureStoragePath {
             scheme,
             filesystem: filesystem.to_string(),
             account_name: account_name.to_string(),
-            storage_service: storage_service.to_string(),
             endpoint_suffix: endpoint_suffix.to_string(),
             path: url.path().to_string(),
         })
@@ -513,7 +509,6 @@ mod tests {
                     scheme: AzureStorageScheme::Abfss,
                     filesystem: "somefs".to_string(),
                     account_name: "myaccount".to_string(),
-                    storage_service: "dfs".to_string(),
                     endpoint_suffix: "core.windows.net".to_string(),
                     path: "/path/to/file.parquet".to_string(),
                 }),
