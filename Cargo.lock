@@ -716,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.97.0"
+version = "1.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e5848836545389ad5109ce84f74c509ba4adefc1b39299a8a52843f7693f58"
+checksum = "1f9341b675fa1ea5a8c2e38cff773b8a8a658896bd3f5556c931949565e68886"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -738,9 +738,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.22.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c845ea2d9c2168620c3ca6ab6561e248d3d3818770f98737bb1fe81113b6ef"
+checksum = "928c4211711b8278e5274cf53f2c8b9c33624819eb6611410265af8ef5d5fdfe"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1531,7 +1531,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3714,7 +3714,7 @@ dependencies = [
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "iceberg_test_utils",
- "ordered-float 2.10.1",
+ "ordered-float 4.6.0",
  "parquet",
  "tokio",
  "uuid",
@@ -4192,7 +4192,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -7692,7 +7692,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
