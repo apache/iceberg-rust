@@ -99,8 +99,8 @@ jobs:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
-    # Only publish to PyPi if the tag is not a pre-release OR if manually triggered
-    if: ${{ (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) || github.event_name == 'workflow_dispatch' }}
+    # Only publish to PyPi if the triggering workflow succeeded OR if manually triggered
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
 
     environment:
       name: pypi
