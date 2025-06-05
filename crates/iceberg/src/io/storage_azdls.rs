@@ -249,10 +249,9 @@ impl AzureStoragePath {
     /// This is possible because the path is fully qualified.
     fn as_endpoint(&self) -> String {
         format!(
-            "{}://{}.{}.{}",
+            "{}://{}.dfs.{}",
             self.scheme.as_http_scheme(),
             self.account_name,
-            self.storage_service,
             self.endpoint_suffix
         )
     }
