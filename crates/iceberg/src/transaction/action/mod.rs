@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -27,8 +26,6 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
 #[async_trait]
 pub(crate) trait TransactionAction: Sync + Send {
-    fn apply(&self) -> Box<dyn Any>;
-
     /// Commit the changes and apply the changes to the transaction
     fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
 }
@@ -49,11 +46,7 @@ impl UpdateLocationAction {
 }
 
 impl TransactionAction for UpdateLocationAction {
-    fn apply(&self) -> Box<dyn Any> {
-        Box::new(self.location.clone())
-    }
-
-    fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
+    async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;
         if let Some(location) = self.location.clone() {

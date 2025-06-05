@@ -261,7 +261,7 @@ impl Transaction {
             self.requirements = vec![];
 
             for action in self.actions.clone() {
-                action.commit(self).expect("Failed to apply updates!");
+                action.commit(self)?
             }
         }
 
