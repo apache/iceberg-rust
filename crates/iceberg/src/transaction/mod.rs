@@ -29,15 +29,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBuilder, RetryableWithContext};
-// use tokio_retry2::strategy::ExponentialBackoff;
-// use tokio_retry2::{Retry, RetryError};
 use uuid::Uuid;
 
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{BoxedTransactionAction, SetLocationAction, TransactionAction};
+use crate::transaction::action::{BoxedTransactionAction, UpdateLocationAction, TransactionAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -194,10 +192,8 @@ impl Transaction {
     }
 
     /// Set the location of table
-    pub fn set_location(mut self, location: String) -> Result<Self> {
-        let set_location = SetLocationAction::new().set_location(location);
-        Arc::new(set_location).commit(&mut self)?;
-        Ok(self)
+    pub fn update_location(&mut self) -> Result<UpdateLocationAction> {
+        Ok(UpdateLocationAction::new())
     }
 
     /// Commit transaction.
@@ -209,18 +205,6 @@ impl Transaction {
             // nothing to commit
             return Ok(self.current_table.clone());
         }
-
-        // let retry_strategy = ExponentialBackoff::from_millis(10)
-        //     .take(3);    // limit to 3 retries
-
-        // Retry::spawn(retry_strategy,
-        //             || {
-        //             async {
-        //                 Transaction::do_commit(
-        //                     &mut self.clone(),
-        //                     catalog.clone()).await
-        //             }
-        //         }).await
 
         let tx = self.clone();
         (|mut tx: Transaction| async {
@@ -291,15 +275,6 @@ impl Transaction {
             .update_table(table_commit)
             .await
             .map_err(anyhow::Error::from)
-
-        // match result {
-        //     Ok(table) => Ok(table),
-        //
-        //     Err(e) if e.kind() == ErrorKind::DataInvalid => {
-        //         Err(RetryError::transient(e))
-        //     }
-        //     Err(e) => Err(RetryError::permanent(e))
-        // }
     }
 }
 
@@ -308,12 +283,13 @@ mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
-
+    use std::sync::Arc;
     use crate::io::FileIOBuilder;
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableUpdate};
+    use crate::transaction::action::TransactionAction;
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -446,10 +422,13 @@ mod tests {
     #[test]
     fn test_set_location() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
-        let tx = tx
-            .set_location(String::from("s3://bucket/prefix/new_table"))
-            .unwrap();
+        let mut tx = Transaction::new(table);
+        let update_location_action = tx
+            .update_location()
+            .unwrap()
+            .set_location(String::from("s3://bucket/prefix/new_table"));
+        
+        let _res = Arc::new(update_location_action).commit(&mut tx).unwrap();
 
         assert_eq!(
             vec![TableUpdate::SetLocation {

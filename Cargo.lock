@@ -3525,7 +3525,6 @@ dependencies = [
  "tera",
  "thrift",
  "tokio",
- "tokio-retry2",
  "typed-builder 0.20.1",
  "url",
  "uuid",
@@ -7013,16 +7012,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
-]
-
-[[package]]
-name = "tokio-retry2"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1264d076dd34560544a2799e40e457bd07c43d30f4a845686b031bcd8455c84f"
-dependencies = [
- "pin-project",
- "tokio",
 ]
 
 [[package]]

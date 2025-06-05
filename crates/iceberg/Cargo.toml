@@ -55,7 +55,6 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
-tokio-retry2 = { version = "0.5.7" }
 backon = { version = "1.5.1"}
 base64 = { workspace = true }
 bimap = { workspace = true }
