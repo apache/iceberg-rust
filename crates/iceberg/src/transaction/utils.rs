@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use futures::TryStreamExt;
+use itertools::Itertools;
 
 use crate::error::Result;
 use crate::io::FileIO;
@@ -99,8 +100,12 @@ impl ReachableFileCleanupStrategy {
             }
         }
 
-        stream::iter(manifest_lists_to_delete)
+        let manifest_lists_to_delete = manifest_lists_to_delete
+            .iter()
             .map(|path| self.file_io.delete(path))
+            .collect_vec();
+
+        stream::iter(manifest_lists_to_delete)
             .buffer_unordered(DEFAULT_DELETE_CONCURRENCY_LIMIT)
             .try_collect::<Vec<_>>()
             .await?;
