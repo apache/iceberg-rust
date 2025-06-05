@@ -19,14 +19,25 @@ use std::sync::OnceLock;
 
 use tokio::runtime::{Handle, Runtime};
 
-static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-
 pub fn runtime() -> Handle {
-    match Handle::try_current() {
-        Ok(h) => h.clone(),
-        _ => {
-            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
-            rt.handle().clone()
+    if let Ok(h) = Handle::try_current() {
+        h
+    } else {
+        static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+        static PID: OnceLock<u32> = OnceLock::new();
+        let pid = std::process::id();
+        let runtime_pid = *PID.get_or_init(|| pid);
+        if pid != runtime_pid {
+            panic!(
+                "Forked process detected - current PID is {pid} but the tokio runtime was created by {runtime_pid}. The tokio \
+                runtime does not support forked processes https://github.com/tokio-rs/tokio/issues/4301. If you are \
+                seeing this message while using Python multithreading make sure to use the `spawn` or `forkserver` \
+                mode.",
+            );
         }
+        RUNTIME
+            .get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
+            .handle()
+            .clone()
     }
 }
