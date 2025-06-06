@@ -3526,6 +3526,7 @@ dependencies = [
  "typed-builder 0.20.1",
  "url",
  "uuid",
+ "waker-set",
  "zstd",
 ]
 
@@ -7473,6 +7474,16 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "waker-set"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e958152c46345e1af5c61812030ac85200573a0b384c137e83ce2c01ac4bc07"
+dependencies = [
+ "crossbeam-utils",
+ "slab",
+]
 
 [[package]]
 name = "walkdir"
