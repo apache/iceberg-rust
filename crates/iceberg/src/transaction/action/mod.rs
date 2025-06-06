@@ -27,7 +27,7 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 #[async_trait]
 pub(crate) trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction
-    fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
+    async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
 }
 
 pub struct UpdateLocationAction {
@@ -45,6 +45,7 @@ impl UpdateLocationAction {
     }
 }
 
+#[async_trait]
 impl TransactionAction for UpdateLocationAction {
     async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
         let updates: Vec<TableUpdate>;

@@ -35,7 +35,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{BoxedTransactionAction, UpdateLocationAction, TransactionAction};
+use crate::transaction::action::{BoxedTransactionAction, UpdateLocationAction};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -160,13 +160,12 @@ impl Transaction {
 
     /// Creates a fast append action.
     pub fn fast_append(
-        self,
+        &mut self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction> {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
-            self,
             snapshot_id,
             commit_uuid.unwrap_or_else(Uuid::now_v7),
             key_metadata,
@@ -261,7 +260,7 @@ impl Transaction {
             self.requirements = vec![];
 
             for action in self.actions.clone() {
-                action.commit(self)?
+                action.commit(self).await?
             }
         }
 
@@ -419,8 +418,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_set_location() {
+    #[tokio::test]
+    async fn test_set_location() {
         let table = make_v2_table();
         let mut tx = Transaction::new(table);
         let update_location_action = tx
@@ -428,7 +427,7 @@ mod tests {
             .unwrap()
             .set_location(String::from("s3://bucket/prefix/new_table"));
         
-        let _res = Arc::new(update_location_action).commit(&mut tx).unwrap();
+        let _res = Arc::new(update_location_action).commit(&mut tx).await;
 
         assert_eq!(
             vec![TableUpdate::SetLocation {

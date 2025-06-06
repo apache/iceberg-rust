@@ -16,8 +16,10 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-
+use std::sync::Arc;
 use arrow_array::StringArray;
+use async_trait::async_trait;
+use futures::lock::Mutex;
 use futures::TryStreamExt;
 use uuid::Uuid;
 
@@ -29,30 +31,29 @@ use crate::transaction::snapshot::{
 };
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
+use crate::transaction::action::TransactionAction;
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
-    snapshot_produce_action: SnapshotProduceAction,
+    snapshot_produce_action: Mutex<SnapshotProduceAction>,
     check_duplicate: bool,
 }
 
 impl FastAppendAction {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        tx: Transaction,
         snapshot_id: i64,
         commit_uuid: Uuid,
         key_metadata: Vec<u8>,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
-            snapshot_produce_action: SnapshotProduceAction::new(
-                tx,
+            snapshot_produce_action: Mutex::new(SnapshotProduceAction::new(
                 snapshot_id,
                 key_metadata,
                 commit_uuid,
                 snapshot_properties,
-            )?,
+            )?),
             check_duplicate: true,
         })
     }
@@ -66,9 +67,10 @@ impl FastAppendAction {
     /// Add data files to the snapshot.
     pub fn add_data_files(
         &mut self,
+        tx: &Transaction,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        self.snapshot_produce_action.add_data_files(data_files)?;
+        self.snapshot_produce_action.get_mut().add_data_files(tx, data_files)?;
         Ok(self)
     }
 
@@ -77,7 +79,7 @@ impl FastAppendAction {
         &mut self,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<&mut Self> {
-        self.snapshot_produce_action
+        self.snapshot_produce_action.get_mut()
             .set_snapshot_properties(snapshot_properties)?;
         Ok(self)
     }
@@ -89,10 +91,8 @@ impl FastAppendAction {
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
     #[allow(dead_code)]
-    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction> {
-        if !self
-            .snapshot_produce_action
-            .tx
+    async fn add_parquet_files(mut self, tx: &mut Transaction, file_path: Vec<String>) -> Result<()> {
+        if !tx
             .current_table
             .metadata()
             .default_spec
@@ -104,34 +104,45 @@ impl FastAppendAction {
             ));
         }
 
-        let table_metadata = self.snapshot_produce_action.tx.current_table.metadata();
+        let table_metadata = tx.current_table.metadata();
 
         let data_files = ParquetWriter::parquet_files_to_data_files(
-            self.snapshot_produce_action.tx.current_table.file_io(),
+            tx.current_table.file_io(),
             file_path,
             table_metadata,
         )
         .await?;
 
-        self.add_data_files(data_files)?;
+        self.add_data_files(tx, data_files)?;
 
-        self.apply().await
+        Arc::new(self).commit(tx).await?;
+        
+        Ok(())
     }
 
+    // TODO remove this method
     /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self) -> Result<Transaction> {
+    pub async fn apply(self, tx: Transaction) -> Result<Transaction> {
+        
+        Ok(tx)
+        
+    }
+}
+
+#[async_trait]
+impl TransactionAction for FastAppendAction {
+    async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
+        let mut action = self.snapshot_produce_action.lock().await;
+        
         // Checks duplicate files
         if self.check_duplicate {
-            let new_files: HashSet<&str> = self
-                .snapshot_produce_action
+            let new_files: HashSet<&str> = action
                 .added_data_files
                 .iter()
                 .map(|df| df.file_path.as_str())
                 .collect();
 
-            let mut manifest_stream = self
-                .snapshot_produce_action
-                .tx
+            let mut manifest_stream = tx
                 .current_table
                 .inspect()
                 .manifests()
@@ -169,10 +180,15 @@ impl FastAppendAction {
                 ));
             }
         }
-
-        self.snapshot_produce_action
-            .apply(FastAppendOperation, DefaultManifestProcess)
-            .await
+        
+        action
+            .apply(tx, FastAppendOperation, DefaultManifestProcess)
+            .await?;
+        
+        drop(action);
+        tx.actions.push(self);
+        
+        Ok(())
     }
 }
 
@@ -192,10 +208,10 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProduceAction,
+        tx: &Transaction,
+        _snapshot_produce: &SnapshotProduceAction,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce
-            .tx
+        let Some(snapshot) = tx
             .current_table
             .metadata()
             .current_snapshot()
@@ -205,8 +221,8 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
         let manifest_list = snapshot
             .load_manifest_list(
-                snapshot_produce.tx.current_table.file_io(),
-                &snapshot_produce.tx.current_table.metadata_ref(),
+                tx.current_table.file_io(),
+                &tx.current_table.metadata_ref(),
             )
             .await?;
 
@@ -222,7 +238,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
+    use std::sync::Arc;
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
@@ -230,20 +246,21 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableRequirement, TableUpdate};
+    use crate::transaction::action::TransactionAction;
 
     #[tokio::test]
     async fn test_empty_data_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table);
+        let mut tx = Transaction::new(table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
-        action.add_data_files(vec![]).unwrap();
-        assert!(action.apply().await.is_err());
+        action.add_data_files(&tx, vec![]).unwrap();
+        assert!(Arc::new(action).commit(&mut tx).await.is_err());
     }
 
     #[tokio::test]
     async fn test_set_snapshot_properties() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table.clone());
+        let mut tx = Transaction::new(table.clone());
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         let mut snapshot_properties = HashMap::new();
@@ -259,8 +276,8 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap();
-        action.add_data_files(vec![data_file]).unwrap();
-        let tx = action.apply().await.unwrap();
+        action.add_data_files(&tx, vec![data_file]).unwrap();
+        Arc::new(action).commit(&mut tx).await.unwrap();
 
         // Check customized properties is contained in snapshot summary properties.
         let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &tx.updates[0] {
@@ -281,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table.clone());
+        let mut tx = Transaction::new(table.clone());
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         // check add data file with incompatible partition value
@@ -295,7 +312,7 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::string("test"))]))
             .build()
             .unwrap();
-        assert!(action.add_data_files(vec![data_file.clone()]).is_err());
+        assert!(action.add_data_files(&tx, vec![data_file.clone()]).is_err());
 
         let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
@@ -307,8 +324,8 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap();
-        action.add_data_files(vec![data_file.clone()]).unwrap();
-        let tx = action.apply().await.unwrap();
+        action.add_data_files(&tx, vec![data_file.clone()]).unwrap();
+        Arc::new(action).commit(&mut tx).await.unwrap();
 
         // check updates and requirements
         assert!(
@@ -367,7 +384,7 @@ mod tests {
     async fn test_add_existing_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
         fixture.setup_unpartitioned_manifest_files().await;
-        let tx = crate::transaction::Transaction::new(fixture.table.clone());
+        let mut tx = crate::transaction::Transaction::new(fixture.table.clone());
 
         let file_paths = vec![
             format!("{}/1.parquet", &fixture.table_location),
@@ -378,14 +395,14 @@ mod tests {
         let fast_append_action = tx.fast_append(None, vec![]).unwrap();
 
         // Attempt to add the existing Parquet files with fast append.
-        let new_tx = fast_append_action
-            .add_parquet_files(file_paths.clone())
+        fast_append_action
+            .add_parquet_files(&mut tx, file_paths.clone())
             .await
             .expect("Adding existing Parquet files should succeed");
 
         let mut found_add_snapshot = false;
         let mut found_set_snapshot_ref = false;
-        for update in new_tx.updates.iter() {
+        for update in tx.updates.iter() {
             match update {
                 TableUpdate::AddSnapshot { .. } => {
                     found_add_snapshot = true;
@@ -404,7 +421,7 @@ mod tests {
         assert!(found_add_snapshot);
         assert!(found_set_snapshot_ref);
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &new_tx.updates[0] {
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &tx.updates[0] {
             snapshot
         } else {
             panic!("Expected the first update to be an AddSnapshot update");
