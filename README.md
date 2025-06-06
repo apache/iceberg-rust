@@ -101,8 +101,8 @@ The Apache Iceberg community is built on the principles described in the [Apache
 
 - [Databend](https://github.com/datafuselabs/databend/): An open-source cloud data warehouse that serves as a cost-effective alternative to Snowflake.
 - [Lakekeeper](https://github.com/lakekeeper/lakekeeper/): An Apache-licensed Iceberg REST Catalog with data access controls.
-- [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 - [Moonlink](https://github.com/Mooncake-Labs/moonlink): A Rust library that enables sub-second mirroring (CDC) of Postgres tables into Iceberg.
+- [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 
 ## License
 
