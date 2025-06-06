@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_azure_storage_path() {
+    fn test_azure_storage_path_parse() {
         let test_cases = vec![
             (
                 "succeeds",
@@ -541,6 +541,50 @@ mod tests {
                     assert!(result.is_err(), "Test case {} expected error.", name);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_azure_storage_path_endpoint() {
+        let test_cases = vec![
+            (
+                "abfss uses https",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfss,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "https://myaccount.dfs.core.windows.net",
+            ),
+            (
+                "abfs uses http",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfs,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "http://myaccount.dfs.core.windows.net",
+            ),
+            (
+                "wasbs uses https and dfs",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfss,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "https://myaccount.dfs.core.windows.net",
+            ),
+        ];
+
+        for (name, path, expected) in test_cases {
+            let endpoint = path.as_endpoint();
+            assert_eq!(endpoint, expected, "Test case: {}", name);
         }
     }
 }
