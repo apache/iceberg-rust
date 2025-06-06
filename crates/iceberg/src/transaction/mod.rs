@@ -17,7 +17,8 @@
 
 //! This module contains transaction api.
 
-mod action;
+/// TODO doc
+pub mod action;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -283,12 +284,13 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
+
     use crate::io::FileIOBuilder;
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
-    use crate::{TableIdent, TableUpdate};
     use crate::transaction::action::TransactionAction;
+    use crate::{TableIdent, TableUpdate};
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -426,7 +428,7 @@ mod tests {
             .update_location()
             .unwrap()
             .set_location(String::from("s3://bucket/prefix/new_table"));
-        
+
         let _res = Arc::new(update_location_action).commit(&mut tx).await;
 
         assert_eq!(

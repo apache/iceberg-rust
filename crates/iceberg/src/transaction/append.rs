@@ -17,21 +17,22 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
 use arrow_array::StringArray;
 use async_trait::async_trait;
-use futures::lock::Mutex;
 use futures::TryStreamExt;
+use futures::lock::Mutex;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::transaction::Transaction;
+use crate::transaction::action::TransactionAction;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
 use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
-use crate::transaction::action::TransactionAction;
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
@@ -70,7 +71,9 @@ impl FastAppendAction {
         tx: &Transaction,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        self.snapshot_produce_action.get_mut().add_data_files(tx, data_files)?;
+        self.snapshot_produce_action
+            .get_mut()
+            .add_data_files(tx, data_files)?;
         Ok(self)
     }
 
@@ -79,7 +82,8 @@ impl FastAppendAction {
         &mut self,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<&mut Self> {
-        self.snapshot_produce_action.get_mut()
+        self.snapshot_produce_action
+            .get_mut()
             .set_snapshot_properties(snapshot_properties)?;
         Ok(self)
     }
@@ -91,13 +95,12 @@ impl FastAppendAction {
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
     #[allow(dead_code)]
-    async fn add_parquet_files(mut self, tx: &mut Transaction, file_path: Vec<String>) -> Result<()> {
-        if !tx
-            .current_table
-            .metadata()
-            .default_spec
-            .is_unpartitioned()
-        {
+    async fn add_parquet_files(
+        mut self,
+        tx: &mut Transaction,
+        file_path: Vec<String>,
+    ) -> Result<()> {
+        if !tx.current_table.metadata().default_spec.is_unpartitioned() {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Appending to partitioned tables is not supported",
@@ -116,24 +119,24 @@ impl FastAppendAction {
         self.add_data_files(tx, data_files)?;
 
         Arc::new(self).commit(tx).await?;
-        
+
         Ok(())
     }
 
     // TODO remove this method
-    /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self, tx: Transaction) -> Result<Transaction> {
-        
-        Ok(tx)
-        
-    }
+    // /// Finished building the action and apply it to the transaction.
+    // pub async fn apply(self, tx: Transaction) -> Result<Transaction> {
+    //
+    //     Ok(tx)
+    //
+    // }
 }
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()> {
         let mut action = self.snapshot_produce_action.lock().await;
-        
+
         // Checks duplicate files
         if self.check_duplicate {
             let new_files: HashSet<&str> = action
@@ -142,12 +145,7 @@ impl TransactionAction for FastAppendAction {
                 .map(|df| df.file_path.as_str())
                 .collect();
 
-            let mut manifest_stream = tx
-                .current_table
-                .inspect()
-                .manifests()
-                .scan()
-                .await?;
+            let mut manifest_stream = tx.current_table.inspect().manifests().scan().await?;
             let mut referenced_files = Vec::new();
 
             while let Some(batch) = manifest_stream.try_next().await? {
@@ -180,14 +178,14 @@ impl TransactionAction for FastAppendAction {
                 ));
             }
         }
-        
+
         action
             .apply(tx, FastAppendOperation, DefaultManifestProcess)
             .await?;
-        
+
         drop(action);
         tx.actions.push(self);
-        
+
         Ok(())
     }
 }
@@ -211,19 +209,12 @@ impl SnapshotProduceOperation for FastAppendOperation {
         tx: &Transaction,
         _snapshot_produce: &SnapshotProduceAction,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = tx
-            .current_table
-            .metadata()
-            .current_snapshot()
-        else {
+        let Some(snapshot) = tx.current_table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
 
         let manifest_list = snapshot
-            .load_manifest_list(
-                tx.current_table.file_io(),
-                &tx.current_table.metadata_ref(),
-            )
+            .load_manifest_list(tx.current_table.file_io(), &tx.current_table.metadata_ref())
             .await?;
 
         Ok(manifest_list
@@ -239,14 +230,15 @@ impl SnapshotProduceOperation for FastAppendOperation {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
     use crate::transaction::Transaction;
+    use crate::transaction::action::TransactionAction;
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableRequirement, TableUpdate};
-    use crate::transaction::action::TransactionAction;
 
     #[tokio::test]
     async fn test_empty_data_append_action() {

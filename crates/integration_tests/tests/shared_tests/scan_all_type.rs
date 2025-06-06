@@ -34,6 +34,7 @@ use iceberg::spec::{
     PrimitiveType, Schema, StructType, Type,
 };
 use iceberg::transaction::Transaction;
+use iceberg::transaction::action::TransactionAction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -308,10 +309,12 @@ async fn test_scan_all_type() {
     let data_file = data_file_writer.close().await.unwrap();
 
     // commit result
-    let tx = Transaction::new(table);
+    let mut tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let mut tx = append_action.apply().await.unwrap();
+    append_action
+        .add_data_files(&tx, data_file.clone())
+        .unwrap();
+    Arc::new(append_action).commit(&mut tx).await.unwrap();
     let table = tx.commit(Arc::new(&rest_catalog)).await.unwrap();
 
     // check result

@@ -22,23 +22,28 @@ use async_trait::async_trait;
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
+/// TODO doc
 pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
+/// TODO doc
 #[async_trait]
-pub(crate) trait TransactionAction: Sync + Send {
+pub trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction
     async fn commit(self: Arc<Self>, tx: &mut Transaction) -> Result<()>;
 }
 
+/// TODO doc
 pub struct UpdateLocationAction {
     location: Option<String>,
 }
 
 impl UpdateLocationAction {
+    /// TODO doc
     pub fn new() -> Self {
         UpdateLocationAction { location: None }
     }
 
+    /// TODO doc
     pub fn set_location(mut self, location: String) -> Self {
         self.location = Some(location);
         self

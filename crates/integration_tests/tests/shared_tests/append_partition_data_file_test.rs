@@ -24,6 +24,7 @@ use futures::TryStreamExt;
 use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
+use iceberg::transaction::action::TransactionAction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -119,12 +120,12 @@ async fn test_append_partition_data_file() {
     let data_file_valid = data_file_writer_valid.close().await.unwrap();
 
     // commit result
-    let tx = Transaction::new(table);
+    let mut tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action
-        .add_data_files(data_file_valid.clone())
+        .add_data_files(&tx, data_file_valid.clone())
         .unwrap();
-    let mut tx = append_action.apply().await.unwrap();
+    Arc::new(append_action).commit(&mut tx).await.unwrap();
     let table = tx.commit(Arc::new(&rest_catalog)).await.unwrap();
 
     // check result
@@ -179,10 +180,10 @@ async fn test_schema_incompatible_partition_type(
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
-    let tx = Transaction::new(table);
+    let mut tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
-        .add_data_files(data_file_invalid.clone())
+        .add_data_files(&tx, data_file_invalid.clone())
         .is_ok()
     {
         panic!("diverging partition info should have returned error");
@@ -219,10 +220,10 @@ async fn test_schema_incompatible_partition_fields(
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
-    let tx = Transaction::new(table);
+    let mut tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
-        .add_data_files(data_file_invalid.clone())
+        .add_data_files(&tx, data_file_invalid.clone())
         .is_ok()
     {
         panic!("passing different number of partition fields should have returned error");

@@ -170,10 +170,7 @@ impl SnapshotProduceAction {
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
-        tx
-            .current_table
-            .file_io()
-            .new_output(new_manifest_path)
+        tx.current_table.file_io().new_output(new_manifest_path)
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
@@ -206,8 +203,7 @@ impl SnapshotProduceAction {
                 Some(self.snapshot_id),
                 self.key_metadata.clone(),
                 tx.current_table.metadata().current_schema().clone(),
-                tx
-                    .current_table
+                tx.current_table
                     .metadata()
                     .default_partition_spec()
                     .as_ref()
@@ -232,7 +228,9 @@ impl SnapshotProduceAction {
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
         let added_manifest = self.write_added_manifest(tx).await?;
-        let existing_manifests = snapshot_produce_operation.existing_manifest(tx, self).await?;
+        let existing_manifests = snapshot_produce_operation
+            .existing_manifest(tx, self)
+            .await?;
         // # TODO
         // Support process delete entries.
 
@@ -326,20 +324,18 @@ impl SnapshotProduceAction {
             })
             .unwrap();
 
-        let manifest_list_path = self.generate_manifest_list_file_path(tx,0);
+        let manifest_list_path = self.generate_manifest_list_file_path(tx, 0);
 
         let mut manifest_list_writer = match tx.current_table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                tx
-                    .current_table
+                tx.current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 tx.current_table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
-                tx
-                    .current_table
+                tx.current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
