@@ -17,7 +17,7 @@
 
 services:
   minio:
-    image: minio/minio:RELEASE.2024-03-07T00-43-48Z
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
     expose:
       - 9000
       - 9001
@@ -30,7 +30,7 @@ services:
   mc:
     depends_on:
       - minio
-    image: minio/mc:RELEASE.2024-03-07T00-31-49Z
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
