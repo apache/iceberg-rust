@@ -45,7 +45,6 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 #[derive(Clone)]
 pub struct Transaction {
     base_table: Table,
-    current_table: Table,
     actions: Vec<BoxedTransactionAction>,
 }
 
@@ -54,19 +53,17 @@ impl Transaction {
     pub fn new(table: Table) -> Self {
         Self {
             base_table: table.clone(),
-            current_table: table.clone(),
             actions: vec![],
         }
     }
 
-    fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
-        let mut metadata_builder = self.current_table.metadata().clone().into_builder(None);
+    fn update_table_metadata(&mut self, table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
         }
 
-        self.current_table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata));
+        table.with_metadata(Arc::new(metadata_builder.build()?.metadata));
 
         Ok(())
     }
@@ -74,16 +71,17 @@ impl Transaction {
     /// TODO documentation
     pub fn apply(
         &mut self,
+        table: &mut Table,
         updates: Vec<TableUpdate>,
         requirements: Vec<TableRequirement>,
         existing_updates: &mut Vec<TableUpdate>,
         existing_requirements: &mut Vec<TableRequirement>,
     ) -> Result<()> {
         for requirement in &requirements {
-            requirement.check(Some(self.current_table.metadata()))?;
+            requirement.check(Some(table.metadata()))?;
         }
 
-        self.update_table_metadata(&updates)?;
+        self.update_table_metadata(table, &updates)?;
 
         existing_updates.extend(updates);
 
@@ -127,7 +125,7 @@ impl Transaction {
         };
         let mut snapshot_id = generate_random_id();
         while self
-            .current_table
+            .base_table
             .metadata()
             .snapshots()
             .any(|s| s.snapshot_id() == snapshot_id)
@@ -166,12 +164,9 @@ impl Transaction {
 
     /// Commit transaction.
     pub async fn commit(&mut self, catalog: Arc<&dyn Catalog>) -> Result<Table> {
-        if self.actions.is_empty()
-            || (self.base_table.metadata() == self.current_table.metadata()
-                && self.base_table.metadata_location() == self.current_table.metadata_location())
-        {
+        if self.actions.is_empty() {
             // nothing to commit
-            return Ok(self.current_table.clone());
+            return Ok(self.base_table.clone());
         }
 
         let tx = self.clone();
@@ -227,18 +222,20 @@ impl Transaction {
         {
             // current base is stale, use refreshed as base and re-apply transaction actions
             self.base_table = refreshed.clone();
-            self.current_table = refreshed.clone(); // todo use a temp table
+        }
 
-            for action in self.actions.clone() {
-                let mut action_commit = action.commit(&self.current_table).await?;
-                // apply changes to current_table
-                self.apply(
-                    action_commit.take_updates(),
-                    action_commit.take_requirements(),
-                    &mut existing_updates,
-                    &mut existing_requirements,
-                )?;
-            }
+        let mut current_table = self.base_table.clone();
+
+        for action in self.actions.clone() {
+            let mut action_commit = action.commit(&current_table).await?;
+            // apply changes to current_table
+            self.apply(
+                &mut current_table,
+                action_commit.take_updates(),
+                action_commit.take_requirements(),
+                &mut existing_updates,
+                &mut existing_requirements,
+            )?;
         }
 
         let table_commit = TableCommit::builder()
