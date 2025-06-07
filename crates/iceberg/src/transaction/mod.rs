@@ -34,7 +34,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::table::Table;
 use crate::transaction::action::{
-    BoxedTransactionAction, UpdateLocationAction, UpdatePropertiesAction,
+    ApplyTransactionAction, BoxedTransactionAction, UpdateLocationAction, UpdatePropertiesAction,
     UpgradeFormatVersionAction,
 };
 use crate::transaction::append::FastAppendAction;
@@ -106,13 +106,13 @@ impl Transaction {
     }
 
     /// Sets table to a new version.
-    pub fn upgrade_table_version(&self) -> Result<UpgradeFormatVersionAction> {
-        Ok(UpgradeFormatVersionAction::new())
+    pub fn upgrade_table_version(&self) -> UpgradeFormatVersionAction {
+        UpgradeFormatVersionAction::new()
     }
 
     /// Update table's property.
-    pub fn update_properties(&self) -> Result<UpdatePropertiesAction> {
-        Ok(UpdatePropertiesAction::new())
+    pub fn update_properties(&self) -> UpdatePropertiesAction {
+        UpdatePropertiesAction::new()
     }
 
     fn generate_unique_snapshot_id(&self) -> i64 {
@@ -160,10 +160,8 @@ impl Transaction {
     }
 
     /// Set the location of table
-    pub fn update_location(&mut self) -> Result<Arc<UpdateLocationAction>> {
-        let update_location_action = Arc::new(UpdateLocationAction::new());
-        self.actions.push(update_location_action.clone());
-        Ok(update_location_action)
+    pub fn update_location(&mut self) -> UpdateLocationAction {
+        UpdateLocationAction::new()
     }
 
     /// Commit transaction.

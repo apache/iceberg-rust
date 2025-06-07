@@ -21,11 +21,11 @@ use std::mem::take;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::spec::FormatVersion;
 use crate::table::Table;
+use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 /// TODO doc
@@ -36,6 +36,20 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 pub trait TransactionAction: Sync + Send {
     /// Commit the changes and apply the changes to the transaction
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit>;
+}
+
+/// TODO doc
+pub trait ApplyTransactionAction {
+    /// TODO doc
+    fn apply(self, tx: Transaction) -> Result<Transaction>;
+}
+
+impl<T: TransactionAction + 'static> ApplyTransactionAction for T {
+    fn apply(self, mut tx: Transaction) -> Result<Transaction>
+    where Self: Sized {
+        tx.actions.push(Arc::new(self));
+        Ok(tx)
+    }
 }
 
 /// TODO doc
@@ -67,30 +81,18 @@ impl ActionCommit {
 
 /// TODO doc
 pub struct UpdateLocationAction {
-    state: Mutex<UpdateLocationState>,
-}
-
-struct UpdateLocationState {
     location: Option<String>,
-}
-
-impl UpdateLocationState {
-    fn new() -> Self {
-        Self { location: None }
-    }
 }
 
 impl UpdateLocationAction {
     /// TODO doc
     pub fn new() -> Self {
-        UpdateLocationAction {
-            state: Mutex::new(UpdateLocationState::new()),
-        }
+        UpdateLocationAction { location: None }
     }
 
     /// TODO doc
-    pub async fn set_location(self: Arc<Self>, location: String) -> Arc<Self> {
-        self.state.lock().await.location = Some(location);
+    pub fn set_location(mut self, location: String) -> Self {
+        self.location = Some(location);
         self
     }
 }
@@ -100,7 +102,7 @@ impl TransactionAction for UpdateLocationAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;
-        if let Some(location) = self.state.lock().await.location.clone() {
+        if let Some(location) = self.location.clone() {
             updates = vec![TableUpdate::SetLocation { location }];
             requirements = vec![];
         } else {
@@ -116,32 +118,20 @@ impl TransactionAction for UpdateLocationAction {
 
 /// TODO doc
 pub struct UpgradeFormatVersionAction {
-    state: Mutex<UpgradeFormatVersionState>,
-}
-
-struct UpgradeFormatVersionState {
     format_version: Option<FormatVersion>,
-}
-
-impl UpgradeFormatVersionState {
-    pub fn new() -> Self {
-        Self {
-            format_version: None,
-        }
-    }
 }
 
 impl UpgradeFormatVersionAction {
     /// TODO doc
     pub fn new() -> Self {
         UpgradeFormatVersionAction {
-            state: Mutex::new(UpgradeFormatVersionState::new()),
+            format_version: None,
         }
     }
 
     /// TODO doc
-    pub async fn set_format_version(self: Arc<Self>, format_version: FormatVersion) -> Arc<Self> {
-        self.state.lock().await.format_version = Some(format_version);
+    pub fn set_format_version(mut self, format_version: FormatVersion) -> Self {
+        self.format_version = Some(format_version);
         self
     }
 }
@@ -153,7 +143,7 @@ impl TransactionAction for UpgradeFormatVersionAction {
         let updates: Vec<TableUpdate>;
         let requirements: Vec<TableRequirement>;
 
-        if let Some(format_version) = self.state.lock().await.format_version {
+        if let Some(format_version) = self.format_version {
             match current_version.cmp(&format_version) {
                 Ordering::Greater => {
                     return Err(Error::new(
