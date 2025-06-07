@@ -17,6 +17,7 @@
 
 //! This module contains transaction api.
 
+mod action;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -32,6 +33,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
+use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -40,6 +42,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction<'a> {
     base_table: &'a Table,
     current_table: Table,
+    actions: Vec<BoxedTransactionAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -50,6 +53,7 @@ impl<'a> Transaction<'a> {
         Self {
             base_table: table,
             current_table: table.clone(),
+            actions: vec![],
             updates: vec![],
             requirements: vec![],
         }
