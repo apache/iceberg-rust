@@ -283,6 +283,44 @@ impl Catalog for MemoryCatalog {
             "MemoryCatalog does not currently support updating tables.",
         ))
     }
+
+    // async fn commit_table(&self, base: &Table, current: Table) -> Result<Table> {
+    //     if base.metadata() == current.metadata() {
+    //         // no change
+    //         return Ok(current);
+    //     }
+    //
+    //     let mut root_namespace_state = self.root_namespace_state.lock().await;
+    //     // TODO: caller needs to retry on the error below
+    //     let _ = root_namespace_state
+    //         .check_metadata_location(base.identifier(), base.metadata_location())?;
+    //
+    //     let next_metadata_version = if let Some(base_metadata_location) = base.metadata_location() {
+    //         self.parse_metadata_version(base_metadata_location) + 1
+    //     } else {
+    //         0
+    //     };
+    //
+    //     // write metadata
+    //     let metadata_location = format!(
+    //         "{}/metadata/{}-{}.metadata.json",
+    //         current.metadata().location(),
+    //         next_metadata_version,
+    //         Uuid::new_v4()
+    //     );
+    //
+    //     // TODO instead of using current.metadata(), build a new metadata with some properties like last_updated_ms updated
+    //     self.file_io
+    //         .new_output(&metadata_location)?
+    //         .write(serde_json::to_vec(current.metadata())?.into())
+    //         .await?;
+    //
+    //     root_namespace_state
+    //         .update_existing_table_location(current.identifier(), current.metadata_location())?;
+    //
+    //     // TODO same here, need to update the metadata location
+    //     Ok(current)
+    // }
 }
 
 #[cfg(test)]

@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -40,6 +41,7 @@ use crate::error::{Result, timestamp_ms_to_utc};
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
+const TABLE_METADATA_FILE_NAME_REGEX: &str = r"(\d+)-([\w-]{36})(?:\.\w+)?\.metadata\.json";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
@@ -430,6 +432,30 @@ impl TableMetadata {
     #[inline]
     pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
         self.encryption_keys.get(key_id)
+    }
+
+    /// Parse metadata version and uuid from metadata filename
+    fn parse_metadata_filename(metadata_location: &str) -> Result<(i32, Uuid)> {
+        if let Some(metadata_file_name) = metadata_location.split('/').last() {
+            let re = Regex::new(TABLE_METADATA_FILE_NAME_REGEX)
+                .expect("Failed to parse regex for metadata file!");
+            if let Some(caps) = re.captures(metadata_file_name) {
+                let metadata_version_str = &caps[1];
+                let uuid_str = &caps[2];
+
+                let metadata_version = metadata_version_str
+                    .parse()
+                    .expect(format!("Invalid metadata version: {metadata_version_str}").as_str());
+                let uuid = Uuid::parse_str(uuid_str)?;
+
+                return Ok((metadata_version, uuid));
+            }
+        }
+
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            format!("Unrecognizable metadata location: {metadata_location}"),
+        ))
     }
 
     /// Normalize this partition spec.

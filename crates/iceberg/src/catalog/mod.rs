@@ -22,6 +22,7 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
@@ -312,6 +313,27 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
+    }
+
+    /// Apply updates to a table
+    pub fn apply(&mut self, mut table: Table) -> Result<Table> {
+        // 1. check requirements
+        let requirements = self.take_requirements();
+        for requirement in requirements {
+            requirement.check(Some(table.metadata()))?;
+        }
+
+        // 2. Apply updates to metadata builder
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
+
+        let updates = self.take_updates();
+        for update in updates {
+            metadata_builder = update.apply(metadata_builder)?;
+        }
+
+        table.with_metadata(Arc::new(metadata_builder.build()?.metadata));
+
+        Ok(table)
     }
 }
 

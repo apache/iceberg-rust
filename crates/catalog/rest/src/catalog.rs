@@ -2125,10 +2125,10 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
+        let table = Transaction::new(table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
-            .commit(&catalog)
+            .commit(Arc::new(&catalog))
             .await
             .unwrap();
 
@@ -2250,10 +2250,10 @@ mod tests {
                 .unwrap()
         };
 
-        let table_result = Transaction::new(&table1)
+        let table_result = Transaction::new(table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
-            .commit(&catalog)
+            .commit(Arc::new(&catalog))
             .await;
 
         assert!(table_result.is_err());

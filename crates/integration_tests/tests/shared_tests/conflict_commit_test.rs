@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::transaction::Transaction;
+use iceberg::transaction::action::TransactionAction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -89,17 +90,21 @@ async fn test_append_data_file_conflict() {
     let data_file = data_file_writer.close().await.unwrap();
 
     // start two transaction and commit one of them
-    let tx1 = Transaction::new(&table);
+    let mut tx1 = Transaction::new(table.clone());
     let mut append_action = tx1.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx1 = append_action.apply().await.unwrap();
+    append_action
+        .add_data_files(&tx1, data_file.clone())
+        .unwrap();
+    Arc::new(append_action).commit(&mut tx1).await.unwrap();
 
-    let tx2 = Transaction::new(&table);
+    let mut tx2 = Transaction::new(table.clone());
     let mut append_action = tx2.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx2 = append_action.apply().await.unwrap();
+    append_action
+        .add_data_files(&tx2, data_file.clone())
+        .unwrap();
+    Arc::new(append_action).commit(&mut tx2).await.unwrap();
     let table = tx2
-        .commit(&rest_catalog)
+        .commit(Arc::new(&rest_catalog))
         .await
         .expect("The first commit should not fail.");
 
@@ -117,5 +122,5 @@ async fn test_append_data_file_conflict() {
     assert_eq!(batches[0], batch);
 
     // another commit should fail
-    assert!(tx1.commit(&rest_catalog).await.is_err());
+    assert!(tx1.commit(Arc::new(&rest_catalog)).await.is_err());
 }

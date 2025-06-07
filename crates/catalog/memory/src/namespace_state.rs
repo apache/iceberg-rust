@@ -262,6 +262,45 @@ impl NamespaceState {
         }
     }
 
+    pub(crate) fn check_metadata_location(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: Option<&str>,
+    ) -> Result<()> {
+        let namespace = self.get_namespace(table_ident.namespace())?;
+
+        if namespace
+            .table_metadata_locations
+            .get(table_ident.name())
+            .map(|s| s.as_str())
+            != metadata_location
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Metadata location does not match for table: {table_ident}!"),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn update_existing_table_location(
+        &mut self,
+        table_ident: &TableIdent,
+        new_metadata_location: Option<&str>,
+    ) -> Result<()> {
+        if new_metadata_location.is_none() {
+            return Ok(());
+        }
+
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
+        namespace
+            .table_metadata_locations
+            .entry(table_ident.name().to_string())
+            .insert_entry(new_metadata_location.unwrap().to_string());
+        Ok(())
+    }
+
     // Inserts the given table or returns an error if it already exists
     pub(crate) fn insert_new_table(
         &mut self,
