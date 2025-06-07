@@ -23,7 +23,6 @@ mod append;
 mod snapshot;
 mod sort_order;
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
@@ -32,11 +31,12 @@ use std::time::Duration;
 use backon::{BackoffBuilder, ExponentialBuilder, RetryableWithContext};
 use uuid::Uuid;
 
-use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
-use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{BoxedTransactionAction, UpdateLocationAction};
+use crate::transaction::action::{
+    BoxedTransactionAction, UpdateLocationAction, UpdatePropertiesAction,
+    UpgradeFormatVersionAction,
+};
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -47,8 +47,6 @@ pub struct Transaction {
     base_table: Table,
     current_table: Table,
     actions: Vec<BoxedTransactionAction>,
-    updates: Vec<TableUpdate>,
-    requirements: Vec<TableRequirement>,
 }
 
 impl Transaction {
@@ -58,8 +56,6 @@ impl Transaction {
             base_table: table.clone(),
             current_table: table.clone(),
             actions: vec![],
-            updates: vec![],
-            requirements: vec![],
         }
     }
 
@@ -80,6 +76,8 @@ impl Transaction {
         &mut self,
         updates: Vec<TableUpdate>,
         requirements: Vec<TableRequirement>,
+        existing_updates: &mut Vec<TableUpdate>,
+        existing_requirements: &mut Vec<TableRequirement>,
     ) -> Result<()> {
         for requirement in &requirements {
             requirement.check(Some(self.current_table.metadata()))?;
@@ -87,18 +85,17 @@ impl Transaction {
 
         self.update_table_metadata(&updates)?;
 
-        self.updates.extend(updates);
+        existing_updates.extend(updates);
 
         // For the requirements, it does not make sense to add a requirement more than once
         // For example, you cannot assert that the current schema has two different IDs
         for new_requirement in requirements {
-            if self
-                .requirements
+            if existing_requirements
                 .iter()
                 .map(discriminant)
                 .all(|d| d != discriminant(&new_requirement))
             {
-                self.requirements.push(new_requirement);
+                existing_requirements.push(new_requirement);
             }
         }
 
@@ -109,32 +106,13 @@ impl Transaction {
     }
 
     /// Sets table to a new version.
-    pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
-        let current_version = self.current_table.metadata().format_version();
-        match current_version.cmp(&format_version) {
-            Ordering::Greater => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot downgrade table version from {} to {}",
-                        current_version, format_version
-                    ),
-                ));
-            }
-            Ordering::Less => {
-                self.apply(vec![UpgradeFormatVersion { format_version }], vec![])?;
-            }
-            Ordering::Equal => {
-                // Do nothing.
-            }
-        }
-        Ok(self)
+    pub fn upgrade_table_version(&self) -> Result<UpgradeFormatVersionAction> {
+        Ok(UpgradeFormatVersionAction::new())
     }
 
     /// Update table's property.
-    pub fn set_properties(mut self, props: HashMap<String, String>) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetProperties { updates: props }], vec![])?;
-        Ok(self)
+    pub fn update_properties(&self) -> Result<UpdatePropertiesAction> {
+        Ok(UpdatePropertiesAction::new())
     }
 
     fn generate_unique_snapshot_id(&self) -> i64 {
@@ -177,23 +155,15 @@ impl Transaction {
     /// Creates replace sort order action.
     pub fn replace_sort_order(self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction {
-            tx: self,
             sort_fields: vec![],
         }
     }
 
-    /// Remove properties in table.
-    pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
-        self.apply(
-            vec![TableUpdate::RemoveProperties { removals: keys }],
-            vec![],
-        )?;
-        Ok(self)
-    }
-
     /// Set the location of table
-    pub fn update_location(&mut self) -> Result<UpdateLocationAction> {
-        Ok(UpdateLocationAction::new())
+    pub fn update_location(&mut self) -> Result<Arc<UpdateLocationAction>> {
+        let update_location_action = Arc::new(UpdateLocationAction::new());
+        self.actions.push(update_location_action.clone());
+        Ok(update_location_action)
     }
 
     /// Commit transaction.
@@ -251,24 +221,32 @@ impl Transaction {
             .await
             .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
 
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
+
         if self.base_table.metadata() != refreshed.metadata()
             || self.base_table.metadata_location() != refreshed.metadata_location()
         {
             // current base is stale, use refreshed as base and re-apply transaction actions
             self.base_table = refreshed.clone();
-            self.current_table = refreshed.clone();
-            self.updates = vec![];
-            self.requirements = vec![];
+            self.current_table = refreshed.clone(); // todo use a temp table
 
             for action in self.actions.clone() {
-                action.commit(self).await?
+                let mut action_commit = action.commit(&self.current_table).await?;
+                // apply changes to current_table
+                self.apply(
+                    action_commit.take_updates(),
+                    action_commit.take_requirements(),
+                    &mut existing_updates,
+                    &mut existing_requirements,
+                )?;
             }
         }
 
         let table_commit = TableCommit::builder()
             .ident(base_table_identifier.clone())
-            .updates(self.updates.clone())
-            .requirements(self.requirements.clone())
+            .updates(existing_updates)
+            .requirements(existing_requirements)
             .build();
 
         catalog

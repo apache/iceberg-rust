@@ -15,74 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
 use crate::error::Result;
 use crate::spec::{NullOrder, SortDirection, SortField, SortOrder, Transform};
-use crate::transaction::Transaction;
+use crate::table::Table;
+use crate::transaction::action::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Transaction action for replacing sort order.
 pub struct ReplaceSortOrderAction {
-    pub tx: Transaction,
     pub sort_fields: Vec<SortField>,
 }
 
 impl ReplaceSortOrderAction {
     /// Adds a field for sorting in ascending order.
-    pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
-        self.add_sort_field(name, SortDirection::Ascending, null_order)
+    pub fn asc(self, table: &Table, name: &str, null_order: NullOrder) -> Result<Self> {
+        self.add_sort_field(table, name, SortDirection::Ascending, null_order)
     }
 
     /// Adds a field for sorting in descending order.
-    pub fn desc(self, name: &str, null_order: NullOrder) -> Result<Self> {
-        self.add_sort_field(name, SortDirection::Descending, null_order)
-    }
-
-    /// Finished building the action and apply it to the transaction.
-    pub fn apply(mut self) -> Result<Transaction> {
-        let unbound_sort_order = SortOrder::builder()
-            .with_fields(self.sort_fields)
-            .build_unbound()?;
-
-        let updates = vec![
-            TableUpdate::AddSortOrder {
-                sort_order: unbound_sort_order,
-            },
-            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
-        ];
-
-        let requirements = vec![
-            TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: self
-                    .tx
-                    .current_table
-                    .metadata()
-                    .current_schema()
-                    .schema_id(),
-            },
-            TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: self
-                    .tx
-                    .current_table
-                    .metadata()
-                    .default_sort_order()
-                    .order_id,
-            },
-        ];
-
-        self.tx.apply(updates, requirements)?;
-
-        Ok(self.tx)
+    pub fn desc(self, table: &Table, name: &str, null_order: NullOrder) -> Result<Self> {
+        self.add_sort_field(table, name, SortDirection::Descending, null_order)
     }
 
     fn add_sort_field(
         mut self,
+        table: &Table,
         name: &str,
         sort_direction: SortDirection,
         null_order: NullOrder,
     ) -> Result<Self> {
-        let field_id = self
-            .tx
-            .current_table
+        let field_id = table
             .metadata()
             .current_schema()
             .field_id_by_name(name)
@@ -102,6 +68,33 @@ impl ReplaceSortOrderAction {
 
         self.sort_fields.push(sort_field);
         Ok(self)
+    }
+}
+
+#[async_trait]
+impl TransactionAction for ReplaceSortOrderAction {
+    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        let unbound_sort_order = SortOrder::builder()
+            .with_fields(self.sort_fields.clone())
+            .build_unbound()?;
+
+        let updates = vec![
+            TableUpdate::AddSortOrder {
+                sort_order: unbound_sort_order,
+            },
+            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
+        ];
+
+        let requirements = vec![
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: table.metadata().current_schema().schema_id(),
+            },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: table.metadata().default_sort_order().order_id,
+            },
+        ];
+
+        Ok(ActionCommit::new(updates, requirements))
     }
 }
 

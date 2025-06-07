@@ -29,7 +29,8 @@ use crate::spec::{
     PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
     SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
-use crate::transaction::Transaction;
+use crate::table::Table;
+use crate::transaction::action::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
@@ -43,7 +44,7 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
     fn existing_manifest(
         &self,
-        tx: &Transaction,
+        table: &Table,
         snapshot_produce: &SnapshotProduceAction,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
@@ -60,6 +61,7 @@ pub(crate) trait ManifestProcess: Send + Sync {
     fn process_manifests(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
 }
 
+#[derive(Clone)]
 pub(crate) struct SnapshotProduceAction {
     snapshot_id: i64,
     key_metadata: Vec<u8>,
@@ -120,6 +122,7 @@ impl SnapshotProduceAction {
         Ok(())
     }
 
+    // todo move this fast_append
     /// Set snapshot summary properties.
     pub fn set_snapshot_properties(
         &mut self,
@@ -129,10 +132,11 @@ impl SnapshotProduceAction {
         Ok(self)
     }
 
+    // TODO moving this to fast append
     /// Add data files to the snapshot.
     pub fn add_data_files(
         &mut self,
-        tx: &Transaction,
+        table: &Table,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
         let data_files: Vec<DataFile> = data_files.into_iter().collect();
@@ -144,9 +148,7 @@ impl SnapshotProduceAction {
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
-            if tx.current_table.metadata().default_partition_spec_id()
-                != data_file.partition_spec_id
-            {
+            if table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Data file partition spec id does not match table default partition spec id",
@@ -154,27 +156,27 @@ impl SnapshotProduceAction {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                tx.current_table.metadata().default_partition_type(),
+                table.metadata().default_partition_type(),
             )?;
         }
         self.added_data_files.extend(data_files);
         Ok(self)
     }
 
-    fn new_manifest_output(&mut self, tx: &Transaction) -> Result<OutputFile> {
+    fn new_manifest_output(&mut self, table: &Table) -> Result<OutputFile> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
-            tx.current_table.metadata().location(),
+            table.metadata().location(),
             META_ROOT_PATH,
             self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
-        tx.current_table.file_io().new_output(new_manifest_path)
+        table.file_io().new_output(new_manifest_path)
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self, tx: &Transaction) -> Result<ManifestFile> {
+    async fn write_added_manifest(&mut self, table: &Table) -> Result<ManifestFile> {
         // let added_data_files = std::mem::take(&mut self.added_data_files);
         if self.added_data_files.is_empty() {
             return Err(Error::new(
@@ -184,7 +186,7 @@ impl SnapshotProduceAction {
         }
 
         let snapshot_id = self.snapshot_id;
-        let format_version = tx.current_table.metadata().format_version();
+        let format_version = table.metadata().format_version();
         let manifest_entries = self.added_data_files.clone().into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
@@ -199,17 +201,13 @@ impl SnapshotProduceAction {
         });
         let mut writer = {
             let builder = ManifestWriterBuilder::new(
-                self.new_manifest_output(tx)?,
+                self.new_manifest_output(table)?,
                 Some(self.snapshot_id),
                 self.key_metadata.clone(),
-                tx.current_table.metadata().current_schema().clone(),
-                tx.current_table
-                    .metadata()
-                    .default_partition_spec()
-                    .as_ref()
-                    .clone(),
+                table.metadata().current_schema().clone(),
+                table.metadata().default_partition_spec().as_ref().clone(),
             );
-            if tx.current_table.metadata().format_version() == FormatVersion::V1 {
+            if table.metadata().format_version() == FormatVersion::V1 {
                 builder.build_v1()
             } else {
                 builder.build_v2_data()
@@ -223,13 +221,13 @@ impl SnapshotProduceAction {
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
-        tx: &Transaction,
+        table: &Table,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        let added_manifest = self.write_added_manifest(tx).await?;
+        let added_manifest = self.write_added_manifest(table).await?;
         let existing_manifests = snapshot_produce_operation
-            .existing_manifest(tx, self)
+            .existing_manifest(table, self)
             .await?;
         // # TODO
         // Support process delete entries.
@@ -243,11 +241,11 @@ impl SnapshotProduceAction {
     // Returns a `Summary` of the current snapshot
     fn summary<OP: SnapshotProduceOperation>(
         &self,
-        tx: &Transaction,
+        table: &Table,
         snapshot_produce_operation: &OP,
     ) -> Result<Summary> {
         let mut summary_collector = SnapshotSummaryCollector::default();
-        let table_metadata = tx.current_table.metadata_ref();
+        let table_metadata = table.metadata_ref();
 
         let partition_summary_limit = if let Some(limit) = table_metadata
             .properties()
@@ -292,10 +290,10 @@ impl SnapshotProduceAction {
         )
     }
 
-    fn generate_manifest_list_file_path(&self, tx: &Transaction, attempt: i64) -> String {
+    fn generate_manifest_list_file_path(&self, table: &Table, attempt: i64) -> String {
         format!(
             "{}/{}/snap-{}-{}-{}.{}",
-            tx.current_table.metadata().location(),
+            table.metadata().location(),
             META_ROOT_PATH,
             self.snapshot_id,
             attempt,
@@ -307,39 +305,35 @@ impl SnapshotProduceAction {
     /// Finished building the action and apply it to the transaction.
     pub async fn apply<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
-        tx: &mut Transaction,
+        table: &Table,
         snapshot_produce_operation: OP,
         process: MP,
-    ) -> Result<()> {
+    ) -> Result<ActionCommit> {
         let new_manifests = self
-            .manifest_file(tx, &snapshot_produce_operation, &process)
+            .manifest_file(table, &snapshot_produce_operation, &process)
             .await?;
-        let next_seq_num = tx.current_table.metadata().next_sequence_number();
+        let next_seq_num = table.metadata().next_sequence_number();
 
         let summary = self
-            .summary(tx, &snapshot_produce_operation)
+            .summary(table, &snapshot_produce_operation)
             .map_err(|err| {
                 Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
                     .with_source(err)
             })
             .unwrap();
 
-        let manifest_list_path = self.generate_manifest_list_file_path(tx, 0);
+        let manifest_list_path = self.generate_manifest_list_file_path(table, 0);
 
-        let mut manifest_list_writer = match tx.current_table.metadata().format_version() {
+        let mut manifest_list_writer = match table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                tx.current_table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                table.file_io().new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                tx.current_table.metadata().current_snapshot_id(),
+                table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
-                tx.current_table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                table.file_io().new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                tx.current_table.metadata().current_snapshot_id(),
+                table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
         };
@@ -350,10 +344,10 @@ impl SnapshotProduceAction {
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(self.snapshot_id)
-            .with_parent_snapshot_id(tx.current_table.metadata().current_snapshot_id())
+            .with_parent_snapshot_id(table.metadata().current_snapshot_id())
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
-            .with_schema_id(tx.current_table.metadata().current_schema_id())
+            .with_schema_id(table.metadata().current_schema_id())
             .with_timestamp_ms(commit_ts)
             .build();
 
@@ -372,16 +366,14 @@ impl SnapshotProduceAction {
 
         let requirements = vec![
             TableRequirement::UuidMatch {
-                uuid: tx.current_table.metadata().uuid(),
+                uuid: table.metadata().uuid(),
             },
             TableRequirement::RefSnapshotIdMatch {
                 r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: tx.current_table.metadata().current_snapshot_id(),
+                snapshot_id: table.metadata().current_snapshot_id(),
             },
         ];
 
-        tx.apply(updates, requirements)?;
-
-        Ok(())
+        Ok(ActionCommit::new(updates, requirements))
     }
 }
