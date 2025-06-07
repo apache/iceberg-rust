@@ -20,6 +20,7 @@
  */
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -29,7 +30,7 @@ use std::str::FromStr;
 pub use _serde::RawLiteral;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use num_bigint::BigInt;
-use ordered_float::OrderedFloat;
+use ordered_float::{Float, OrderedFloat};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use serde::de::{
@@ -214,6 +215,36 @@ impl<'de> Deserialize<'de> for Datum {
     }
 }
 
+// Compare following iceberg float ordering rules:
+//  -NaN < -Infinity < -value < -0 < 0 < value < Infinity < NaN
+fn iceberg_float_cmp<T: Float>(a: T, b: T) -> Option<Ordering> {
+    if a.is_nan() && b.is_nan() {
+        return match (a.is_sign_negative(), b.is_sign_negative()) {
+            (true, false) => Some(Ordering::Less),
+            (false, true) => Some(Ordering::Greater),
+            _ => Some(Ordering::Equal),
+        };
+    }
+
+    if a.is_nan() {
+        return Some(if a.is_sign_negative() {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        });
+    }
+
+    if b.is_nan() {
+        return Some(if b.is_sign_negative() {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        });
+    }
+
+    a.partial_cmp(&b)
+}
+
 impl PartialOrd for Datum {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (&self.literal, &other.literal, &self.r#type, &other.r#type) {
@@ -241,13 +272,13 @@ impl PartialOrd for Datum {
                 PrimitiveLiteral::Float(other_val),
                 PrimitiveType::Float,
                 PrimitiveType::Float,
-            ) => val.partial_cmp(other_val),
+            ) => iceberg_float_cmp(*val, *other_val),
             (
                 PrimitiveLiteral::Double(val),
                 PrimitiveLiteral::Double(other_val),
                 PrimitiveType::Double,
                 PrimitiveType::Double,
-            ) => val.partial_cmp(other_val),
+            ) => iceberg_float_cmp(*val, *other_val),
             (
                 PrimitiveLiteral::Int(val),
                 PrimitiveLiteral::Int(other_val),
@@ -3844,5 +3875,72 @@ mod tests {
         let expected = Datum::timestamptz_micros(-1407990900000000);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_iceberg_float_order() {
+        // Test float ordering
+        let float_values = vec![
+            Datum::float(f32::NAN),
+            Datum::float(-f32::NAN),
+            Datum::float(f32::MAX),
+            Datum::float(f32::MIN),
+            Datum::float(f32::INFINITY),
+            Datum::float(-f32::INFINITY),
+            Datum::float(1.0),
+            Datum::float(-1.0),
+            Datum::float(0.0),
+            Datum::float(-0.0),
+        ];
+
+        let mut float_sorted = float_values.clone();
+        float_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let float_expected = vec![
+            Datum::float(-f32::NAN),
+            Datum::float(-f32::INFINITY),
+            Datum::float(f32::MIN),
+            Datum::float(-1.0),
+            Datum::float(-0.0),
+            Datum::float(0.0),
+            Datum::float(1.0),
+            Datum::float(f32::MAX),
+            Datum::float(f32::INFINITY),
+            Datum::float(f32::NAN),
+        ];
+
+        assert_eq!(float_sorted, float_expected);
+
+        // Test double ordering
+        let double_values = vec![
+            Datum::double(f64::NAN),
+            Datum::double(-f64::NAN),
+            Datum::double(f64::INFINITY),
+            Datum::double(-f64::INFINITY),
+            Datum::double(f64::MAX),
+            Datum::double(f64::MIN),
+            Datum::double(1.0),
+            Datum::double(-1.0),
+            Datum::double(0.0),
+            Datum::double(-0.0),
+        ];
+
+        let mut double_sorted = double_values.clone();
+        double_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let double_expected = vec![
+            Datum::double(-f64::NAN),
+            Datum::double(-f64::INFINITY),
+            Datum::double(f64::MIN),
+            Datum::double(-1.0),
+            Datum::double(-0.0),
+            Datum::double(0.0),
+            Datum::double(1.0),
+            Datum::double(f64::MAX),
+            Datum::double(f64::INFINITY),
+            Datum::double(f64::NAN),
+        ];
+
+        assert_eq!(double_sorted, double_expected);
     }
 }
