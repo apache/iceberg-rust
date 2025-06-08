@@ -37,18 +37,18 @@ use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
-pub struct Transaction<'a> {
-    base_table: &'a Table,
+pub struct Transaction {
+    base_table: Table,
     current_table: Table,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction {
     /// Creates a new transaction.
-    pub fn new(table: &'a Table) -> Self {
+    pub fn new(table: Table) -> Self {
         Self {
-            base_table: table,
+            base_table: table.clone(),
             current_table: table.clone(),
             updates: vec![],
             requirements: vec![],
@@ -155,7 +155,7 @@ impl<'a> Transaction<'a> {
         self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
-    ) -> Result<FastAppendAction<'a>> {
+    ) -> Result<FastAppendAction> {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
             self,
@@ -167,7 +167,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(self) -> ReplaceSortOrderAction<'a> {
+    pub fn replace_sort_order(self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction {
             tx: self,
             sort_fields: vec![],
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_upgrade_table_version_v1_to_v2() {
         let table = make_v1_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
 
         assert_eq!(
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn test_upgrade_table_version_v2_to_v2() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
 
         assert!(
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_downgrade_table_version() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx.upgrade_table_version(FormatVersion::V1);
 
         assert!(tx.is_err(), "Downgrade table version should fail!");
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn test_set_table_property() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx
             .set_properties(HashMap::from([("a".to_string(), "b".to_string())]))
             .unwrap();
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn test_remove_property() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx
             .remove_properties(vec!["a".to_string(), "b".to_string()])
             .unwrap();
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_set_location() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let tx = tx
             .set_location(String::from("s3://bucket/prefix/new_table"))
             .unwrap();
@@ -360,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_apply_upgrade() {
         let table = make_v1_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         // Upgrade v1 to v1, do nothing.
         let tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
         // Upgrade v1 to v2, success.

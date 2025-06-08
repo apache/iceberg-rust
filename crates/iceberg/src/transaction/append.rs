@@ -29,15 +29,15 @@ use crate::writer::file_writer::ParquetWriter;
 use crate::{Error, ErrorKind};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
-pub struct FastAppendAction<'a> {
-    snapshot_produce_action: SnapshotProduceAction<'a>,
+pub struct FastAppendAction {
+    snapshot_produce_action: SnapshotProduceAction,
     check_duplicate: bool,
 }
 
-impl<'a> FastAppendAction<'a> {
+impl FastAppendAction {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        tx: Transaction<'a>,
+        tx: Transaction,
         snapshot_id: i64,
         commit_uuid: Uuid,
         key_metadata: Vec<u8>,
@@ -87,7 +87,7 @@ impl<'a> FastAppendAction<'a> {
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
     #[allow(dead_code)]
-    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
+    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction> {
         if !self
             .snapshot_produce_action
             .tx
@@ -117,7 +117,7 @@ impl<'a> FastAppendAction<'a> {
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self) -> Result<Transaction<'a>> {
+    pub async fn apply(self) -> Result<Transaction> {
         // Checks duplicate files
         if self.check_duplicate {
             let new_files: HashSet<&str> = self
@@ -170,14 +170,14 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn delete_entries(
         &self,
-        _snapshot_produce: &SnapshotProduceAction<'_>,
+        _snapshot_produce: &SnapshotProduceAction,
     ) -> Result<Vec<ManifestEntry>> {
         Ok(vec![])
     }
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProduceAction<'_>,
+        snapshot_produce: &SnapshotProduceAction,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce
             .tx
@@ -219,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_data_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
         action.add_data_files(vec![]).unwrap();
         assert!(action.apply().await.is_err());
@@ -228,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_snapshot_properties() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table.clone());
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         let mut snapshot_properties = HashMap::new();
@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
+        let tx = Transaction::new(table.clone());
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         // check add data file with incompatible partition value
@@ -352,7 +352,7 @@ mod tests {
     async fn test_add_duplicated_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
         fixture.setup_unpartitioned_manifest_files().await;
-        let tx = crate::transaction::Transaction::new(&fixture.table);
+        let tx = crate::transaction::Transaction::new(fixture.table.clone());
 
         let file_paths = vec![
             format!("{}/1.parquet", &fixture.table_location),
@@ -372,7 +372,7 @@ mod tests {
 
         let file_paths = vec![format!("{}/2.parquet", &fixture.table_location)];
 
-        let tx = crate::transaction::Transaction::new(&fixture.table);
+        let tx = crate::transaction::Transaction::new(fixture.table.clone());
         let fast_append_action = tx.fast_append(None, vec![]).unwrap();
 
         // Attempt to add Parquet file which was deleted from table.
