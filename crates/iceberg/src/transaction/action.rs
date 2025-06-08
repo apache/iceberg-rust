@@ -45,6 +45,7 @@ pub trait TransactionAction: Sync + Send {
     ///
     /// An `ActionCommit` containing table updates and table requirements,
     /// or an error if the commit fails.
+    #[allow(dead_code)]
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit>;
 }
 
@@ -62,6 +63,7 @@ pub trait ApplyTransactionAction {
     /// # Returns
     ///
     /// The modified transaction containing this action, or an error if the operation fails.
+    #[allow(dead_code)]
     fn apply(self, tx: Transaction) -> Result<Transaction>;
 }
 
@@ -84,6 +86,7 @@ pub struct ActionCommit {
 
 impl ActionCommit {
     /// Creates a new `ActionCommit` from the given updates and requirements.
+    #[allow(dead_code)]
     pub fn new(updates: Vec<TableUpdate>, requirements: Vec<TableRequirement>) -> Self {
         Self {
             updates,
@@ -92,11 +95,13 @@ impl ActionCommit {
     }
 
     /// Consumes and returns the list of table updates.
+    #[allow(dead_code)]
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
     }
 
     /// Consumes and returns the list of table requirements.
+    #[allow(dead_code)]
     pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
         take(&mut self.requirements)
     }
