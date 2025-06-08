@@ -716,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.98.0"
+version = "1.99.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f9341b675fa1ea5a8c2e38cff773b8a8a658896bd3f5556c931949565e68886"
+checksum = "6d3964f2ad78d3fe39a327f109faaf0d0d7b2aa1742d99fb9434a36c99ca542a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -3712,7 +3712,7 @@ dependencies = [
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "iceberg_test_utils",
- "ordered-float 4.6.0",
+ "ordered-float 2.10.1",
  "parquet",
  "tokio",
  "uuid",
@@ -4190,7 +4190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
