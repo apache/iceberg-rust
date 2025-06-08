@@ -111,7 +111,7 @@ async fn test_append_data_file() {
     assert_eq!(field_ids, vec![1, 2, 3]);
 
     // commit result
-    let tx = Transaction::new(&table);
+    let tx = Transaction::new(table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
     let tx = append_action.apply().await.unwrap();

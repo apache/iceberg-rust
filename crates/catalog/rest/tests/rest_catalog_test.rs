@@ -347,7 +347,7 @@ async fn test_update_table() {
     );
 
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
+    let table2 = Transaction::new(table)
         .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
         .unwrap()
         .commit(&catalog)

@@ -2125,7 +2125,7 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
+        let table = Transaction::new(table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
             .commit(&catalog)
@@ -2250,7 +2250,7 @@ mod tests {
                 .unwrap()
         };
 
-        let table_result = Transaction::new(&table1)
+        let table_result = Transaction::new(table1)
             .upgrade_table_version(FormatVersion::V2)
             .unwrap()
             .commit(&catalog)
