@@ -46,7 +46,7 @@ pub struct Transaction {
 
 impl Transaction {
     /// Creates a new transaction.
-    pub fn new(table: Table) -> Self {
+    pub fn new(table: &Table) -> Self {
         Self {
             base_table: table.clone(),
             current_table: table.clone(),
