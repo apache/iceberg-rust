@@ -202,6 +202,35 @@ please cancel the release for the current `release_version`,
 _increase th RC counting_ and re-initiate a release with the new `release_version`.
 And remember to delete the wrong artifacts from the SVN dist repo.
 
+## How to verify a release
+
+### Validating a source release
+
+A release contains links to following things:
+
+* A source tarball
+* A signature(.asc)
+* A checksum(.sha512)
+
+After downloading them, here are the instructions on how to verify them.
+
+* Import keys:
+
+```bash
+curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+gpg --import KEYS
+```
+* Verify the `.asc` file: ```gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc```
+* Verify the checksums: ```shasum -a 512 apache-iceberg-rust-${iceberg_version}.tar.gz.sha512``` 
+* Verify build and test:
+```bash
+tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
+cd apache-iceberg-rust-${iceberg_version}
+make build && make test
+```
+
+
+
 ## Voting
 
 Iceberg Community Vote should send email to: <dev@iceberg.apache.org>:
