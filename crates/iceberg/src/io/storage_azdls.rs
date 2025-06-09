@@ -230,9 +230,6 @@ struct AzureStoragePath {
 
     account_name: String,
 
-    /// Either `blob` or `dfs` for Blob Storage and ADLSv2 respectively.
-    storage_service: String,
-
     /// The endpoint suffix, e.g., `core.windows.net` for the public cloud
     /// endpoint.
     endpoint_suffix: String,
@@ -249,10 +246,9 @@ impl AzureStoragePath {
     /// This is possible because the path is fully qualified.
     fn as_endpoint(&self) -> String {
         format!(
-            "{}://{}.{}.{}",
+            "{}://{}.dfs.{}",
             self.scheme.as_http_scheme(),
             self.account_name,
-            self.storage_service,
             self.endpoint_suffix
         )
     }
@@ -278,7 +274,6 @@ impl FromStr for AzureStoragePath {
             scheme,
             filesystem: filesystem.to_string(),
             account_name: account_name.to_string(),
-            storage_service: storage_service.to_string(),
             endpoint_suffix: endpoint_suffix.to_string(),
             path: url.path().to_string(),
         })
@@ -505,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_azure_storage_path() {
+    fn test_azure_storage_path_parse() {
         let test_cases = vec![
             (
                 "succeeds",
@@ -514,7 +509,6 @@ mod tests {
                     scheme: AzureStorageScheme::Abfss,
                     filesystem: "somefs".to_string(),
                     account_name: "myaccount".to_string(),
-                    storage_service: "dfs".to_string(),
                     endpoint_suffix: "core.windows.net".to_string(),
                     path: "/path/to/file.parquet".to_string(),
                 }),
@@ -547,6 +541,50 @@ mod tests {
                     assert!(result.is_err(), "Test case {} expected error.", name);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_azure_storage_path_endpoint() {
+        let test_cases = vec![
+            (
+                "abfss uses https",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfss,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "https://myaccount.dfs.core.windows.net",
+            ),
+            (
+                "abfs uses http",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfs,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "http://myaccount.dfs.core.windows.net",
+            ),
+            (
+                "wasbs uses https and dfs",
+                AzureStoragePath {
+                    scheme: AzureStorageScheme::Abfss,
+                    filesystem: "myfs".to_string(),
+                    account_name: "myaccount".to_string(),
+                    endpoint_suffix: "core.windows.net".to_string(),
+                    path: "/path/to/file.parquet".to_string(),
+                },
+                "https://myaccount.dfs.core.windows.net",
+            ),
+        ];
+
+        for (name, path, expected) in test_cases {
+            let endpoint = path.as_endpoint();
+            assert_eq!(endpoint, expected, "Test case: {}", name);
         }
     }
 }
