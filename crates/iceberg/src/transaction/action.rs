@@ -33,7 +33,7 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 /// Each action is responsible for generating the updates and requirements needed
 /// to modify the table metadata.
 #[async_trait]
-pub trait TransactionAction: Sync + Send {
+pub(crate) trait TransactionAction: Sync + Send {
     /// Commits this action against the provided table and returns the resulting updates.
     /// NOTE: This function is intended for internal use only and should not be called directly by users.
     ///
