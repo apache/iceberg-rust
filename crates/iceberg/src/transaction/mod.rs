@@ -186,27 +186,13 @@ impl Transaction {
         )
         .context(tx)
         .sleep(tokio::time::sleep)
-        .when(|e| {
-            if let Some(err) = e.downcast_ref::<Error>() {
-                err.kind() == ErrorKind::DataInvalid // TODO add retryable error kind
-            } else {
-                false
-            }
-        })
+        // todo use a specific commit failure
+        .when(|e| e.kind() == ErrorKind::DataInvalid)
         .await
         .1
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to commit transaction! caused by: {e}"),
-            )
-        })
     }
 
-    async fn do_commit(
-        &mut self,
-        catalog: Arc<&dyn Catalog>,
-    ) -> std::result::Result<Table, anyhow::Error> {
+    async fn do_commit(&mut self, catalog: Arc<&dyn Catalog>) -> Result<Table> {
         let base_table_identifier = self.base_table.identifier().to_owned();
 
         let refreshed = catalog
@@ -244,10 +230,7 @@ impl Transaction {
             .requirements(existing_requirements)
             .build();
 
-        catalog
-            .update_table(table_commit)
-            .await
-            .map_err(anyhow::Error::from)
+        catalog.update_table(table_commit).await
     }
 }
 
