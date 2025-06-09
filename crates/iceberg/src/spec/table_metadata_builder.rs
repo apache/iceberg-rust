@@ -21,12 +21,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
-    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, TableMetadata, UnboundPartitionSpec,
-    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
-    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
+    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
+    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
+    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, PartitionSpec, PartitionSpecBuilder,
+    PartitionStatisticsFile, RESERVED_PROPERTIES, Schema, SchemaRef, Snapshot, SnapshotLog,
+    SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableMetadata, UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -120,6 +120,7 @@ impl TableMetadataBuilder {
                 refs: HashMap::default(),
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
+                encryption_keys: HashMap::new(),
             },
             last_updated_ms: None,
             changes: vec![],
@@ -351,7 +352,7 @@ impl TableMetadataBuilder {
                     "Cannot add snapshot with sequence number {} older than last sequence number {}",
                     snapshot.sequence_number(),
                     self.metadata.last_sequence_number
-                )
+                ),
             ));
         }
 
@@ -761,17 +762,19 @@ impl TableMetadataBuilder {
             ));
         }
 
-        let schemaless_spec =
-            self.metadata
-                .partition_specs
-                .get(&spec_id)
-                .ok_or_else(|| {
-                    Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set default partition spec to unknown spec with id: '{spec_id}'",),
-            )
-                })?
-                .clone();
+        let schemaless_spec = self
+            .metadata
+            .partition_specs
+            .get(&spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
+                    ),
+                )
+            })?
+            .clone();
         let spec = Arc::unwrap_or_clone(schemaless_spec);
         let spec_type = spec.partition_type(self.get_current_schema()?)?;
         self.metadata.default_spec = Arc::new(spec);
@@ -1210,6 +1213,37 @@ impl TableMetadataBuilder {
     fn highest_sort_order_id(&self) -> Option<i64> {
         self.metadata.sort_orders.keys().max().copied()
     }
+
+    /// Remove schemas by their ids from the table metadata.
+    /// Does nothing if a schema id is not present. Active schemas should not be removed.
+    pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
+        if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot remove current schema",
+            ));
+        }
+
+        if schema_id_to_remove.is_empty() {
+            return Ok(self);
+        }
+
+        let mut removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
+        self.metadata.schemas.retain(|id, _schema| {
+            if schema_id_to_remove.contains(id) {
+                removed_schemas.push(*id);
+                false
+            } else {
+                true
+            }
+        });
+
+        self.changes.push(TableUpdate::RemoveSchemas {
+            schema_ids: removed_schemas,
+        });
+
+        Ok(self)
+    }
 }
 
 impl From<TableMetadataBuildResult> for TableMetadata {
@@ -1225,6 +1259,7 @@ mod tests {
     use std::thread::sleep;
 
     use super::*;
+    use crate::TableIdent;
     use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
@@ -1232,7 +1267,6 @@ mod tests {
         UnboundPartitionField,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
     const LAST_ASSIGNED_COLUMN_ID: i32 = 3;
@@ -1377,12 +1411,10 @@ mod tests {
                 NestedField::required(
                     13,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        14,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(14, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(15, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1418,12 +1450,10 @@ mod tests {
                 NestedField::required(
                     3,
                     "struct",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        5,
-                        "nested",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .into()])),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(5, "nested", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long)).into(),
@@ -1935,19 +1965,21 @@ mod tests {
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
 
-        assert!(builder
-            .clone()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 10,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
-                },
-            })
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot set 'main' to unknown snapshot: '10'"));
+        assert!(
+            builder
+                .clone()
+                .set_ref(MAIN_BRANCH, SnapshotReference {
+                    snapshot_id: 10,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                })
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot set 'main' to unknown snapshot: '10'")
+        );
 
         let build_result = builder
             .set_ref(MAIN_BRANCH, SnapshotReference {
@@ -2129,9 +2161,10 @@ mod tests {
             .build()
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Cannot find partition source field"));
+        assert!(
+            err.to_string()
+                .contains("Cannot find partition source field")
+        );
     }
 
     #[test]
@@ -2250,9 +2283,10 @@ mod tests {
         let err = builder
             .set_branch_snapshot(snapshot, MAIN_BRANCH)
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Cannot add snapshot with sequence number"));
+        assert!(
+            err.to_string()
+                .contains("Cannot add snapshot with sequence number")
+        );
     }
 
     #[test]
@@ -2411,5 +2445,55 @@ mod tests {
             table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
             table.metadata().current_snapshot_id().unwrap()
         );
+    }
+
+    #[test]
+    fn test_active_schema_cannot_be_removed() {
+        let builder = builder_without_changes(FormatVersion::V2);
+        builder.remove_schemas(&[0]).unwrap_err();
+    }
+
+    #[test]
+    fn test_remove_schemas() {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let table = Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap();
+
+        assert_eq!(2, table.metadata().schemas.len());
+
+        {
+            // can not remove active schema
+            let meta_data_builder = table.metadata().clone().into_builder(None);
+            meta_data_builder.remove_schemas(&[1]).unwrap_err();
+        }
+
+        let mut meta_data_builder = table.metadata().clone().into_builder(None);
+        meta_data_builder = meta_data_builder.remove_schemas(&[0]).unwrap();
+        let build_result = meta_data_builder.build().unwrap();
+        assert_eq!(1, build_result.metadata.schemas.len());
+        assert_eq!(1, build_result.metadata.current_schema_id);
+        assert_eq!(1, build_result.metadata.current_schema().schema_id());
+        assert_eq!(1, build_result.changes.len());
+
+        let remove_schema_ids =
+            if let TableUpdate::RemoveSchemas { schema_ids } = &build_result.changes[0] {
+                schema_ids
+            } else {
+                unreachable!("Expected RemoveSchema change")
+            };
+        assert_eq!(remove_schema_ids, &[0]);
     }
 }

@@ -26,7 +26,7 @@ use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
+use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -839,12 +839,9 @@ mod tests {
 
     fn simple_table_schema() -> Schema {
         Schema::builder()
-            .with_fields(vec![NestedField::required(
-                1,
-                "foo",
-                Type::Primitive(PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
             .build()
             .unwrap()
     }
@@ -1050,10 +1047,12 @@ mod tests {
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
-        assert!(!catalog
-            .namespace_exists(&NamespaceIdent::new("b".into()))
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&NamespaceIdent::new("b".into()))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1162,6 +1161,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_namespace_noop() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        catalog
+            .update_namespace(&namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
+            HashMap::from_iter([("exists".to_string(), "true".to_string())])
+        )
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let mut props = HashMap::from_iter([
+            ("prop1".to_string(), "val1".to_string()),
+            ("prop2".into(), "val2".into()),
+        ]);
+
+        catalog
+            .update_namespace(&namespace_ident, props.clone())
+            .await
+            .unwrap();
+
+        props.insert("exists".into(), "true".into());
+
+        assert_eq!(
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
+            props
+        )
+    }
+
+    #[tokio::test]
+    async fn test_update_nested_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::from_strs(["a", "b"]).unwrap();
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let mut props = HashMap::from_iter([
+            ("prop1".to_string(), "val1".to_string()),
+            ("prop2".into(), "val2".into()),
+        ]);
+
+        catalog
+            .update_namespace(&namespace_ident, props.clone())
+            .await
+            .unwrap();
+
+        props.insert("exists".into(), "true".into());
+
+        assert_eq!(
+            *catalog
+                .get_namespace(&namespace_ident)
+                .await
+                .unwrap()
+                .properties(),
+            props
+        )
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace_errors_if_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+
+        let props = HashMap::from_iter([
+            ("prop1".to_string(), "val1".to_string()),
+            ("prop2".into(), "val2".into()),
+        ]);
+
+        let err = catalog
+            .update_namespace(&namespace_ident, props)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.message(),
+            format!("No such namespace: {:?}", namespace_ident)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace_errors_if_nested_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::from_strs(["a", "b"]).unwrap();
+
+        let props = HashMap::from_iter([
+            ("prop1".to_string(), "val1".to_string()),
+            ("prop2".into(), "val2".into()),
+        ]);
+
+        let err = catalog
+            .update_namespace(&namespace_ident, props)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.message(),
+            format!("No such namespace: {:?}", namespace_ident)
+        );
+    }
+
+    #[tokio::test]
     async fn test_drop_namespace() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -1183,10 +1306,12 @@ mod tests {
 
         catalog.drop_namespace(&namespace_ident_a_b).await.unwrap();
 
-        assert!(!catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
 
         assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
     }
@@ -1210,15 +1335,19 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!catalog
-            .namespace_exists(&namespace_ident_a_b_c)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&namespace_ident_a_b_c)
+                .await
+                .unwrap()
+        );
 
-        assert!(catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
 
         assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
     }
@@ -1275,10 +1404,12 @@ mod tests {
 
         assert!(!catalog.namespace_exists(&namespace_ident_a).await.unwrap());
 
-        assert!(catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1341,11 +1472,13 @@ mod tests {
 
         assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
 
-        assert!(table
-            .metadata_location()
-            .unwrap()
-            .to_string()
-            .starts_with(&location))
+        assert!(
+            table
+                .metadata_location()
+                .unwrap()
+                .to_string()
+                .starts_with(&location)
+        )
     }
 
     #[tokio::test]
@@ -1392,8 +1525,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_in_nested_namespace_falls_back_to_nested_namespace_location_if_table_location_is_missing(
-    ) {
+    async fn test_create_table_in_nested_namespace_falls_back_to_nested_namespace_location_if_table_location_is_missing()
+     {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
 
@@ -1449,8 +1582,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
-    ) {
+    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing()
+     {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc.clone()).await;
 
@@ -1489,8 +1622,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_in_nested_namespace_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
-    ) {
+    async fn test_create_table_in_nested_namespace_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing()
+     {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc.clone()).await;
 

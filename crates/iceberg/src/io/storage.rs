@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use opendal::layers::RetryLayer;
+#[cfg(feature = "storage-azdls")]
+use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
 #[cfg(feature = "storage-oss")]
@@ -26,6 +28,8 @@ use opendal::services::OssConfig;
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
 
+#[cfg(feature = "storage-azdls")]
+use super::AzureStorageScheme;
 use super::FileIOBuilder;
 use crate::{Error, ErrorKind};
 
@@ -36,17 +40,28 @@ pub(crate) enum Storage {
     Memory(Operator),
     #[cfg(feature = "storage-fs")]
     LocalFs,
+    /// Expects paths of the form `s3[a]://<bucket>/<path>`.
     #[cfg(feature = "storage-s3")]
     S3 {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
-        scheme_str: String,
+        configured_scheme: String,
         config: Arc<S3Config>,
     },
-    #[cfg(feature = "storage-oss")]
-    Oss { config: Arc<OssConfig> },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
+    #[cfg(feature = "storage-oss")]
+    Oss { config: Arc<OssConfig> },
+    /// Expects paths of the form
+    /// `abfs[s]://<filesystem>@<account>.dfs.<endpoint-suffix>/<path>` or
+    /// `wasb[s]://<container>@<account>.blob.<endpoint-suffix>/<path>`.
+    #[cfg(feature = "storage-azdls")]
+    Azdls {
+        /// Because Azdls accepts multiple possible schemes, we store the full
+        /// passed scheme here to later validate schemes passed via paths.
+        configured_scheme: AzureStorageScheme,
+        config: Arc<AzdlsConfig>,
+    },
 }
 
 impl Storage {
@@ -62,7 +77,7 @@ impl Storage {
             Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
-                scheme_str,
+                configured_scheme: scheme_str,
                 config: super::s3_config_parse(props)?.into(),
             }),
             #[cfg(feature = "storage-gcs")]
@@ -73,6 +88,14 @@ impl Storage {
             Scheme::Oss => Ok(Self::Oss {
                 config: super::oss_config_parse(props)?.into(),
             }),
+            #[cfg(feature = "storage-azdls")]
+            Scheme::Azdls => {
+                let scheme = scheme_str.parse::<AzureStorageScheme>()?;
+                Ok(Self::Azdls {
+                    config: super::azdls_config_parse(props)?.into(),
+                    configured_scheme: scheme,
+                })
+            }
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -102,9 +125,9 @@ impl Storage {
             #[cfg(feature = "storage-memory")]
             Storage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok((op.clone(), stripped))
+                    Ok::<_, crate::Error>((op.clone(), stripped))
                 } else {
-                    Ok((op.clone(), &path[1..]))
+                    Ok::<_, crate::Error>((op.clone(), &path[1..]))
                 }
             }
             #[cfg(feature = "storage-fs")]
@@ -112,18 +135,21 @@ impl Storage {
                 let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
-                    Ok((op, stripped))
+                    Ok::<_, crate::Error>((op, stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    Ok::<_, crate::Error>((op, &path[1..]))
                 }
             }
             #[cfg(feature = "storage-s3")]
-            Storage::S3 { scheme_str, config } => {
+            Storage::S3 {
+                configured_scheme,
+                config,
+            } => {
                 let op = super::s3_config_build(config, path)?;
                 let op_info = op.info();
 
                 // Check prefix of s3 path.
-                let prefix = format!("{}://{}/", scheme_str, op_info.name());
+                let prefix = format!("{}://{}/", configured_scheme, op_info.name());
                 if path.starts_with(&prefix) {
                     Ok((op, &path[prefix.len()..]))
                 } else {
@@ -133,7 +159,6 @@ impl Storage {
                     ))
                 }
             }
-
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
@@ -162,11 +187,17 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-azdls")]
+            Storage::Azdls {
+                configured_scheme,
+                config,
+            } => super::azdls_create_operator(path, config, configured_scheme),
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
-                not(feature = "storage-oss")
+                not(feature = "storage-oss"),
+                not(feature = "storage-azdls"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -189,6 +220,7 @@ impl Storage {
             "s3" | "s3a" => Ok(Scheme::S3),
             "gs" | "gcs" => Ok(Scheme::Gcs),
             "oss" => Ok(Scheme::Oss),
+            "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
             s => Ok(s.parse::<Scheme>()?),
         }
     }

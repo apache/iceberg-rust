@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
 
-use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
+use apache_avro::{Reader as AvroReader, Writer as AvroWriter, from_value, to_value};
 use serde_derive::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use super::_serde::DataFileSerde;
-use super::{data_file_schema_v1, data_file_schema_v2, Datum, FormatVersion, Schema};
+use super::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
 use crate::error::Result;
 use crate::spec::{Struct, StructType};
 use crate::{Error, ErrorKind};
@@ -43,7 +43,7 @@ pub struct DataFile {
     pub(crate) file_path: String,
     /// field id: 101
     ///
-    /// String file format name, avro, orc or parquet
+    /// String file format name, `avro`, `orc`, `parquet`, or `puffin`
     pub(crate) file_format: DataFileFormat,
     /// field id: 102
     ///
@@ -52,7 +52,7 @@ pub struct DataFile {
     pub(crate) partition: Struct,
     /// field id: 103
     ///
-    /// Number of records in this file
+    /// Number of records in this file, or the cardinality of a deletion vector
     pub(crate) record_count: u64,
     /// field id: 104
     ///
@@ -148,9 +148,35 @@ pub struct DataFile {
     /// delete files.
     #[builder(default, setter(strip_option))]
     pub(crate) sort_order_id: Option<i32>,
+    /// field id: 142
+    ///
+    /// The _row_id for the first row in the data file.
+    /// For more details, refer to https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance
+    #[builder(default)]
+    pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
     pub(crate) partition_spec_id: i32,
+    /// field id: 143
+    ///
+    /// Fully qualified location (URI with FS scheme) of a data file that all deletes reference.
+    /// Position delete metadata can use `referenced_data_file` when all deletes tracked by the
+    /// entry are in a single data file. Setting the referenced file is required for deletion vectors.
+    #[builder(default)]
+    pub(crate) referenced_data_file: Option<String>,
+    /// field: 144
+    ///
+    /// The offset in the file where the content starts.
+    /// The `content_offset` and `content_size_in_bytes` fields are used to reference a specific blob
+    /// for direct access to a deletion vector. For deletion vectors, these values are required and must
+    /// exactly match the `offset` and `length` stored in the Puffin footer for the deletion vector blob.
+    #[builder(default)]
+    pub(crate) content_offset: Option<i64>,
+    /// field: 145
+    ///
+    /// The length of a referenced content stored in the file; required if `content_offset` is present
+    #[builder(default)]
+    pub(crate) content_size_in_bytes: Option<i64>,
 }
 
 impl DataFile {
@@ -226,6 +252,10 @@ impl DataFile {
     pub fn equality_ids(&self) -> &[i32] {
         &self.equality_ids
     }
+    /// Get the first row id in the data file.
+    pub fn first_row_id(&self) -> Option<i64> {
+        self.first_row_id
+    }
     /// Get the sort order id of the data file.
     /// Only data files and equality delete files should be
     /// written with a non-null order id. Position deletes are required to be
@@ -234,6 +264,21 @@ impl DataFile {
     /// delete files.
     pub fn sort_order_id(&self) -> Option<i32> {
         self.sort_order_id
+    }
+    /// Get the fully qualified referenced location for the corresponding data file.
+    /// Positional delete files could have the field set, and deletion vectors must the field set.
+    pub fn referenced_data_file(&self) -> Option<String> {
+        self.referenced_data_file.clone()
+    }
+    /// Get the offset in the file where the blob content starts.
+    /// Only meaningful for puffin blobs, and required for deletion vectors.
+    pub fn content_offset(&self) -> Option<i64> {
+        self.content_offset
+    }
+    /// Get the length of a puffin blob.
+    /// Only meaningful for puffin blobs, and required for deletion vectors.
+    pub fn content_size_in_bytes(&self) -> Option<i64> {
+        self.content_size_in_bytes
     }
 }
 
@@ -323,6 +368,8 @@ pub enum DataFileFormat {
     Orc,
     /// Parquet file format: <https://parquet.apache.org/>
     Parquet,
+    /// Puffin file format: <https://iceberg.apache.org/puffin-spec/>
+    Puffin,
 }
 
 impl FromStr for DataFileFormat {
@@ -333,6 +380,7 @@ impl FromStr for DataFileFormat {
             "avro" => Ok(Self::Avro),
             "orc" => Ok(Self::Orc),
             "parquet" => Ok(Self::Parquet),
+            "puffin" => Ok(Self::Puffin),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Unsupported data file format: {}", s),
@@ -347,6 +395,7 @@ impl std::fmt::Display for DataFileFormat {
             DataFileFormat::Avro => write!(f, "avro"),
             DataFileFormat::Orc => write!(f, "orc"),
             DataFileFormat::Parquet => write!(f, "parquet"),
+            DataFileFormat::Puffin => write!(f, "puffin"),
         }
     }
 }

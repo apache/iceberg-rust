@@ -17,14 +17,31 @@
 
 //! Iceberg name mapping.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DefaultOnNull};
+use serde_with::{DefaultOnNull, serde_as};
+
+/// Property name for name mapping.
+pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
 
 /// Iceberg fallback field name to ID mapping.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(transparent)]
 pub struct NameMapping {
-    pub root: Vec<MappedField>,
+    root: Vec<MappedField>,
+}
+
+impl NameMapping {
+    /// Create a new [`NameMapping`] given a collection of mapped fields.
+    pub fn new(fields: Vec<MappedField>) -> Self {
+        Self { root: fields }
+    }
+
+    /// Get a reference to fields which are to be mapped from name to field ID.
+    pub fn fields(&self) -> &[MappedField] {
+        &self.root
+    }
 }
 
 /// Maps field names to IDs.
@@ -33,12 +50,38 @@ pub struct NameMapping {
 #[serde(rename_all = "kebab-case")]
 pub struct MappedField {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub field_id: Option<i32>,
-    pub names: Vec<String>,
+    field_id: Option<i32>,
+    names: Vec<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde_as(deserialize_as = "DefaultOnNull")]
-    pub fields: Vec<MappedField>,
+    fields: Vec<Arc<MappedField>>,
+}
+
+impl MappedField {
+    /// Create a new [`MappedField`].
+    pub fn new(field_id: Option<i32>, names: Vec<String>, fields: Vec<MappedField>) -> Self {
+        Self {
+            field_id,
+            names,
+            fields: fields.into_iter().map(Arc::new).collect(),
+        }
+    }
+
+    /// Iceberg field ID when a field's name is present within `names`.
+    pub fn field_id(&self) -> Option<i32> {
+        self.field_id
+    }
+
+    /// Get a reference to names for a mapped field.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// Get a reference to the field mapping for any child fields.
+    pub fn fields(&self) -> &[Arc<MappedField>] {
+        &self.fields
+    }
 }
 
 #[cfg(test)]
@@ -196,15 +239,17 @@ mod tests {
                             field_id: Some(4),
                             names: vec!["latitude".to_string(), "lat".to_string()],
                             fields: vec![]
-                        },
+                        }
+                        .into(),
                         MappedField {
                             field_id: Some(5),
                             names: vec!["longitude".to_string(), "long".to_string()],
                             fields: vec![]
-                        },
+                        }
+                        .into(),
                     ]
                 }
-            ]
+            ],
         });
     }
 
@@ -230,11 +275,14 @@ mod tests {
                 MappedField {
                     field_id: Some(4),
                     names: vec!["qux".to_string()],
-                    fields: vec![MappedField {
-                        field_id: Some(5),
-                        names: vec!["element".to_string()],
-                        fields: vec![],
-                    }],
+                    fields: vec![
+                        MappedField {
+                            field_id: Some(5),
+                            names: vec!["element".to_string()],
+                            fields: vec![],
+                        }
+                        .into(),
+                    ],
                 },
                 MappedField {
                     field_id: Some(6),
@@ -244,7 +292,8 @@ mod tests {
                             field_id: Some(7),
                             names: vec!["key".to_string()],
                             fields: vec![],
-                        },
+                        }
+                        .into(),
                         MappedField {
                             field_id: Some(8),
                             names: vec!["value".to_string()],
@@ -253,35 +302,43 @@ mod tests {
                                     field_id: Some(9),
                                     names: vec!["key".to_string()],
                                     fields: vec![],
-                                },
+                                }
+                                .into(),
                                 MappedField {
                                     field_id: Some(10),
                                     names: vec!["value".to_string()],
                                     fields: vec![],
-                                },
+                                }
+                                .into(),
                             ],
-                        },
+                        }
+                        .into(),
                     ],
                 },
                 MappedField {
                     field_id: Some(11),
                     names: vec!["location".to_string()],
-                    fields: vec![MappedField {
-                        field_id: Some(12),
-                        names: vec!["element".to_string()],
-                        fields: vec![
-                            MappedField {
-                                field_id: Some(13),
-                                names: vec!["latitude".to_string()],
-                                fields: vec![],
-                            },
-                            MappedField {
-                                field_id: Some(14),
-                                names: vec!["longitude".to_string()],
-                                fields: vec![],
-                            },
-                        ],
-                    }],
+                    fields: vec![
+                        MappedField {
+                            field_id: Some(12),
+                            names: vec!["element".to_string()],
+                            fields: vec![
+                                MappedField {
+                                    field_id: Some(13),
+                                    names: vec!["latitude".to_string()],
+                                    fields: vec![],
+                                }
+                                .into(),
+                                MappedField {
+                                    field_id: Some(14),
+                                    names: vec!["longitude".to_string()],
+                                    fields: vec![],
+                                }
+                                .into(),
+                            ],
+                        }
+                        .into(),
+                    ],
                 },
                 MappedField {
                     field_id: Some(15),
@@ -291,12 +348,14 @@ mod tests {
                             field_id: Some(16),
                             names: vec!["name".to_string()],
                             fields: vec![],
-                        },
+                        }
+                        .into(),
                         MappedField {
                             field_id: Some(17),
                             names: vec!["age".to_string()],
                             fields: vec![],
-                        },
+                        }
+                        .into(),
                     ],
                 },
             ],

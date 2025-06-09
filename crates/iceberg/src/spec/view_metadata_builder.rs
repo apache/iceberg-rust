@@ -23,16 +23,16 @@ use itertools::Itertools;
 use uuid::Uuid;
 
 use super::{
-    Schema, SchemaId, TableMetadataBuilder, ViewFormatVersion, ViewMetadata, ViewRepresentation,
-    ViewVersion, ViewVersionLog, ViewVersionRef, DEFAULT_SCHEMA_ID, INITIAL_VIEW_VERSION_ID,
-    ONE_MINUTE_MS, VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED,
+    DEFAULT_SCHEMA_ID, INITIAL_VIEW_VERSION_ID, ONE_MINUTE_MS, Schema, SchemaId,
+    TableMetadataBuilder, VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED,
     VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED_DEFAULT, VIEW_PROPERTY_VERSION_HISTORY_SIZE,
-    VIEW_PROPERTY_VERSION_HISTORY_SIZE_DEFAULT,
+    VIEW_PROPERTY_VERSION_HISTORY_SIZE_DEFAULT, ViewFormatVersion, ViewMetadata,
+    ViewRepresentation, ViewVersion, ViewVersionLog, ViewVersionRef,
 };
+use crate::ViewCreation;
 use crate::catalog::ViewUpdate;
 use crate::error::{Error, ErrorKind, Result};
 use crate::io::is_truthy;
-use crate::ViewCreation;
 
 /// Manipulating view metadata.
 ///
@@ -219,7 +219,20 @@ impl ViewMetadataBuilder {
             });
         }
 
-        self.history_entry = Some(version.log());
+        // Use the timestamp of the snapshot if it was added in this set of changes,
+        // otherwise use a current timestamp for the log. The view version was added
+        // by a past transaction.
+        let version_added_in_this_changes = self
+            .changes
+            .iter()
+            .any(|update| matches!(update, ViewUpdate::AddViewVersion { view_version } if view_version.version_id() == version_id));
+
+        let mut log = version.log();
+        if !version_added_in_this_changes {
+            log.set_timestamp_ms(Utc::now().timestamp_millis());
+        }
+
+        self.history_entry = Some(log);
 
         Ok(self)
     }
@@ -257,9 +270,8 @@ impl ViewMetadataBuilder {
             // in this case. I prefer to add changes as the state of the builder is
             // potentially mutated (`last_added_version_id`), thus we should record the change.
             if self.last_added_version_id != Some(version_id) {
-                self.changes.push(ViewUpdate::AddViewVersion {
-                    view_version: view_version.with_version_id(version_id),
-                });
+                self.changes
+                    .push(ViewUpdate::AddViewVersion { view_version });
                 self.last_added_version_id = Some(version_id);
             }
             return Ok(version_id);
@@ -293,7 +305,6 @@ impl ViewMetadataBuilder {
 
         require_unique_dialects(&view_version)?;
 
-        // ToDo Discuss: This check is not present in Java.
         // The `TableMetadataBuilder` uses these checks in multiple places - also in Java.
         // If we think delayed requests are a problem, I think we should also add it here.
         if let Some(last) = self.metadata.version_log.last() {
@@ -584,7 +595,9 @@ fn require_no_dialect_dropped(previous: &ViewVersion, current: &ViewVersion) -> 
             ErrorKind::DataInvalid,
             format!(
                 "Cannot replace view due to loss of view dialects: \nPrevious dialects: {:?}\nNew dialects: {:?}\nSet {} to true to allow dropping dialects.",
-                Vec::from_iter(base_dialects), Vec::from_iter(updated_dialects), VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED
+                Vec::from_iter(base_dialects),
+                Vec::from_iter(updated_dialects),
+                VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED
             ),
         ));
     }
@@ -626,10 +639,10 @@ pub(super) fn require_unique_dialects(view_version: &ViewVersion) -> Result<()> 
 mod test {
     use super::super::view_metadata::tests::get_test_view_metadata;
     use super::*;
+    use crate::NamespaceIdent;
     use crate::spec::{
         NestedField, PrimitiveType, SqlViewRepresentation, Type, ViewRepresentations,
     };
-    use crate::NamespaceIdent;
 
     fn new_view_version(id: usize, schema_id: SchemaId, sql: &str) -> ViewVersion {
         new_view_version_with_dialect(id, schema_id, sql, vec!["spark"])
@@ -712,11 +725,13 @@ mod test {
         let changes = build_result.changes;
         assert_eq!(changes.len(), 5);
         assert!(changes.contains(&ViewUpdate::SetLocation { location }));
-        assert!(changes.contains(&ViewUpdate::AddViewVersion {
-            view_version: version
-                .with_version_id(INITIAL_VIEW_VERSION_ID)
-                .with_schema_id(-1)
-        }));
+        assert!(
+            changes.contains(&ViewUpdate::AddViewVersion {
+                view_version: version
+                    .with_version_id(INITIAL_VIEW_VERSION_ID)
+                    .with_schema_id(-1)
+            })
+        );
         assert!(changes.contains(&ViewUpdate::SetCurrentViewVersion {
             view_version_id: -1
         }));
@@ -850,6 +865,54 @@ mod test {
             ),
             vec![three.clone(), one.clone(), three.clone()]
         );
+    }
+
+    #[test]
+    fn test_use_previously_added_version() {
+        let v2 = new_view_version(2, 1, "select 1 as count");
+        let v3 = new_view_version(3, 1, "select count(1) as count from t2");
+        let schema = Schema::builder().build().unwrap();
+
+        let log_v2 = ViewVersionLog::new(2, v2.timestamp_ms());
+        let log_v3 = ViewVersionLog::new(3, v3.timestamp_ms());
+
+        let metadata_v2 = builder_without_changes()
+            .set_current_version(v2.clone(), schema.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Log should use the exact timestamp of v1
+        assert_eq!(metadata_v2.version_log.last().unwrap(), &log_v2);
+
+        // Add second version, should use exact timestamp of v2
+        let metadata_v3 = metadata_v2
+            .into_builder()
+            .set_current_version(v3.clone(), schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata_v3.version_log[1..], vec![
+            log_v2.clone(),
+            log_v3.clone()
+        ]);
+
+        // Re-use Version 1, add a new log entry with a new timestamp
+        let metadata_v4 = metadata_v3
+            .into_builder()
+            .set_current_version_id(2)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Last entry should be equal to v2 but with an updated timestamp
+        let entry = metadata_v4.version_log.last().unwrap();
+        assert_eq!(entry.version_id(), 2);
+        assert!(entry.timestamp_ms() > v2.timestamp_ms());
     }
 
     #[test]
@@ -1073,32 +1136,23 @@ mod test {
     fn test_view_version_and_schema_deduplication() {
         let schema_one = Schema::builder()
             .with_schema_id(5)
-            .with_fields(vec![NestedField::required(
-                1,
-                "x",
-                Type::Primitive(PrimitiveType::Long),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
             .build()
             .unwrap();
         let schema_two = Schema::builder()
             .with_schema_id(7)
-            .with_fields(vec![NestedField::required(
-                1,
-                "y",
-                Type::Primitive(PrimitiveType::Long),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
             .build()
             .unwrap();
         let schema_three = Schema::builder()
             .with_schema_id(9)
-            .with_fields(vec![NestedField::required(
-                1,
-                "z",
-                Type::Primitive(PrimitiveType::Long),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
             .build()
             .unwrap();
 
@@ -1163,20 +1217,24 @@ mod test {
     fn test_error_on_missing_schema() {
         let builder = builder_without_changes();
         // Missing schema
-        assert!(builder
-            .clone()
-            .add_version(new_view_version(0, 10, "SELECT * FROM foo"))
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot add version with unknown schema: 10"));
+        assert!(
+            builder
+                .clone()
+                .add_version(new_view_version(0, 10, "SELECT * FROM foo"))
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot add version with unknown schema: 10")
+        );
 
         // Missing last added schema
-        assert!(builder
-            .clone()
-            .add_version(new_view_version(0, -1, "SELECT * FROM foo"))
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot set last added schema: no schema has been added"));
+        assert!(
+            builder
+                .clone()
+                .add_version(new_view_version(0, -1, "SELECT * FROM foo"))
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot set last added schema: no schema has been added")
+        );
     }
 
     #[test]
@@ -1190,12 +1248,14 @@ mod test {
             .contains(
                 "Cannot set current version id to last added version: no version has been added."
             ));
-        assert!(builder
-            .clone()
-            .set_current_version_id(10)
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot set current version to unknown version with id: 10"));
+        assert!(
+            builder
+                .clone()
+                .set_current_version_id(10)
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot set current version to unknown version with id: 10")
+        );
     }
 
     #[test]
@@ -1219,15 +1279,17 @@ mod test {
     #[test]
     fn test_error_when_setting_negative_version_history_size() {
         let builder = builder_without_changes();
-        assert!(builder
-            .clone()
-            .set_properties(HashMap::from_iter(vec![(
-                VIEW_PROPERTY_VERSION_HISTORY_SIZE.to_string(),
-                "-1".to_string(),
-            )]))
-            .unwrap_err()
-            .to_string()
-            .contains("version.history.num-entries must be positive but was -1"));
+        assert!(
+            builder
+                .clone()
+                .set_properties(HashMap::from_iter(vec![(
+                    VIEW_PROPERTY_VERSION_HISTORY_SIZE.to_string(),
+                    "-1".to_string(),
+                )]))
+                .unwrap_err()
+                .to_string()
+                .contains("version.history.num-entries must be positive but was -1")
+        );
     }
 
     #[test]
@@ -1283,9 +1345,10 @@ mod test {
             .build()
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Cannot replace view due to loss of view dialects"));
+        assert!(
+            err.to_string()
+                .contains("Cannot replace view due to loss of view dialects")
+        );
     }
 
     #[test]
@@ -1435,9 +1498,10 @@ mod test {
             .build()
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Cannot replace view due to loss of view dialects"));
+        assert!(
+            err.to_string()
+                .contains("Cannot replace view due to loss of view dialects")
+        );
     }
 
     #[test]

@@ -38,7 +38,9 @@
 //! own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)
 //!
 //! # Simple example for the data file writer used parquet physical format:
-//! ```rust, no_run
+//! ```rust, ignore
+//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
+//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::sync::Arc;
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
@@ -47,10 +49,10 @@
 //! use iceberg::spec::DataFile;
 //! use iceberg::transaction::Transaction;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
 //! use iceberg_catalog_memory::MemoryCatalog;
@@ -95,17 +97,19 @@
 //! ```
 //!
 //! # Custom writer to record latency
-//! ```rust, no_run
+//! ```rust, ignore
+//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
+//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::time::Instant;
 //!
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
 //! use iceberg_catalog_memory::MemoryCatalog;
@@ -198,8 +202,8 @@ pub mod file_writer;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFile;
 use crate::Result;
+use crate::spec::DataFile;
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;

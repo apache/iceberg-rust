@@ -16,4 +16,4 @@
 # under the License.
 
 [files]
-extend-exclude = ["**/testdata"]
+extend-exclude = ["**/testdata", "CHANGELOG.md"]

@@ -32,7 +32,7 @@ use uuid::Uuid;
 pub use super::view_metadata_builder::ViewMetadataBuilder;
 use super::view_version::{ViewVersionId, ViewVersionRef};
 use super::{SchemaId, SchemaRef};
-use crate::error::{timestamp_ms_to_utc, Result};
+use crate::error::{Result, timestamp_ms_to_utc};
 use crate::{Error, ErrorKind};
 
 /// Reference to [`ViewMetadata`].
@@ -229,6 +229,12 @@ impl ViewVersionLog {
     pub fn timestamp(&self) -> Result<DateTime<Utc>> {
         timestamp_ms_to_utc(self.timestamp_ms)
     }
+
+    /// Update the timestamp of this version log.
+    pub(crate) fn set_timestamp_ms(&mut self, timestamp_ms: i64) -> &mut Self {
+        self.timestamp_ms = timestamp_ms;
+        self
+    }
 }
 
 pub(super) mod _serde {
@@ -242,11 +248,11 @@ pub(super) mod _serde {
     use uuid::Uuid;
 
     use super::{ViewFormatVersion, ViewVersionId, ViewVersionLog};
+    use crate::Error;
     use crate::spec::schema::_serde::SchemaV2;
     use crate::spec::table_metadata::_serde::VersionNumber;
     use crate::spec::view_version::_serde::ViewVersionV1;
     use crate::spec::{ViewMetadata, ViewVersion};
-    use crate::Error;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -404,8 +410,8 @@ pub(crate) mod tests {
 
     use super::{ViewFormatVersion, ViewMetadataBuilder, ViewVersionLog};
     use crate::spec::{
-        NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
-        ViewRepresentations, ViewVersion, INITIAL_VIEW_VERSION_ID,
+        INITIAL_VIEW_VERSION_ID, NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type,
+        ViewMetadata, ViewRepresentations, ViewVersion,
     };
     use crate::{NamespaceIdent, ViewCreation};
 
@@ -489,12 +495,14 @@ pub(crate) mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(ViewRepresentations(vec![SqlViewRepresentation {
-                sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                    .to_string(),
-                dialect: "spark".to_string(),
-            }
-            .into()]))
+            .with_representations(ViewRepresentations(vec![
+                SqlViewRepresentation {
+                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                        .to_string(),
+                    dialect: "spark".to_string(),
+                }
+                .into(),
+            ]))
             .build();
 
         let expected = ViewMetadata {
@@ -531,12 +539,14 @@ pub(crate) mod tests {
 
     #[test]
     fn test_view_builder_from_view_creation() {
-        let representations = ViewRepresentations(vec![SqlViewRepresentation {
-            sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                .to_string(),
-            dialect: "spark".to_string(),
-        }
-        .into()]);
+        let representations = ViewRepresentations(vec![
+            SqlViewRepresentation {
+                sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                    .to_string(),
+                dialect: "spark".to_string(),
+            }
+            .into(),
+        ]);
         let creation = ViewCreation::builder()
             .location("s3://bucket/warehouse/default.db/event_agg".to_string())
             .name("view".to_string())
@@ -592,12 +602,14 @@ pub(crate) mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(ViewRepresentations(vec![SqlViewRepresentation {
-                sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                    .to_string(),
-                dialect: "spark".to_string(),
-            }
-            .into()]))
+            .with_representations(ViewRepresentations(vec![
+                SqlViewRepresentation {
+                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                        .to_string(),
+                    dialect: "spark".to_string(),
+                }
+                .into(),
+            ]))
             .build();
 
         let expected = ViewMetadata {

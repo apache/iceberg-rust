@@ -163,9 +163,9 @@ impl TableProvider for IcebergTableProvider {
 mod tests {
     use datafusion::common::Column;
     use datafusion::prelude::SessionContext;
+    use iceberg::TableIdent;
     use iceberg::io::FileIO;
     use iceberg::table::{StaticTable, Table};
-    use iceberg::TableIdent;
 
     use super::*;
 

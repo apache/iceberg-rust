@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use opendal::services::FsConfig;
 use opendal::Operator;
+use opendal::services::FsConfig;
 
 use crate::Result;
 

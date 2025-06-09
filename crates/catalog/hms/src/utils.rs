@@ -130,7 +130,7 @@ pub(crate) fn convert_to_database(
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!("Invalid value for setting 'owner_type': {}", v),
-                        ))
+                        ));
                     }
                 };
                 db.owner_type = Some(owner_type);

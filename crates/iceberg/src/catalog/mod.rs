@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
 
@@ -41,7 +42,7 @@ use crate::{Error, ErrorKind, Result};
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+    -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -67,7 +68,7 @@ pub trait Catalog: Debug + Sync + Send {
         properties: HashMap<String, String>,
     ) -> Result<()>;
 
-    /// Drop a namespace from the catalog.
+    /// Drop a namespace from the catalog, or returns error if it doesn't exist.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()>;
 
     /// List tables from namespace.
@@ -83,7 +84,7 @@ pub trait Catalog: Debug + Sync + Send {
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
-    /// Drop a table from the catalog.
+    /// Drop a table from the catalog, or returns error if it doesn't exist.
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
@@ -94,6 +95,18 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+}
+
+/// Common interface for all catalog builders.
+pub trait CatalogBuilder: Default + Debug + Send + Sync {
+    /// The catalog type that this builder creates.
+    type C: Catalog;
+    /// Create a new catalog instance.
+    fn load(
+        self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
@@ -261,11 +274,17 @@ pub struct TableCreation {
     #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
     /// The properties of the table.
-    #[builder(default)]
+    #[builder(default, setter(transform = |props: impl IntoIterator<Item=(String, String)>| {
+        props.into_iter().collect()
+    }))]
     pub properties: HashMap<String, String>,
 }
 
 /// TableCommit represents the commit of a table in the catalog.
+///
+/// The builder is marked as private since it's dangerous and error-prone to construct
+/// [`TableCommit`] directly.
+/// Users are supposed to use [`crate::transaction::Transaction`] to update table.
 #[derive(Debug, TypedBuilder)]
 #[builder(build_method(vis = "pub(crate)"))]
 pub struct TableCommit {
@@ -483,6 +502,12 @@ pub enum TableUpdate {
         /// Snapshot id to remove partition statistics for.
         snapshot_id: i64,
     },
+    /// Remove schemas
+    #[serde(rename_all = "kebab-case")]
+    RemoveSchemas {
+        /// Schema IDs to remove.
+        schema_ids: Vec<i32>,
+    },
 }
 
 impl TableUpdate {
@@ -526,6 +551,7 @@ impl TableUpdate {
             TableUpdate::RemovePartitionStatistics { snapshot_id } => {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
+            TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
         }
     }
 }
@@ -859,17 +885,18 @@ mod tests {
     use std::collections::HashMap;
     use std::fmt::Debug;
 
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use uuid::uuid;
 
     use super::ViewUpdate;
     use crate::spec::{
-        BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
-        ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
+        BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
+        StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -892,6 +919,26 @@ mod tests {
         };
 
         assert_eq!(table_id, TableIdent::from_strs(vec!["ns1", "t1"]).unwrap());
+    }
+
+    #[test]
+    fn test_table_creation_iterator_properties() {
+        let builder = TableCreation::builder()
+            .name("table".to_string())
+            .schema(Schema::builder().build().unwrap());
+
+        fn s(k: &str, v: &str) -> (String, String) {
+            (k.to_string(), v.to_string())
+        }
+
+        let table_creation = builder
+            .properties([s("key", "value"), s("foo", "bar")])
+            .build();
+
+        assert_eq!(
+            HashMap::from([s("key", "value"), s("foo", "bar")]),
+            table_creation.properties
+        );
     }
 
     fn test_serde_json<T: Serialize + DeserializeOwned + PartialEq + Debug>(
@@ -2048,5 +2095,20 @@ mod tests {
                 snapshot_id: 1940541653261589030,
             },
         )
+    }
+
+    #[test]
+    fn test_remove_schema_update() {
+        test_serde_json(
+            r#"
+                {
+                    "action": "remove-schemas",
+                    "schema-ids": [1, 2]
+                }        
+            "#,
+            TableUpdate::RemoveSchemas {
+                schema_ids: vec![1, 2],
+            },
+        );
     }
 }
