@@ -69,6 +69,8 @@
 mod file_io;
 pub use file_io::*;
 
+pub(crate) mod data_cache;
+
 mod storage;
 #[cfg(feature = "storage-memory")]
 mod storage_memory;
