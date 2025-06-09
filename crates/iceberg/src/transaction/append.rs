@@ -219,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_data_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
         action.add_data_files(vec![]).unwrap();
         assert!(action.apply().await.is_err());
@@ -228,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_snapshot_properties() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table.clone());
+        let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         let mut snapshot_properties = HashMap::new();
@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(table.clone());
+        let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
         // check add data file with incompatible partition value
@@ -352,7 +352,7 @@ mod tests {
     async fn test_add_duplicated_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
         fixture.setup_unpartitioned_manifest_files().await;
-        let tx = crate::transaction::Transaction::new(fixture.table.clone());
+        let tx = crate::transaction::Transaction::new(&fixture.table);
 
         let file_paths = vec![
             format!("{}/1.parquet", &fixture.table_location),
@@ -372,7 +372,7 @@ mod tests {
 
         let file_paths = vec![format!("{}/2.parquet", &fixture.table_location)];
 
-        let tx = crate::transaction::Transaction::new(fixture.table.clone());
+        let tx = crate::transaction::Transaction::new(&fixture.table);
         let fast_append_action = tx.fast_append(None, vec![]).unwrap();
 
         // Attempt to add Parquet file which was deleted from table.

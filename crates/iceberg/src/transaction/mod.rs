@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_upgrade_table_version_v1_to_v2() {
         let table = make_v1_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
 
         assert_eq!(
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn test_upgrade_table_version_v2_to_v2() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
 
         assert!(
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_downgrade_table_version() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx.upgrade_table_version(FormatVersion::V1);
 
         assert!(tx.is_err(), "Downgrade table version should fail!");
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn test_set_table_property() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx
             .set_properties(HashMap::from([("a".to_string(), "b".to_string())]))
             .unwrap();
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn test_remove_property() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx
             .remove_properties(vec!["a".to_string(), "b".to_string()])
             .unwrap();
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_set_location() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx
             .set_location(String::from("s3://bucket/prefix/new_table"))
             .unwrap();
@@ -360,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_apply_upgrade() {
         let table = make_v1_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         // Upgrade v1 to v1, do nothing.
         let tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
         // Upgrade v1 to v2, success.

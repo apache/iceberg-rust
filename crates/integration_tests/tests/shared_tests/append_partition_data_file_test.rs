@@ -119,7 +119,7 @@ async fn test_append_partition_data_file() {
     let data_file_valid = data_file_writer_valid.close().await.unwrap();
 
     // commit result
-    let tx = Transaction::new(table);
+    let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action
         .add_data_files(data_file_valid.clone())
@@ -179,7 +179,7 @@ async fn test_schema_incompatible_partition_type(
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
-    let tx = Transaction::new(table);
+    let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
         .add_data_files(data_file_invalid.clone())
@@ -219,7 +219,7 @@ async fn test_schema_incompatible_partition_fields(
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
-    let tx = Transaction::new(table);
+    let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
         .add_data_files(data_file_invalid.clone())

@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn test_replace_sort_order() {
         let table = make_v2_table();
-        let tx = Transaction::new(table);
+        let tx = Transaction::new(&table);
         let tx = tx.replace_sort_order().apply().unwrap();
 
         assert_eq!(
