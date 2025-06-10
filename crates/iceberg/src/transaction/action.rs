@@ -28,7 +28,7 @@ use crate::transaction::Transaction;
 use crate::{Result, TableRequirement, TableUpdate};
 
 /// A boxed, thread-safe reference to a `TransactionAction`.
-pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
+pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
 /// A trait representing an atomic action that can be part of a transaction.
 ///

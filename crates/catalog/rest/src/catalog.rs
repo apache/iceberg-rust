@@ -803,6 +803,7 @@ mod tests {
         UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::transaction::Transaction;
+    use iceberg::transaction::action::ApplyTransactionAction;
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
@@ -2125,8 +2126,11 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await
@@ -2250,8 +2254,11 @@ mod tests {
                 .unwrap()
         };
 
-        let table_result = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table_result = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await;

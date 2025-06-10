@@ -31,6 +31,7 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 use tracing::info;
+use iceberg::transaction::action::ApplyTransactionAction;
 
 const REST_CATALOG_PORT: u16 = 8181;
 static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
@@ -346,9 +347,12 @@ async fn test_update_table() {
         &TableIdent::new(ns.name().clone(), "t1".to_string())
     );
 
+    let tx = Transaction::new(&table);
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
-        .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
+    let table2 = tx
+        .update_properties()
+        .set("prop1".to_string(), "v1".to_string())
+        .apply(tx)
         .unwrap()
         .commit(&catalog)
         .await
