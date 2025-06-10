@@ -184,10 +184,10 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
+    use crate::TableIdent;
     use crate::io::FileIOBuilder;
     use crate::spec::TableMetadata;
     use crate::table::Table;
-    use crate::TableIdent;
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
