@@ -59,8 +59,8 @@
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">fn </span>process_manifests(<span class="kw-2">&amp;</span><span class="self">self</span>, manifests: Vec&lt;ManifestFile&gt;) -&gt; Vec&lt;ManifestFile&gt;;
 <a href=#60 id=60 data-nosnippet>60</a>}
 <a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SnapshotProduceAction&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>tx: Transaction&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#62 id=62 data-nosnippet>62</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>SnapshotProduceAction {
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>tx: Transaction,
 <a href=#64 id=64 data-nosnippet>64</a>    snapshot_id: i64,
 <a href=#65 id=65 data-nosnippet>65</a>    key_metadata: Vec&lt;u8&gt;,
 <a href=#66 id=66 data-nosnippet>66</a>    commit_uuid: Uuid,
@@ -72,9 +72,9 @@
 <a href=#72 id=72 data-nosnippet>72</a>    </span>manifest_counter: RangeFrom&lt;u64&gt;,
 <a href=#73 id=73 data-nosnippet>73</a>}
 <a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; SnapshotProduceAction&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#75 id=75 data-nosnippet>75</a><span class="kw">impl </span>SnapshotProduceAction {
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(
-<a href=#77 id=77 data-nosnippet>77</a>        tx: Transaction&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#77 id=77 data-nosnippet>77</a>        tx: Transaction,
 <a href=#78 id=78 data-nosnippet>78</a>        snapshot_id: i64,
 <a href=#79 id=79 data-nosnippet>79</a>        key_metadata: Vec&lt;u8&gt;,
 <a href=#80 id=80 data-nosnippet>80</a>        commit_uuid: Uuid,
@@ -310,7 +310,7 @@
 <a href=#310 id=310 data-nosnippet>310</a>        <span class="kw-2">mut </span><span class="self">self</span>,
 <a href=#311 id=311 data-nosnippet>311</a>        snapshot_produce_operation: OP,
 <a href=#312 id=312 data-nosnippet>312</a>        process: MP,
-<a href=#313 id=313 data-nosnippet>313</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&lt;<span class="lifetime">'a</span>&gt;&gt; {
+<a href=#313 id=313 data-nosnippet>313</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&gt; {
 <a href=#314 id=314 data-nosnippet>314</a>        <span class="kw">let </span>new_manifests = <span class="self">self
 <a href=#315 id=315 data-nosnippet>315</a>            </span>.manifest_file(<span class="kw-2">&amp;</span>snapshot_produce_operation, <span class="kw-2">&amp;</span>process)
 <a href=#316 id=316 data-nosnippet>316</a>            .<span class="kw">await</span><span class="question-mark">?</span>;

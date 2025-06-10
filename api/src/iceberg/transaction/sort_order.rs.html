@@ -21,12 +21,12 @@
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use crate</span>::{Error, ErrorKind, TableRequirement, TableUpdate};
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="doccomment">/// Transaction action for replacing sort order.
-<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub struct </span>ReplaceSortOrderAction&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">pub </span>tx: Transaction&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub struct </span>ReplaceSortOrderAction {
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">pub </span>tx: Transaction,
 <a href=#26 id=26 data-nosnippet>26</a>    <span class="kw">pub </span>sort_fields: Vec&lt;SortField&gt;,
 <a href=#27 id=27 data-nosnippet>27</a>}
 <a href=#28 id=28 data-nosnippet>28</a>
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; ReplaceSortOrderAction&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">impl </span>ReplaceSortOrderAction {
 <a href=#30 id=30 data-nosnippet>30</a>    <span class="doccomment">/// Adds a field for sorting in ascending order.
 <a href=#31 id=31 data-nosnippet>31</a>    </span><span class="kw">pub fn </span>asc(<span class="self">self</span>, name: <span class="kw-2">&amp;</span>str, null_order: NullOrder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#32 id=32 data-nosnippet>32</a>        <span class="self">self</span>.add_sort_field(name, SortDirection::Ascending, null_order)
@@ -38,7 +38,7 @@
 <a href=#38 id=38 data-nosnippet>38</a>    }
 <a href=#39 id=39 data-nosnippet>39</a>
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// Finished building the action and apply it to the transaction.
-<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub fn </span>apply(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&lt;<span class="lifetime">'a</span>&gt;&gt; {
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub fn </span>apply(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&gt; {
 <a href=#42 id=42 data-nosnippet>42</a>        <span class="kw">let </span>unbound_sort_order = SortOrder::builder()
 <a href=#43 id=43 data-nosnippet>43</a>            .with_fields(<span class="self">self</span>.sort_fields)
 <a href=#44 id=44 data-nosnippet>44</a>            .build_unbound()<span class="question-mark">?</span>;

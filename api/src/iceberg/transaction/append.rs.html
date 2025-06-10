@@ -29,15 +29,15 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use crate</span>::{Error, ErrorKind};
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// FastAppendAction is a transaction action for fast append data files to the table.
-<a href=#32 id=32 data-nosnippet>32</a></span><span class="kw">pub struct </span>FastAppendAction&lt;<span class="lifetime">'a</span>&gt; {
-<a href=#33 id=33 data-nosnippet>33</a>    snapshot_produce_action: SnapshotProduceAction&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#32 id=32 data-nosnippet>32</a></span><span class="kw">pub struct </span>FastAppendAction {
+<a href=#33 id=33 data-nosnippet>33</a>    snapshot_produce_action: SnapshotProduceAction,
 <a href=#34 id=34 data-nosnippet>34</a>    check_duplicate: bool,
 <a href=#35 id=35 data-nosnippet>35</a>}
 <a href=#36 id=36 data-nosnippet>36</a>
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; FastAppendAction&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">impl </span>FastAppendAction {
 <a href=#38 id=38 data-nosnippet>38</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
 <a href=#39 id=39 data-nosnippet>39</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(
-<a href=#40 id=40 data-nosnippet>40</a>        tx: Transaction&lt;<span class="lifetime">'a</span>&gt;,
+<a href=#40 id=40 data-nosnippet>40</a>        tx: Transaction,
 <a href=#41 id=41 data-nosnippet>41</a>        snapshot_id: i64,
 <a href=#42 id=42 data-nosnippet>42</a>        commit_uuid: Uuid,
 <a href=#43 id=43 data-nosnippet>43</a>        key_metadata: Vec&lt;u8&gt;,
@@ -87,7 +87,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>    /// Specifically, schema compatibility checks and support for adding to partitioned tables
 <a href=#88 id=88 data-nosnippet>88</a>    /// have not yet been implemented.
 <a href=#89 id=89 data-nosnippet>89</a>    </span><span class="attr">#[allow(dead_code)]
-<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">async fn </span>add_parquet_files(<span class="kw-2">mut </span><span class="self">self</span>, file_path: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&lt;<span class="lifetime">'a</span>&gt;&gt; {
+<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">async fn </span>add_parquet_files(<span class="kw-2">mut </span><span class="self">self</span>, file_path: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&gt; {
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">if </span>!<span class="self">self
 <a href=#92 id=92 data-nosnippet>92</a>            </span>.snapshot_produce_action
 <a href=#93 id=93 data-nosnippet>93</a>            .tx
@@ -117,7 +117,7 @@
 <a href=#117 id=117 data-nosnippet>117</a>    </span>}
 <a href=#118 id=118 data-nosnippet>118</a>
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="doccomment">/// Finished building the action and apply it to the transaction.
-<a href=#120 id=120 data-nosnippet>120</a>    </span><span class="kw">pub async fn </span>apply(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&lt;<span class="lifetime">'a</span>&gt;&gt; {
+<a href=#120 id=120 data-nosnippet>120</a>    </span><span class="kw">pub async fn </span>apply(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&gt; {
 <a href=#121 id=121 data-nosnippet>121</a>        <span class="comment">// Checks duplicate files
 <a href=#122 id=122 data-nosnippet>122</a>        </span><span class="kw">if </span><span class="self">self</span>.check_duplicate {
 <a href=#123 id=123 data-nosnippet>123</a>            <span class="kw">let </span>new_files: HashSet&lt;<span class="kw-2">&amp;</span>str&gt; = <span class="self">self
@@ -170,14 +170,14 @@
 <a href=#170 id=170 data-nosnippet>170</a>
 <a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">async fn </span>delete_entries(
 <a href=#172 id=172 data-nosnippet>172</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#173 id=173 data-nosnippet>173</a>        _snapshot_produce: <span class="kw-2">&amp;</span>SnapshotProduceAction&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#173 id=173 data-nosnippet>173</a>        _snapshot_produce: <span class="kw-2">&amp;</span>SnapshotProduceAction,
 <a href=#174 id=174 data-nosnippet>174</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;ManifestEntry&gt;&gt; {
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[])
 <a href=#176 id=176 data-nosnippet>176</a>    }
 <a href=#177 id=177 data-nosnippet>177</a>
 <a href=#178 id=178 data-nosnippet>178</a>    <span class="kw">async fn </span>existing_manifest(
 <a href=#179 id=179 data-nosnippet>179</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#180 id=180 data-nosnippet>180</a>        snapshot_produce: <span class="kw-2">&amp;</span>SnapshotProduceAction&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#180 id=180 data-nosnippet>180</a>        snapshot_produce: <span class="kw-2">&amp;</span>SnapshotProduceAction,
 <a href=#181 id=181 data-nosnippet>181</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;ManifestFile&gt;&gt; {
 <a href=#182 id=182 data-nosnippet>182</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(snapshot) = snapshot_produce
 <a href=#183 id=183 data-nosnippet>183</a>            .tx
