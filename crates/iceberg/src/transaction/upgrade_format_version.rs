@@ -100,6 +100,7 @@ impl TransactionAction for UpgradeFormatVersionAction {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::spec::FormatVersion;
     use crate::transaction::Transaction;

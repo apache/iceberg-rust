@@ -75,6 +75,7 @@ impl TransactionAction for UpdateLocationAction {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::transaction::Transaction;
     use crate::transaction::action::ApplyTransactionAction;

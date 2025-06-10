@@ -185,10 +185,9 @@ mod tests {
     use std::io::BufReader;
 
     use crate::io::FileIOBuilder;
-    use crate::spec::{FormatVersion, TableMetadata};
+    use crate::spec::TableMetadata;
     use crate::table::Table;
-    use crate::transaction::Transaction;
-    use crate::{TableIdent, TableUpdate};
+    use crate::TableIdent;
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
