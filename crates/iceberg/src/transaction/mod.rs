@@ -25,16 +25,13 @@ mod update_location;
 mod update_properties;
 mod upgrade_format_version;
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
-use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
@@ -42,7 +39,7 @@ use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 pub struct Transaction {

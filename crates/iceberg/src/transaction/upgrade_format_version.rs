@@ -121,6 +121,6 @@ mod tests {
         let any = tx.actions[0].clone().as_any();
         let action = any.downcast_ref::<UpgradeFormatVersionAction>().unwrap();
 
-        assert_eq!(action.format_version, FormatVersion::V2);
+        assert_eq!(action.format_version, Some(FormatVersion::V2));
     }
 }
