@@ -175,10 +175,10 @@ impl Transaction {
             // nothing to commit
             return Ok(self.base_table.clone());
         }
-        
+
         self.do_commit(catalog).await
     }
-    
+
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
         let base_table_identifier = self.base_table.identifier().to_owned();
 
@@ -186,14 +186,14 @@ impl Transaction {
             .load_table(&base_table_identifier.clone())
             .await
             .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
-        
+
         if self.base_table.metadata() != refreshed.metadata()
             || self.base_table.metadata_location() != refreshed.metadata_location()
         {
             // current base is stale, use refreshed as base and re-apply transaction actions
             self.base_table = refreshed.clone();
         }
-        
+
         let current_table = self.base_table.clone();
 
         for action in self.actions.clone() {
