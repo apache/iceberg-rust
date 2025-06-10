@@ -17,7 +17,7 @@
 
 //! This module contains transaction api.
 
-/// The `ApplyTransactionAction` trait provides an `apply` method 
+/// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
 pub mod action;
 mod append;
