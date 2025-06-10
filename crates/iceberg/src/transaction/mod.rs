@@ -170,11 +170,45 @@ impl Transaction {
     }
 
     /// Commit transaction.
-    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+        if self.actions.is_empty() && self.updates.is_empty() {
+            // nothing to commit
+            return Ok(self.base_table.clone());
+        }
+        
+        self.do_commit(catalog).await
+    }
+    
+    async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
+        let base_table_identifier = self.base_table.identifier().to_owned();
+
+        let refreshed = catalog
+            .load_table(&base_table_identifier.clone())
+            .await
+            .expect(format!("Failed to refresh table {}", base_table_identifier).as_str());
+        
+        if self.base_table.metadata() != refreshed.metadata()
+            || self.base_table.metadata_location() != refreshed.metadata_location()
+        {
+            // current base is stale, use refreshed as base and re-apply transaction actions
+            self.base_table = refreshed.clone();
+        }
+        
+        let current_table = self.base_table.clone();
+
+        for action in self.actions.clone() {
+            let mut action_commit = action.commit(&current_table).await?;
+            // apply changes to current_table
+            self.apply(
+                action_commit.take_updates(),
+                action_commit.take_requirements(),
+            )?;
+        }
+
         let table_commit = TableCommit::builder()
-            .ident(self.base_table.identifier().clone())
-            .updates(self.updates)
-            .requirements(self.requirements)
+            .ident(base_table_identifier)
+            .updates(self.updates.clone())
+            .requirements(self.requirements.clone())
             .build();
 
         catalog.update_table(table_commit).await
