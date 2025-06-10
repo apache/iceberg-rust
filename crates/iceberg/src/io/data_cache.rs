@@ -126,7 +126,6 @@ struct FileContentCache {
 impl FileContentCache {
     fn new_with_first_buf(path: String, range: Range<u64>, bytes: Bytes) -> Self {
         if range.start == range.end {
-            // TODO: check if this is necessary
             return Self {
                 path,
                 buffers: vec![],
@@ -158,12 +157,14 @@ impl FileContentCache {
                 return DataCacheRes::Hit(buf.slice(offset..(offset + len)));
             }
 
-            if buf_range.start <= range.start && buf_range.end < range.end {
+            if buf_range.start <= range.start
+                && ((range.start + 1)..range.end).contains(&buf_range.end)
+            {
                 let offset = (range.start - buf_range.start) as usize;
                 head = Some(buf.slice(offset..buf.len()));
             }
 
-            if range.start < buf_range.start && range.end <= buf_range.end {
+            if range.contains(&buf_range.start) && range.end <= buf_range.end {
                 let cutoff = (range.end - buf_range.start) as usize;
                 tail = Some(buf.slice(0..cutoff))
             }
@@ -195,8 +196,6 @@ impl FileContentCache {
     }
 
     fn set(&mut self, range: Range<u64>, bytes: Bytes) {
-        // TODO: LOCKING THIS IS PROBABLY A GOOD IDEA
-
         if range.end == range.start {
             // TODO: check if this necessary
             return;
@@ -211,11 +210,13 @@ impl FileContentCache {
                 return; // we already have this cached
             }
 
-            if buf_range.start <= range.start && buf_range.end < range.end {
+            if buf_range.start <= range.start
+                && ((range.start + 1)..range.end).contains(&buf_range.end)
+            {
                 head_touching = Some(self.buffers.remove(i));
             }
 
-            if range.start < buf_range.start && range.end <= buf_range.start {
+            if range.contains(&buf_range.start) && range.end <= buf_range.end {
                 tail_touching = Some(self.buffers.remove(i));
             }
 
