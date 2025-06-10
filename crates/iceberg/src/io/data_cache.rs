@@ -200,13 +200,13 @@ impl FileContentCache {
 
             let missing_range = (range.start + offset_start)..(range.end - offset_end);
 
-            return DataCacheRes::PartialHit(PartialHit {
+            DataCacheRes::PartialHit(PartialHit {
                 path: self.path.clone(),
                 original_range: range,
                 missing_range,
                 head_bytes: head,
                 tail_bytes: tail,
-            });
+            })
         } else {
             DataCacheRes::Miss
         }
