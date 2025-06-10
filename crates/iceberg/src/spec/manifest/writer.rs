@@ -416,7 +416,7 @@ impl ManifestWriter {
             existing_rows_count: Some(self.existing_rows),
             deleted_rows_count: Some(self.deleted_rows),
             partitions: Some(partition_summary),
-            key_metadata: self.key_metadata,
+            key_metadata: Some(self.key_metadata),
         })
     }
 }
