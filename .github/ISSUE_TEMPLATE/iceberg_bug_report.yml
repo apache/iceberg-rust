@@ -28,7 +28,8 @@ body:
       description: What Apache Iceberg Rust version are you using?
       multiple: false
       options:
-        - 0.4.0 (latest version)
+        - 0.5.1 (latest version)
+        - 0.4.0
         - 0.3.0
         - 0.2.0
     validations:

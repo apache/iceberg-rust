@@ -716,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.97.0"
+version = "1.99.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e5848836545389ad5109ce84f74c509ba4adefc1b39299a8a52843f7693f58"
+checksum = "6d3964f2ad78d3fe39a327f109faaf0d0d7b2aa1742d99fb9434a36c99ca542a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -738,9 +738,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.22.0"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c845ea2d9c2168620c3ca6ab6561e248d3d3818770f98737bb1fe81113b6ef"
+checksum = "3382afb09173e6f30369399041f0d3920031b14878d4b013ba7d3f04052359dd"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -3526,6 +3526,7 @@ dependencies = [
  "typed-builder 0.20.1",
  "url",
  "uuid",
+ "waker-set",
  "zstd",
 ]
 
@@ -4733,7 +4734,7 @@ dependencies = [
  "md-5",
  "parking_lot",
  "percent-encoding",
- "quick-xml 0.37.4",
+ "quick-xml",
  "rand 0.8.5",
  "reqwest",
  "ring",
@@ -4756,9 +4757,9 @@ checksum = "d75b0bedcc4fe52caa0e03d9f1151a323e4aa5e2d78ba3580400cd3c9e2bc4bc"
 
 [[package]]
 name = "opendal"
-version = "0.53.0"
+version = "0.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ebd1183902124c6b3ee0a9383683513dd8cca3d25a5d065593f969a44f979e"
+checksum = "f947c4efbca344c1a125753366033c8107f552b2e3f8251815ed1908f116ca3e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4770,10 +4771,11 @@ dependencies = [
  "futures",
  "getrandom 0.2.15",
  "http 1.3.1",
+ "http-body 1.0.1",
  "log",
  "md-5",
  "percent-encoding",
- "quick-xml 0.36.2",
+ "quick-xml",
  "reqsign",
  "reqwest",
  "serde",
@@ -5335,26 +5337,6 @@ checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
 
 [[package]]
 name = "quick-xml"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e446ed58cef1bbfe847bc2fda0e2e4ea9f0e57b90c507d4781292590d72a4e"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.37.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ce8c88de324ff838700f36fb6ab86c96df0e3c4ab6ef3a9b2044465cce1369"
@@ -5639,9 +5621,9 @@ checksum = "a35e8a6bf28cd121053a66aa2e6a2e3eaffad4a60012179f0e864aa5ffeff215"
 
 [[package]]
 name = "reqsign"
-version = "0.16.1"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb0075a66c8bfbf4cc8b70dca166e722e1f55a3ea9250ecbb85f4d92a5f64149"
+checksum = "9323c0afb30e54f793f4705b10c890395bccc87c6e6ea62c4e7e82d09a380dc6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5657,7 +5639,7 @@ dependencies = [
  "log",
  "once_cell",
  "percent-encoding",
- "quick-xml 0.35.0",
+ "quick-xml",
  "rand 0.8.5",
  "reqwest",
  "rsa",
@@ -7492,6 +7474,16 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "waker-set"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e958152c46345e1af5c61812030ac85200573a0b384c137e83ce2c01ac4bc07"
+dependencies = [
+ "crossbeam-utils",
+ "slab",
+]
 
 [[package]]
 name = "walkdir"
