@@ -184,8 +184,7 @@ impl Transaction {
 
         let refreshed = catalog
             .load_table(&base_table_identifier.clone())
-            .await
-            .unwrap_or_else(|_| panic!("Failed to refresh table {}", base_table_identifier));
+            .await?;
 
         if self.base_table.metadata() != refreshed.metadata()
             || self.base_table.metadata_location() != refreshed.metadata_location()
