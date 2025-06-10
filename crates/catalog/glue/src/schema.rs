@@ -118,7 +118,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
             (ICEBERG_FIELD_ID.to_string(), format!("{}", field.id)),
             (
                 ICEBERG_FIELD_OPTIONAL.to_string(),
-                format!("{}", field.required).to_lowercase(),
+                format!("{}", !field.required).to_lowercase(),
             ),
             (
                 ICEBERG_FIELD_CURRENT.to_string(),
