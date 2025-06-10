@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>
 <a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">let </span>storage_descriptor = StorageDescriptor::builder()
 <a href=#153 id=153 data-nosnippet>153</a>        .set_columns(<span class="prelude-val">Some</span>(glue_schema))
-<a href=#154 id=154 data-nosnippet>154</a>        .location(<span class="kw-2">&amp;</span>metadata_location)
+<a href=#154 id=154 data-nosnippet>154</a>        .location(metadata.location().to_string())
 <a href=#155 id=155 data-nosnippet>155</a>        .build();
 <a href=#156 id=156 data-nosnippet>156</a>
 <a href=#157 id=157 data-nosnippet>157</a>    <span class="kw">let </span><span class="kw-2">mut </span>parameters = HashMap::from([
@@ -345,7 +345,7 @@
 <a href=#345 id=345 data-nosnippet>345</a>
 <a href=#346 id=346 data-nosnippet>346</a>        <span class="kw">let </span>parameters = HashMap::from([
 <a href=#347 id=347 data-nosnippet>347</a>            (ICEBERG_FIELD_ID.to_string(), <span class="string">"1"</span>.to_string()),
-<a href=#348 id=348 data-nosnippet>348</a>            (ICEBERG_FIELD_OPTIONAL.to_string(), <span class="string">"true"</span>.to_string()),
+<a href=#348 id=348 data-nosnippet>348</a>            (ICEBERG_FIELD_OPTIONAL.to_string(), <span class="string">"false"</span>.to_string()),
 <a href=#349 id=349 data-nosnippet>349</a>            (ICEBERG_FIELD_CURRENT.to_string(), <span class="string">"true"</span>.to_string()),
 <a href=#350 id=350 data-nosnippet>350</a>        ]);
 <a href=#351 id=351 data-nosnippet>351</a>
@@ -359,7 +359,7 @@
 <a href=#359 id=359 data-nosnippet>359</a>
 <a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>storage_descriptor = StorageDescriptor::builder()
 <a href=#361 id=361 data-nosnippet>361</a>            .set_columns(<span class="prelude-val">Some</span>(<span class="macro">vec!</span>[column]))
-<a href=#362 id=362 data-nosnippet>362</a>            .location(<span class="kw-2">&amp;</span>metadata_location)
+<a href=#362 id=362 data-nosnippet>362</a>            .location(metadata.location())
 <a href=#363 id=363 data-nosnippet>363</a>            .build();
 <a href=#364 id=364 data-nosnippet>364</a>
 <a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>result =
