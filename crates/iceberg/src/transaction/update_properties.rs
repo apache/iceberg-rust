@@ -85,6 +85,12 @@ impl UpdatePropertiesAction {
     }
 }
 
+impl Default for UpdatePropertiesAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl TransactionAction for UpdatePropertiesAction {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any> {

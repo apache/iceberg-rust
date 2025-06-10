@@ -54,6 +54,12 @@ impl UpdateLocationAction {
     }
 }
 
+impl Default for UpdateLocationAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl TransactionAction for UpdateLocationAction {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any> {

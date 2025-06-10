@@ -59,6 +59,12 @@ impl UpgradeFormatVersionAction {
     }
 }
 
+impl Default for UpgradeFormatVersionAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any> {
