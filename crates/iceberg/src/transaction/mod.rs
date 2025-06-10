@@ -21,6 +21,9 @@ mod action;
 mod append;
 mod snapshot;
 mod sort_order;
+mod update_location;
+mod update_properties;
+mod upgrade_format_version;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -36,6 +39,9 @@ use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
+use crate::transaction::update_location::UpdateLocationAction;
+use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -104,32 +110,13 @@ impl Transaction {
     }
 
     /// Sets table to a new version.
-    pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
-        let current_version = self.current_table.metadata().format_version();
-        match current_version.cmp(&format_version) {
-            Ordering::Greater => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot downgrade table version from {} to {}",
-                        current_version, format_version
-                    ),
-                ));
-            }
-            Ordering::Less => {
-                self.apply(vec![UpgradeFormatVersion { format_version }], vec![])?;
-            }
-            Ordering::Equal => {
-                // Do nothing.
-            }
-        }
-        Ok(self)
+    pub fn upgrade_table_version(&self) -> UpgradeFormatVersionAction {
+        UpgradeFormatVersionAction::new()
     }
 
     /// Update table's property.
-    pub fn set_properties(mut self, props: HashMap<String, String>) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetProperties { updates: props }], vec![])?;
-        Ok(self)
+    pub fn update_properties(&self) -> UpdatePropertiesAction {
+        UpdatePropertiesAction::new()
     }
 
     fn generate_unique_snapshot_id(&self) -> i64 {
@@ -178,19 +165,9 @@ impl Transaction {
         }
     }
 
-    /// Remove properties in table.
-    pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
-        self.apply(
-            vec![TableUpdate::RemoveProperties { removals: keys }],
-            vec![],
-        )?;
-        Ok(self)
-    }
-
     /// Set the location of table
-    pub fn set_location(mut self, location: String) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
-        Ok(self)
+    pub fn update_location(&self) -> UpdateLocationAction {
+        UpdateLocationAction::new()
     }
 
     /// Commit transaction.
@@ -207,7 +184,6 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -217,7 +193,7 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableUpdate};
 
-    fn make_v1_table() -> Table {
+    pub fn make_v1_table() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -272,110 +248,5 @@ mod tests {
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap()
-    }
-
-    #[test]
-    fn test_upgrade_table_version_v1_to_v2() {
-        let table = make_v1_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::UpgradeFormatVersion {
-                format_version: FormatVersion::V2
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_upgrade_table_version_v2_to_v2() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-
-        assert!(
-            tx.updates.is_empty(),
-            "Upgrade table to same version should not generate any updates"
-        );
-        assert!(
-            tx.requirements.is_empty(),
-            "Upgrade table to same version should not generate any requirements"
-        );
-    }
-
-    #[test]
-    fn test_downgrade_table_version() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V1);
-
-        assert!(tx.is_err(), "Downgrade table version should fail!");
-    }
-
-    #[test]
-    fn test_set_table_property() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .set_properties(HashMap::from([("a".to_string(), "b".to_string())]))
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::SetProperties {
-                updates: HashMap::from([("a".to_string(), "b".to_string())])
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_remove_property() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .remove_properties(vec!["a".to_string(), "b".to_string()])
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::RemoveProperties {
-                removals: vec!["a".to_string(), "b".to_string()]
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_set_location() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .set_location(String::from("s3://bucket/prefix/new_table"))
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::SetLocation {
-                location: String::from("s3://bucket/prefix/new_table")
-            }],
-            tx.updates
-        )
-    }
-
-    #[tokio::test]
-    async fn test_transaction_apply_upgrade() {
-        let table = make_v1_table();
-        let tx = Transaction::new(&table);
-        // Upgrade v1 to v1, do nothing.
-        let tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
-        // Upgrade v1 to v2, success.
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-        assert_eq!(
-            vec![TableUpdate::UpgradeFormatVersion {
-                format_version: FormatVersion::V2
-            }],
-            tx.updates
-        );
-        // Upgrade v2 to v1, return error.
-        assert!(tx.upgrade_table_version(FormatVersion::V1).is_err());
     }
 }
