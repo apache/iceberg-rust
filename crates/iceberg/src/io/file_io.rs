@@ -404,7 +404,7 @@ pub struct OutputFile {
     path: String,
     // Relative path of file to uri, starts at [`relative_path_pos`]
     relative_path_pos: usize,
-    cache: DataCacheRef, // TODO: cache writes to output files to prevent unecessary reads
+    cache: DataCacheRef, // TODO: cache writes to output files to prevent unnecessary reads
 }
 
 impl OutputFile {
