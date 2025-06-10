@@ -70,8 +70,8 @@ mod file_io;
 mod storage;
 
 pub use file_io::*;
-pub(crate) mod object_cache;
 pub(crate) mod data_cache;
+pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]
 mod storage_azdls;
