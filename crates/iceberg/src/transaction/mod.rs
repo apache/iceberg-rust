@@ -114,7 +114,7 @@ impl Transaction {
     }
 
     /// Update table's property.
-    pub fn update_properties(&self) -> UpdatePropertiesAction {
+    pub fn update_table_properties(&self) -> UpdatePropertiesAction {
         UpdatePropertiesAction::new()
     }
 
