@@ -1,0 +1,1 @@
+searchState.loadedDescShard("iceberg_playground", 0, "Introduction\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")
