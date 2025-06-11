@@ -28,6 +28,7 @@ use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use super::snapshot::SnapshotReference;
@@ -101,7 +102,7 @@ pub const RESERVED_PROPERTIES: [&str; 9] = [
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
-#[derive(Debug, PartialEq, Deserialize, Eq, Clone, typed_builder::TypedBuilder)]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone, TypedBuilder)]
 #[builder(builder_method(name=declarative_builder))]
 #[builder(builder_type(name=TableMetadataDeclarativeBuilder, doc="Build a new [`TableMetadata`] in a declarative way. For imperative operations (e.g. `add_snapshot`) and creating new TableMetadata, use [`TableMetadataBuilder`] instead."))]
 #[builder(build_method(into = UnnormalizedTableMetadata))]
@@ -140,16 +141,18 @@ pub struct TableMetadata {
     pub(crate) last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
-    /// For example, commit.retry.num-retries is used to control the number of commit retries
+    /// For example, commit.retry.num-retries is used to control the number of commit retries.
+    #[builder(default)]
     pub(crate) properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
+    #[builder(default)]
     pub(crate) current_snapshot_id: Option<i64>,
     ///A list of valid snapshots. Valid snapshots are snapshots for which all
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    #[builder(setter(transform = |snapshots: Vec<SnapshotRef>| snapshots.into_iter().map(|s| (s.snapshot_id(), s)).collect()))]
+    #[builder(default, setter(transform = |snapshots: Vec<SnapshotRef>| snapshots.into_iter().map(|s| (s.snapshot_id(), s)).collect()))]
     pub(crate) snapshots: HashMap<i64, SnapshotRef>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
@@ -157,6 +160,7 @@ pub struct TableMetadata {
     /// and the new current-snapshot-id. When snapshots are expired from
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
+    #[builder(default)]
     pub(crate) snapshot_log: Vec<SnapshotLog>,
 
     /// A list (optional) of timestamp and metadata file location pairs
@@ -165,6 +169,7 @@ pub struct TableMetadata {
     /// previous metadata file location should be added to the list.
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
+    #[builder(default)]
     pub(crate) metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
@@ -185,8 +190,7 @@ pub struct TableMetadata {
     }))]
     pub(crate) statistics: HashMap<i64, StatisticsFile>,
     /// Mapping of snapshot ids to partition statistics files.
-    #[builder(default)]
-    #[builder(setter(transform = |stats: Vec<PartitionStatisticsFile>| {
+    #[builder(default, setter(transform = |stats: Vec<PartitionStatisticsFile>| {
         stats.into_iter().map(|s| (s.snapshot_id, s)).collect()
     }))]
     pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
@@ -669,6 +673,8 @@ impl TableMetadata {
         Ok(())
     }
 }
+
+impl TableMetadataDeclarativeBuilder {}
 
 /// Unnormalized table metadata, used as an intermediate type
 /// to build table metadata in a declarative way.
