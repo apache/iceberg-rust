@@ -3655,26 +3655,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iceberg-cli"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "clap",
- "datafusion",
- "datafusion-cli",
- "dirs",
- "fs-err",
- "iceberg-catalog-rest",
- "iceberg-datafusion",
- "mimalloc",
- "stacker",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "iceberg-datafusion"
 version = "0.5.1"
 dependencies = [
@@ -3716,6 +3696,26 @@ dependencies = [
  "parquet",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "iceberg-playground"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "datafusion",
+ "datafusion-cli",
+ "dirs",
+ "fs-err",
+ "iceberg-catalog-rest",
+ "iceberg-datafusion",
+ "mimalloc",
+ "stacker",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
