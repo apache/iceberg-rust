@@ -28,6 +28,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::expr::visitors::predicate_visitor::visit;
+use crate::expr::visitors::rewrite_not::RewriteNotVisitor;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
 use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
 use crate::{Error, ErrorKind};
@@ -652,29 +654,8 @@ impl Predicate {
     /// assert_eq!(&format!("{result}"), "a >= 5");
     /// ```
     pub fn rewrite_not(self) -> Predicate {
-        match self {
-            Predicate::And(expr) => {
-                let [left, right] = expr.inputs;
-                let new_left = Box::new(left.rewrite_not());
-                let new_right = Box::new(right.rewrite_not());
-                Predicate::And(LogicalExpression::new([new_left, new_right]))
-            }
-            Predicate::Or(expr) => {
-                let [left, right] = expr.inputs;
-                let new_left = Box::new(left.rewrite_not());
-                let new_right = Box::new(right.rewrite_not());
-                Predicate::Or(LogicalExpression::new([new_left, new_right]))
-            }
-            Predicate::Not(expr) => {
-                let [inner] = expr.inputs;
-                inner.negate()
-            }
-            Predicate::Unary(expr) => Predicate::Unary(expr),
-            Predicate::Binary(expr) => Predicate::Binary(expr),
-            Predicate::Set(expr) => Predicate::Set(expr),
-            Predicate::AlwaysTrue => Predicate::AlwaysTrue,
-            Predicate::AlwaysFalse => Predicate::AlwaysFalse,
-        }
+        visit(&mut RewriteNotVisitor::new(), &self)
+            .expect("RewriteNotVisitor guarantees always success")
     }
 }
 
@@ -1465,5 +1446,30 @@ mod tests {
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"True"#);
         test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_rewrite_not_deeply_nested() {
+        // Test nested expression: not((not((not(ref(name="bar") < 40) and ref(name="bar") < 40)) and ref(name="bar") < 40))
+        // Expected rewrite not result: ((bar >= 40) AND (bar < 40)) OR (bar >= 40)
+        let complex_expression = Reference::new("bar")
+            .less_than(Datum::int(40))
+            .not()
+            .and(Reference::new("bar").less_than(Datum::int(40)))
+            .not()
+            .and(Reference::new("bar").less_than(Datum::int(40)))
+            .not();
+
+        let expected = Reference::new("bar")
+            .greater_than_or_equal_to(Datum::int(40))
+            .and(Reference::new("bar").less_than(Datum::int(40)))
+            .or(Reference::new("bar").greater_than_or_equal_to(Datum::int(40)));
+
+        let result = complex_expression.rewrite_not();
+
+        assert_eq!(result, expected);
+
+        let result_str = format!("{result}");
+        assert_eq!(&result_str, "((bar >= 40) AND (bar < 40)) OR (bar >= 40)");
     }
 }
