@@ -182,9 +182,7 @@ impl Transaction {
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
         let base_table_identifier = self.base_table.identifier().to_owned();
 
-        let refreshed = catalog
-            .load_table(&base_table_identifier.clone())
-            .await?;
+        let refreshed = catalog.load_table(&base_table_identifier.clone()).await?;
 
         if self.base_table.metadata() != refreshed.metadata()
             || self.base_table.metadata_location() != refreshed.metadata_location()
