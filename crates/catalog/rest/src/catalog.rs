@@ -2228,6 +2228,17 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
+
         let update_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1")
             .with_status(404)
@@ -2286,5 +2297,6 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+        load_table_mock.assert_async().await;
     }
 }
