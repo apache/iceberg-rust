@@ -63,10 +63,12 @@ impl DataCache {
 
     pub async fn set_whole(&self, path: &String, bytes: Bytes) {
         let size = size_of::<Bytes>() + bytes.len();
-        self.cache.insert(
-            path.clone(),
-            FileCache { content: Arc::new(RwLock::new(FileContentCache::Complete(bytes))), current_size: size as u32 }
-        ).await;
+        self.cache
+            .insert(path.clone(), FileCache {
+                content: Arc::new(RwLock::new(FileContentCache::Complete(bytes))),
+                current_size: size as u32,
+            })
+            .await;
     }
 
     pub async fn get_range(&self, path: &String, range: Range<u64>) -> DataCacheRes {
@@ -75,10 +77,10 @@ impl DataCache {
                 FileContentCache::Complete(bytes) => {
                     let range = (range.start as usize)..(range.end as usize);
                     DataCacheRes::Hit(bytes.slice(range))
-                },
+                }
                 FileContentCache::Fragmented(fragmented_content_cache) => {
                     fragmented_content_cache.get(range)
-                },
+                }
             }
         } else {
             DataCacheRes::Miss
@@ -91,10 +93,11 @@ impl DataCache {
             match &mut *file_content_cache {
                 FileContentCache::Complete(_) => {
                     // do nothing, we already have the entire file cached
-                },
+                }
                 FileContentCache::Fragmented(fragmented_content_cache) => {
                     fragmented_content_cache.set(range, bytes);
-                    file_cache.current_size = fragmented_content_cache.size() as u32 + size_of::<u32>() as u32;
+                    file_cache.current_size =
+                        fragmented_content_cache.size() as u32 + size_of::<u32>() as u32;
 
                     mem::drop(file_content_cache); // release our lock
 
@@ -106,7 +109,9 @@ impl DataCache {
                 FragmentedContentCache::new_with_first_buf(path.clone(), range, bytes);
             let current_size = fragmented_content_cache.size() as u32;
             let file_cache = FileCache {
-                content: Arc::new(RwLock::new(FileContentCache::Fragmented(fragmented_content_cache))),
+                content: Arc::new(RwLock::new(FileContentCache::Fragmented(
+                    fragmented_content_cache,
+                ))),
                 current_size,
             };
 
@@ -168,7 +173,7 @@ impl PartialHit {
 #[derive(Clone, Debug)]
 enum FileContentCache {
     Complete(Bytes),
-    Fragmented(FragmentedContentCache)
+    Fragmented(FragmentedContentCache),
 }
 
 #[derive(Clone, Debug)]
