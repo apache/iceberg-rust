@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,7 +24,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result, TableUpdate};
+use crate::{Error, ErrorKind, Result};
 
 /// A transaction action to upgrade a table's format version.
 ///
@@ -71,30 +70,8 @@ impl TransactionAction for UpgradeFormatVersionAction {
         self
     }
 
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let current_version = table.metadata().format_version();
-        let updates: Vec<TableUpdate>;
-
-        if let Some(format_version) = self.format_version {
-            match current_version.cmp(&format_version) {
-                Ordering::Greater => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot downgrade table version from {} to {}",
-                            current_version, format_version
-                        ),
-                    ));
-                }
-                Ordering::Less => {
-                    updates = vec![UpgradeFormatVersion { format_version }];
-                }
-                Ordering::Equal => {
-                    // do nothing
-                    updates = vec![];
-                }
-            }
-        } else {
+    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+        if self.format_version.is_none() {
             // error
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -102,7 +79,12 @@ impl TransactionAction for UpgradeFormatVersionAction {
             ));
         }
 
-        Ok(ActionCommit::new(updates, vec![]))
+        Ok(ActionCommit::new(
+            vec![UpgradeFormatVersion {
+                format_version: self.format_version.unwrap(),
+            }],
+            vec![],
+        ))
     }
 }
 
