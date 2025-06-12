@@ -40,9 +40,9 @@ pub(crate) struct StrictMetricsEvaluator<'a> {
     data_file: &'a DataFile,
 }
 
+#[allow(dead_code)]
 impl<'a> StrictMetricsEvaluator<'a> {
-    #[allow(dead_code)]
-    fn new(data_file: &'a DataFile) -> Self {
+    pub fn new(data_file: &'a DataFile) -> Self {
         StrictMetricsEvaluator { data_file }
     }
 
@@ -50,7 +50,6 @@ impl<'a> StrictMetricsEvaluator<'a> {
     /// provided [`DataFile`]'s metrics. Used by [`TableScan`] to
     /// see if this `DataFile` contains data that could match
     /// the scan's filter.
-    #[allow(dead_code)]
     pub(crate) fn eval(filter: &'a BoundPredicate, data_file: &'a DataFile) -> crate::Result<bool> {
         if data_file.record_count == 0 {
             return ROWS_MUST_MATCH;
@@ -58,6 +57,15 @@ impl<'a> StrictMetricsEvaluator<'a> {
 
         let mut evaluator = Self::new(data_file);
         visit(&mut evaluator, filter)
+    }
+
+    /// Evaluate filter using `StrictMetricsEvaluator` instance
+    pub(crate) fn evaluate(&mut self, filter: &'a BoundPredicate) -> crate::Result<bool> {
+        if self.data_file.record_count == 0 {
+            return ROWS_MUST_MATCH;
+        }
+
+        visit(self, filter)
     }
 
     fn nan_count(&self, field_id: i32) -> Option<&u64> {
