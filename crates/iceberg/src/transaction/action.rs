@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(dead_code)]
-
 use std::any::Any;
 use std::mem::take;
 use std::sync::Arc;
