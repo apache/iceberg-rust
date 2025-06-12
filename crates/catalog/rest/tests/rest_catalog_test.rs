@@ -350,7 +350,7 @@ async fn test_update_table() {
     let tx = Transaction::new(&table);
     // Update table by committing transaction
     let table2 = tx
-        .update_properties()
+        .update_table_properties()
         .set("prop1".to_string(), "v1".to_string())
         .apply(tx)
         .unwrap()

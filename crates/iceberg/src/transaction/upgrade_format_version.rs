@@ -67,7 +67,7 @@ impl Default for UpgradeFormatVersionAction {
 
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
-    fn as_any(self: Arc<Self>) -> Arc<dyn Any> {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -125,8 +125,11 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let any = tx.actions[0].clone().as_any();
-        let action = any.downcast_ref::<UpgradeFormatVersionAction>().unwrap();
+        let action_clone = tx.actions[0].clone();
+        let action = action_clone
+            .as_any()
+            .downcast_ref::<UpgradeFormatVersionAction>()
+            .unwrap();
 
         assert_eq!(action.format_version, Some(FormatVersion::V2));
     }

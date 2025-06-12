@@ -93,7 +93,7 @@ impl Default for UpdatePropertiesAction {
 
 #[async_trait]
 impl TransactionAction for UpdatePropertiesAction {
-    fn as_any(self: Arc<Self>) -> Arc<dyn Any> {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -125,7 +125,7 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
         let tx = tx
-            .update_properties()
+            .update_table_properties()
             .set("a".to_string(), "b".to_string())
             .remove("b".to_string())
             .apply(tx)
@@ -133,8 +133,11 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let any = tx.actions[0].clone().as_any();
-        let action = any.downcast_ref::<UpdatePropertiesAction>().unwrap();
+        let action_clone = tx.actions[0].clone();
+        let action = action_clone
+            .as_any()
+            .downcast_ref::<UpdatePropertiesAction>()
+            .unwrap();
         assert_eq!(
             action.updates,
             HashMap::from([("a".to_string(), "b".to_string())])

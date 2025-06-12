@@ -38,9 +38,7 @@ pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 #[async_trait]
 pub(crate) trait TransactionAction: Sync + Send {
     /// Returns the action as [`Any`] so it can be downcast to concrete types later
-    fn as_any(&self) -> &Any {
-        self
-    }
+    fn as_any(&self) -> &dyn Any;
 
     /// Commits this action against the provided table and returns the resulting updates.
     /// NOTE: This function is intended for internal use only and should not be called directly by users.
@@ -129,7 +127,7 @@ mod tests {
 
     #[async_trait]
     impl TransactionAction for TestAction {
-        fn as_any(self: Arc<Self>) -> Arc<dyn Any> {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
