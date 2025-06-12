@@ -35,6 +35,7 @@ pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 /// to modify the table metadata.
 #[async_trait]
 pub(crate) trait TransactionAction: Sync + Send {
+    #[allow(dead_code)]
     /// Returns the action as [`Any`] so it can be downcast to concrete types later
     fn as_any(&self) -> &dyn Any;
 
