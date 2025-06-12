@@ -343,11 +343,17 @@ impl InputFile {
     /// For continuous reading, use [`Self::reader`] instead.
     // TODO: implement cache-level understanding of file size and completeness so this function can use cache too
     pub async fn read(&self) -> crate::Result<Bytes> {
-        Ok(self
-            .op
-            .read(&self.path[self.relative_path_pos..])
-            .await?
-            .to_bytes())
+        if let Some(bytes) = self.cache.get_whole(&self.path).await {
+            Ok(bytes)
+        } else {
+            let bytes = self
+                .op
+                .read(&self.path[self.relative_path_pos..])
+                .await?
+                .to_bytes();
+            self.cache.set_whole(&self.path, bytes.clone()).await;
+            Ok(bytes)
+        }
     }
 
     /// Creates [`FileRead`] for continuous reading.
