@@ -88,7 +88,8 @@ impl TransactionAction for UpdatePropertiesAction {
     }
 
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
-        if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k)) {
+        if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 format!(
