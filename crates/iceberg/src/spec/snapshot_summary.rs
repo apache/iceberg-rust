@@ -848,8 +848,8 @@ mod tests {
             added_rows_count: Some(100),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(50),
-            partitions: Vec::new(),
-            key_metadata: Vec::new(),
+            partitions: Some(Vec::new()),
+            key_metadata: None,
         };
 
         collector
@@ -972,8 +972,8 @@ mod tests {
             added_rows_count: Some(5),
             existing_rows_count: Some(0),
             deleted_rows_count: Some(0),
-            partitions: Vec::new(),
-            key_metadata: Vec::new(),
+            partitions: Some(Vec::new()),
+            key_metadata: None,
         });
 
         summary_four.add_file(

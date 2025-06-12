@@ -637,7 +637,7 @@ dependencies = [
  "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -699,7 +699,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -716,14 +716,14 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.94.0"
+version = "1.99.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad31af89bb8a038040caedf19234147203bc141744eb8954cbcf09578a910b6"
+checksum = "6d3964f2ad78d3fe39a327f109faaf0d0d7b2aa1742d99fb9434a36c99ca542a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -738,14 +738,14 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.20.0"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7aeb8d50940ff852885f372f3099eeadc70f7d4917389b39f4c7a1b8e6c372bc"
+checksum = "3382afb09173e6f30369399041f0d3920031b14878d4b013ba7d3f04052359dd"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -767,7 +767,7 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -790,7 +790,7 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -813,7 +813,7 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-json",
  "aws-smithy-query",
  "aws-smithy-runtime",
@@ -835,7 +835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3503af839bd8751d0bdc5a46b9cac93a003a353e635b0c12cf2376b5b53e41ea"
 dependencies = [
  "aws-credential-types",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
@@ -859,26 +859,6 @@ dependencies = [
  "futures-util",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "aws-smithy-http"
-version = "0.60.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7809c27ad8da6a6a68c454e651d4962479e81472aa19ae99e59f9aba1f9713cc"
-dependencies = [
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "bytes",
- "bytes-utils",
- "futures-core",
- "http 0.2.12",
- "http-body 0.4.6",
- "once_cell",
- "percent-encoding",
- "pin-project-lite",
- "pin-utils",
- "tracing",
 ]
 
 [[package]]
@@ -964,7 +944,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14302f06d1d5b7d333fd819943075b13d27c7700b414f574c3c35859bfb55d5e"
 dependencies = [
  "aws-smithy-async",
- "aws-smithy-http 0.62.1",
+ "aws-smithy-http",
  "aws-smithy-http-client",
  "aws-smithy-observability",
  "aws-smithy-runtime-api",
@@ -1551,7 +1531,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2750,7 +2730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2845,7 +2825,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix 1.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3495,7 +3475,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3519,7 +3499,6 @@ dependencies = [
  "expect-test",
  "fnv",
  "futures",
- "iceberg-catalog-memory",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "moka",
@@ -3552,7 +3531,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-cache-moka"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "iceberg",
  "moka",
@@ -3560,7 +3539,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-glue"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3579,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-hms"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3605,7 +3584,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-memory"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -3620,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-rest"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3643,7 +3622,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-s3tables"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3660,7 +3639,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-sql"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "iceberg",
@@ -3676,8 +3655,52 @@ dependencies = [
 ]
 
 [[package]]
-name = "iceberg-cli"
-version = "0.5.0"
+name = "iceberg-datafusion"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datafusion",
+ "futures",
+ "iceberg",
+ "iceberg-catalog-memory",
+ "parquet",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "iceberg-examples"
+version = "0.5.1"
+dependencies = [
+ "futures",
+ "iceberg",
+ "iceberg-catalog-rest",
+ "tokio",
+]
+
+[[package]]
+name = "iceberg-integration-tests"
+version = "0.5.1"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "ctor",
+ "datafusion",
+ "futures",
+ "iceberg",
+ "iceberg-catalog-rest",
+ "iceberg-datafusion",
+ "iceberg_test_utils",
+ "ordered-float 2.10.1",
+ "parquet",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "iceberg-playground"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3696,51 +3719,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "iceberg-datafusion"
-version = "0.5.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "datafusion",
- "futures",
- "iceberg",
- "iceberg-catalog-memory",
- "parquet",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "iceberg-examples"
-version = "0.5.0"
-dependencies = [
- "futures",
- "iceberg",
- "iceberg-catalog-rest",
- "tokio",
-]
-
-[[package]]
-name = "iceberg-integration-tests"
-version = "0.5.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "ctor",
- "datafusion",
- "futures",
- "iceberg",
- "iceberg-catalog-rest",
- "iceberg-datafusion",
- "iceberg_test_utils",
- "parquet",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "iceberg-sqllogictest"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3754,7 +3734,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg_test_utils"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -4210,7 +4190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -4753,7 +4733,7 @@ dependencies = [
  "md-5",
  "parking_lot",
  "percent-encoding",
- "quick-xml 0.37.4",
+ "quick-xml",
  "rand 0.8.5",
  "reqwest",
  "ring",
@@ -4776,9 +4756,9 @@ checksum = "d75b0bedcc4fe52caa0e03d9f1151a323e4aa5e2d78ba3580400cd3c9e2bc4bc"
 
 [[package]]
 name = "opendal"
-version = "0.53.0"
+version = "0.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ebd1183902124c6b3ee0a9383683513dd8cca3d25a5d065593f969a44f979e"
+checksum = "f947c4efbca344c1a125753366033c8107f552b2e3f8251815ed1908f116ca3e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4790,10 +4770,11 @@ dependencies = [
  "futures",
  "getrandom 0.2.15",
  "http 1.3.1",
+ "http-body 1.0.1",
  "log",
  "md-5",
  "percent-encoding",
- "quick-xml 0.36.2",
+ "quick-xml",
  "reqsign",
  "reqwest",
  "serde",
@@ -5355,26 +5336,6 @@ checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
 
 [[package]]
 name = "quick-xml"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e446ed58cef1bbfe847bc2fda0e2e4ea9f0e57b90c507d4781292590d72a4e"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.37.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ce8c88de324ff838700f36fb6ab86c96df0e3c4ab6ef3a9b2044465cce1369"
@@ -5432,7 +5393,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5659,9 +5620,9 @@ checksum = "a35e8a6bf28cd121053a66aa2e6a2e3eaffad4a60012179f0e864aa5ffeff215"
 
 [[package]]
 name = "reqsign"
-version = "0.16.1"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb0075a66c8bfbf4cc8b70dca166e722e1f55a3ea9250ecbb85f4d92a5f64149"
+checksum = "9323c0afb30e54f793f4705b10c890395bccc87c6e6ea62c4e7e82d09a380dc6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5677,7 +5638,7 @@ dependencies = [
  "log",
  "once_cell",
  "percent-encoding",
- "quick-xml 0.35.0",
+ "quick-xml",
  "rand 0.8.5",
  "reqwest",
  "rsa",
@@ -5912,7 +5873,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5925,7 +5886,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.9.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6716,7 +6677,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6841,7 +6802,7 @@ dependencies = [
  "getrandom 0.3.1",
  "once_cell",
  "rustix 1.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7417,9 +7378,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
+checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
 dependencies = [
  "getrandom 0.3.1",
  "js-sys",
@@ -7710,7 +7671,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

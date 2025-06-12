@@ -16,7 +16,7 @@
 // under the License.
 
 #![doc = include_str!("../README.md")]
-pub const ICEBERG_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const ICEBERG_PLAYGROUND_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod catalog;
 pub use catalog::*;

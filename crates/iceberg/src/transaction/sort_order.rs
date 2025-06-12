@@ -21,12 +21,12 @@ use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Transaction action for replacing sort order.
-pub struct ReplaceSortOrderAction<'a> {
-    pub tx: Transaction<'a>,
+pub struct ReplaceSortOrderAction {
+    pub tx: Transaction,
     pub sort_fields: Vec<SortField>,
 }
 
-impl<'a> ReplaceSortOrderAction<'a> {
+impl ReplaceSortOrderAction {
     /// Adds a field for sorting in ascending order.
     pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
         self.add_sort_field(name, SortDirection::Ascending, null_order)
@@ -38,7 +38,7 @@ impl<'a> ReplaceSortOrderAction<'a> {
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub fn apply(mut self) -> Result<Transaction<'a>> {
+    pub fn apply(mut self) -> Result<Transaction> {
         let unbound_sort_order = SortOrder::builder()
             .with_fields(self.sort_fields)
             .build_unbound()?;
