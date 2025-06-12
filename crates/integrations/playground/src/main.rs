@@ -26,7 +26,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_cli::exec;
 use datafusion_cli::print_format::PrintFormat;
 use datafusion_cli::print_options::{MaxRows, PrintOptions};
-use iceberg_cli::{ICEBERG_CLI_VERSION, IcebergCatalogList};
+use iceberg_playground::{ICEBERG_PLAYGROUND_VERSION, IcebergCatalogList};
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
@@ -76,7 +76,7 @@ async fn main_inner() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("ICEBERG CLI v{}", ICEBERG_CLI_VERSION);
+        println!("ICEBERG PLAYGROUND v{}", ICEBERG_PLAYGROUND_VERSION);
     }
 
     let session_config = SessionConfig::from_env()?.with_information_schema(true);
