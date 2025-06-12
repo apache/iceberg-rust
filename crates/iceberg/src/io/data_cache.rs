@@ -61,10 +61,10 @@ impl DataCache {
         None
     }
 
-    pub async fn set_whole(&self, path: &String, bytes: Bytes) {
+    pub async fn set_whole(&self, path: &str, bytes: Bytes) {
         let size = size_of::<Bytes>() + bytes.len();
         self.cache
-            .insert(path.clone(), FileCache {
+            .insert(path.to_owned(), FileCache {
                 content: Arc::new(RwLock::new(FileContentCache::Complete(bytes))),
                 current_size: size as u32,
             })
