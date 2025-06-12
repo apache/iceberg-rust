@@ -23,7 +23,7 @@ use async_trait::async_trait;
 
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Result, TableUpdate};
+use crate::{Error, ErrorKind, Result, TableUpdate};
 
 /// A transactional action that updates or removes table properties
 ///
@@ -47,10 +47,6 @@ impl UpdatePropertiesAction {
 
     /// Adds a key-value pair to the update set of this action.
     ///
-    /// # Panics
-    ///
-    /// Panics if the key was previously marked for removal.
-    ///
     /// # Arguments
     ///
     /// * `key` - The property key to update.
@@ -60,16 +56,11 @@ impl UpdatePropertiesAction {
     ///
     /// The updated [`UpdatePropertiesAction`] with the key-value pair added to the update set.
     pub fn set(mut self, key: String, value: String) -> Self {
-        assert!(!self.removals.contains(&key));
         self.updates.insert(key, value);
         self
     }
 
     /// Adds a key to the removal set of this action.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the key was already marked for update.
     ///
     /// # Arguments
     ///
@@ -79,7 +70,6 @@ impl UpdatePropertiesAction {
     ///
     /// The updated [`UpdatePropertiesAction`] with the key added to the removal set.
     pub fn remove(mut self, key: String) -> Self {
-        assert!(!self.updates.contains_key(&key));
         self.removals.insert(key);
         self
     }
@@ -98,6 +88,16 @@ impl TransactionAction for UpdatePropertiesAction {
     }
 
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+        if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k)) {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                format!(
+                    "Key {} is present in both the HashSet and the HashMap",
+                    overlapping_key
+                ),
+            ));
+        }
+
         let updates: Vec<TableUpdate> = vec![
             TableUpdate::SetProperties {
                 updates: self.updates.clone(),
