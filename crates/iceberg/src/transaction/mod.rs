@@ -57,7 +57,7 @@ impl Transaction {
         }
     }
 
-    fn update_table_metadata(&mut self, table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
+    fn update_table_metadata(&self, table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
         let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
@@ -70,7 +70,7 @@ impl Transaction {
 
     /// TODO documentation
     pub fn apply(
-        &mut self,
+        &self,
         table: &mut Table,
         updates: Vec<TableUpdate>,
         requirements: Vec<TableRequirement>,
