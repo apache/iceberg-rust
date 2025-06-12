@@ -30,11 +30,12 @@ use crate::spec::{
     SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
 use crate::transaction::Transaction;
+use crate::transaction::validate::SnapshotValidator;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
-pub(crate) trait SnapshotProduceOperation: Send + Sync {
+pub(crate) trait SnapshotProduceOperation: Send + SnapshotValidator + Sync {
     fn operation(&self) -> Operation;
     #[allow(unused)]
     fn delete_entries(
