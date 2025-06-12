@@ -21,6 +21,7 @@ mod action;
 mod append;
 mod snapshot;
 mod sort_order;
+mod update_statistics;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -36,6 +37,7 @@ use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
+use crate::transaction::update_statistics::UpdateStatistics;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -191,6 +193,11 @@ impl Transaction {
     pub fn set_location(mut self, location: String) -> Result<Self> {
         self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
         Ok(self)
+    }
+
+    /// Update the statistics of table
+    pub fn update_statistics(self) -> UpdateStatistics<'a> {
+        UpdateStatistics::new(self)
     }
 
     /// Commit transaction.
