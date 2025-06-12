@@ -278,7 +278,7 @@ pub struct CachedFileReader {
 #[async_trait::async_trait]
 impl FileRead for CachedFileReader {
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
-        match self.cache.get(&self.path, range.clone()).await {
+        match self.cache.get_range(&self.path, range.clone()).await {
             DataCacheRes::Hit(res) => Ok(res),
             DataCacheRes::PartialHit(partial_hit) => {
                 let missing_bytes = self
@@ -293,7 +293,7 @@ impl FileRead for CachedFileReader {
             }
             DataCacheRes::Miss => {
                 let res = self.reader.read(range.clone()).await?.to_bytes();
-                self.cache.set(&self.path, range, res.clone()).await;
+                self.cache.set_range(&self.path, range, res.clone()).await;
                 Ok(res)
             }
         }

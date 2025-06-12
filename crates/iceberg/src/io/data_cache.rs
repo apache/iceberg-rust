@@ -51,30 +51,62 @@ impl DataCache {
         }
     }
 
-    pub async fn get(&self, path: &String, range: Range<u64>) -> DataCacheRes {
+    pub async fn get_whole(&self, path: &String) -> Option<Bytes> {
         if let Some(file_cache) = self.cache.get(path).await {
-            file_cache.content.read().await.get(range)
+            if let FileContentCache::Complete(bytes) = &*file_cache.content.read().await {
+                return Some(bytes.clone());
+            }
+        }
+
+        None
+    }
+
+    pub async fn set_whole(&self, path: &String, bytes: Bytes) {
+        let size = size_of::<Bytes>() + bytes.len();
+        self.cache.insert(
+            path.clone(),
+            FileCache { content: Arc::new(RwLock::new(FileContentCache::Complete(bytes))), current_size: size as u32 }
+        ).await;
+    }
+
+    pub async fn get_range(&self, path: &String, range: Range<u64>) -> DataCacheRes {
+        if let Some(file_cache) = self.cache.get(path).await {
+            match &*file_cache.content.read().await {
+                FileContentCache::Complete(bytes) => {
+                    let range = (range.start as usize)..(range.end as usize);
+                    DataCacheRes::Hit(bytes.slice(range))
+                },
+                FileContentCache::Fragmented(fragmented_content_cache) => {
+                    fragmented_content_cache.get(range)
+                },
+            }
         } else {
             DataCacheRes::Miss
         }
     }
 
-    pub async fn set(&self, path: &String, range: Range<u64>, bytes: Bytes) {
+    pub async fn set_range(&self, path: &String, range: Range<u64>, bytes: Bytes) {
         if let Some(mut file_cache) = self.cache.get(path).await {
             let mut file_content_cache = file_cache.content.write().await;
+            match &mut *file_content_cache {
+                FileContentCache::Complete(_) => {
+                    // do nothing, we already have the entire file cached
+                },
+                FileContentCache::Fragmented(fragmented_content_cache) => {
+                    fragmented_content_cache.set(range, bytes);
+                    file_cache.current_size = fragmented_content_cache.size() as u32 + size_of::<u32>() as u32;
 
-            file_content_cache.set(range, bytes);
-            file_cache.current_size = file_content_cache.size() as u32 + size_of::<u32>() as u32;
+                    mem::drop(file_content_cache); // release our lock
 
-            mem::drop(file_content_cache); // release our lock
-
-            self.cache.insert(path.clone(), file_cache).await;
+                    self.cache.insert(path.clone(), file_cache).await;
+                }
+            }
         } else {
-            let file_content_cache =
-                FileContentCache::new_with_first_buf(path.clone(), range, bytes);
-            let current_size = file_content_cache.size() as u32;
+            let fragmented_content_cache =
+                FragmentedContentCache::new_with_first_buf(path.clone(), range, bytes);
+            let current_size = fragmented_content_cache.size() as u32;
             let file_cache = FileCache {
-                content: Arc::new(RwLock::new(file_content_cache)),
+                content: Arc::new(RwLock::new(FileContentCache::Fragmented(fragmented_content_cache))),
                 current_size,
             };
 
@@ -83,7 +115,7 @@ impl DataCache {
     }
 
     pub async fn fill_partial_hit(&self, partial_hit: PartialHit, missing_bytes: Bytes) -> Bytes {
-        self.set(
+        self.set_range(
             &partial_hit.path,
             partial_hit.missing_range,
             missing_bytes.clone(),
@@ -91,7 +123,7 @@ impl DataCache {
         .await;
 
         if let DataCacheRes::Hit(complete_buf) = self
-            .get(&partial_hit.path, partial_hit.original_range)
+            .get_range(&partial_hit.path, partial_hit.original_range)
             .await
         {
             complete_buf
@@ -134,13 +166,19 @@ impl PartialHit {
 }
 
 #[derive(Clone, Debug)]
-struct FileContentCache {
+enum FileContentCache {
+    Complete(Bytes),
+    Fragmented(FragmentedContentCache)
+}
+
+#[derive(Clone, Debug)]
+struct FragmentedContentCache {
     path: String,
     // it is assumed no buffers overlap or are adjacent (adjacent buffers should be merged)
     buffers: Vec<(Range<u64>, Bytes)>,
 }
 
-impl FileContentCache {
+impl FragmentedContentCache {
     fn new_with_first_buf(path: String, range: Range<u64>, bytes: Bytes) -> Self {
         if range.start == range.end {
             return Self {
