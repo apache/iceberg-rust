@@ -17,6 +17,7 @@
 
 //! This module contains transaction api.
 
+mod action;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -32,24 +33,27 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
+use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
-pub struct Transaction<'a> {
-    base_table: &'a Table,
+pub struct Transaction {
+    base_table: Table,
     current_table: Table,
+    actions: Vec<BoxedTransactionAction>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction {
     /// Creates a new transaction.
-    pub fn new(table: &'a Table) -> Self {
+    pub fn new(table: &Table) -> Self {
         Self {
-            base_table: table,
+            base_table: table.clone(),
             current_table: table.clone(),
+            actions: vec![],
             updates: vec![],
             requirements: vec![],
         }
@@ -155,7 +159,7 @@ impl<'a> Transaction<'a> {
         self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
-    ) -> Result<FastAppendAction<'a>> {
+    ) -> Result<FastAppendAction> {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
             self,
@@ -167,7 +171,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(self) -> ReplaceSortOrderAction<'a> {
+    pub fn replace_sort_order(self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction {
             tx: self,
             sort_fields: vec![],

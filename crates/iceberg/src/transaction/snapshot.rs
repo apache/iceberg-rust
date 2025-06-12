@@ -59,8 +59,8 @@ pub(crate) trait ManifestProcess: Send + Sync {
     fn process_manifests(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
 }
 
-pub(crate) struct SnapshotProduceAction<'a> {
-    pub tx: Transaction<'a>,
+pub(crate) struct SnapshotProduceAction {
+    pub tx: Transaction,
     snapshot_id: i64,
     key_metadata: Vec<u8>,
     commit_uuid: Uuid,
@@ -72,9 +72,9 @@ pub(crate) struct SnapshotProduceAction<'a> {
     manifest_counter: RangeFrom<u64>,
 }
 
-impl<'a> SnapshotProduceAction<'a> {
+impl SnapshotProduceAction {
     pub(crate) fn new(
-        tx: Transaction<'a>,
+        tx: Transaction,
         snapshot_id: i64,
         key_metadata: Vec<u8>,
         commit_uuid: Uuid,
@@ -310,7 +310,7 @@ impl<'a> SnapshotProduceAction<'a> {
         mut self,
         snapshot_produce_operation: OP,
         process: MP,
-    ) -> Result<Transaction<'a>> {
+    ) -> Result<Transaction> {
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
