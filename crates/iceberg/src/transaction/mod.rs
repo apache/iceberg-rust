@@ -19,7 +19,8 @@
 
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
-pub mod action;
+mod action;
+pub use action::*;
 mod append;
 mod snapshot;
 mod sort_order;
