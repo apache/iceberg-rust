@@ -341,7 +341,6 @@ impl InputFile {
     /// Read and returns whole content of file.
     ///
     /// For continuous reading, use [`Self::reader`] instead.
-    // TODO: implement cache-level understanding of file size and completeness so this function can use cache too
     pub async fn read(&self) -> crate::Result<Bytes> {
         if let Some(bytes) = self.cache.get_whole(&self.path).await {
             Ok(bytes)
@@ -359,7 +358,6 @@ impl InputFile {
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    // TODO: figure out how to cache reads with a reader
     pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
         let direct_reader = self.op.reader(&self.path[self.relative_path_pos..]).await?;
 
@@ -410,7 +408,7 @@ pub struct OutputFile {
     path: String,
     // Relative path of file to uri, starts at [`relative_path_pos`]
     relative_path_pos: usize,
-    cache: DataCacheRef, // TODO: cache writes to output files to prevent unnecessary reads
+    cache: DataCacheRef, // TODO: consider caching file writes
 }
 
 impl OutputFile {

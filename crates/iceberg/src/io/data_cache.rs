@@ -257,7 +257,6 @@ impl FragmentedContentCache {
 
     fn set(&mut self, range: Range<u64>, bytes: Bytes) {
         if range.end == range.start {
-            // TODO: check if this necessary
             return;
         }
 
