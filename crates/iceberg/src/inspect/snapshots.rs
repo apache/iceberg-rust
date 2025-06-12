@@ -137,9 +137,10 @@ impl<'a> SnapshotsTable<'a> {
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
+    use futures::TryStreamExt;
 
-    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
+    use crate::test_utils::check_record_batches;
 
     #[tokio::test]
     async fn test_snapshots_table() {
@@ -148,7 +149,7 @@ mod tests {
         let batch_stream = table.inspect().snapshots().scan().await.unwrap();
 
         check_record_batches(
-            batch_stream,
+            batch_stream.try_collect::<Vec<_>>().await.unwrap(),
             expect![[r#"
                 Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
                 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
@@ -211,6 +212,6 @@ mod tests {
                 ]"#]],
             &["manifest_list"],
             Some("committed_at"),
-        ).await;
+        );
     }
 }
