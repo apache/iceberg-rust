@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -66,16 +65,12 @@ impl Default for UpgradeFormatVersionAction {
 
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
-            Err(Error::new(
+            Error::new(
                 ErrorKind::DataInvalid,
                 "FormatVersion is not set for UpgradeFormatVersionAction!",
-            ))
+            )
         })?;
 
         Ok(ActionCommit::new(
@@ -87,6 +82,8 @@ impl TransactionAction for UpgradeFormatVersionAction {
 
 #[cfg(test)]
 mod tests {
+    use as_any::Downcast;
+
     use crate::spec::FormatVersion;
     use crate::transaction::Transaction;
     use crate::transaction::action::ApplyTransactionAction;
@@ -104,9 +101,7 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let action_clone = tx.actions[0].clone();
-        let action = action_clone
-            .as_any()
+        let action = (&*tx.actions[0])
             .downcast_ref::<UpgradeFormatVersionAction>()
             .unwrap();
 

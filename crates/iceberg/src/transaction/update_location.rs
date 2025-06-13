@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -62,10 +61,6 @@ impl Default for UpdateLocationAction {
 
 #[async_trait]
 impl TransactionAction for UpdateLocationAction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
         if let Some(location) = self.location.clone() {
@@ -83,6 +78,8 @@ impl TransactionAction for UpdateLocationAction {
 
 #[cfg(test)]
 mod tests {
+    use as_any::Downcast;
+
     use crate::transaction::Transaction;
     use crate::transaction::action::ApplyTransactionAction;
     use crate::transaction::tests::make_v2_table;
@@ -100,9 +97,7 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let action_clone = tx.actions[0].clone();
-        let action = action_clone
-            .as_any()
+        let action = (&*tx.actions[0])
             .downcast_ref::<UpdateLocationAction>()
             .unwrap();
 

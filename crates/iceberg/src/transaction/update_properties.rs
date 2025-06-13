@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -83,10 +82,6 @@ impl Default for UpdatePropertiesAction {
 
 #[async_trait]
 impl TransactionAction for UpdatePropertiesAction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))
         {
@@ -116,6 +111,8 @@ impl TransactionAction for UpdatePropertiesAction {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use as_any::Downcast;
+
     use crate::transaction::Transaction;
     use crate::transaction::action::ApplyTransactionAction;
     use crate::transaction::tests::make_v2_table;
@@ -134,9 +131,7 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let action_clone = tx.actions[0].clone();
-        let action = action_clone
-            .as_any()
+        let action = (&*tx.actions[0])
             .downcast_ref::<UpdatePropertiesAction>()
             .unwrap();
         assert_eq!(

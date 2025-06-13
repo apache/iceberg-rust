@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::mem::take;
 use std::sync::Arc;
 
+use as_any::AsAny;
 use async_trait::async_trait;
 
 use crate::table::Table;
@@ -34,11 +34,7 @@ pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 /// Each action is responsible for generating the updates and requirements needed
 /// to modify the table metadata.
 #[async_trait]
-pub(crate) trait TransactionAction: Sync + Send {
-    /// Returns the action as [`Any`] so it can be downcast to concrete types later
-    #[allow(dead_code)]
-    fn as_any(&self) -> &dyn Any;
-
+pub(crate) trait TransactionAction: AsAny + Sync + Send {
     /// Commits this action against the provided table and returns the resulting updates.
     /// NOTE: This function is intended for internal use only and should not be called directly by users.
     ///
@@ -109,10 +105,10 @@ impl ActionCommit {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::str::FromStr;
     use std::sync::Arc;
 
+    use as_any::Downcast;
     use async_trait::async_trait;
     use uuid::Uuid;
 
@@ -126,10 +122,6 @@ mod tests {
 
     #[async_trait]
     impl TransactionAction for TestAction {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
             Ok(ActionCommit::new(
                 vec![TableUpdate::SetLocation {
@@ -167,9 +159,12 @@ mod tests {
         let tx = Transaction::new(&table);
 
         let updated_tx = action.apply(tx).unwrap();
-
         // There should be one action in the transaction now
         assert_eq!(updated_tx.actions.len(), 1);
+
+        (&*updated_tx.actions[0])
+            .downcast_ref::<TestAction>()
+            .expect("TestAction was not applied to Transaction!");
     }
 
     #[test]

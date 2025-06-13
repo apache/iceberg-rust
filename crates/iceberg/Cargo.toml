@@ -54,6 +54,7 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
+as-any = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
