@@ -71,18 +71,15 @@ impl TransactionAction for UpgradeFormatVersionAction {
     }
 
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
-        if self.format_version.is_none() {
-            // error
-            return Err(Error::new(
+        let format_version = self.format_version.ok_or_else(|| {
+            Err(Error::new(
                 ErrorKind::DataInvalid,
                 "FormatVersion is not set for UpgradeFormatVersionAction!",
-            ));
-        }
+            ))
+        })?;
 
         Ok(ActionCommit::new(
-            vec![UpgradeFormatVersion {
-                format_version: self.format_version.unwrap(),
-            }],
+            vec![UpgradeFormatVersion { format_version }],
             vec![],
         ))
     }
