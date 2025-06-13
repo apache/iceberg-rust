@@ -28,7 +28,6 @@ mod update_location;
 mod update_properties;
 mod upgrade_format_version;
 
-use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
 
@@ -142,18 +141,12 @@ impl Transaction {
     }
 
     /// Creates a fast append action.
-    pub fn fast_append(
-        self,
-        commit_uuid: Option<Uuid>,
-        key_metadata: Vec<u8>,
-    ) -> Result<FastAppendAction> {
+    pub fn fast_append(&self, commit_uuid: Option<Uuid>, key_metadata: Vec<u8>) -> FastAppendAction {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
-            self,
             snapshot_id,
             commit_uuid.unwrap_or_else(Uuid::now_v7),
             key_metadata,
-            HashMap::new(),
         )
     }
 
