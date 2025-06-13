@@ -97,7 +97,7 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
 
-        let action = (&*tx.actions[0])
+        let action = (*tx.actions[0])
             .downcast_ref::<UpdateLocationAction>()
             .unwrap();
 

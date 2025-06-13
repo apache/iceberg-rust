@@ -162,7 +162,7 @@ mod tests {
         // There should be one action in the transaction now
         assert_eq!(updated_tx.actions.len(), 1);
 
-        (&*updated_tx.actions[0])
+        (*updated_tx.actions[0])
             .downcast_ref::<TestAction>()
             .expect("TestAction was not applied to Transaction!");
     }
