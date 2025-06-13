@@ -93,7 +93,7 @@ impl TransactionAction for UpdatePropertiesAction {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 format!(
-                    "Key {} is present in both the HashSet and the HashMap",
+                    "Key {} is present in both removal set and update set",
                     overlapping_key
                 ),
             ));
