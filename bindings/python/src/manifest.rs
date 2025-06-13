@@ -23,12 +23,37 @@ use iceberg::spec::{
     ManifestList, ManifestStatus, PrimitiveLiteral,
 };
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
+use pyo3::types::{PyBytes};
 
-#[pyclass]
+
 #[allow(dead_code)]
 pub struct PyPrimitiveLiteral {
-    inner: Option<PrimitiveLiteral>,
+    inner: PrimitiveLiteral
 }
+//
+// impl<'py> IntoPyObject<'py> for PyPrimitiveLiteral  {
+//     type Target = PyAny; // the Python type
+//     type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+//     type Error = std::convert::Infallible; // the conversion error type, has to be convertable to `PyErr`
+//
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        match self.inner {
+            PrimitiveLiteral::Boolean(v) => Ok(v.into_py_any(py)),
+            PrimitiveLiteral::Int(v) => Ok(v.into_py_any(py)),
+            PrimitiveLiteral::Long(v) =>Ok( v.into_py_any(py)),
+            PrimitiveLiteral::Float(v) => Ok(v.0.into_py_any(py)), // unwrap OrderedFloat
+            PrimitiveLiteral::Double(v) =>Ok( v.0.into_py_any(py)),
+            PrimitiveLiteral::String(v) =>Ok( v.into_py_any(py)),
+            PrimitiveLiteral::Binary(v) =>Ok( PyBytes::new(py, &v).into_py_any(py)),
+            PrimitiveLiteral::Int128(v) => Ok(v.into_py_any(py)),  // Python handles big ints
+            PrimitiveLiteral::UInt128(v) =>Ok( v.into_py_any(py)),
+            PrimitiveLiteral::AboveMax => Err("AboveMax is not supported"),
+            PrimitiveLiteral::BelowMin => Err("BelowMin is not supported"),
+        }
+    }
+// }
+
 
 #[pyclass]
 pub struct PyDataFile {
@@ -57,15 +82,33 @@ impl PyDataFile {
         }
     }
 
+    fn into_pyobject(self, lit: PrimitiveLiteral, py: Python<'py>) -> Option<PyObject> {
+        match lit {
+            PrimitiveLiteral::Boolean(v) => v,
+            PrimitiveLiteral::Int(v) => v,
+            PrimitiveLiteral::Long(v) => Some(v.into_py_any(py)),
+            PrimitiveLiteral::Float(v) => Some(v.0.into_py_any(py)), // unwrap OrderedFloat
+            PrimitiveLiteral::Double(v) =>Some( v.0.into_py_any(py)),
+            PrimitiveLiteral::String(v) =>Some( v.into_py_any(py)),
+            PrimitiveLiteral::Binary(v) =>Some( PyBytes::new(py, &v).into_py_any(py)),
+            PrimitiveLiteral::Int128(v) => Some(v.into_py_any(py)),  // Python handles big ints
+            PrimitiveLiteral::UInt128(v) => Some(v.into_py_any(py)),
+            PrimitiveLiteral::AboveMax => None,
+            PrimitiveLiteral::BelowMin => None,
+        }
+    }
+
     #[getter]
     fn partition(&self) -> Vec<PyPrimitiveLiteral> {
-        self.inner
-            .partition()
-            .iter()
-            .map(|lit| PyPrimitiveLiteral {
-                inner: lit.map(|l| l.as_primitive_literal().unwrap()),
-            })
-            .collect()
+        Python::with_gil(|py| {
+            self.inner
+                .partition()
+                .iter()
+                .map(|lit|
+                    lit.map(|l| into_pyobject(l))
+                )
+                .collect()
+        })
     }
 
     #[getter]
@@ -269,7 +312,7 @@ impl crate::manifest::PyManifestFile {
     }
 
     #[getter]
-    fn key_metadata(&self) -> Vec<u8> {
+    fn key_metadata(&self) -> Option<Vec<u8>> {
         self.inner.key_metadata.clone()
     }
 }
