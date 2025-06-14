@@ -15,18 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
 use crate::error::Result;
 use crate::spec::{NullOrder, SortDirection, SortField, SortOrder, Transform};
-use crate::transaction::Transaction;
+use crate::table::Table;
+use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
+
+#[derive(Clone)]
+struct PendingSortField {
+    name: String,
+    direction: SortDirection,
+    null_order: NullOrder,
+}
 
 /// Transaction action for replacing sort order.
 pub struct ReplaceSortOrderAction {
-    pub tx: Transaction,
-    pub sort_fields: Vec<SortField>,
+    pending_sort_fields: Vec<PendingSortField>,
 }
 
 impl ReplaceSortOrderAction {
+    pub fn new() -> Self {
+        ReplaceSortOrderAction {
+            pending_sort_fields: vec![],
+        }
+    }
+
     /// Adds a field for sorting in ascending order.
     pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
         self.add_sort_field(name, SortDirection::Ascending, null_order)
@@ -37,10 +54,58 @@ impl ReplaceSortOrderAction {
         self.add_sort_field(name, SortDirection::Descending, null_order)
     }
 
-    /// Finished building the action and apply it to the transaction.
-    pub fn apply(mut self) -> Result<Transaction> {
+    fn add_sort_field(
+        mut self,
+        name: &str,
+        sort_direction: SortDirection,
+        null_order: NullOrder,
+    ) -> Result<Self> {
+        self.pending_sort_fields.push(PendingSortField {
+            name: name.to_string(),
+            direction: sort_direction,
+            null_order,
+        });
+
+        Ok(self)
+    }
+}
+
+impl Default for ReplaceSortOrderAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl TransactionAction for ReplaceSortOrderAction {
+    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        let pending_sort_fields = self.pending_sort_fields.clone();
+
+        let sort_fields: Result<Vec<SortField>> = pending_sort_fields
+            .iter()
+            .map(|p| {
+                let field_id = table
+                    .metadata()
+                    .current_schema()
+                    .field_id_by_name(&*p.name)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Cannot find field {} in table schema", p.name),
+                        )
+                    })?;
+
+                Ok(SortField::builder()
+                    .source_id(field_id)
+                    .transform(Transform::Identity)
+                    .direction(p.direction)
+                    .null_order(p.null_order)
+                    .build())
+            })
+            .collect();
+
         let unbound_sort_order = SortOrder::builder()
-            .with_fields(self.sort_fields)
+            .with_fields(sort_fields?)
             .build_unbound()?;
 
         let updates = vec![
@@ -52,71 +117,37 @@ impl ReplaceSortOrderAction {
 
         let requirements = vec![
             TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: self
-                    .tx
-                    .current_table
-                    .metadata()
-                    .current_schema()
-                    .schema_id(),
+                current_schema_id: table.metadata().current_schema().schema_id(),
             },
             TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: self
-                    .tx
-                    .current_table
-                    .metadata()
-                    .default_sort_order()
-                    .order_id,
+                default_sort_order_id: table.metadata().default_sort_order().order_id,
             },
         ];
 
-        self.tx.apply(updates, requirements)?;
-
-        Ok(self.tx)
-    }
-
-    fn add_sort_field(
-        mut self,
-        name: &str,
-        sort_direction: SortDirection,
-        null_order: NullOrder,
-    ) -> Result<Self> {
-        let field_id = self
-            .tx
-            .current_table
-            .metadata()
-            .current_schema()
-            .field_id_by_name(name)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Cannot find field {} in table schema", name),
-                )
-            })?;
-
-        let sort_field = SortField::builder()
-            .source_id(field_id)
-            .transform(Transform::Identity)
-            .direction(sort_direction)
-            .null_order(null_order)
-            .build();
-
-        self.sort_fields.push(sort_field);
-        Ok(self)
+        Ok(ActionCommit::new(updates, requirements))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::transaction::Transaction;
+    use as_any::Downcast;
+
+    use crate::transaction::sort_order::ReplaceSortOrderAction;
     use crate::transaction::tests::make_v2_table;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{TableRequirement, TableUpdate};
 
     #[test]
-    fn test_replace_sort_order() {
+    fn test_empty_replace_sort_order() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
-        let tx = tx.replace_sort_order().apply().unwrap();
+        let tx = tx.replace_sort_order().apply(tx).unwrap();
 
+        assert_eq!(tx.actions.len(), 1);
+
+        let action = (*tx.actions[0]).downcast_ref::<ReplaceSortOrderAction>();
+
+        // todo verify pending sort field instead
         assert_eq!(
             vec![
                 TableUpdate::AddSortOrder {

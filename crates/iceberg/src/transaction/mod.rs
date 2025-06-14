@@ -158,11 +158,8 @@ impl Transaction {
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(self) -> ReplaceSortOrderAction {
-        ReplaceSortOrderAction {
-            tx: self,
-            sort_fields: vec![],
-        }
+    pub fn replace_sort_order(&self) -> ReplaceSortOrderAction {
+        ReplaceSortOrderAction::new()
     }
 
     /// Set the location of table
