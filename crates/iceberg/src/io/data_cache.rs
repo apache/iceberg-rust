@@ -23,9 +23,9 @@ use bytes::Bytes;
 use moka::future::{Cache, CacheBuilder};
 use tokio::sync::RwLock;
 
-/// A cache for data files retrieved by `FileIO`.
+/// A cache for data files retrieved by [`FileIO`].
 ///
-/// Minimizes work by allowing "partial" cache hits, where a file read with edge(s) covered
+/// Minimizes work by allowing cache [`PartialHit`]s, where a file read with edge(s) covered
 /// by the cache only needs to fetch the missing part in the middle.
 // !!!! Note: the current implementation is unoptimized and basic, it must be revised
 // Before any optimization is done, some kind of benchmarking is needed
@@ -34,6 +34,7 @@ pub struct DataCache {
     cache: Cache<String, FileCache>,
 }
 
+/// The cache of a single file, with a read/write lock on the content for concurrent use
 #[derive(Clone, Debug)]
 struct FileCache {
     content: Arc<RwLock<FileContentCache>>,
@@ -41,6 +42,7 @@ struct FileCache {
 }
 
 impl DataCache {
+    /// Creates a new [`DataCache`] with no entries and the specified size.
     pub fn new(max_size: u64) -> Self {
         Self {
             cache: CacheBuilder::new(max_size)
@@ -51,6 +53,9 @@ impl DataCache {
         }
     }
 
+    /// Tries to get the entire contents of a data file. Will only return the cached content if the
+    /// entire file has previously been cached as a whole. If it has been cached in fragments,
+    /// we have no way of knowing whether it is complete or not ATM.
     pub async fn get_whole(&self, path: &String) -> Option<Bytes> {
         if let Some(file_cache) = self.cache.get(path).await {
             if let FileContentCache::Complete(bytes) = &*file_cache.content.read().await {
@@ -61,6 +66,7 @@ impl DataCache {
         None
     }
 
+    /// Caches an entire data file.
     pub async fn set_whole(&self, path: &str, bytes: Bytes) {
         let size = size_of::<Bytes>() + bytes.len();
         self.cache
@@ -71,6 +77,13 @@ impl DataCache {
             .await;
     }
 
+    /// Tries to get a range of bytes from the cache of a data file. Depending on what is currently
+    /// availible, this may return
+    /// 
+    /// - Hit, if the entire range is availible
+    /// - PartialHit, if only some of the head and/or the tail is availible
+    ///   - Use [`PartialHit::missing_range`] and [`DataCache::fill_partial_hit`] to resolve this
+    /// - Miss, if none of the range is availible
     pub async fn get_range(&self, path: &String, range: Range<u64>) -> DataCacheRes {
         if let Some(file_cache) = self.cache.get(path).await {
             match &*file_cache.content.read().await {
@@ -87,6 +100,7 @@ impl DataCache {
         }
     }
 
+    /// Caches a fragment of a data file
     pub async fn set_range(&self, path: &String, range: Range<u64>, bytes: Bytes) {
         if let Some(mut file_cache) = self.cache.get(path).await {
             let mut file_content_cache = file_cache.content.write().await;
@@ -119,6 +133,8 @@ impl DataCache {
         }
     }
 
+    /// Fills the missing section of a [`PartialHit`] and returns the complete btyes, even if the
+    /// cached head and/or tail have since been purged from the cache
     pub async fn fill_partial_hit(&self, partial_hit: PartialHit, missing_bytes: Bytes) -> Bytes {
         self.set_range(
             &partial_hit.path,
@@ -148,8 +164,10 @@ impl DataCache {
     }
 }
 
+/// An atomic reference to a [`DataCache`]
 pub type DataCacheRef = Arc<DataCache>;
 
+/// Possible results of a cache search for a range of a file
 #[derive(Debug, PartialEq)]
 pub enum DataCacheRes {
     Hit(Bytes),
@@ -157,6 +175,7 @@ pub enum DataCacheRes {
     Miss,
 }
 
+/// A result of a cache search where some of the head and/or tail of the needed range was in the cache
 #[derive(Debug, PartialEq)]
 pub struct PartialHit {
     path: String,
@@ -167,6 +186,7 @@ pub struct PartialHit {
 }
 
 impl PartialHit {
+    /// Get the range that still needs to be recovered
     pub fn missing_range(&self) -> Range<u64> {
         self.missing_range.clone()
     }
