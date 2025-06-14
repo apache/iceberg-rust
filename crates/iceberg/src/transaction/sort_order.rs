@@ -87,7 +87,7 @@ impl TransactionAction for ReplaceSortOrderAction {
                 let field_id = table
                     .metadata()
                     .current_schema()
-                    .field_id_by_name(&*p.name)
+                    .field_id_by_name(p.name.as_str())
                     .ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,
