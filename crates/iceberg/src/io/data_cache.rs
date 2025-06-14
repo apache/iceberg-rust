@@ -78,12 +78,12 @@ impl DataCache {
     }
 
     /// Tries to get a range of bytes from the cache of a data file. Depending on what is currently
-    /// availible, this may return
+    /// available, this may return
     ///
-    /// - Hit, if the entire range is availible
-    /// - PartialHit, if only some of the head and/or the tail is availible
+    /// - Hit, if the entire range is available
+    /// - PartialHit, if only some of the head and/or the tail is available
     ///   - Use [`PartialHit::missing_range`] and [`DataCache::fill_partial_hit`] to resolve this
-    /// - Miss, if none of the range is availible
+    /// - Miss, if none of the range is available
     pub async fn get_range(&self, path: &String, range: Range<u64>) -> DataCacheRes {
         if let Some(file_cache) = self.cache.get(path).await {
             match &*file_cache.content.read().await {
@@ -133,7 +133,7 @@ impl DataCache {
         }
     }
 
-    /// Fills the missing section of a [`PartialHit`] and returns the complete btyes, even if the
+    /// Fills the missing section of a [`PartialHit`] and returns the complete bytes, even if the
     /// cached head and/or tail have since been purged from the cache
     pub async fn fill_partial_hit(&self, partial_hit: PartialHit, missing_bytes: Bytes) -> Bytes {
         self.set_range(
