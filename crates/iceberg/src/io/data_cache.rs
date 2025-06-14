@@ -150,12 +150,14 @@ impl DataCache {
 
 pub type DataCacheRef = Arc<DataCache>;
 
+#[derive(Debug, PartialEq)]
 pub enum DataCacheRes {
     Hit(Bytes),
     PartialHit(PartialHit),
     Miss,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PartialHit {
     path: String,
     original_range: Range<u64>,
@@ -311,6 +313,186 @@ impl FragmentedContentCache {
 
             self.buffers
                 .push((head_range.start..tail_range.end, new_buf))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use bytes::Bytes;
+
+    use crate::io::data_cache::PartialHit;
+
+    use super::DataCache;
+    use super::DataCacheRes::{Hit, Miss, PartialHit as ParHit};
+
+    const MEGS32: u64 = 32 * 1000 * 1000;
+    const TEST_PATH: &str = "/test/path";
+    const TEST_CONTENTS: &str = "abcdefghijklmnopqrstuvwxyz";
+    const TEST_BYTES: Bytes = Bytes::from_static(TEST_CONTENTS.as_bytes());
+
+    #[tokio::test]
+    async fn cache_whole_file() {
+        let cache = DataCache::new(MEGS32);
+
+        assert_eq!(None, cache.get_whole(&TEST_PATH.to_owned()).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 5..10).await);
+
+        cache.set_whole(TEST_PATH, TEST_BYTES).await;
+
+        assert_eq!(
+            Some(TEST_BYTES),
+            cache.get_whole(&TEST_PATH.to_owned()).await
+        );
+        assert_eq!(
+            Hit(TEST_BYTES.slice(5..10)),
+            cache.get_range(&TEST_PATH.to_owned(), 5..10).await
+        );
+
+        // shouldn't have an effect, we already have this fully cached and the cache shouldn't have filled and purged it
+        cache.set_range(&TEST_PATH.to_owned(), 4..8, Bytes::new()).await;
+
+        assert_eq!(
+            Some(TEST_BYTES),
+            cache.get_whole(&TEST_PATH.to_owned()).await
+        );
+        assert_eq!(
+            Hit(TEST_BYTES.slice(5..10)),
+            cache.get_range(&TEST_PATH.to_owned(), 5..10).await
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_one_range_simple() {
+        let cache = DataCache::new(MEGS32);
+
+        assert_eq!(None, cache.get_whole(&TEST_PATH.to_owned()).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 0..4).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 9..12).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 20..23).await);
+
+        cache.set_range(&TEST_PATH.to_owned(), 7..15, TEST_BYTES.slice(7..15)).await;
+
+        assert_eq!(None, cache.get_whole(&TEST_PATH.to_owned()).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 0..4).await);
+        assert_eq!(Hit(TEST_BYTES.slice(9..12)), cache.get_range(&TEST_PATH.to_owned(), 9..12).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 20..23).await);
+
+        cache.set_whole(TEST_PATH, TEST_BYTES).await;
+
+        assert_eq!(Some(TEST_BYTES), cache.get_whole(&TEST_PATH.to_owned()).await);
+        assert_eq!(Hit(TEST_BYTES.slice(0..4)), cache.get_range(&TEST_PATH.to_owned(), 0..4).await);
+        assert_eq!(Hit(TEST_BYTES.slice(9..12)), cache.get_range(&TEST_PATH.to_owned(), 9..12).await);
+        assert_eq!(Hit(TEST_BYTES.slice(20..23)), cache.get_range(&TEST_PATH.to_owned(), 20..23).await);
+    }
+
+    #[tokio::test]
+    async fn cache_partial_hit() {
+        let cache = DataCache::new(MEGS32);
+
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 5..15).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 10..20).await);
+
+        cache.set_range(&TEST_PATH.to_owned(), 3..8, TEST_BYTES.slice(3..8)).await;
+
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 5..15,
+            missing_range: 8..15,
+            head_bytes: Some(TEST_BYTES.slice(5..8)),
+            tail_bytes: None
+        }), cache.get_range(&TEST_PATH.to_owned(), 5..15).await);
+        assert_eq!(Miss, cache.get_range(&TEST_PATH.to_owned(), 10..20).await);
+
+        cache.set_range(&TEST_PATH.to_owned(), 15..22, TEST_BYTES.slice(15..22)).await;
+
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 5..15,
+            missing_range: 8..15,
+            head_bytes: Some(TEST_BYTES.slice(5..8)),
+            tail_bytes: None
+        }), cache.get_range(&TEST_PATH.to_owned(), 5..15).await);
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 10..20,
+            missing_range: 10..15,
+            head_bytes: None,
+            tail_bytes: Some(TEST_BYTES.slice(15..20))
+        }), cache.get_range(&TEST_PATH.to_owned(), 10..20).await);
+
+        cache.set_range(&TEST_PATH.to_owned(), 12..17, TEST_BYTES.slice(12..17)).await;
+
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 5..15,
+            missing_range: 8..12,
+            head_bytes: Some(TEST_BYTES.slice(5..8)),
+            tail_bytes: Some(TEST_BYTES.slice(12..15))
+        }), cache.get_range(&TEST_PATH.to_owned(), 5..15).await);
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 10..20,
+            missing_range: 10..12,
+            head_bytes: None,
+            tail_bytes: Some(TEST_BYTES.slice(12..20))
+        }), cache.get_range(&TEST_PATH.to_owned(), 10..20).await);
+    }
+
+    #[tokio::test]
+    async fn cache_partial_hit_fill() {
+        let cache = DataCache::new(MEGS32);
+
+        cache.set_range(&TEST_PATH.to_owned(), 3..8, TEST_BYTES.slice(3..8)).await;
+
+        if let ParHit(partial_hit) = cache.get_range(&TEST_PATH.to_owned(), 5..13).await {
+            let missing = partial_hit.missing_range();
+            let missing = missing.start as usize..missing.end as usize;
+            let missing_bytes = TEST_BYTES.slice(missing);
+            assert_eq!(TEST_BYTES.slice(5..13), cache.fill_partial_hit(partial_hit, missing_bytes).await);
+        } else {
+            panic!("not a partial hit :(")
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_overlapping_ranges() {
+        let cache = DataCache::new(MEGS32);
+
+        cache.set_range(&TEST_PATH.to_owned(), 12..18, TEST_BYTES.slice(12..18)).await;
+        cache.set_range(&TEST_PATH.to_owned(), 10..20, TEST_BYTES.slice(10..20)).await;
+        cache.set_range(&TEST_PATH.to_owned(), 14..16, TEST_BYTES.slice(14..16)).await;
+        
+        assert_eq!(ParHit(PartialHit {
+            path: TEST_PATH.to_owned(),
+            original_range: 5..15,
+            missing_range: 5..10,
+            head_bytes: None,
+            tail_bytes: Some(TEST_BYTES.slice(10..15))
+        }), cache.get_range(&TEST_PATH.to_owned(), 5..15).await);
+
+        assert_eq!(Hit(TEST_BYTES.slice(11..17)), cache.get_range(&TEST_PATH.to_owned(), 11..17).await)
+    }
+
+    #[tokio::test]
+    async fn cache_partial_fill_ran_out_of_memory() {
+        // enough memory to cache 5 bytes
+        let size = size_of::<u32>() + size_of::<Vec<(Range<u64>, Bytes)>>() + size_of::<Range<u64>>() + size_of::<Bytes>() + 5;
+
+        // give a little bit of extra leeway
+        let cache = DataCache::new(size as u64 + 2);
+
+        cache.set_range(&TEST_PATH.to_owned(), 10..15, TEST_BYTES.slice(10..15)).await;
+
+        if let ParHit(partial_hit) = cache.get_range(&TEST_PATH.to_owned(), 12..22).await {
+            let missing = partial_hit.missing_range();
+            let missing = missing.start as usize..missing.end as usize;
+            let missing_bytes = TEST_BYTES.slice(missing);
+            assert_eq!(TEST_BYTES.slice(12..22), cache.fill_partial_hit(partial_hit, missing_bytes).await);
+        } else {
+            panic!("not a partial hit :(")
         }
     }
 }
