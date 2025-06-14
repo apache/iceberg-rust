@@ -25,7 +25,7 @@ use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
-#[derive(Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct PendingSortField {
     name: String,
     direction: SortDirection,
@@ -45,12 +45,12 @@ impl ReplaceSortOrderAction {
     }
 
     /// Adds a field for sorting in ascending order.
-    pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
+    pub fn asc(self, name: &str, null_order: NullOrder) -> Self {
         self.add_sort_field(name, SortDirection::Ascending, null_order)
     }
 
     /// Adds a field for sorting in descending order.
-    pub fn desc(self, name: &str, null_order: NullOrder) -> Result<Self> {
+    pub fn desc(self, name: &str, null_order: NullOrder) -> Self {
         self.add_sort_field(name, SortDirection::Descending, null_order)
     }
 
@@ -59,14 +59,14 @@ impl ReplaceSortOrderAction {
         name: &str,
         sort_direction: SortDirection,
         null_order: NullOrder,
-    ) -> Result<Self> {
+    ) -> Self {
         self.pending_sort_fields.push(PendingSortField {
             name: name.to_string(),
             direction: sort_direction,
             null_order,
         });
 
-        Ok(self)
+        self
     }
 }
 
@@ -132,42 +132,38 @@ impl TransactionAction for ReplaceSortOrderAction {
 mod tests {
     use as_any::Downcast;
 
-    use crate::transaction::sort_order::ReplaceSortOrderAction;
+    use crate::spec::{NullOrder, SortDirection};
+    use crate::transaction::sort_order::{PendingSortField, ReplaceSortOrderAction};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{TableRequirement, TableUpdate};
 
     #[test]
-    fn test_empty_replace_sort_order() {
+    fn test_replace_sort_order() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
-        let tx = tx.replace_sort_order().apply(tx).unwrap();
+        let replace_sort_order = tx.replace_sort_order();
 
-        assert_eq!(tx.actions.len(), 1);
+        let tx = replace_sort_order
+            .asc("x", NullOrder::First)
+            .desc("y", NullOrder::Last)
+            .apply(tx)
+            .unwrap();
 
-        let action = (*tx.actions[0]).downcast_ref::<ReplaceSortOrderAction>();
+        let replace_sort_order = (*tx.actions[0])
+            .downcast_ref::<ReplaceSortOrderAction>()
+            .unwrap();
 
-        // todo verify pending sort field instead
-        assert_eq!(
-            vec![
-                TableUpdate::AddSortOrder {
-                    sort_order: Default::default()
-                },
-                TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }
-            ],
-            tx.updates
-        );
-
-        assert_eq!(
-            vec![
-                TableRequirement::CurrentSchemaIdMatch {
-                    current_schema_id: 1
-                },
-                TableRequirement::DefaultSortOrderIdMatch {
-                    default_sort_order_id: 3
-                }
-            ],
-            tx.requirements
-        );
+        assert_eq!(replace_sort_order.pending_sort_fields, vec![
+            PendingSortField {
+                name: String::from("x"),
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            },
+            PendingSortField {
+                name: String::from("y"),
+                direction: SortDirection::Descending,
+                null_order: NullOrder::Last,
+            }
+        ]);
     }
 }
