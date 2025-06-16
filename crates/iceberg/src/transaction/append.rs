@@ -78,10 +78,7 @@ impl FastAppendAction {
         Ok(())
     }
 
-    async fn validate_duplicate_files(
-        table: &Table,
-        added_data_files: &[DataFile],
-    ) -> Result<()> {
+    async fn validate_duplicate_files(table: &Table, added_data_files: &[DataFile]) -> Result<()> {
         let new_files: HashSet<&str> = added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
