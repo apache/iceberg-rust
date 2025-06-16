@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -112,9 +112,10 @@ async fn test_append_data_file() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
+    let append_action = tx
+        .fast_append(None, vec![])
+        .add_data_files(data_file.clone());
+    let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result

@@ -23,7 +23,7 @@ use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
 use iceberg::table::Table;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -120,11 +120,10 @@ async fn test_append_partition_data_file() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action
-        .add_data_files(data_file_valid.clone())
-        .unwrap();
-    let tx = append_action.apply().await.unwrap();
+    let append_action = tx
+        .fast_append(None, vec![])
+        .add_data_files(data_file_valid.clone());
+    let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result
@@ -144,6 +143,7 @@ async fn test_append_partition_data_file() {
         parquet_writer_builder.clone(),
         batch.clone(),
         table.clone(),
+        &rest_catalog,
     )
     .await;
 
@@ -151,6 +151,7 @@ async fn test_append_partition_data_file() {
         parquet_writer_builder,
         batch,
         table,
+        &rest_catalog,
         first_partition_id_value,
     )
     .await;
@@ -163,6 +164,7 @@ async fn test_schema_incompatible_partition_type(
     >,
     batch: RecordBatch,
     table: Table,
+    catalog: &dyn Catalog,
 ) {
     // test writing different "type" of partition than mentioned in schema
     let mut data_file_writer_invalid = DataFileWriterBuilder::new(
@@ -180,11 +182,12 @@ async fn test_schema_incompatible_partition_type(
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    if append_action
-        .add_data_files(data_file_invalid.clone())
-        .is_ok()
-    {
+    let append_action = tx
+        .fast_append(None, vec![])
+        .add_data_files(data_file_invalid.clone());
+    let tx = append_action.apply(tx).unwrap();
+
+    if tx.commit(catalog).await.is_ok() {
         panic!("diverging partition info should have returned error");
     }
 }
@@ -196,6 +199,7 @@ async fn test_schema_incompatible_partition_fields(
     >,
     batch: RecordBatch,
     table: Table,
+    catalog: &dyn Catalog,
     first_partition_id_value: i32,
 ) {
     // test writing different number of partition fields than mentioned in schema
@@ -220,11 +224,11 @@ async fn test_schema_incompatible_partition_fields(
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    if append_action
-        .add_data_files(data_file_invalid.clone())
-        .is_ok()
-    {
+    let append_action = tx
+        .fast_append(None, vec![])
+        .add_data_files(data_file_invalid.clone());
+    let tx = append_action.apply(tx).unwrap();
+    if tx.commit(catalog).await.is_ok() {
         panic!("passing different number of partition fields should have returned error");
     }
 }

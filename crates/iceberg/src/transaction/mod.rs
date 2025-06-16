@@ -141,7 +141,11 @@ impl Transaction {
     }
 
     /// Creates a fast append action.
-    pub fn fast_append(&self, commit_uuid: Option<Uuid>, key_metadata: Vec<u8>) -> FastAppendAction {
+    pub fn fast_append(
+        &self,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> FastAppendAction {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
             snapshot_id,

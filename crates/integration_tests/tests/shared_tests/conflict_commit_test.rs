@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -90,14 +90,16 @@ async fn test_append_data_file_conflict() {
 
     // start two transaction and commit one of them
     let tx1 = Transaction::new(&table);
-    let mut append_action = tx1.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx1 = append_action.apply().await.unwrap();
+    let append_action = tx1
+        .fast_append(None, vec![])
+        .add_data_files(data_file.clone());
+    let tx1 = append_action.apply(tx1).unwrap();
 
     let tx2 = Transaction::new(&table);
-    let mut append_action = tx2.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx2 = append_action.apply().await.unwrap();
+    let append_action = tx2
+        .fast_append(None, vec![])
+        .add_data_files(data_file.clone());
+    let tx2 = append_action.apply(tx2).unwrap();
     let table = tx2
         .commit(&rest_catalog)
         .await
