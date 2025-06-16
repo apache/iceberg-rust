@@ -54,7 +54,7 @@ impl FastAppendAction {
         }
     }
 
-    fn validate_added_data_files(table: &Table, added_data_files: &Vec<DataFile>) -> Result<()> {
+    fn validate_added_data_files(table: &Table, added_data_files: &[DataFile]) -> Result<()> {
         for data_file in added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
@@ -80,7 +80,7 @@ impl FastAppendAction {
 
     async fn validate_duplicate_files(
         table: &Table,
-        added_data_files: &Vec<DataFile>,
+        added_data_files: &[DataFile],
     ) -> Result<()> {
         let new_files: HashSet<&str> = added_data_files
             .iter()
@@ -202,8 +202,8 @@ impl TransactionAction for FastAppendAction {
         }
 
         let snapshot_producer = SnapshotProducer::new(
-            self.snapshot_id.clone(),
-            self.commit_uuid.clone(),
+            self.snapshot_id,
+            self.commit_uuid,
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
