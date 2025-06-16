@@ -234,6 +234,7 @@ impl TableMetadata {
     }
 
     /// Returns the last partition_id
+    #[inline]
     pub fn last_partition_id(&self) -> i32 {
         self.last_partition_id
     }
