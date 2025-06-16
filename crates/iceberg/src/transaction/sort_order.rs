@@ -20,16 +20,37 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::spec::{NullOrder, SortDirection, SortField, SortOrder, Transform};
+use crate::spec::{NullOrder, SchemaRef, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
+/// Represents a sort field whose construction and validation are deferred until commit time.
+/// This avoids the need to pass a `Table` reference into methods like `asc` or `desc` when
+/// adding sort orders.
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct PendingSortField {
     name: String,
     direction: SortDirection,
     null_order: NullOrder,
+}
+
+impl PendingSortField {
+    fn to_sort_field(&self, schema: &SchemaRef) -> Result<SortField> {
+        let field_id = schema.field_id_by_name(self.name.as_str()).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot find field {} in table schema", self.name),
+            )
+        })?;
+
+        Ok(SortField::builder()
+            .source_id(field_id)
+            .transform(Transform::Identity)
+            .direction(self.direction)
+            .null_order(self.null_order)
+            .build())
+    }
 }
 
 /// Transaction action for replacing sort order.
@@ -79,45 +100,27 @@ impl Default for ReplaceSortOrderAction {
 #[async_trait]
 impl TransactionAction for ReplaceSortOrderAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let pending_sort_fields = self.pending_sort_fields.clone();
-
-        let sort_fields: Result<Vec<SortField>> = pending_sort_fields
+        let current_schema = table.metadata().current_schema();
+        let sort_fields = self
+            .pending_sort_fields
             .iter()
-            .map(|p| {
-                let field_id = table
-                    .metadata()
-                    .current_schema()
-                    .field_id_by_name(p.name.as_str())
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Cannot find field {} in table schema", p.name),
-                        )
-                    })?;
+            .map(|p| p.to_sort_field(current_schema))
+            .collect()?;
 
-                Ok(SortField::builder()
-                    .source_id(field_id)
-                    .transform(Transform::Identity)
-                    .direction(p.direction)
-                    .null_order(p.null_order)
-                    .build())
-            })
-            .collect();
-
-        let unbound_sort_order = SortOrder::builder()
-            .with_fields(sort_fields?)
-            .build_unbound()?;
+        let bound_sort_order = SortOrder::builder()
+            .with_fields(sort_fields)
+            .build(current_schema)?;
 
         let updates = vec![
             TableUpdate::AddSortOrder {
-                sort_order: unbound_sort_order,
+                sort_order: bound_sort_order,
             },
             TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
         ];
 
         let requirements = vec![
             TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: table.metadata().current_schema().schema_id(),
+                current_schema_id: current_schema.schema_id(),
             },
             TableRequirement::DefaultSortOrderIdMatch {
                 default_sort_order_id: table.metadata().default_sort_order().order_id,
