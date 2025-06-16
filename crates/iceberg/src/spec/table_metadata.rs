@@ -227,6 +227,18 @@ impl TableMetadata {
         }
     }
 
+    /// Returns the last column id.
+    #[inline]
+    pub fn last_column_id(&self) -> i32 {
+        self.last_column_id
+    }
+
+    /// Returns the last partition_id
+    #[inline]
+    pub fn last_partition_id(&self) -> i32 {
+        self.last_partition_id
+    }
+
     /// Returns last updated time.
     #[inline]
     pub fn last_updated_timestamp(&self) -> Result<DateTime<Utc>> {
