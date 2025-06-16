@@ -101,14 +101,14 @@ impl Default for ReplaceSortOrderAction {
 impl TransactionAction for ReplaceSortOrderAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let current_schema = table.metadata().current_schema();
-        let sort_fields = self
+        let sort_fields: Result<Vec<SortField>> = self
             .pending_sort_fields
             .iter()
             .map(|p| p.to_sort_field(current_schema))
-            .collect()?;
+            .collect();
 
         let bound_sort_order = SortOrder::builder()
-            .with_fields(sort_fields)
+            .with_fields(sort_fields?)
             .build(current_schema)?;
 
         let updates = vec![
