@@ -99,9 +99,6 @@ jobs:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
-    # Only publish to PyPi if the tag is not a pre-release OR if manually triggered
-    # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
-    if: ${{ !contains(github.event.workflow_run.head_branch, '-') || github.event_name == 'workflow_dispatch' }}
 
     environment:
       name: pypi
@@ -111,6 +108,17 @@ jobs:
       id-token: write # IMPORTANT: mandatory for trusted publishing
 
     steps:
+      - name: Validate release tag format
+        # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
+        run: |
+          RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
+          echo "Validating release tag: $RELEASE_TAG"
+          if [[ ! "$RELEASE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)? ]]; then
+            echo "❌ Invalid release tag format: $RELEASE_TAG"
+            exit 1
+          fi
+          echo "✅ Release tag format is valid"
+
       - name: Download all the dists
         uses: actions/download-artifact@v4
         with:
