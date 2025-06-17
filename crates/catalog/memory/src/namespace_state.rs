@@ -295,4 +295,23 @@ impl NamespaceState {
             Some(metadata_location) => Ok(metadata_location),
         }
     }
+
+    pub fn update_table_location(
+        &mut self,
+        table_ident: &TableIdent,
+        new_metadata_location: String,
+    ) -> Result<()> {
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
+
+        match namespace
+            .table_metadata_locations
+            .get_mut(table_ident.name())
+        {
+            None => no_such_table_err(table_ident),
+            Some(location) => {
+                *location = new_metadata_location;
+                Ok(())
+            }
+        }
+    }
 }
