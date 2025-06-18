@@ -60,6 +60,9 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+
+    /// Commit failed due to outdated metadata
+    CommitFailed,
 }
 
 impl ErrorKind {
@@ -80,6 +83,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
+            ErrorKind::CommitFailed => "CommitFailed",
         }
     }
 }

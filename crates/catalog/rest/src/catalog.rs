@@ -768,7 +768,7 @@ impl Catalog for RestCatalog {
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::CommitFailed,
                     "CommitFailedException, one or more requirements failed. The client may retry.",
                 )
                 .with_retryable(true));
