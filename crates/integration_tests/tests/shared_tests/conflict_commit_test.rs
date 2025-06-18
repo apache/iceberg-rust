@@ -90,15 +90,11 @@ async fn test_append_data_file_conflict() {
 
     // start two transaction and commit one of them
     let tx1 = Transaction::new(&table);
-    let append_action = tx1
-        .fast_append(None, vec![])
-        .add_data_files(data_file.clone());
+    let append_action = tx1.fast_append().add_data_files(data_file.clone());
     let tx1 = append_action.apply(tx1).unwrap();
 
     let tx2 = Transaction::new(&table);
-    let append_action = tx2
-        .fast_append(None, vec![])
-        .add_data_files(data_file.clone());
+    let append_action = tx2.fast_append().add_data_files(data_file.clone());
     let tx2 = append_action.apply(tx2).unwrap();
     let table = tx2
         .commit(&rest_catalog)

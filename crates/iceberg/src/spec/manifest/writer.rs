@@ -40,7 +40,7 @@ use crate::{Error, ErrorKind};
 pub struct ManifestWriterBuilder {
     output: OutputFile,
     snapshot_id: Option<i64>,
-    key_metadata: Vec<u8>,
+    key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
 }
@@ -50,7 +50,7 @@ impl ManifestWriterBuilder {
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Vec<u8>,
+        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
@@ -115,7 +115,7 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    key_metadata: Vec<u8>,
+    key_metadata: Option<Vec<u8>>,
 
     manifest_entries: Vec<ManifestEntry>,
 
@@ -127,7 +127,7 @@ impl ManifestWriter {
     pub(crate) fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Vec<u8>,
+        key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
     ) -> Self {
         Self {
@@ -416,7 +416,7 @@ impl ManifestWriter {
             existing_rows_count: Some(self.existing_rows),
             deleted_rows_count: Some(self.deleted_rows),
             partitions: Some(partition_summary),
-            key_metadata: Some(self.key_metadata),
+            key_metadata: self.key_metadata,
         })
     }
 }
@@ -622,7 +622,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )

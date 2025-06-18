@@ -15,133 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation, Struct, StructType};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::writer::file_writer::ParquetWriter;
-use crate::{Error, ErrorKind};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
     check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
     snapshot_id: i64,
-    commit_uuid: Uuid,
-    key_metadata: Vec<u8>,
+    commit_uuid: Option<Uuid>,
+    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
 }
 
 impl FastAppendAction {
-    pub(crate) fn new(snapshot_id: i64, commit_uuid: Uuid, key_metadata: Vec<u8>) -> Self {
+    pub(crate) fn new(snapshot_id: i64) -> Self {
         Self {
             check_duplicate: true,
             snapshot_id,
-            commit_uuid,
-            key_metadata,
+            commit_uuid: None,
+            key_metadata: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
         }
-    }
-
-    fn validate_added_data_files(table: &Table, added_data_files: &[DataFile]) -> Result<()> {
-        for data_file in added_data_files {
-            if data_file.content_type() != crate::spec::DataContentType::Data {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Only data content type is allowed for fast append",
-                ));
-            }
-            // Check if the data file partition spec id matches the table default partition spec id.
-            if table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Data file partition spec id does not match table default partition spec id",
-                ));
-            }
-            Self::validate_partition_value(
-                data_file.partition(),
-                table.metadata().default_partition_type(),
-            )?;
-        }
-
-        Ok(())
-    }
-
-    async fn validate_duplicate_files(table: &Table, added_data_files: &[DataFile]) -> Result<()> {
-        let new_files: HashSet<&str> = added_data_files
-            .iter()
-            .map(|df| df.file_path.as_str())
-            .collect();
-
-        let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = table.metadata().current_snapshot() {
-            let manifest_list = current_snapshot
-                .load_manifest_list(table.file_io(), &table.metadata_ref())
-                .await?;
-            for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
-                for entry in manifest.entries() {
-                    let file_path = entry.file_path();
-                    if new_files.contains(file_path) && entry.is_alive() {
-                        referenced_files.push(file_path.to_string());
-                    }
-                }
-            }
-        }
-
-        if !referenced_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add files that are already referenced by table, files: {}",
-                    referenced_files.join(", ")
-                ),
-            ));
-        }
-
-        Ok(())
-    }
-
-    // Check if the partition value is compatible with the partition type.
-    fn validate_partition_value(
-        partition_value: &Struct,
-        partition_type: &StructType,
-    ) -> Result<()> {
-        if partition_value.fields().len() != partition_type.fields().len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Partition value is not compatible with partition type",
-            ));
-        }
-
-        for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
-            let field = field.field_type.as_primitive_type().ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Partition field should only be primitive type.",
-                )
-            })?;
-            if let Some(value) = value {
-                if !field.compatible(&value.as_primitive_literal().unwrap()) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Partition value is not compatible partition type",
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Set whether to check duplicate files
@@ -156,34 +64,22 @@ impl FastAppendAction {
         self
     }
 
+    /// Set commit UUID for the snapshot.
+    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
+        self.commit_uuid = Some(commit_uuid);
+        self
+    }
+
+    /// Set key metadata for manifest files.
+    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
+        self.key_metadata = Some(key_metadata);
+        self
+    }
+
     /// Set snapshot summary properties.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
         self
-    }
-
-    /// Adds existing parquet files
-    ///
-    /// Note: This API is not yet fully supported in version 0.5.x.  
-    /// It is currently incomplete and should not be used in production.
-    /// Specifically, schema compatibility checks and support for adding to partitioned tables
-    /// have not yet been implemented.
-    #[allow(dead_code)]
-    async fn add_parquet_files(self, table: &Table, file_path: Vec<String>) -> Result<Self> {
-        if !table.metadata().default_spec.is_unpartitioned() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Appending to partitioned tables is not supported",
-            ));
-        }
-
-        let table_metadata = table.metadata();
-
-        let data_files =
-            ParquetWriter::parquet_files_to_data_files(table.file_io(), file_path, table_metadata)
-                .await?;
-
-        Ok(self.add_data_files(data_files))
     }
 }
 
@@ -191,16 +87,16 @@ impl FastAppendAction {
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         // validate added files
-        Self::validate_added_data_files(table, &self.added_data_files)?;
+        SnapshotProducer::validate_added_data_files(table, &self.added_data_files)?;
 
         // Checks duplicate files
         if self.check_duplicate {
-            Self::validate_duplicate_files(table, &self.added_data_files).await?;
+            SnapshotProducer::validate_duplicate_files(table, &self.added_data_files).await?;
         }
 
         let snapshot_producer = SnapshotProducer::new(
             self.snapshot_id,
-            self.commit_uuid,
+            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
@@ -249,7 +145,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
@@ -261,7 +156,7 @@ mod tests {
     async fn test_empty_data_append_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let action = tx.fast_append(None, vec![]).add_data_files(vec![]);
+        let action = tx.fast_append().add_data_files(vec![]);
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
 
@@ -285,7 +180,7 @@ mod tests {
             .unwrap();
 
         let action = tx
-            .fast_append(None, vec![])
+            .fast_append()
             .set_snapshot_properties(snapshot_properties)
             .add_data_files(vec![data_file]);
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -311,7 +206,7 @@ mod tests {
     async fn test_fast_append_file_with_incompatible_partition_value() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let action = tx.fast_append(None, vec![]);
+        let action = tx.fast_append();
 
         // check add data file with incompatible partition value
         let data_file = DataFileBuilder::default()
@@ -334,7 +229,7 @@ mod tests {
     async fn test_fast_append() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let action = tx.fast_append(None, vec![]);
+        let action = tx.fast_append();
 
         let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
@@ -403,50 +298,5 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
-    }
-
-    #[tokio::test]
-    async fn test_add_duplicated_parquet_files_to_unpartitioned_table() {
-        let mut fixture = TableTestFixture::new_unpartitioned();
-        fixture.setup_unpartitioned_manifest_files().await;
-        let tx = Transaction::new(&fixture.table);
-
-        let file_paths = vec![
-            format!("{}/1.parquet", &fixture.table_location),
-            format!("{}/3.parquet", &fixture.table_location),
-        ];
-
-        let fast_append_action = tx
-            .fast_append(None, vec![])
-            .add_parquet_files(&fixture.table, file_paths.clone())
-            .await
-            .unwrap();
-
-        // Attempt to add duplicated Parquet files with fast append.
-        assert!(
-            Arc::new(fast_append_action)
-                .commit(&fixture.table)
-                .await
-                .is_err(),
-            "file already in table"
-        );
-
-        let file_paths = vec![format!("{}/2.parquet", &fixture.table_location)];
-
-        let tx = Transaction::new(&fixture.table);
-        let fast_append_action = tx
-            .fast_append(None, vec![])
-            .add_parquet_files(&fixture.table, file_paths.clone())
-            .await
-            .unwrap();
-
-        // Attempt to add Parquet file which was deleted from table.
-        assert!(
-            Arc::new(fast_append_action)
-                .commit(&fixture.table)
-                .await
-                .is_ok(),
-            "file not in table"
-        );
     }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
@@ -27,7 +27,7 @@ use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestEntry, ManifestFile,
     ManifestListWriter, ManifestWriterBuilder, Operation, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
     PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
-    SnapshotSummaryCollector, Summary, update_snapshot_summaries,
+    SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -63,7 +63,7 @@ pub(crate) trait ManifestProcess: Send + Sync {
 pub(crate) struct SnapshotProducer {
     snapshot_id: i64,
     commit_uuid: Uuid,
-    key_metadata: Vec<u8>,
+    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
@@ -76,7 +76,7 @@ impl SnapshotProducer {
     pub(crate) fn new(
         snapshot_id: i64,
         commit_uuid: Uuid,
-        key_metadata: Vec<u8>,
+        key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
@@ -90,6 +90,71 @@ impl SnapshotProducer {
         }
     }
 
+    pub(crate) fn validate_added_data_files(
+        table: &Table,
+        added_data_files: &[DataFile],
+    ) -> Result<()> {
+        for data_file in added_data_files {
+            if data_file.content_type() != crate::spec::DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Only data content type is allowed for fast append",
+                ));
+            }
+            // Check if the data file partition spec id matches the table default partition spec id.
+            if table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Data file partition spec id does not match table default partition spec id",
+                ));
+            }
+            Self::validate_partition_value(
+                data_file.partition(),
+                table.metadata().default_partition_type(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn validate_duplicate_files(
+        table: &Table,
+        added_data_files: &[DataFile],
+    ) -> Result<()> {
+        let new_files: HashSet<&str> = added_data_files
+            .iter()
+            .map(|df| df.file_path.as_str())
+            .collect();
+
+        let mut referenced_files = Vec::new();
+        if let Some(current_snapshot) = table.metadata().current_snapshot() {
+            let manifest_list = current_snapshot
+                .load_manifest_list(table.file_io(), &table.metadata_ref())
+                .await?;
+            for manifest_list_entry in manifest_list.entries() {
+                let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
+                for entry in manifest.entries() {
+                    let file_path = entry.file_path();
+                    if new_files.contains(file_path) && entry.is_alive() {
+                        referenced_files.push(file_path.to_string());
+                    }
+                }
+            }
+        }
+
+        if !referenced_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add files that are already referenced by table, files: {}",
+                    referenced_files.join(", ")
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
     fn new_manifest_output(&mut self, table: &Table) -> Result<OutputFile> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
@@ -100,6 +165,37 @@ impl SnapshotProducer {
             DataFileFormat::Avro
         );
         table.file_io().new_output(new_manifest_path)
+    }
+
+    // Check if the partition value is compatible with the partition type.
+    fn validate_partition_value(
+        partition_value: &Struct,
+        partition_type: &StructType,
+    ) -> Result<()> {
+        if partition_value.fields().len() != partition_type.fields().len() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Partition value is not compatible with partition type",
+            ));
+        }
+
+        for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
+            let field = field.field_type.as_primitive_type().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Partition field should only be primitive type.",
+                )
+            })?;
+            if let Some(value) = value {
+                if !field.compatible(&value.as_primitive_literal().unwrap()) {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Partition value is not compatible partition type",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.

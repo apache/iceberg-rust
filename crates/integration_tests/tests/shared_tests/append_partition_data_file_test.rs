@@ -120,9 +120,7 @@ async fn test_append_partition_data_file() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let append_action = tx
-        .fast_append(None, vec![])
-        .add_data_files(data_file_valid.clone());
+    let append_action = tx.fast_append().add_data_files(data_file_valid.clone());
     let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
@@ -182,9 +180,7 @@ async fn test_schema_incompatible_partition_type(
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let append_action = tx
-        .fast_append(None, vec![])
-        .add_data_files(data_file_invalid.clone());
+    let append_action = tx.fast_append().add_data_files(data_file_invalid.clone());
     let tx = append_action.apply(tx).unwrap();
 
     if tx.commit(catalog).await.is_ok() {
@@ -224,9 +220,7 @@ async fn test_schema_incompatible_partition_fields(
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let append_action = tx
-        .fast_append(None, vec![])
-        .add_data_files(data_file_invalid.clone());
+    let append_action = tx.fast_append().add_data_files(data_file_invalid.clone());
     let tx = append_action.apply(tx).unwrap();
     if tx.commit(catalog).await.is_ok() {
         panic!("passing different number of partition fields should have returned error");
