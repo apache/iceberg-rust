@@ -40,7 +40,7 @@
 <a href=#40 id=40 data-nosnippet>40</a></span><span class="kw">pub struct </span>ManifestWriterBuilder {
 <a href=#41 id=41 data-nosnippet>41</a>    output: OutputFile,
 <a href=#42 id=42 data-nosnippet>42</a>    snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#43 id=43 data-nosnippet>43</a>    key_metadata: Vec&lt;u8&gt;,
+<a href=#43 id=43 data-nosnippet>43</a>    key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
 <a href=#44 id=44 data-nosnippet>44</a>    schema: SchemaRef,
 <a href=#45 id=45 data-nosnippet>45</a>    partition_spec: PartitionSpec,
 <a href=#46 id=46 data-nosnippet>46</a>}
@@ -50,7 +50,7 @@
 <a href=#50 id=50 data-nosnippet>50</a>    </span><span class="kw">pub fn </span>new(
 <a href=#51 id=51 data-nosnippet>51</a>        output: OutputFile,
 <a href=#52 id=52 data-nosnippet>52</a>        snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#53 id=53 data-nosnippet>53</a>        key_metadata: Vec&lt;u8&gt;,
+<a href=#53 id=53 data-nosnippet>53</a>        key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
 <a href=#54 id=54 data-nosnippet>54</a>        schema: SchemaRef,
 <a href=#55 id=55 data-nosnippet>55</a>        partition_spec: PartitionSpec,
 <a href=#56 id=56 data-nosnippet>56</a>    ) -&gt; <span class="self">Self </span>{
@@ -115,7 +115,7 @@
 <a href=#115 id=115 data-nosnippet>115</a>
 <a href=#116 id=116 data-nosnippet>116</a>    min_seq_num: <span class="prelude-ty">Option</span>&lt;i64&gt;,
 <a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a>    key_metadata: Vec&lt;u8&gt;,
+<a href=#118 id=118 data-nosnippet>118</a>    key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
 <a href=#119 id=119 data-nosnippet>119</a>
 <a href=#120 id=120 data-nosnippet>120</a>    manifest_entries: Vec&lt;ManifestEntry&gt;,
 <a href=#121 id=121 data-nosnippet>121</a>
@@ -127,7 +127,7 @@
 <a href=#127 id=127 data-nosnippet>127</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(
 <a href=#128 id=128 data-nosnippet>128</a>        output: OutputFile,
 <a href=#129 id=129 data-nosnippet>129</a>        snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#130 id=130 data-nosnippet>130</a>        key_metadata: Vec&lt;u8&gt;,
+<a href=#130 id=130 data-nosnippet>130</a>        key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
 <a href=#131 id=131 data-nosnippet>131</a>        metadata: ManifestMetadata,
 <a href=#132 id=132 data-nosnippet>132</a>    ) -&gt; <span class="self">Self </span>{
 <a href=#133 id=133 data-nosnippet>133</a>        <span class="self">Self </span>{
@@ -416,7 +416,7 @@
 <a href=#416 id=416 data-nosnippet>416</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="self">self</span>.existing_rows),
 <a href=#417 id=417 data-nosnippet>417</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="self">self</span>.deleted_rows),
 <a href=#418 id=418 data-nosnippet>418</a>            partitions: <span class="prelude-val">Some</span>(partition_summary),
-<a href=#419 id=419 data-nosnippet>419</a>            key_metadata: <span class="prelude-val">Some</span>(<span class="self">self</span>.key_metadata),
+<a href=#419 id=419 data-nosnippet>419</a>            key_metadata: <span class="self">self</span>.key_metadata,
 <a href=#420 id=420 data-nosnippet>420</a>        })
 <a href=#421 id=421 data-nosnippet>421</a>    }
 <a href=#422 id=422 data-nosnippet>422</a>}
@@ -622,7 +622,7 @@
 <a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestWriterBuilder::new(
 <a href=#623 id=623 data-nosnippet>623</a>            output_file,
 <a href=#624 id=624 data-nosnippet>624</a>            <span class="prelude-val">Some</span>(<span class="number">3</span>),
-<a href=#625 id=625 data-nosnippet>625</a>            <span class="macro">vec!</span>[],
+<a href=#625 id=625 data-nosnippet>625</a>            <span class="prelude-val">None</span>,
 <a href=#626 id=626 data-nosnippet>626</a>            metadata.schema.clone(),
 <a href=#627 id=627 data-nosnippet>627</a>            metadata.partition_spec.clone(),
 <a href=#628 id=628 data-nosnippet>628</a>        )
