@@ -22,8 +22,8 @@
 //! We provided a `FileIOBuilder` to build `FileIO` from scratch. For example:
 //!
 //! ```rust
-//! use iceberg::io::{FileIOBuilder, S3_REGION};
 //! use iceberg::Result;
+//! use iceberg::io::{FileIOBuilder, S3_REGION};
 //!
 //! # fn test() -> Result<()> {
 //! // Build a memory file io.
@@ -41,8 +41,8 @@
 //! Or you can pass a path to ask `FileIO` to infer schema for you:
 //!
 //! ```rust
-//! use iceberg::io::{FileIO, S3_REGION};
 //! use iceberg::Result;
+//! use iceberg::io::{FileIO, S3_REGION};
 //!
 //! # fn test() -> Result<()> {
 //! // Build a memory file io.
@@ -67,36 +67,41 @@
 //! - `new_output`: Create output file for writing.
 
 mod file_io;
-pub use file_io::*;
-
 mod storage;
+
+pub use file_io::*;
+pub(crate) mod object_cache;
+
+#[cfg(feature = "storage-azdls")]
+mod storage_azdls;
+#[cfg(feature = "storage-fs")]
+mod storage_fs;
+#[cfg(feature = "storage-gcs")]
+mod storage_gcs;
 #[cfg(feature = "storage-memory")]
 mod storage_memory;
-#[cfg(feature = "storage-memory")]
-use storage_memory::*;
+#[cfg(feature = "storage-oss")]
+mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
+
+#[cfg(feature = "storage-azdls")]
+pub use storage_azdls::*;
+#[cfg(feature = "storage-fs")]
+use storage_fs::*;
+#[cfg(feature = "storage-gcs")]
+pub use storage_gcs::*;
+#[cfg(feature = "storage-memory")]
+use storage_memory::*;
+#[cfg(feature = "storage-oss")]
+pub use storage_oss::*;
 #[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
+
 #[cfg(feature = "storage-hdfs-native")]
 mod storage_hdfs_native;
 #[cfg(feature = "storage-hdfs-native")]
 pub use storage_hdfs_native::*;
-pub(crate) mod object_cache;
-#[cfg(feature = "storage-fs")]
-mod storage_fs;
-
-#[cfg(feature = "storage-fs")]
-use storage_fs::*;
-#[cfg(feature = "storage-gcs")]
-mod storage_gcs;
-#[cfg(feature = "storage-gcs")]
-pub use storage_gcs::*;
-
-#[cfg(feature = "storage-oss")]
-mod storage_oss;
-#[cfg(feature = "storage-oss")]
-pub use storage_oss::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

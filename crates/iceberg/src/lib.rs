@@ -21,7 +21,9 @@
 //!
 //! ## Scan A Table
 //!
-//! ```rust, no_run
+//! ```rust, ignore
+//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
+//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use futures::TryStreamExt;
 //! use iceberg::io::{FileIO, FileIOBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
@@ -62,10 +64,7 @@ pub use error::{Error, ErrorKind, Result};
 
 mod catalog;
 
-pub use catalog::{
-    Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement,
-    TableUpdate, ViewCreation,
-};
+pub use catalog::*;
 
 pub mod table;
 

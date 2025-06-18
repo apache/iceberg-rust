@@ -23,7 +23,7 @@ use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_test_utils::docker::DockerCompose;
@@ -136,12 +136,14 @@ async fn test_list_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
-        ))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(
+                &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
+            ))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -178,10 +180,12 @@ async fn test_list_empty_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(ns_apple.name()))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(ns_apple.name()))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -218,12 +222,14 @@ async fn test_list_root_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
-        ))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(
+                &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
+            ))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog
@@ -340,9 +346,12 @@ async fn test_update_table() {
         &TableIdent::new(ns.name().clone(), "t1".to_string())
     );
 
+    let tx = Transaction::new(&table);
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
-        .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
+    let table2 = tx
+        .update_table_properties()
+        .set("prop1".to_string(), "v1".to_string())
+        .apply(tx)
         .unwrap()
         .commit(&catalog)
         .await
@@ -375,10 +384,12 @@ async fn test_list_empty_multi_level_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(catalog
-        .list_namespaces(Some(ns_apple.name()))
-        .await
-        .is_err());
+    assert!(
+        catalog
+            .list_namespaces(Some(ns_apple.name()))
+            .await
+            .is_err()
+    );
 
     // Create namespaces
     catalog

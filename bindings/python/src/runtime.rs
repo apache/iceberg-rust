@@ -15,8 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc = include_str!("../README.md")]
-pub const ICEBERG_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+use std::sync::OnceLock;
 
-mod catalog;
-pub use catalog::*;
+use tokio::runtime::{Handle, Runtime};
+
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+pub fn runtime() -> Handle {
+    match Handle::try_current() {
+        Ok(h) => h.clone(),
+        _ => {
+            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
+            rt.handle().clone()
+        }
+    }
+}

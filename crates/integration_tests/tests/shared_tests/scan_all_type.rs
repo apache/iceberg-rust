@@ -30,15 +30,15 @@ use arrow_schema::{DataType, Field, Fields};
 use futures::TryStreamExt;
 use iceberg::arrow::{DEFAULT_MAP_FIELD_NAME, UTC_TIME_ZONE};
 use iceberg::spec::{
-    ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, LIST_FIELD_NAME,
-    MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField,
+    PrimitiveType, Schema, StructType, Type,
 };
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, TableCreation};
 use iceberg_catalog_rest::RestCatalog;

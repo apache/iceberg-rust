@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
-use crate::error::{timestamp_ms_to_utc, Result};
+use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
-use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
+use crate::spec::{ManifestList, SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
@@ -190,20 +190,11 @@ impl Snapshot {
         table_metadata: &TableMetadata,
     ) -> Result<ManifestList> {
         let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
-
-        let schema = self.schema(table_metadata)?;
-
-        let partition_type_provider = |partition_spec_id: i32| -> Result<Option<StructType>> {
-            table_metadata
-                .partition_spec_by_id(partition_spec_id)
-                .map(|partition_spec| partition_spec.partition_type(&schema))
-                .transpose()
-        };
-
         ManifestList::parse_with_version(
             &manifest_list_content,
+            // TODO: You don't really need the version since you could just project any Avro in
+            // the version that you'd like to get (probably always the latest)
             table_metadata.format_version(),
-            partition_type_provider,
         )
     }
 
@@ -226,8 +217,8 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{Operation, Snapshot, Summary};
-    use crate::spec::SchemaId;
     use crate::Error;
+    use crate::spec::SchemaId;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]

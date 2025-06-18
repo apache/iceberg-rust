@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 
 use bytes::Bytes;
 
-use crate::io::FileWrite;
 use crate::Result;
+use crate::io::FileWrite;
 
 /// `TrackWriter` is used to track the written size.
 pub(crate) struct TrackWriter {

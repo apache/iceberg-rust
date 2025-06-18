@@ -151,7 +151,7 @@ pub(crate) fn convert_to_glue_table(
 
     let storage_descriptor = StorageDescriptor::builder()
         .set_columns(Some(glue_schema))
-        .location(&metadata_location)
+        .location(metadata.location().to_string())
         .build();
 
     let mut parameters = HashMap::from([
@@ -336,19 +336,16 @@ mod tests {
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "foo",
-                Type::Primitive(PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
             .build()?;
 
         let metadata = create_metadata(schema)?;
 
         let parameters = HashMap::from([
             (ICEBERG_FIELD_ID.to_string(), "1".to_string()),
-            (ICEBERG_FIELD_OPTIONAL.to_string(), "true".to_string()),
+            (ICEBERG_FIELD_OPTIONAL.to_string(), "false".to_string()),
             (ICEBERG_FIELD_CURRENT.to_string(), "true".to_string()),
         ]);
 
@@ -362,7 +359,7 @@ mod tests {
 
         let storage_descriptor = StorageDescriptor::builder()
             .set_columns(Some(vec![column]))
-            .location(&metadata_location)
+            .location(metadata.location())
             .build();
 
         let result =

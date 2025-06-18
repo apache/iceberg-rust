@@ -393,7 +393,7 @@ impl Bind for Predicate {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
                             format!("Expecting unary operator, but found {op}"),
-                        ))
+                        ));
                     }
                 }
 
@@ -476,7 +476,7 @@ impl Bind for Predicate {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
                             format!("Expecting unary operator,but found {op}"),
-                        ))
+                        ));
                     }
                 }
 

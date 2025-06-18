@@ -32,6 +32,7 @@ repository = { workspace = true }
 default = ["storage-memory", "storage-fs", "storage-s3","storage-hdfs-native", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3","storage-hdfs-native", "storage-gcs"]
 
+storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
@@ -53,8 +54,10 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
+as-any = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -89,7 +92,6 @@ zstd = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 expect-test = { workspace = true }
-iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }

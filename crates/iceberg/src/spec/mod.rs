@@ -18,6 +18,7 @@
 //! Spec for Iceberg.
 
 mod datatypes;
+mod encrypted_key;
 mod manifest;
 mod manifest_list;
 mod name_mapping;
@@ -36,6 +37,7 @@ mod view_metadata_builder;
 mod view_version;
 
 pub use datatypes::*;
+pub use encrypted_key::*;
 pub use manifest::*;
 pub use manifest_list::*;
 pub use name_mapping::*;

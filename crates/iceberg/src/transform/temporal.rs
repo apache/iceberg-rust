@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow_arith::arity::binary;
-use arrow_arith::temporal::{date_part, DatePart};
+use arrow_arith::temporal::{DatePart, date_part};
 use arrow_array::types::Date32Type;
 use arrow_array::{
     Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
@@ -102,7 +102,7 @@ impl TransformFunction for Year {
                         "Unsupported data type for year transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Some(Datum::int(val)))
@@ -200,7 +200,7 @@ impl TransformFunction for Month {
                         "Unsupported data type for month transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Some(Datum::int(val)))
@@ -297,7 +297,7 @@ impl TransformFunction for Day {
                         "Should not call internally for unsupported data type {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Arc::new(res))
@@ -323,7 +323,7 @@ impl TransformFunction for Day {
                         "Unsupported data type for day transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Some(Datum::date(val)))
@@ -386,7 +386,7 @@ impl TransformFunction for Hour {
                         "Unsupported data type for hour transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Some(Datum::int(val)))
@@ -400,6 +400,7 @@ mod test {
     use arrow_array::{ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
     use chrono::{NaiveDate, NaiveDateTime};
 
+    use crate::Result;
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
@@ -409,7 +410,6 @@ mod test {
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
     use crate::transform::{BoxedTransformFunction, TransformFunction};
-    use crate::Result;
 
     #[test]
     fn test_year_transform() {
@@ -449,12 +449,9 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Int))),
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],
@@ -501,12 +498,9 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Int))),
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],
@@ -553,12 +547,9 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Date))),
                 (Primitive(TimestamptzNs), Some(Primitive(Date))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],
@@ -605,12 +596,9 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Int))),
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],
