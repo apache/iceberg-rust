@@ -63,7 +63,7 @@ pub(crate) enum Storage {
         config: Arc<AzdlsConfig>,
     },
     #[cfg(benchmarking)]
-    Benchmarking(Operator)
+    Benchmarking(Operator),
 }
 
 impl Storage {
@@ -202,7 +202,7 @@ impl Storage {
             } => super::azdls_create_operator(path, config, configured_scheme),
             #[cfg(benchmarking)]
             Storage::Benchmarking(op) => {
-                if let Some(stripped) = path.split_once(":")  {
+                if let Some(stripped) = path.split_once(":") {
                     Ok::<_, crate::Error>((op.clone(), stripped.1))
                 } else {
                     Ok::<_, crate::Error>((op.clone(), path))

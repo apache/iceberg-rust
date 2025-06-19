@@ -74,6 +74,8 @@ pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]
 mod storage_azdls;
+#[cfg(benchmarking)]
+mod storage_benchmarking;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
 #[cfg(feature = "storage-gcs")]
@@ -84,11 +86,11 @@ mod storage_memory;
 mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
-#[cfg(benchmarking)]
-mod storage_benchmarking;
 
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;
+#[cfg(benchmarking)]
+use storage_benchmarking::*;
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
@@ -99,8 +101,6 @@ use storage_memory::*;
 pub use storage_oss::*;
 #[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
-#[cfg(benchmarking)]
-use storage_benchmarking::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

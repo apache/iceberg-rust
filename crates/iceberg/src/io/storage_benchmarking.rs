@@ -21,15 +21,18 @@
 use std::thread;
 use std::time::Duration;
 
-use opendal::raw::{Access, Layer, LayeredAccess, OpList, OpRead, OpWrite, RpDelete, RpList, RpRead, RpWrite};
-use opendal::Operator;
+use opendal::raw::{
+    Access, Layer, LayeredAccess, OpList, OpRead, OpWrite, RpDelete, RpList, RpRead, RpWrite,
+};
 use opendal::services::MemoryConfig;
-use opendal::Result;
-use rand::{thread_rng, Rng};
+use opendal::{Operator, Result};
+use rand::{Rng, thread_rng};
 use tokio::time::sleep;
 
 pub(crate) fn benchmarking_config_build() -> Result<Operator> {
-    Ok(Operator::from_config(MemoryConfig::default())?.layer(DelayLayer).finish())
+    Ok(Operator::from_config(MemoryConfig::default())?
+        .layer(DelayLayer)
+        .finish())
 }
 
 /// Usually takes around 50 ms, to visualize function: $ f\left(x\right)=x^{-0.5}\ \cdot\ 0.10 $
@@ -51,7 +54,7 @@ impl<A: Access> Layer<A> for DelayLayer {
 
 #[derive(Debug)]
 struct DelayedAccessor<A: Access> {
-    inner: A
+    inner: A,
 }
 
 impl<A: Access> LayeredAccess for DelayedAccessor<A> {
@@ -75,11 +78,7 @@ impl<A: Access> LayeredAccess for DelayedAccessor<A> {
         self.inner.read(path, args).await
     }
 
-    fn blocking_read(
-        &self,
-        path: &str,
-        args: OpRead,
-    ) -> Result<(RpRead, Self::BlockingReader)> {
+    fn blocking_read(&self, path: &str, args: OpRead) -> Result<(RpRead, Self::BlockingReader)> {
         thread::sleep(gen_amt_latency());
 
         self.inner.blocking_read(path, args)
@@ -89,11 +88,7 @@ impl<A: Access> LayeredAccess for DelayedAccessor<A> {
         self.inner.write(path, args).await
     }
 
-    fn blocking_write(
-        &self,
-        path: &str,
-        args: OpWrite,
-    ) -> Result<(RpWrite, Self::BlockingWriter)> {
+    fn blocking_write(&self, path: &str, args: OpWrite) -> Result<(RpWrite, Self::BlockingWriter)> {
         self.inner.blocking_write(path, args)
     }
 
@@ -101,19 +96,15 @@ impl<A: Access> LayeredAccess for DelayedAccessor<A> {
         self.inner.list(path, args).await
     }
 
-    fn blocking_list(
-        &self,
-        path: &str,
-        args: OpList,
-    ) -> Result<(RpList, Self::BlockingLister)> {
+    fn blocking_list(&self, path: &str, args: OpList) -> Result<(RpList, Self::BlockingLister)> {
         self.inner.blocking_list(path, args)
     }
 
     async fn delete(&self) -> Result<(RpDelete, Self::Deleter)> {
-       self.inner.delete().await
-       }
+        self.inner.delete().await
+    }
 
     fn blocking_delete(&self) -> Result<(RpDelete, Self::BlockingDeleter)> {
-       self.inner.blocking_delete()
-   }
+        self.inner.blocking_delete()
+    }
 }
