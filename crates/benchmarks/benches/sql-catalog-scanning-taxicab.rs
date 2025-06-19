@@ -31,7 +31,8 @@ use tokio::runtime::Runtime;
 
 pub fn bench_1_taxicab_query(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_read_taxicab_sql_catalog");
-    group.measurement_time(Duration::from_secs(25));
+    // request times are very sporadic, so we need a lower confidence level for reasonable results
+    group.measurement_time(Duration::from_secs(25)).confidence_level(0.8);
 
     let table_dir = run_construction_script("sql-catalog-taxicab");
     let mut db_path = table_dir.clone();
