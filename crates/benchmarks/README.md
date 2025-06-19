@@ -20,3 +20,7 @@ Where `iceberg-rust` benchmarks are kept.
 To run the benchmarks, we must pass the `benchmarking` rustflag so that the benchmarking storage is compiled and we can tamper with fileio latency.
 
 This command includes it: `RUSTFLAGS="--cfg benchmarking" cargo bench`
+
+## Existing benchmarks
+
+- `sql-catalog-scanning-taxicab`: Benchmarks scanning two columns from one month of NYC taxicab data.

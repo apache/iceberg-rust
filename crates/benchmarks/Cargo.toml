@@ -38,5 +38,5 @@ arrow-array.workspace = true
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 
 [[bench]]
-name = "sql-catalog-querying-taxicab"
+name = "sql-catalog-scanning-taxicab"
 harness = false
