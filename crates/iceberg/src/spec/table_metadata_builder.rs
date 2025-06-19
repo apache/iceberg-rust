@@ -204,6 +204,13 @@ impl TableMetadataBuilder {
         self
     }
 
+    /// Set the last updated ms. Intended for use in tests.
+    #[cfg(test)]
+    pub(crate) fn set_last_updated_ms(mut self, last_updated_ms: i64) -> Self {
+        self.last_updated_ms = Some(last_updated_ms);
+        self
+    }
+
     /// Upgrade `FormatVersion`. Downgrades are not allowed.
     ///
     /// # Errors
@@ -1028,7 +1035,7 @@ impl TableMetadataBuilder {
     /// intermediate snapshot is added to table metadata, it is added to the snapshot log, assuming
     /// that it will be the current snapshot. when there are multiple snapshot updates, the log must
     /// be corrected by suppressing the intermediate snapshot entries.
-    ///     
+    ///
     /// A snapshot is an intermediate snapshot if it was added but is not the current snapshot.
     fn get_intermediate_snapshots(&self) -> HashSet<i64> {
         let added_snapshot_ids = self

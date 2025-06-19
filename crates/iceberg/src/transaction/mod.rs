@@ -76,7 +76,7 @@ impl Transaction {
         Ok(())
     }
 
-    fn apply(
+    pub(crate) fn apply(
         &mut self,
         updates: Vec<TableUpdate>,
         requirements: Vec<TableRequirement>,
