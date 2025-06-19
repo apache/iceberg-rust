@@ -40,7 +40,7 @@ use crate::{Error, ErrorKind};
 pub struct ManifestWriterBuilder {
     output: OutputFile,
     snapshot_id: Option<i64>,
-    key_metadata: Vec<u8>,
+    key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
 }
@@ -50,7 +50,7 @@ impl ManifestWriterBuilder {
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Vec<u8>,
+        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
@@ -115,7 +115,7 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    key_metadata: Vec<u8>,
+    key_metadata: Option<Vec<u8>>,
 
     manifest_entries: Vec<ManifestEntry>,
 
@@ -127,7 +127,7 @@ impl ManifestWriter {
     pub(crate) fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Vec<u8>,
+        key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
     ) -> Self {
         Self {
@@ -415,7 +415,7 @@ impl ManifestWriter {
             added_rows_count: Some(self.added_rows),
             existing_rows_count: Some(self.existing_rows),
             deleted_rows_count: Some(self.deleted_rows),
-            partitions: partition_summary,
+            partitions: Some(partition_summary),
             key_metadata: self.key_metadata,
         })
     }
@@ -423,59 +423,63 @@ impl ManifestWriter {
 
 struct PartitionFieldStats {
     partition_type: PrimitiveType,
-    summary: FieldSummary,
+
+    contains_null: bool,
+    contains_nan: Option<bool>,
+    lower_bound: Option<Datum>,
+    upper_bound: Option<Datum>,
 }
 
 impl PartitionFieldStats {
     pub(crate) fn new(partition_type: PrimitiveType) -> Self {
         Self {
             partition_type,
-            summary: FieldSummary::default(),
+            contains_null: false,
+            contains_nan: Some(false),
+            upper_bound: None,
+            lower_bound: None,
         }
     }
 
     pub(crate) fn update(&mut self, value: Option<PrimitiveLiteral>) -> Result<()> {
         let Some(value) = value else {
-            self.summary.contains_null = true;
+            self.contains_null = true;
             return Ok(());
         };
         if !self.partition_type.compatible(&value) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "value is not compatitable with type",
+                "value is not compatible with type",
             ));
         }
         let value = Datum::new(self.partition_type.clone(), value);
 
         if value.is_nan() {
-            self.summary.contains_nan = Some(true);
+            self.contains_nan = Some(true);
             return Ok(());
         }
 
-        self.summary.lower_bound = Some(self.summary.lower_bound.take().map_or(
-            value.clone(),
-            |original| {
-                if value < original {
-                    value.clone()
-                } else {
-                    original
-                }
-            },
-        ));
-        self.summary.upper_bound = Some(self.summary.upper_bound.take().map_or(
-            value.clone(),
-            |original| {
-                if value > original { value } else { original }
-            },
-        ));
+        self.lower_bound = Some(self.lower_bound.take().map_or(value.clone(), |original| {
+            if value < original {
+                value.clone()
+            } else {
+                original
+            }
+        }));
+        self.upper_bound = Some(self.upper_bound.take().map_or(value.clone(), |original| {
+            if value > original { value } else { original }
+        }));
 
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> FieldSummary {
-        // Always set contains_nan
-        self.summary.contains_nan = self.summary.contains_nan.or(Some(false));
-        self.summary
+    pub(crate) fn finish(self) -> FieldSummary {
+        FieldSummary {
+            contains_null: self.contains_null,
+            contains_nan: self.contains_nan,
+            upper_bound: self.upper_bound.map(|v| v.to_bytes().unwrap()),
+            lower_bound: self.lower_bound.map(|v| v.to_bytes().unwrap()),
+        }
     }
 }
 
@@ -618,7 +622,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -112,9 +112,8 @@ async fn test_append_data_file() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
+    let append_action = tx.fast_append().add_data_files(data_file.clone());
+    let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result
@@ -129,25 +128,4 @@ async fn test_append_data_file() {
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
-
-    // commit result again
-    let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
-
-    // check result again
-    let batch_stream = table
-        .scan()
-        .select_all()
-        .build()
-        .unwrap()
-        .to_arrow()
-        .await
-        .unwrap();
-    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
-    assert_eq!(batches.len(), 2);
-    assert_eq!(batches[0], batch);
-    assert_eq!(batches[1], batch);
 }

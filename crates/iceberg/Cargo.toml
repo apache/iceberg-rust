@@ -32,6 +32,7 @@ repository = { workspace = true }
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
+storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
@@ -53,6 +54,7 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
+as-any = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
