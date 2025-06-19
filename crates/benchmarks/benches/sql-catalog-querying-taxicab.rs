@@ -15,12 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{hint::black_box, path::PathBuf, time::{Duration, Instant}};
+use std::hint::black_box;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
 use arrow_array::RecordBatch;
 use benches::{copy_dir_to_fileio, run_construction_script};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::TryStreamExt;
-use iceberg::{io::FileIOBuilder, table::Table, Catalog, TableIdent};
+use iceberg::io::FileIOBuilder;
+use iceberg::table::Table;
+use iceberg::{Catalog, TableIdent};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 use tokio::runtime::Runtime;
 
@@ -36,8 +41,8 @@ pub fn bench_1_taxicab_query(c: &mut Criterion) {
     group.bench_function(
         "single_read_taxicab_sql_catalog",
         // iter custom is not ideal, but criterion doesn't let us have a custom async setup which is really annoying
-        |b| b.to_async(Runtime::new().unwrap()).iter_custom(
-            async |_| {
+        |b| {
+            b.to_async(Runtime::new().unwrap()).iter_custom(async |_| {
                 let table = setup_table(table_dir.clone(), uri.clone()).await;
 
                 let start = Instant::now();
@@ -47,14 +52,16 @@ pub fn bench_1_taxicab_query(c: &mut Criterion) {
                 drop(black_box(output));
 
                 end - start
-            },
-        )
+            })
+        },
     );
     group.finish()
 }
 
 async fn setup_table(table_dir: PathBuf, uri: String) -> Table {
-    let file_io = FileIOBuilder::new("iceberg_benchmarking_storage").build().unwrap();
+    let file_io = FileIOBuilder::new("iceberg_benchmarking_storage")
+        .build()
+        .unwrap();
     copy_dir_to_fileio(table_dir.clone(), &file_io).await;
 
     let config = SqlCatalogConfig::builder()
@@ -65,14 +72,16 @@ async fn setup_table(table_dir: PathBuf, uri: String) -> Table {
         .warehouse_location(table_dir.to_str().unwrap().to_owned())
         .build();
     let catalog = SqlCatalog::new(config).await.unwrap();
-    let table = catalog.load_table(&TableIdent::from_strs(["default", "taxi_dataset"]).unwrap())
+    let table = catalog
+        .load_table(&TableIdent::from_strs(["default", "taxi_dataset"]).unwrap())
         .await
         .expect(&format!("table_dir: {table_dir:?}"));
     table
 }
 
 async fn scan_table(table: Table) -> Vec<RecordBatch> {
-    let stream = table.scan()
+    let stream = table
+        .scan()
         .select(["passenger_count", "fare_amount"])
         .build()
         .unwrap()

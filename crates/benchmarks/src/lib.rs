@@ -15,15 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{env::{set_current_dir, temp_dir}, fs::{create_dir_all, read}, path::PathBuf, process, str::FromStr};
+use std::env::{set_current_dir, temp_dir};
+use std::fs::{create_dir_all, read};
+use std::path::PathBuf;
+use std::process;
+use std::str::FromStr;
 
 use bytes::Bytes;
 use iceberg::io::FileIO;
-use rand::{thread_rng, RngCore};
+use rand::{RngCore, thread_rng};
 use walkdir::WalkDir;
 
 /// runs the python construction script, provided just the file name without .py
-/// 
+///
 /// ("sql-catalog-querying-taxicab" etc.)
 pub fn run_construction_script(script_name: &str) -> PathBuf {
     let script_filename = [script_name, "py"].join(".");
@@ -54,12 +58,14 @@ pub fn run_construction_script(script_name: &str) -> PathBuf {
 }
 
 pub async fn copy_dir_to_fileio(dir: PathBuf, fileio: &FileIO) {
-    for entry in WalkDir::new(dir).into_iter()
+    for entry in WalkDir::new(dir)
+        .into_iter()
         .map(|res| res.unwrap())
-        .filter(|entry| entry.file_type().is_file()) {
-            let path = entry.into_path();
-            let output = fileio.new_output(path.to_str().unwrap()).unwrap();
-            let bytes = Bytes::from(read(path).unwrap());
-            output.write(bytes).await.unwrap();
-        }
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry.into_path();
+        let output = fileio.new_output(path.to_str().unwrap()).unwrap();
+        let bytes = Bytes::from(read(path).unwrap());
+        output.write(bytes).await.unwrap();
+    }
 }
