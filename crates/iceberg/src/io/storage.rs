@@ -62,12 +62,20 @@ pub(crate) enum Storage {
         configured_scheme: AzureStorageScheme,
         config: Arc<AzdlsConfig>,
     },
+    #[cfg(benchmarking)]
+    Benchmarking(Operator)
 }
 
 impl Storage {
     /// Convert iceberg config to opendal config.
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
         let (scheme_str, props) = file_io_builder.into_parts();
+
+        #[cfg(benchmarking)]
+        if scheme_str == "iceberg_benchmarking_storage" {
+            return Ok(Self::Benchmarking(super::benchmarking_config_build()?));
+        }
+
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {
@@ -192,6 +200,14 @@ impl Storage {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
+            #[cfg(benchmarking)]
+            Storage::Benchmarking(op) => {
+                if let Some(stripped) = path.split_once(":")  {
+                    Ok::<_, crate::Error>((op.clone(), stripped.1))
+                } else {
+                    Ok::<_, crate::Error>((op.clone(), path))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),

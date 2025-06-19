@@ -100,3 +100,7 @@ tera = { workspace = true }
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]
+
+[lints.rust]
+# so the #[cfg(benchmarking)] tag doesn't create warnings
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(benchmarking)'] }
