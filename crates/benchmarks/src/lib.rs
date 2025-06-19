@@ -20,7 +20,6 @@ use std::{env::{set_current_dir, temp_dir}, fs::{create_dir_all, read}, path::Pa
 use bytes::Bytes;
 use iceberg::io::FileIO;
 use rand::{thread_rng, RngCore};
-use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 /// runs the python construction script, provided just the file name without .py

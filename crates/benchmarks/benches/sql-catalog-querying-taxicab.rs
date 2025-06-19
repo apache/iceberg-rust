@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{hint::black_box, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{hint::black_box, path::PathBuf, time::{Duration, Instant}};
 use arrow_array::RecordBatch;
 use benches::{copy_dir_to_fileio, run_construction_script};
 use criterion::{criterion_group, criterion_main, Criterion};
 use futures::TryStreamExt;
-use iceberg::{io::{FileIO, FileIOBuilder}, table::Table, Catalog, NamespaceIdent, TableIdent};
+use iceberg::{io::FileIOBuilder, table::Table, Catalog, TableIdent};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 use tokio::runtime::Runtime;
 
