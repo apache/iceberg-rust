@@ -34,18 +34,6 @@ use crate::table::Table;
 use crate::transaction::{ActionCommit, ApplyTransactionAction, Transaction, TransactionAction};
 use crate::{Catalog, Error, ErrorKind, TableUpdate};
 
-/// Trait for performing the broader expire snapshots operation
-///
-/// Given a configuration for the procedure, you can then call `execute` on tables to perform the
-/// configured operation.
-///
-/// This is the primary entrypoint for code in this module.
-#[async_trait]
-pub trait ExpireSnapshotsProcedure: Send + Sync {
-    /// Execute the expire snapshots operation
-    async fn execute(&self, table: &Table, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult>;
-}
-
 /// Result of the expire snapshots operation. Contains information about how many files were
 /// deleted.
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,7 +101,7 @@ impl ExpireSnapshotsAction {
 
 #[async_trait]
 impl TransactionAction for ExpireSnapshotsAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         Ok(ActionCommit::new(
             vec![TableUpdate::RemoveSnapshots {
                 snapshot_ids: self.snapshot_ids_to_expire.clone(),
@@ -123,11 +111,15 @@ impl TransactionAction for ExpireSnapshotsAction {
     }
 }
 
-struct ExpireSnapshotsProcedureImpl {
+/// Procedure for expiring snapshots. Should be constructed via the `ExpireSnapshotsProcedureBuilder`.
+///
+/// Once constructed, `execute` can be called on a catalog + table to perform the expire snapshots
+/// operation as configured.
+pub struct ExpireSnapshotsProcedure {
     config: ExpireSnapshotsConfig,
 }
 
-impl ExpireSnapshotsProcedureImpl {
+impl ExpireSnapshotsProcedure {
     /// Determine which snapshots should be expired based on the configuration. This will:
     ///
     /// - Sort snapshots by timestamp (oldest first)
@@ -354,18 +346,19 @@ impl ExpireSnapshotsProcedureImpl {
 
         Ok(result)
     }
-}
 
-#[async_trait]
-impl ExpireSnapshotsProcedure for ExpireSnapshotsProcedureImpl {
-    /// The main entrypoint for the expire snapshots action. This will:
+    /// The main entrypoint for the expire snapshots procedure. This will:
     ///
     /// - Validate the table state
     /// - Identify snapshots to expire
     /// - Update the table metadata to remove expired snapshots
     /// - Collect files to delete
     /// - Delete the files
-    async fn execute(&self, table: &Table, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult> {
+    pub async fn execute(
+        &self,
+        table: &Table,
+        catalog: &dyn Catalog,
+    ) -> Result<ExpireSnapshotsResult> {
         if table.readonly() {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -430,8 +423,8 @@ impl ExpireSnapshotsProcedureBuilder {
     }
 
     /// Build an expire snapshots action with default configuration
-    pub fn build(self) -> ExpireSnapshotsProcedureImpl {
-        ExpireSnapshotsProcedureImpl {
+    pub fn build(self) -> ExpireSnapshotsProcedure {
+        ExpireSnapshotsProcedure {
             config: self.config,
         }
     }
