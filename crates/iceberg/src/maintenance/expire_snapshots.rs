@@ -236,12 +236,10 @@ impl ExpireSnapshotsAction {
                     }
                 }
                 Err(e) => {
-                    // Log warning but continue - the manifest list file might already be deleted
-                    eprintln!(
-                        "Warning: Failed to load manifest list {}: {}",
-                        snapshot.manifest_list(),
-                        e
-                    );
+                    // If we end up here, the failure mode is that we will skip some snapshots.
+                    // This could happen if the manifest list was already deleted. This is not a
+                    // critical error, so we will just skip this snapshot. It can be cleaned up
+                    // later by a delete orphan files action.
                 }
             }
         }
@@ -270,12 +268,10 @@ impl ExpireSnapshotsAction {
                     }
                 }
                 Err(e) => {
-                    // Log warning but continue
-                    eprintln!(
-                        "Warning: Failed to load manifest list {}: {}",
-                        snapshot.manifest_list(),
-                        e
-                    );
+                    // If we end up here, the failure mode is the opposite of the above! We could
+                    // accidentally delete a manifest list that is still referenced by this snapshot.
+                    // We have to return error here, otherwise we risk deleting the wrong files.
+                    return Err(e);
                 }
             }
         }
@@ -325,8 +321,6 @@ impl ExpireSnapshotsAction {
         let mut delete_tasks: Vec<JoinHandle<Vec<Result<String>>>> =
             Vec::with_capacity(num_concurrent_deletes);
 
-        eprintln!("Num concurrent deletes: {}", num_concurrent_deletes);
-
         for task_index in 0..num_concurrent_deletes {
             // Ideally we'd use a semaphore here to allow each thread to delete as fast as possible.
             // However, we can't assume that tokio::sync::Semaphore is available, and AsyncStd
@@ -344,11 +338,9 @@ impl ExpireSnapshotsAction {
                 for file_path in task_file_paths {
                     match file_io_clone.delete(&file_path).await {
                         Ok(_) => {
-                            eprintln!("Deleted file: {:?}", file_path);
                             results.push(Ok(file_path));
                         }
                         Err(e) => {
-                            eprintln!("Error deleting file: {:?}", e);
                             results.push(Err(e));
                         }
                     }
@@ -362,13 +354,13 @@ impl ExpireSnapshotsAction {
         for task in delete_tasks {
             let file_delete_results = task.await;
             for file_delete_result in file_delete_results {
-                eprintln!("Deleted file: {:?}", file_delete_result);
                 match file_delete_result {
                     Ok(deleted_path) => {
                         self.process_file_deletion(&mut result, deleted_path).await;
                     }
                     Err(e) => {
-                        eprintln!("Warning: File deletion task failed: {}", e);
+                        // This is not a critical error, so we will just continue. The result is
+                        // that an orphaned file will be left behind.
                     }
                 }
             }
@@ -474,8 +466,8 @@ mod tests {
     use crate::io::{FileIOBuilder, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, Operation,
-        PrimitiveType, Schema, Snapshot, Struct, Summary, TableMetadataBuilder, Type,
+        ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField,
+        Operation, PrimitiveType, Schema, Snapshot, Struct, Summary, TableMetadataBuilder, Type,
     };
     use crate::table::{Table, TableBuilder};
     use crate::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent};
@@ -637,18 +629,21 @@ mod tests {
             format!("memory://test/table/data/data_{}.parquet", Uuid::new_v4())
         }
 
-        async fn add_snapshot(&mut self, snapshot_id: i64) {
-            eprintln!("Adding snapshot: {}", snapshot_id);
+        async fn add_snapshot(&mut self, snapshot_id: i64, include_existing_manifests: bool) {
             let parent_id = if snapshot_id == 1000 {
                 None
             } else {
                 Some(snapshot_id - 1)
             };
-            eprintln!("Parent id: {:?}", parent_id);
 
             let manifest_file = self.next_manifest_file();
             let manifest_list_file = self.next_manifest_list_file();
             let manifest_list_file_path = manifest_list_file.location().to_string();
+
+            // Prep manifest list
+            let mut manifest_list_write =
+                ManifestListWriter::v2(manifest_list_file, snapshot_id, parent_id, snapshot_id + 1);
+            let mut manifest_list_entries: Vec<ManifestFile> = Vec::new();
 
             let mut writer = ManifestWriterBuilder::new(
                 manifest_file,
@@ -683,13 +678,32 @@ mod tests {
                         .build(),
                 )
                 .unwrap();
-            let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
-            // Write to manifest list
-            let mut manifest_list_write =
-                ManifestListWriter::v2(manifest_list_file, snapshot_id, parent_id, snapshot_id + 1);
+            if include_existing_manifests {
+                let previous_snapshots = self
+                    .table
+                    .metadata()
+                    .snapshots()
+                    .filter(|s| s.snapshot_id() < snapshot_id)
+                    .collect::<Vec<_>>();
+
+                for snapshot in previous_snapshots {
+                    let manifest_list = snapshot
+                        .load_manifest_list(self.table.file_io(), self.table.metadata())
+                        .await
+                        .unwrap();
+                    for manifest in manifest_list.entries() {
+                        if !manifest_list_entries.contains(manifest) {
+                            manifest_list_entries.push(manifest.clone());
+                        }
+                    }
+                }
+            }
+
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+            manifest_list_entries.push(data_file_manifest.clone());
             manifest_list_write
-                .add_manifests(vec![data_file_manifest].into_iter())
+                .add_manifests(manifest_list_entries.into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
 
@@ -732,12 +746,27 @@ mod tests {
         }
     }
 
-    /// Helper function to create a table with snapshots
-    async fn create_table_with_snapshots(snapshot_count: usize) -> Table {
+    /// Helper function to create a table with snapshots where each snapshot has its own separate
+    /// manifest. When running expire snapshots on this table, both manifest files and manifest
+    /// lists should be deleted.
+    async fn create_table_with_isolated_manifests(snapshot_count: usize) -> Table {
         let mut table_fixture = TableTestFixture::new().await;
 
         for i in 0..snapshot_count {
-            table_fixture.add_snapshot((i + 1000) as i64).await;
+            table_fixture.add_snapshot((i + 1000) as i64, false).await;
+        }
+
+        table_fixture.table
+    }
+
+    /// Helper function to create a table with snapshots where some snapshots share manifest files.
+    /// When running expire snapshots on this table, only the manifest files that are not shared
+    /// with remaining snapshots should be deleted.
+    async fn create_table_with_shared_manifests(snapshot_count: usize) -> Table {
+        let mut table_fixture = TableTestFixture::new().await;
+
+        for i in 0..snapshot_count {
+            table_fixture.add_snapshot((i + 1000) as i64, true).await;
         }
 
         table_fixture.table
@@ -745,7 +774,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_expire_snapshots_zero_snapshots() {
-        let table = create_table_with_snapshots(0).await;
+        let table = create_table_with_isolated_manifests(0).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build();
@@ -763,8 +792,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expire_snapshots_one_snapshot() {
-        let table = create_table_with_snapshots(1).await;
+    async fn test_expire_snapshots_one_snapshot_isolated_manifests() {
+        let table = create_table_with_isolated_manifests(1).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build();
@@ -781,8 +810,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expire_snapshots_many_snapshots_retain_last() {
-        let table = create_table_with_snapshots(5).await;
+    async fn test_expire_snapshots_one_snapshot_shared_manifests() {
+        let table = create_table_with_shared_manifests(1).await;
+        let catalog = MockCatalog::new(table.clone());
+
+        let action = table.expire_snapshots().build();
+        let result = action.execute(&catalog).await.unwrap();
+
+        assert_eq!(result.deleted_data_files_count, 0);
+        assert_eq!(result.deleted_manifest_files_count, 0);
+        assert_eq!(result.deleted_manifest_lists_count, 0);
+        assert_eq!(result.deleted_position_delete_files_count, 0);
+        assert_eq!(result.deleted_equality_delete_files_count, 0);
+        assert_eq!(result.deleted_statistics_files_count, 0);
+
+        assert_eq!(catalog.update_table_calls.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_expire_snapshots_many_snapshots_isolated_manifests_retain_last() {
+        let table = create_table_with_isolated_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build().retain_last(2);
@@ -819,9 +866,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expire_snapshots_older_than_timestamp() {
+    async fn test_expire_snapshots_many_snapshots_shared_manifests_retain_last() {
+        let table = create_table_with_shared_manifests(5).await;
+        let catalog = MockCatalog::new(table.clone());
+
+        let action = table.expire_snapshots().build().retain_last(2);
+
+        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+
+        assert_eq!(snapshots_to_expire.len(), 3);
+
+        let mut ids_to_expire: Vec<i64> = snapshots_to_expire
+            .iter()
+            .map(|s| s.snapshot_id())
+            .collect();
+
+        ids_to_expire.sort();
+
+        assert_eq!(ids_to_expire, vec![1000, 1001, 1002]);
+
+        let result = action.execute(&catalog).await.unwrap();
+
+        assert_eq!(result.deleted_manifest_lists_count, 3);
+        assert_eq!(result.deleted_manifest_files_count, 0);
+        assert_eq!(result.deleted_data_files_count, 0);
+        assert_eq!(result.deleted_position_delete_files_count, 0);
+        assert_eq!(result.deleted_equality_delete_files_count, 0);
+
+        assert_eq!(catalog.update_table_calls.lock().unwrap().len(), 1);
+
+        let mut commit = catalog.update_table_calls.lock().unwrap().pop().unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0], TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1000, 1001, 1002]
+        });
+    }
+
+    #[tokio::test]
+    async fn test_expire_snapshots_older_than_timestamp_isolated_manifests() {
         // Test case 3b: Table with many snapshots, expire based on timestamp
-        let table = create_table_with_snapshots(5).await;
+        let table = create_table_with_isolated_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
         // Get the timestamp of the middle snapshot and use it as threshold
@@ -872,8 +957,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expire_specific_snapshot_ids() {
-        let table = create_table_with_snapshots(5).await;
+    async fn test_expire_snapshots_older_than_timestamp_shared_manifests() {
+        // Test case 3b: Table with many snapshots, expire based on timestamp
+        let table = create_table_with_shared_manifests(5).await;
+        let catalog = MockCatalog::new(table.clone());
+
+        // Get the timestamp of the middle snapshot and use it as threshold
+        let middle_timestamp = table
+            .metadata()
+            .snapshots()
+            .find(|s| s.snapshot_id() == 1002)
+            .unwrap()
+            .timestamp_ms();
+
+        let action = table
+            .expire_snapshots()
+            .build()
+            .expire_older_than(middle_timestamp)
+            .retain_last(1); // Keep at least 1
+
+        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+
+        // Should expire snapshots older than the middle one, but keep at least 1
+        // So we expect snapshots 1000 and 1001 to be expired
+        assert_eq!(snapshots_to_expire.len(), 2);
+
+        let mut ids_to_expire: Vec<i64> = snapshots_to_expire
+            .iter()
+            .map(|s| s.snapshot_id())
+            .collect();
+        ids_to_expire.sort();
+
+        assert_eq!(ids_to_expire, vec![1000, 1001]);
+
+        let result = action.execute(&catalog).await.unwrap();
+
+        assert_eq!(result.deleted_manifest_lists_count, 2);
+        assert_eq!(result.deleted_manifest_files_count, 0);
+        assert_eq!(result.deleted_data_files_count, 0);
+        assert_eq!(result.deleted_position_delete_files_count, 0);
+        assert_eq!(result.deleted_equality_delete_files_count, 0);
+        assert_eq!(result.deleted_statistics_files_count, 0);
+
+        assert_eq!(catalog.update_table_calls.lock().unwrap().len(), 1);
+
+        let mut commit = catalog.update_table_calls.lock().unwrap().pop().unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0], TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1000, 1001]
+        });
+    }
+
+    #[tokio::test]
+    async fn test_expire_specific_snapshot_ids_isolated_manifests() {
+        let table = create_table_with_isolated_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table
@@ -914,8 +1052,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_expire_specific_snapshot_ids_shared_manifests() {
+        let table = create_table_with_shared_manifests(5).await;
+        let catalog = MockCatalog::new(table.clone());
+
+        let action = table
+            .expire_snapshots()
+            .build()
+            .expire_snapshot_ids(vec![1001, 1003]);
+
+        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+
+        assert_eq!(snapshots_to_expire.len(), 2);
+
+        let mut ids_to_expire: Vec<i64> = snapshots_to_expire
+            .iter()
+            .map(|s| s.snapshot_id())
+            .collect();
+
+        ids_to_expire.sort();
+
+        assert_eq!(ids_to_expire, vec![1001, 1003]);
+
+        let result = action.execute(&catalog).await.unwrap();
+
+        assert_eq!(result.deleted_manifest_lists_count, 2);
+        assert_eq!(result.deleted_manifest_files_count, 0);
+        assert_eq!(result.deleted_data_files_count, 0);
+        assert_eq!(result.deleted_position_delete_files_count, 0);
+        assert_eq!(result.deleted_equality_delete_files_count, 0);
+        assert_eq!(result.deleted_statistics_files_count, 0);
+
+        assert_eq!(catalog.update_table_calls.lock().unwrap().len(), 1);
+
+        let mut commit = catalog.update_table_calls.lock().unwrap().pop().unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0], TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1001, 1003]
+        });
+    }
+
+    #[tokio::test]
     async fn test_expire_current_snapshot_error() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let current_snapshot_id = table.metadata().current_snapshot_id().unwrap();
 
         let action = table
@@ -937,7 +1117,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_expire_readonly_table_error() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
         let readonly_table = TableBuilder::new()
@@ -963,7 +1143,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retain_last_minimum_validation() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build().retain_last(0);
@@ -991,7 +1171,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_concurrent_deletes_configuration() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build().max_concurrent_deletes(5);
@@ -1019,8 +1199,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_empty_snapshot_ids_list() {
-        let table = create_table_with_snapshots(3).await;
+    async fn test_empty_snapshot_ids_list_isolated_manifests() {
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table.expire_snapshots().build().expire_snapshot_ids(vec![]);
@@ -1046,8 +1226,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_empty_snapshot_ids_list_shared_manifests() {
+        let table = create_table_with_shared_manifests(3).await;
+        let catalog = MockCatalog::new(table.clone());
+
+        let action = table.expire_snapshots().build().expire_snapshot_ids(vec![]);
+
+        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+
+        assert_eq!(snapshots_to_expire.len(), 2);
+
+        let result = action.execute(&catalog).await.unwrap();
+
+        assert_eq!(result.deleted_manifest_lists_count, 2);
+        assert_eq!(result.deleted_manifest_files_count, 0);
+        assert_eq!(result.deleted_data_files_count, 0);
+
+        assert_eq!(catalog.update_table_calls.lock().unwrap().len(), 1);
+
+        let mut commit = catalog.update_table_calls.lock().unwrap().pop().unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0], TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1000, 1001]
+        });
+    }
+
+    #[tokio::test]
     async fn test_nonexistent_snapshot_ids() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
         let action = table
@@ -1070,7 +1277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_builder_pattern() {
-        let table = create_table_with_snapshots(5).await;
+        let table = create_table_with_isolated_manifests(5).await;
 
         let action = table
             .expire_snapshots()
@@ -1088,7 +1295,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_files_to_delete_logic() {
-        let table = create_table_with_snapshots(4).await;
+        let table = create_table_with_isolated_manifests(4).await;
 
         let action = table.expire_snapshots().build().retain_last(2);
 
@@ -1115,7 +1322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_configuration() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let action = table.expire_snapshots().build();
 
         assert_eq!(action.config.older_than_ms, None);
@@ -1126,7 +1333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dry_run() {
-        let table = create_table_with_snapshots(3).await;
+        let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
         let action = table.expire_snapshots().build().dry_run(true);
 
