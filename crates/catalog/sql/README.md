@@ -25,3 +25,15 @@
 This crate contains the official Native Rust implementation of Apache Iceberg Rest Catalog.
 
 See the [API documentation](https://docs.rs/iceberg-catalog-sql/latest) for examples and the full API.
+
+## Database support
+
+For additional database support (such as for `sqlite` databases), include the `sqlx` dependancy in your crate with the needed features.
+
+For example, to include support for `sqlite` databases, these should both be included in your `Cargo.toml`
+
+```toml
+[dependencies]
+iceberg-catalog-sql = "X.Y.Z"
+sqlx = { version = "X.Y.Z", features = ["runtime-tokio", "sqlite"] }
+```
