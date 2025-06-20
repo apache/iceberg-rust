@@ -70,11 +70,11 @@ pub mod table;
 
 mod avro;
 pub mod cache;
-pub mod io;
-pub mod spec;
-
 pub mod inspect;
+pub mod io;
+pub mod metrics;
 pub mod scan;
+pub mod spec;
 
 pub mod expr;
 pub mod transaction;
