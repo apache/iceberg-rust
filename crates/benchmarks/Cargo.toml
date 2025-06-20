@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "benches"
+name = "benchmarks"
 edition.workspace = true
 homepage.workspace = true
 version.workspace = true
@@ -33,6 +33,7 @@ tokio = { features = ["rt-multi-thread"], workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 arrow-array.workspace = true
+sqlx = { version = "0.8.6", features = ["any", "runtime-tokio", "sqlite"] }
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["async_tokio"] }
