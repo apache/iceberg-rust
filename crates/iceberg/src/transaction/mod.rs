@@ -55,23 +55,23 @@ impl Transaction {
         }
     }
 
-    fn update_table_metadata(table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
+    fn update_table_metadata(table: Table, updates: &[TableUpdate]) -> Result<Table> {
         let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
         }
 
-        table.with_metadata(Arc::new(metadata_builder.build()?.metadata));
-
-        Ok(())
+        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
     }
 
+    /// Applies an [`ActionCommit`] to the given [`Table`], returning a new [`Table`] with updated metadata.
+    /// Also appends any derived [`TableUpdate`]s and [`TableRequirement`]s to the provided vectors.
     fn apply(
-        table: &mut Table,
+        table: Table,
         mut action_commit: ActionCommit,
         existing_updates: &mut Vec<TableUpdate>,
         existing_requirements: &mut Vec<TableRequirement>,
-    ) -> Result<()> {
+    ) -> Result<Table> {
         let updates = action_commit.take_updates();
         let requirements = action_commit.take_requirements();
 
@@ -79,12 +79,12 @@ impl Transaction {
             requirement.check(Some(table.metadata()))?;
         }
 
-        Self::update_table_metadata(table, &updates)?;
+        let updated_table = Self::update_table_metadata(table, &updates)?;
 
         existing_updates.extend(updates);
         existing_requirements.extend(requirements);
 
-        Ok(())
+        Ok(updated_table)
     }
 
     /// Sets table to a new version.
@@ -142,8 +142,8 @@ impl Transaction {
         for action in &self.actions {
             let action_commit = Arc::clone(action).commit(&current_table).await?;
             // apply action commit to current_table
-            Self::apply(
-                &mut current_table,
+            current_table = Self::apply(
+                current_table,
                 action_commit,
                 &mut existing_updates,
                 &mut existing_requirements,
