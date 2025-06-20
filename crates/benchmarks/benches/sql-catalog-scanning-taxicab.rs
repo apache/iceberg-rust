@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
-use benches::{copy_dir_to_fileio, run_construction_script};
+use benchmarks::{copy_dir_to_fileio, run_construction_script};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::TryStreamExt;
 use iceberg::io::FileIOBuilder;
