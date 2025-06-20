@@ -74,7 +74,7 @@ impl Transaction {
     ) -> Result<()> {
         let updates = action_commit.take_updates();
         let requirements = action_commit.take_requirements();
-        
+
         for requirement in &requirements {
             requirement.check(Some(table.metadata()))?;
         }
