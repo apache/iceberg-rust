@@ -22,6 +22,7 @@
 //! in a consistent state.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -30,8 +31,20 @@ use crate::error::Result;
 use crate::runtime::JoinHandle;
 use crate::spec::SnapshotRef;
 use crate::table::Table;
-use crate::transaction::Transaction;
+use crate::transaction::{ActionCommit, ApplyTransactionAction, Transaction, TransactionAction};
 use crate::{Catalog, Error, ErrorKind, TableUpdate};
+
+/// Trait for performing the broader expire snapshots operation
+///
+/// Given a configuration for the procedure, you can then call `execute` on tables to perform the
+/// configured operation.
+///
+/// This is the primary entrypoint for code in this module.
+#[async_trait]
+pub trait ExpireSnapshotsProcedure: Send + Sync {
+    /// Execute the expire snapshots operation
+    async fn execute(&self, table: &Table, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult>;
+}
 
 /// Result of the expire snapshots operation. Contains information about how many files were
 /// deleted.
@@ -83,70 +96,38 @@ impl Default for ExpireSnapshotsConfig {
     }
 }
 
-/// Trait for performing expire snapshots operations
-///
-/// This trait provides a low-level API for expiring snapshots that can be
-/// extended with different implementations for different environments.
-#[async_trait]
-pub trait ExpireSnapshots: Send + Sync {
-    /// Execute the expire snapshots operation
-    async fn execute(&self, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult>;
-}
-
-/// Implementation of the expire snapshots operation
+/// Action for expiring snapshots, this can be constructed and applied to a transaction to directly
+/// remove snapshots from the table.
 pub struct ExpireSnapshotsAction {
-    table: Table,
-    config: ExpireSnapshotsConfig,
+    snapshot_ids_to_expire: Vec<i64>,
 }
 
 impl ExpireSnapshotsAction {
     /// Create a new expire snapshots action
-    pub fn new(table: Table) -> Self {
+    pub fn new(snapshot_ids_to_expire: Vec<i64>) -> Self {
         Self {
-            table,
-            config: ExpireSnapshotsConfig::default(),
+            snapshot_ids_to_expire,
         }
     }
+}
 
-    /// Set the timestamp threshold for expiring snapshots
-    pub fn expire_older_than(mut self, timestamp_ms: i64) -> Self {
-        self.config.older_than_ms = Some(timestamp_ms);
-        self
+#[async_trait]
+impl TransactionAction for ExpireSnapshotsAction {
+    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        Ok(ActionCommit::new(
+            vec![TableUpdate::RemoveSnapshots {
+                snapshot_ids: self.snapshot_ids_to_expire.clone(),
+            }],
+            vec![],
+        ))
     }
+}
 
-    /// Set the dry run flag
-    pub fn dry_run(mut self, dry_run: bool) -> Self {
-        self.config.dry_run = dry_run;
-        self
-    }
+struct ExpireSnapshotsProcedureImpl {
+    config: ExpireSnapshotsConfig,
+}
 
-    /// Set the minimum number of snapshots to retain. If the number of snapshots is less than 1,
-    /// it will be automatically adjusted to 1, following the behavior in Spark.
-    pub fn retain_last(mut self, num_snapshots: u32) -> Self {
-        if num_snapshots < 1 {
-            self.config.retain_last = Some(1);
-        } else {
-            self.config.retain_last = Some(num_snapshots);
-        }
-        self
-    }
-
-    /// Set specific snapshot IDs to expire. An empty list is equivalent to the default behavior
-    /// of expiring all but `retain_last` snapshots! When only expiring specific snapshots, please
-    /// ensure that the list of snapshot IDs is non-empty before using this method.
-    pub fn expire_snapshot_ids(mut self, snapshot_ids: Vec<i64>) -> Self {
-        self.config.snapshot_ids = snapshot_ids;
-        self
-    }
-
-    /// Set the maximum number of concurrent file deletions
-    pub fn max_concurrent_deletes(mut self, max_deletes: u32) -> Self {
-        if max_deletes > 0 {
-            self.config.max_concurrent_deletes = Some(max_deletes);
-        }
-        self
-    }
-
+impl ExpireSnapshotsProcedureImpl {
     /// Determine which snapshots should be expired based on the configuration. This will:
     ///
     /// - Sort snapshots by timestamp (oldest first)
@@ -158,8 +139,8 @@ impl ExpireSnapshotsAction {
     /// - Never expire the current snapshot!
     ///
     /// Returns a Vec of SnapshotRefs that should be expired (references removed, and deleted).
-    fn identify_snapshots_to_expire(&self) -> Result<Vec<SnapshotRef>> {
-        let metadata = self.table.metadata();
+    fn identify_snapshots_to_expire(&self, table: &Table) -> Result<Vec<SnapshotRef>> {
+        let metadata = table.metadata();
         let all_snapshots: Vec<SnapshotRef> = metadata.snapshots().cloned().collect();
 
         if all_snapshots.is_empty() {
@@ -216,11 +197,12 @@ impl ExpireSnapshotsAction {
     /// Collect all files that should be deleted along with the expired snapshots
     async fn collect_files_to_delete(
         &self,
+        table: &Table,
         expired_snapshots: &[SnapshotRef],
     ) -> Result<Vec<String>> {
         let mut files_to_delete = Vec::new();
-        let file_io = self.table.file_io();
-        let metadata = self.table.metadata();
+        let file_io = table.file_io();
+        let metadata = table.metadata();
 
         // Collect files from snapshots that are being expired
         let mut expired_manifest_lists = HashSet::new();
@@ -301,7 +283,11 @@ impl ExpireSnapshotsAction {
 
     /// Delete files concurrently with respect to max_concurrent_deletes setting
     /// Should not be called if dry_run is true, but this is checked for extra safety.
-    async fn delete_files(&self, files_to_delete: Vec<String>) -> Result<ExpireSnapshotsResult> {
+    async fn delete_files(
+        &self,
+        table: &Table,
+        files_to_delete: Vec<String>,
+    ) -> Result<ExpireSnapshotsResult> {
         let mut result = ExpireSnapshotsResult::default();
 
         if self.config.dry_run {
@@ -311,7 +297,7 @@ impl ExpireSnapshotsAction {
             return Ok(result);
         }
 
-        let file_io = self.table.file_io();
+        let file_io = table.file_io();
 
         if files_to_delete.is_empty() {
             return Ok(result);
@@ -371,7 +357,7 @@ impl ExpireSnapshotsAction {
 }
 
 #[async_trait]
-impl ExpireSnapshots for ExpireSnapshotsAction {
+impl ExpireSnapshotsProcedure for ExpireSnapshotsProcedureImpl {
     /// The main entrypoint for the expire snapshots action. This will:
     ///
     /// - Validate the table state
@@ -379,21 +365,23 @@ impl ExpireSnapshots for ExpireSnapshotsAction {
     /// - Update the table metadata to remove expired snapshots
     /// - Collect files to delete
     /// - Delete the files
-    async fn execute(&self, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult> {
-        if self.table.readonly() {
+    async fn execute(&self, table: &Table, catalog: &dyn Catalog) -> Result<ExpireSnapshotsResult> {
+        if table.readonly() {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Cannot expire snapshots on a readonly table",
             ));
         }
 
-        let snapshots_to_expire = self.identify_snapshots_to_expire()?;
+        let snapshots_to_expire = self.identify_snapshots_to_expire(table)?;
 
         if snapshots_to_expire.is_empty() {
             return Ok(ExpireSnapshotsResult::default());
         }
 
-        let files_to_delete = self.collect_files_to_delete(&snapshots_to_expire).await?;
+        let files_to_delete = self
+            .collect_files_to_delete(table, &snapshots_to_expire)
+            .await?;
 
         if self.config.dry_run {
             let mut result = ExpireSnapshotsResult::default();
@@ -403,54 +391,96 @@ impl ExpireSnapshots for ExpireSnapshotsAction {
             return Ok(result);
         }
 
-        // update the table metadata to remove the expired snapshots _before_ deleting anything!
-        // TODO: make this retry
-        let mut transaction = Transaction::new(&self.table);
-        let mut snapshot_ids: Vec<i64> = snapshots_to_expire
+        let mut snapshot_ids_to_expire: Vec<i64> = snapshots_to_expire
             .iter()
             .map(|s| s.snapshot_id())
             .collect();
+
         // sort for a deterministic output
-        snapshot_ids.sort();
-        transaction.apply(
-            vec![TableUpdate::RemoveSnapshots { snapshot_ids }],
-            // no requirements here. if the table's main branch was rewound while this operation is
-            // running, this will potentially corrupt the table by deleting the wrong snapshots.
-            // but, if this fails because of a concurrent update, we have to repeat the logic.
-            // TODO: verify that this is running against the latest metadata version. if the commit
-            // fails, refresh the metadata and try again if and only if new snapshots were added.
-            vec![],
-        )?;
+        snapshot_ids_to_expire.sort();
+
+        let mut transaction = Transaction::new(table);
+        let action = ExpireSnapshotsAction::new(snapshot_ids_to_expire);
+        transaction = action.apply(transaction)?;
         transaction.commit(catalog).await?;
 
-        let result = self.delete_files(files_to_delete).await?;
+        let result = self.delete_files(table, files_to_delete).await?;
 
         Ok(result)
     }
 }
 
 /// Builder for creating expire snapshots operations
-pub struct ExpireSnapshotsBuilder {
-    table: Table,
+pub struct ExpireSnapshotsProcedureBuilder {
+    config: ExpireSnapshotsConfig,
 }
 
-impl ExpireSnapshotsBuilder {
-    /// Create a new builder for the given table
-    pub fn new(table: Table) -> Self {
-        Self { table }
+impl Default for ExpireSnapshotsProcedureBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExpireSnapshotsProcedureBuilder {
+    /// Create a new builder for the expire snapshots procedure
+    pub fn new() -> Self {
+        Self {
+            config: ExpireSnapshotsConfig::default(),
+        }
     }
 
     /// Build an expire snapshots action with default configuration
-    pub fn build(self) -> ExpireSnapshotsAction {
-        ExpireSnapshotsAction::new(self.table)
+    pub fn build(self) -> ExpireSnapshotsProcedureImpl {
+        ExpireSnapshotsProcedureImpl {
+            config: self.config,
+        }
+    }
+
+    /// Set the timestamp threshold for expiring snapshots
+    pub fn expire_older_than(mut self, timestamp_ms: i64) -> Self {
+        self.config.older_than_ms = Some(timestamp_ms);
+        self
+    }
+
+    /// Set the dry run flag
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.config.dry_run = dry_run;
+        self
+    }
+
+    /// Set the minimum number of snapshots to retain. If the number of snapshots is less than 1,
+    /// it will be automatically adjusted to 1, following the behavior in Spark.
+    pub fn retain_last(mut self, num_snapshots: u32) -> Self {
+        if num_snapshots < 1 {
+            self.config.retain_last = Some(1);
+        } else {
+            self.config.retain_last = Some(num_snapshots);
+        }
+        self
+    }
+
+    /// Set specific snapshot IDs to expire. An empty list is equivalent to the default behavior
+    /// of expiring all but `retain_last` snapshots! When only expiring specific snapshots, please
+    /// ensure that the list of snapshot IDs is non-empty before using this method.
+    pub fn expire_snapshot_ids(mut self, snapshot_ids: Vec<i64>) -> Self {
+        self.config.snapshot_ids = snapshot_ids;
+        self
+    }
+
+    /// Set the maximum number of concurrent file deletions
+    pub fn max_concurrent_deletes(mut self, max_deletes: u32) -> Self {
+        if max_deletes > 0 {
+            self.config.max_concurrent_deletes = Some(max_deletes);
+        }
+        self
     }
 }
 
 // Extension trait to add expire_snapshots method to Table
 impl Table {
     /// Create a new expire snapshots builder for this table
-    pub fn expire_snapshots(&self) -> ExpireSnapshotsBuilder {
-        ExpireSnapshotsBuilder::new(self.clone())
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsProcedureBuilder {
+        ExpireSnapshotsProcedureBuilder::new()
     }
 }
 
@@ -777,8 +807,8 @@ mod tests {
         let table = create_table_with_isolated_manifests(0).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build();
-        let result = action.execute(&catalog).await.unwrap();
+        let procedure = table.expire_snapshots().build();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         // Should complete successfully with no deletions
         assert_eq!(result.deleted_data_files_count, 0);
@@ -796,8 +826,8 @@ mod tests {
         let table = create_table_with_isolated_manifests(1).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build();
-        let result = action.execute(&catalog).await.unwrap();
+        let procedure = table.expire_snapshots().build();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_data_files_count, 0);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -814,8 +844,8 @@ mod tests {
         let table = create_table_with_shared_manifests(1).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build();
-        let result = action.execute(&catalog).await.unwrap();
+        let procedure = table.expire_snapshots().build();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_data_files_count, 0);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -832,9 +862,9 @@ mod tests {
         let table = create_table_with_isolated_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().retain_last(2);
+        let procedure = table.expire_snapshots().retain_last(2).build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 3);
 
@@ -847,7 +877,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1000, 1001, 1002]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 3);
         assert_eq!(result.deleted_manifest_files_count, 3);
@@ -870,9 +900,9 @@ mod tests {
         let table = create_table_with_shared_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().retain_last(2);
+        let procedure = table.expire_snapshots().retain_last(2).build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 3);
 
@@ -885,7 +915,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1000, 1001, 1002]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 3);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -917,13 +947,13 @@ mod tests {
             .unwrap()
             .timestamp_ms();
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
             .expire_older_than(middle_timestamp)
-            .retain_last(1); // Keep at least 1
+            .retain_last(1)
+            .build(); // Keep at least 1
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         // Should expire snapshots older than the middle one, but keep at least 1
         // So we expect snapshots 1000 and 1001 to be expired
@@ -937,7 +967,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1000, 1001]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
@@ -970,13 +1000,13 @@ mod tests {
             .unwrap()
             .timestamp_ms();
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
             .expire_older_than(middle_timestamp)
-            .retain_last(1); // Keep at least 1
+            .retain_last(1)
+            .build(); // Keep at least 1
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         // Should expire snapshots older than the middle one, but keep at least 1
         // So we expect snapshots 1000 and 1001 to be expired
@@ -990,7 +1020,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1000, 1001]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -1014,12 +1044,12 @@ mod tests {
         let table = create_table_with_isolated_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
-            .expire_snapshot_ids(vec![1001, 1003]);
+            .expire_snapshot_ids(vec![1001, 1003])
+            .build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 2);
 
@@ -1032,7 +1062,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1001, 1003]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
@@ -1056,12 +1086,12 @@ mod tests {
         let table = create_table_with_shared_manifests(5).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
-            .expire_snapshot_ids(vec![1001, 1003]);
+            .expire_snapshot_ids(vec![1001, 1003])
+            .build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 2);
 
@@ -1074,7 +1104,7 @@ mod tests {
 
         assert_eq!(ids_to_expire, vec![1001, 1003]);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -1098,12 +1128,12 @@ mod tests {
         let table = create_table_with_isolated_manifests(3).await;
         let current_snapshot_id = table.metadata().current_snapshot_id().unwrap();
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
-            .expire_snapshot_ids(vec![current_snapshot_id]);
+            .expire_snapshot_ids(vec![current_snapshot_id])
+            .build();
 
-        let result = action.identify_snapshots_to_expire();
+        let result = procedure.identify_snapshots_to_expire(&table);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -1128,8 +1158,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let action = readonly_table.expire_snapshots().build();
-        let result = action.execute(&catalog).await;
+        let procedure = readonly_table.expire_snapshots().build();
+        let result = procedure.execute(&readonly_table, &catalog).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -1146,11 +1176,11 @@ mod tests {
         let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().retain_last(0);
+        let procedure = table.expire_snapshots().retain_last(0).build();
 
-        assert_eq!(action.config.retain_last, Some(1));
+        assert_eq!(procedure.config.retain_last, Some(1));
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
@@ -1174,15 +1204,15 @@ mod tests {
         let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().max_concurrent_deletes(5);
+        let procedure = table.expire_snapshots().max_concurrent_deletes(5).build();
 
-        assert_eq!(action.config.max_concurrent_deletes, Some(5));
+        assert_eq!(procedure.config.max_concurrent_deletes, Some(5));
 
-        let action2 = table.expire_snapshots().build().max_concurrent_deletes(0);
+        let procedure2 = table.expire_snapshots().max_concurrent_deletes(0).build();
 
-        assert_eq!(action2.config.max_concurrent_deletes, None);
+        assert_eq!(procedure2.config.max_concurrent_deletes, None);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
@@ -1203,13 +1233,13 @@ mod tests {
         let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().expire_snapshot_ids(vec![]);
+        let procedure = table.expire_snapshots().expire_snapshot_ids(vec![]).build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 2);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
@@ -1230,13 +1260,13 @@ mod tests {
         let table = create_table_with_shared_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table.expire_snapshots().build().expire_snapshot_ids(vec![]);
+        let procedure = table.expire_snapshots().expire_snapshot_ids(vec![]).build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 2);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -1257,16 +1287,16 @@ mod tests {
         let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
-            .expire_snapshot_ids(vec![9999, 8888]);
+            .expire_snapshot_ids(vec![9999, 8888])
+            .build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
 
         assert_eq!(snapshots_to_expire.len(), 0);
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 0);
         assert_eq!(result.deleted_manifest_files_count, 0);
@@ -1279,31 +1309,31 @@ mod tests {
     async fn test_builder_pattern() {
         let table = create_table_with_isolated_manifests(5).await;
 
-        let action = table
+        let procedure = table
             .expire_snapshots()
-            .build()
             .expire_older_than(Utc::now().timestamp_millis())
             .retain_last(3)
             .max_concurrent_deletes(10)
-            .expire_snapshot_ids(vec![1001, 1002]);
+            .expire_snapshot_ids(vec![1001, 1002])
+            .build();
 
-        assert!(action.config.older_than_ms.is_some());
-        assert_eq!(action.config.retain_last, Some(3));
-        assert_eq!(action.config.max_concurrent_deletes, Some(10));
-        assert_eq!(action.config.snapshot_ids, vec![1001, 1002]);
+        assert!(procedure.config.older_than_ms.is_some());
+        assert_eq!(procedure.config.retain_last, Some(3));
+        assert_eq!(procedure.config.max_concurrent_deletes, Some(10));
+        assert_eq!(procedure.config.snapshot_ids, vec![1001, 1002]);
     }
 
     #[tokio::test]
     async fn test_collect_files_to_delete_logic() {
         let table = create_table_with_isolated_manifests(4).await;
 
-        let action = table.expire_snapshots().build().retain_last(2);
+        let procedure = table.expire_snapshots().retain_last(2).build();
 
-        let snapshots_to_expire = action.identify_snapshots_to_expire().unwrap();
+        let snapshots_to_expire = procedure.identify_snapshots_to_expire(&table).unwrap();
         assert_eq!(snapshots_to_expire.len(), 2);
 
-        let files_to_delete = action
-            .collect_files_to_delete(&snapshots_to_expire)
+        let files_to_delete = procedure
+            .collect_files_to_delete(&table, &snapshots_to_expire)
             .await
             .unwrap();
 
@@ -1323,21 +1353,21 @@ mod tests {
     #[tokio::test]
     async fn test_default_configuration() {
         let table = create_table_with_isolated_manifests(3).await;
-        let action = table.expire_snapshots().build();
+        let procedure = table.expire_snapshots().build();
 
-        assert_eq!(action.config.older_than_ms, None);
-        assert_eq!(action.config.retain_last, Some(1));
-        assert_eq!(action.config.max_concurrent_deletes, None);
-        assert!(action.config.snapshot_ids.is_empty());
+        assert_eq!(procedure.config.older_than_ms, None);
+        assert_eq!(procedure.config.retain_last, Some(1));
+        assert_eq!(procedure.config.max_concurrent_deletes, None);
+        assert!(procedure.config.snapshot_ids.is_empty());
     }
 
     #[tokio::test]
     async fn test_dry_run() {
         let table = create_table_with_isolated_manifests(3).await;
         let catalog = MockCatalog::new(table.clone());
-        let action = table.expire_snapshots().build().dry_run(true);
+        let procedure = table.expire_snapshots().dry_run(true).build();
 
-        let result = action.execute(&catalog).await.unwrap();
+        let result = procedure.execute(&table, &catalog).await.unwrap();
 
         assert_eq!(result.deleted_manifest_lists_count, 2);
         assert_eq!(result.deleted_manifest_files_count, 2);
