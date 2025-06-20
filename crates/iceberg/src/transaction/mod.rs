@@ -127,9 +127,6 @@ impl Transaction {
 
         let refreshed = catalog.load_table(&base_table_identifier.clone()).await?;
 
-        let mut existing_updates: Vec<TableUpdate> = vec![];
-        let mut existing_requirements: Vec<TableRequirement> = vec![];
-
         if self.table.metadata() != refreshed.metadata()
             || self.table.metadata_location() != refreshed.metadata_location()
         {
@@ -138,6 +135,8 @@ impl Transaction {
         }
 
         let mut current_table = self.table.clone();
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
 
         for action in &self.actions {
             let action_commit = Arc::clone(action).commit(&current_table).await?;
