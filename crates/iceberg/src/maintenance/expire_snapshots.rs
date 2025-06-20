@@ -235,7 +235,7 @@ impl ExpireSnapshotsAction {
                         expired_manifests.insert(manifest_entry.manifest_path.clone());
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     // If we end up here, the failure mode is that we will skip some snapshots.
                     // This could happen if the manifest list was already deleted. This is not a
                     // critical error, so we will just skip this snapshot. It can be cleaned up
@@ -358,7 +358,7 @@ impl ExpireSnapshotsAction {
                     Ok(deleted_path) => {
                         self.process_file_deletion(&mut result, deleted_path).await;
                     }
-                    Err(e) => {
+                    Err(_) => {
                         // This is not a critical error, so we will just continue. The result is
                         // that an orphaned file will be left behind.
                     }
