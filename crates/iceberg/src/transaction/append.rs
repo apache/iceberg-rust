@@ -33,7 +33,6 @@ use crate::transaction::{ActionCommit, TransactionAction};
 pub struct FastAppendAction {
     check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
-    snapshot_id: i64,
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
@@ -41,10 +40,9 @@ pub struct FastAppendAction {
 }
 
 impl FastAppendAction {
-    pub(crate) fn new(snapshot_id: i64) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             check_duplicate: true,
-            snapshot_id,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
@@ -95,7 +93,7 @@ impl TransactionAction for FastAppendAction {
         }
 
         let snapshot_producer = SnapshotProducer::new(
-            self.snapshot_id,
+            table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),

@@ -28,10 +28,7 @@ mod update_location;
 mod update_properties;
 mod upgrade_format_version;
 
-use std::mem::discriminant;
 use std::sync::Arc;
-
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::table::Table;
@@ -58,7 +55,7 @@ impl Transaction {
         }
     }
 
-    fn update_table_metadata(&self, table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
+    fn update_table_metadata(table: &mut Table, updates: &[TableUpdate]) -> Result<()> {
         let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
@@ -70,35 +67,22 @@ impl Transaction {
     }
 
     fn apply(
-        &self,
         table: &mut Table,
-        updates: Vec<TableUpdate>,
-        requirements: Vec<TableRequirement>,
+        mut action_commit: ActionCommit,
         existing_updates: &mut Vec<TableUpdate>,
         existing_requirements: &mut Vec<TableRequirement>,
     ) -> Result<()> {
+        let updates = action_commit.take_updates();
+        let requirements = action_commit.take_requirements();
+        
         for requirement in &requirements {
             requirement.check(Some(table.metadata()))?;
         }
 
-        self.update_table_metadata(table, &updates)?;
+        Self::update_table_metadata(table, &updates)?;
 
         existing_updates.extend(updates);
-
-        // For the requirements, it does not make sense to add a requirement more than once
-        // For example, you cannot assert that the current schema has two different IDs
-        for new_requirement in requirements {
-            if existing_requirements
-                .iter()
-                .map(discriminant)
-                .all(|d| d != discriminant(&new_requirement))
-            {
-                existing_requirements.push(new_requirement);
-            }
-        }
-
-        // # TODO
-        // Support auto commit later.
+        existing_requirements.extend(requirements);
 
         Ok(())
     }
@@ -113,33 +97,9 @@ impl Transaction {
         UpdatePropertiesAction::new()
     }
 
-    fn generate_unique_snapshot_id(&self) -> i64 {
-        let generate_random_id = || -> i64 {
-            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-            let snapshot_id = (lhs ^ rhs) as i64;
-            if snapshot_id < 0 {
-                -snapshot_id
-            } else {
-                snapshot_id
-            }
-        };
-        let mut snapshot_id = generate_random_id();
-
-        // todo revisit this, this check won't be 100% valid because it's not checking the staging table
-        while self
-            .table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
-            snapshot_id = generate_random_id();
-        }
-        snapshot_id
-    }
-
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
-        FastAppendAction::new(self.generate_unique_snapshot_id())
+        FastAppendAction::new()
     }
 
     /// Creates replace sort order action.
@@ -180,12 +140,11 @@ impl Transaction {
         let mut current_table = self.table.clone();
 
         for action in &self.actions {
-            let mut action_commit = Arc::clone(action).commit(&current_table).await?;
+            let action_commit = Arc::clone(action).commit(&current_table).await?;
             // apply action commit to current_table
-            self.apply(
+            Self::apply(
                 &mut current_table,
-                action_commit.take_updates(),
-                action_commit.take_requirements(),
+                action_commit,
                 &mut existing_updates,
                 &mut existing_requirements,
             )?;
