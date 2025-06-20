@@ -15,40 +15,79 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::spec::StatisticsFile;
-use crate::transaction::Transaction;
-use crate::{Error, TableUpdate};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-pub struct UpdateStatistics<'a> {
-    tx: Transaction<'a>,
-    updates: Vec<TableUpdate>,
+use async_trait::async_trait;
+
+use crate::spec::StatisticsFile;
+use crate::table::Table;
+use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Result, TableUpdate};
+
+/// A transactional action for updating statistics files in a table
+pub struct UpdateStatisticsAction {
+    statistics_to_set: HashMap<i64, Option<StatisticsFile>>,
 }
 
-impl<'a> UpdateStatistics<'a> {
-    pub fn new(tx: Transaction<'a>) -> Self {
+impl UpdateStatisticsAction {
+    pub fn new() -> Self {
         Self {
-            tx,
-            updates: Vec::new(),
+            statistics_to_set: HashMap::default(),
         }
     }
 
-    pub fn set_statistics(mut self, statistics: StatisticsFile) -> Result<Self, Error> {
-        self.updates.push(TableUpdate::SetStatistics { statistics });
-
-        Ok(self)
+    /// Set the table's statistics file for given snapshot, replacing the previous statistics file for
+    /// the snapshot if any exists. The snapshot id of the statistics file will be used.
+    ///
+    /// # Arguments
+    ///
+    /// * `statistics_file` - The [`StatisticsFile`] to associate with its corresponding snapshot ID.
+    ///
+    /// # Returns
+    ///
+    /// An updated [`UpdateStatisticsAction`] with the new statistics file applied.
+    pub fn set_statistics(mut self, statistics_file: StatisticsFile) -> Self {
+        self.statistics_to_set
+            .insert(statistics_file.snapshot_id, Some(statistics_file));
+        self
     }
 
-    pub fn remove_statistics(mut self, snapshot_id: i64) -> Result<Self, Error> {
-        self.updates
-            .push(TableUpdate::RemoveStatistics { snapshot_id });
-
-        Ok(self)
+    /// Remove the table's statistics file for given snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot_id` - The ID of the snapshot whose statistics file should be removed.
+    ///
+    /// # Returns
+    ///
+    /// An updated [`UpdateStatisticsAction`] with the removal operation recorded.
+    pub fn remove_statistics(mut self, snapshot_id: i64) -> Self {
+        self.statistics_to_set.insert(snapshot_id, None);
+        self
     }
+}
 
-    pub fn apply(mut self) -> Result<Transaction<'a>, Error> {
-        self.tx.apply(self.updates, vec![])?;
+#[async_trait]
+impl TransactionAction for UpdateStatisticsAction {
+    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+        let mut updates: Vec<TableUpdate> = vec![];
 
-        Ok(self.tx)
+        self.statistics_to_set
+            .iter()
+            .for_each(|(snapshot_id, statistic_file)| {
+                if let Some(statistics) = statistic_file {
+                    updates.push(TableUpdate::SetStatistics {
+                        statistics: statistics.clone(),
+                    })
+                } else {
+                    updates.push(TableUpdate::RemoveStatistics {
+                        snapshot_id: snapshot_id.clone(),
+                    })
+                }
+            });
+
+        Ok(ActionCommit::new(updates, vec![]))
     }
 }
 
@@ -56,10 +95,12 @@ impl<'a> UpdateStatistics<'a> {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::TableUpdate;
+    use as_any::Downcast;
+
     use crate::spec::{BlobMetadata, StatisticsFile};
-    use crate::transaction::Transaction;
     use crate::transaction::tests::make_v2_table;
+    use crate::transaction::update_statistics::UpdateStatisticsAction;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
 
     #[test]
     fn test_update_statistics() {
@@ -100,35 +141,28 @@ mod tests {
         let tx = tx
             .update_statistics()
             .set_statistics(statistics_file_1.clone())
-            .unwrap()
-            .apply()
-            .unwrap();
-
-        let TableUpdate::SetStatistics { statistics } = tx.updates.first().unwrap().clone() else {
-            panic!("The update should be a TableUpdate::SetStatistics!");
-        };
-        assert_eq!(statistics, statistics_file_1);
-
-        // start a new update, remove stat1 and set stat2
-        let tx = tx
-            .update_statistics()
-            .remove_statistics(3055729675574597004i64)
-            .unwrap()
             .set_statistics(statistics_file_2.clone())
-            .unwrap()
-            .apply()
+            .remove_statistics(3055729675574597004i64) // remove stats1
+            .apply(tx)
             .unwrap();
 
-        assert_eq!(tx.updates.len(), 3);
-        let TableUpdate::RemoveStatistics { snapshot_id } = tx.updates.get(1).unwrap().clone()
-        else {
-            panic!("The update should be a TableUpdate::RemoveStatistics!");
-        };
-        assert_eq!(snapshot_id, 3055729675574597004i64);
-
-        let TableUpdate::SetStatistics { statistics } = tx.updates.get(2).unwrap().clone() else {
-            panic!("The update should be a TableUpdate::SetStatistics!");
-        };
-        assert_eq!(statistics, statistics_file_2);
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateStatisticsAction>()
+            .unwrap();
+        assert!(
+            action
+                .statistics_to_set
+                .get(&statistics_file_1.snapshot_id)
+                .unwrap()
+                .is_none()
+        ); // stats1 should have been removed
+        assert_eq!(
+            action
+                .statistics_to_set
+                .get(&statistics_file_2.snapshot_id)
+                .unwrap()
+                .clone(),
+            Some(statistics_file_2)
+        );
     }
 }
