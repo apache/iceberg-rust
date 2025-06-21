@@ -253,15 +253,7 @@ Checklist for reference:
 [ ] All source files have ASF headers
 [ ] Can compile from source
 
-More detailed checklist please refer to:
-https://github.com/apache/iceberg-rust/tree/main/scripts
-
-To compile from source, please refer to:
-https://github.com/apache/iceberg-rust/blob/main/CONTRIBUTING.md
-
-Here is a Python script in release to help you verify the release candidate:
-
-./scripts/verify.py
+More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
 
 Thanks
 
