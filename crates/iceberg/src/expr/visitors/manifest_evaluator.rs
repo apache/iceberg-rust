@@ -661,7 +661,7 @@ mod test {
             existing_rows_count: None,
             deleted_rows_count: None,
             partitions: Some(partitions),
-            key_metadata: vec![],
+            key_metadata: None,
         }
     }
 

@@ -579,7 +579,7 @@ pub struct ManifestFile {
     /// field: 519
     ///
     /// Implementation-specific key metadata for encryption
-    pub key_metadata: Vec<u8>,
+    pub key_metadata: Option<Vec<u8>>,
 }
 
 impl ManifestFile {
@@ -830,7 +830,7 @@ pub(super) mod _serde {
                 existing_rows_count: Some(self.existing_rows_count.try_into()?),
                 deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
                 partitions: self.partitions,
-                key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
+                key_metadata: self.key_metadata.map(|b| b.into_vec()),
             })
         }
     }
@@ -862,7 +862,7 @@ pub(super) mod _serde {
                     .transpose()?,
                 deleted_rows_count: self.deleted_rows_count.map(TryInto::try_into).transpose()?,
                 partitions: self.partitions,
-                key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
+                key_metadata: self.key_metadata.map(|b| b.into_vec()),
                 // as ref: https://iceberg.apache.org/spec/#partitioning
                 // use 0 when reading v1 manifest lists
                 content: super::ManifestContentType::Data,
@@ -872,11 +872,10 @@ pub(super) mod _serde {
         }
     }
 
-    fn convert_to_serde_key_metadata(key_metadata: Vec<u8>) -> Option<ByteBuf> {
-        if key_metadata.is_empty() {
-            None
-        } else {
-            Some(ByteBuf::from(key_metadata))
+    fn convert_to_serde_key_metadata(key_metadata: Option<Vec<u8>>) -> Option<ByteBuf> {
+        match key_metadata {
+            Some(metadata) if !metadata.is_empty() => Some(ByteBuf::from(metadata)),
+            _ => None,
         }
     }
 
@@ -1025,7 +1024,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(vec![]),
-                    key_metadata: vec![],
+                    key_metadata: None,
                 }
             ]
         };
@@ -1076,7 +1075,7 @@ mod test {
                     partitions: Some(
                         vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                     ),
-                    key_metadata: vec![],
+                    key_metadata: None,
                 },
                 ManifestFile {
                     manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
@@ -1095,7 +1094,7 @@ mod test {
                     partitions: Some(
                         vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
                     ),
-                    key_metadata: vec![],
+                    key_metadata: None,
                 }
             ]
         };
@@ -1144,7 +1143,7 @@ mod test {
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
                 partitions: None,
-                key_metadata: vec![],
+                key_metadata: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
@@ -1174,7 +1173,7 @@ mod test {
                 partitions: Some(
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
-                key_metadata: vec![],
+                key_metadata: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
@@ -1204,7 +1203,7 @@ mod test {
                 partitions: Some(
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}],
                 ),
-                key_metadata: vec![],
+                key_metadata: None,
             }]
         };
 
@@ -1250,7 +1249,7 @@ mod test {
                 partitions: Some(
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
-                key_metadata: vec![],
+                key_metadata: None,
             }]
         };
 
@@ -1295,7 +1294,7 @@ mod test {
                 partitions: Some(
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
-                key_metadata: vec![],
+                key_metadata: None,
             }]
         };
 
