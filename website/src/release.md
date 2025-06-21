@@ -306,6 +306,33 @@ ${name}
 
 Example: <https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6>
 
+## How to verify a release
+
+### Validating a source release
+
+A release contains links to following things:
+
+* A source tarball
+* A signature(.asc)
+* A checksum(.sha512)
+
+After downloading them, here are the instructions on how to verify them.
+
+* Import keys:
+
+```bash
+curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+gpg --import KEYS
+```
+* Verify the `.asc` file: ```gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc```
+* Verify the checksums: ```shasum -a 512 apache-iceberg-rust-${iceberg_version}.tar.gz.sha512```
+* Verify build and test:
+```bash
+tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
+cd apache-iceberg-rust-${iceberg_version}
+make build && make test
+```
+
 ## Official Release
 
 ### Push the release git tag
