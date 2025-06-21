@@ -22,7 +22,7 @@
 [![crates.io](https://img.shields.io/crates/v/iceberg.svg)](https://crates.io/crates/iceberg-catalog-sql)
 [![docs.rs](https://img.shields.io/docsrs/iceberg.svg)](https://docs.rs/iceberg/latest/iceberg-catalog-sql/)
 
-This crate contains the official Native Rust implementation of Apache Iceberg Rest Catalog.
+This crate contains the official Native Rust implementation of Apache Iceberg SQL Catalog.
 
 See the [API documentation](https://docs.rs/iceberg-catalog-sql/latest) for examples and the full API.
 
