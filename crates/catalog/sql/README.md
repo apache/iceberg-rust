@@ -28,7 +28,7 @@ See the [API documentation](https://docs.rs/iceberg-catalog-sql/latest) for exam
 
 ## Database support
 
-For additional database support (such as for `sqlite` databases), include the `sqlx` dependancy in your crate with the needed features.
+For additional database support (such as for `sqlite` databases), include the `sqlx` dependency in your crate with the needed features.
 
 For example, to include support for `sqlite` databases, these should both be included in your `Cargo.toml`
 
