@@ -1043,6 +1043,30 @@ Thanks
 ${name}
 </code></pre>
 <p>Example: <a href="https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6">https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6</a></p>
+<h2 id="how-to-verify-a-release"><a class="header" href="#how-to-verify-a-release">How to verify a release</a></h2>
+<h3 id="validating-a-source-release"><a class="header" href="#validating-a-source-release">Validating a source release</a></h3>
+<p>A release contains links to following things:</p>
+<ul>
+<li>A source tarball</li>
+<li>A signature(.asc)</li>
+<li>A checksum(.sha512)</li>
+</ul>
+<p>After downloading them, here are the instructions on how to verify them.</p>
+<ul>
+<li>Import keys:</li>
+</ul>
+<pre><code class="language-bash">curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+gpg --import KEYS
+</code></pre>
+<ul>
+<li>Verify the <code>.asc</code> file: <code>gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc</code></li>
+<li>Verify the checksums: <code>shasum -a 512 apache-iceberg-rust-${iceberg_version}.tar.gz.sha512</code></li>
+<li>Verify build and test:</li>
+</ul>
+<pre><code class="language-bash">tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
+cd apache-iceberg-rust-${iceberg_version}
+make build &amp;&amp; make test
+</code></pre>
 <h2 id="official-release"><a class="header" href="#official-release">Official Release</a></h2>
 <h3 id="push-the-release-git-tag"><a class="header" href="#push-the-release-git-tag">Push the release git tag</a></h3>
 <pre><code class="language-shell"># Checkout the tags that passed VOTE
