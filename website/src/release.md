@@ -202,9 +202,6 @@ please cancel the release for the current `release_version`,
 _increase th RC counting_ and re-initiate a release with the new `release_version`.
 And remember to delete the wrong artifacts from the SVN dist repo.
 
-
-
-
 ## Voting
 
 Iceberg Community Vote should send email to: <dev@iceberg.apache.org>:
