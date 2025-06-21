@@ -123,9 +123,7 @@ impl Transaction {
     }
 
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
-        let base_table_identifier = self.table.identifier().to_owned();
-
-        let refreshed = catalog.load_table(&base_table_identifier.clone()).await?;
+        let refreshed = catalog.load_table(self.table.identifier()).await?;
 
         if self.table.metadata() != refreshed.metadata()
             || self.table.metadata_location() != refreshed.metadata_location()
@@ -150,7 +148,7 @@ impl Transaction {
         }
 
         let table_commit = TableCommit::builder()
-            .ident(base_table_identifier)
+            .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
             .requirements(existing_requirements)
             .build();
