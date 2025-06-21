@@ -74,14 +74,14 @@ pub(crate) struct SnapshotProducer {
 
 impl SnapshotProducer {
     pub(crate) fn new(
-        snapshot_id: i64,
+        table: &Table,
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
         Self {
-            snapshot_id,
+            snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
             key_metadata,
             snapshot_properties,
@@ -153,6 +153,28 @@ impl SnapshotProducer {
         }
 
         Ok(())
+    }
+
+    fn generate_unique_snapshot_id(table: &Table) -> i64 {
+        let generate_random_id = || -> i64 {
+            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
+            let snapshot_id = (lhs ^ rhs) as i64;
+            if snapshot_id < 0 {
+                -snapshot_id
+            } else {
+                snapshot_id
+            }
+        };
+        let mut snapshot_id = generate_random_id();
+
+        while table
+            .metadata()
+            .snapshots()
+            .any(|s| s.snapshot_id() == snapshot_id)
+        {
+            snapshot_id = generate_random_id();
+        }
+        snapshot_id
     }
 
     fn new_manifest_output(&mut self, table: &Table) -> Result<OutputFile> {
