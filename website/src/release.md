@@ -253,7 +253,7 @@ Checklist for reference:
 [ ] All source files have ASF headers
 [ ] Can compile from source
 
-More detailed checklist please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
+More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
 
 Thanks
 
