@@ -28,10 +28,7 @@ mod update_location;
 mod update_properties;
 mod upgrade_format_version;
 
-use std::mem::discriminant;
 use std::sync::Arc;
-
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::table::Table;
@@ -45,67 +42,49 @@ use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 pub struct Transaction {
-    base_table: Table,
-    current_table: Table,
+    table: Table,
     actions: Vec<BoxedTransactionAction>,
-    updates: Vec<TableUpdate>,
-    requirements: Vec<TableRequirement>,
 }
 
 impl Transaction {
     /// Creates a new transaction.
     pub fn new(table: &Table) -> Self {
         Self {
-            base_table: table.clone(),
-            current_table: table.clone(),
+            table: table.clone(),
             actions: vec![],
-            updates: vec![],
-            requirements: vec![],
         }
     }
 
-    fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
-        let mut metadata_builder = self.current_table.metadata().clone().into_builder(None);
+    fn update_table_metadata(table: Table, updates: &[TableUpdate]) -> Result<Table> {
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
         }
 
-        self.current_table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata));
-
-        Ok(())
+        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
     }
 
+    /// Applies an [`ActionCommit`] to the given [`Table`], returning a new [`Table`] with updated metadata.
+    /// Also appends any derived [`TableUpdate`]s and [`TableRequirement`]s to the provided vectors.
     fn apply(
-        &mut self,
-        updates: Vec<TableUpdate>,
-        requirements: Vec<TableRequirement>,
-    ) -> Result<()> {
+        table: Table,
+        mut action_commit: ActionCommit,
+        existing_updates: &mut Vec<TableUpdate>,
+        existing_requirements: &mut Vec<TableRequirement>,
+    ) -> Result<Table> {
+        let updates = action_commit.take_updates();
+        let requirements = action_commit.take_requirements();
+
         for requirement in &requirements {
-            requirement.check(Some(self.current_table.metadata()))?;
+            requirement.check(Some(table.metadata()))?;
         }
 
-        self.update_table_metadata(&updates)?;
+        let updated_table = Self::update_table_metadata(table, &updates)?;
 
-        self.updates.extend(updates);
+        existing_updates.extend(updates);
+        existing_requirements.extend(requirements);
 
-        // For the requirements, it does not make sense to add a requirement more than once
-        // For example, you cannot assert that the current schema has two different IDs
-        for new_requirement in requirements {
-            if self
-                .requirements
-                .iter()
-                .map(discriminant)
-                .all(|d| d != discriminant(&new_requirement))
-            {
-                self.requirements.push(new_requirement);
-            }
-        }
-
-        // # TODO
-        // Support auto commit later.
-
-        Ok(())
+        Ok(updated_table)
     }
 
     /// Sets table to a new version.
@@ -118,31 +97,9 @@ impl Transaction {
         UpdatePropertiesAction::new()
     }
 
-    fn generate_unique_snapshot_id(&self) -> i64 {
-        let generate_random_id = || -> i64 {
-            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-            let snapshot_id = (lhs ^ rhs) as i64;
-            if snapshot_id < 0 {
-                -snapshot_id
-            } else {
-                snapshot_id
-            }
-        };
-        let mut snapshot_id = generate_random_id();
-        while self
-            .current_table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
-            snapshot_id = generate_random_id();
-        }
-        snapshot_id
-    }
-
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
-        FastAppendAction::new(self.generate_unique_snapshot_id())
+        FastAppendAction::new()
     }
 
     /// Creates replace sort order action.
@@ -157,41 +114,43 @@ impl Transaction {
 
     /// Commit transaction.
     pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
-        if self.actions.is_empty() && self.updates.is_empty() {
+        if self.actions.is_empty() {
             // nothing to commit
-            return Ok(self.base_table.clone());
+            return Ok(self.table.clone());
         }
 
         self.do_commit(catalog).await
     }
 
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
-        let base_table_identifier = self.base_table.identifier().to_owned();
+        let refreshed = catalog.load_table(self.table.identifier()).await?;
 
-        let refreshed = catalog.load_table(&base_table_identifier.clone()).await?;
-
-        if self.base_table.metadata() != refreshed.metadata()
-            || self.base_table.metadata_location() != refreshed.metadata_location()
+        if self.table.metadata() != refreshed.metadata()
+            || self.table.metadata_location() != refreshed.metadata_location()
         {
             // current base is stale, use refreshed as base and re-apply transaction actions
-            self.base_table = refreshed.clone();
+            self.table = refreshed.clone();
         }
 
-        let current_table = self.base_table.clone();
+        let mut current_table = self.table.clone();
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
 
-        for action in self.actions.clone() {
-            let mut action_commit = action.commit(&current_table).await?;
-            // apply changes to current_table
-            self.apply(
-                action_commit.take_updates(),
-                action_commit.take_requirements(),
+        for action in &self.actions {
+            let action_commit = Arc::clone(action).commit(&current_table).await?;
+            // apply action commit to current_table
+            current_table = Self::apply(
+                current_table,
+                action_commit,
+                &mut existing_updates,
+                &mut existing_requirements,
             )?;
         }
 
         let table_commit = TableCommit::builder()
-            .ident(base_table_identifier)
-            .updates(self.updates.clone())
-            .requirements(self.requirements.clone())
+            .ident(self.table.identifier().to_owned())
+            .updates(existing_updates)
+            .requirements(existing_requirements)
             .build();
 
         catalog.update_table(table_commit).await
