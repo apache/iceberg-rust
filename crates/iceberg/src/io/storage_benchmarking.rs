@@ -26,19 +26,13 @@ use opendal::raw::{
 };
 use opendal::services::MemoryConfig;
 use opendal::{Operator, Result};
-use rand::{Rng, thread_rng};
 use tokio::time::sleep;
+use rand::*;
 
 pub(crate) fn benchmarking_config_build() -> Result<Operator> {
     Ok(Operator::from_config(MemoryConfig::default())?
         .layer(DelayLayer)
         .finish())
-}
-
-/// Usually takes around 50 ms, to visualize function: $ f\left(x\right)=x^{-0.5}\ \cdot\ 0.10 $
-fn gen_amt_latency() -> Duration {
-    let x: f64 = thread_rng().gen_range(0.01..10.);
-    Duration::from_secs_f64(x.powf(-0.5) * 0.1)
 }
 
 /// A layer that artifially introduces predictable relay for better benchmarking
@@ -73,22 +67,26 @@ impl<A: Access> LayeredAccess for DelayedAccessor<A> {
     }
 
     async fn read(&self, path: &str, args: OpRead) -> Result<(RpRead, Self::Reader)> {
-        sleep(gen_amt_latency()).await;
+        sleep(Duration::from_millis(20)).await;
 
         self.inner.read(path, args).await
     }
 
     fn blocking_read(&self, path: &str, args: OpRead) -> Result<(RpRead, Self::BlockingReader)> {
-        thread::sleep(gen_amt_latency());
+        thread::sleep(Duration::from_millis(20));
 
         self.inner.blocking_read(path, args)
     }
 
     async fn write(&self, path: &str, args: OpWrite) -> Result<(RpWrite, Self::Writer)> {
+        sleep(Duration::from_millis(20)).await;
+
         self.inner.write(path, args).await
     }
 
     fn blocking_write(&self, path: &str, args: OpWrite) -> Result<(RpWrite, Self::BlockingWriter)> {
+        thread::sleep(Duration::from_millis(20));
+
         self.inner.blocking_write(path, args)
     }
 
