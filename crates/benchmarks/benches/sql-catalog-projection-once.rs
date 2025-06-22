@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
-use benchmarks::{copy_dir_to_fileio, run_construction_script};
+use benchmarks::{copy_dir_to_fileio, construct_table};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::TryStreamExt;
 use iceberg::io::FileIOBuilder;
@@ -31,17 +31,18 @@ use tokio::runtime::Runtime;
 
 pub fn bench_sql_catalog_projection_once(c: &mut Criterion) {
     let mut group = c.benchmark_group("sql_catalog_projection_once");
-    // request times are very sporadic, so we need a lower confidence level for reasonable results
     group.measurement_time(Duration::from_secs(20)).sample_size(50);
 
-    let table_dir = run_construction_script("sql-catalog-taxicab");
+    let table_dir = construct_table("sql-catalog-taxicab");
     let mut db_path = table_dir.clone();
     db_path.push("benchmarking-catalog.db");
     let uri = format!("sqlite:{}", db_path.to_str().unwrap());
 
     group.bench_function(
         "sql_catalog_projection_once",
-        // iter custom is not ideal, but criterion doesn't let us have a custom async setup which is really annoying
+        // an issue with criterion (https://github.com/bheisler/criterion.rs/issues/751) means we can't do a normal benchmark here,
+        // it doesn't let use provide an async setup function to build `FileIO`, etc. instead, we have to use `iter_custom` and do
+        // the measurements ourselves
         |b| {
             b.to_async(Runtime::new().unwrap()).iter_custom(async |n| {
                 let mut total_elapsed = Duration::default();
