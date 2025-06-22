@@ -33,7 +33,7 @@ tokio = { features = ["rt-multi-thread"], workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 arrow-array.workspace = true
-sqlx = { version = "0.8.6", features = ["any", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8.1", features = ["any", "runtime-tokio", "sqlite"] }
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["async_tokio"] }
