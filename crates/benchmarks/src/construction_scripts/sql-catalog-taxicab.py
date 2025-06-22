@@ -51,6 +51,8 @@ table = catalog.create_table(
 
 table.append(df)
 
+
+# the rust sql catalog needs an extra column for each table that pyiceberg doesn't include, this adds it
 conn = sqlite3.connect(f"{warehouse_path}/benchmarking-catalog.db")
 c = conn.cursor()
 c.execute("ALTER TABLE iceberg_tables ADD column iceberg_type VARCHAR(5) DEFAULT 'TABLE'")
