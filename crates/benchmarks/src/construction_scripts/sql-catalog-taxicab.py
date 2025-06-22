@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# reason for existence explained in ../lib.rs
+
 from pathlib import Path
 from sys import argv
 from urllib.request import urlretrieve

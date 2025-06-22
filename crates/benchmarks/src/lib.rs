@@ -26,11 +26,14 @@ use iceberg::io::FileIO;
 use rand::{RngCore, thread_rng};
 use walkdir::WalkDir;
 
-/// runs the python construction script, provided just the file name without .py
-///
-/// ("sql-catalog-querying-taxicab" etc.)
-pub fn run_construction_script(script_name: &str) -> PathBuf {
-    let script_filename = [script_name, "py"].join(".");
+/// As of now, write support for tables is not complete for iceberg rust, so we can't construct
+/// tables for benchmarking ourselves.
+/// 
+/// As a temporary (and admittedly ugly) measure, we run a python script to generate the tables
+/// in a temp directory instead and then migrate all files created to a memory-storage `FileIO`.
+/// When write support is complete, we can easily swap out the Python scripts and do this natively.
+pub fn construct_table(table_name: &str) -> PathBuf {
+    let script_filename = [table_name, "py"].join(".");
     let mut script_path = PathBuf::from_str(env!("CARGO_MANIFEST_DIR")).unwrap();
     script_path.push("src");
     script_path.push("construction_scripts");
@@ -42,7 +45,7 @@ pub fn run_construction_script(script_name: &str) -> PathBuf {
     // should look like /tmp/iceberg_benchmark_tables/<script_name>-<random number>>
     let mut working_dir = temp_dir();
     working_dir.push("iceberg_benchmark_tables");
-    working_dir.push([script_name, &thread_rng().next_u64().to_string()].join("-"));
+    working_dir.push([table_name, &thread_rng().next_u64().to_string()].join("-"));
 
     create_dir_all(&working_dir).unwrap();
 
