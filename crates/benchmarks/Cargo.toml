@@ -41,3 +41,7 @@ criterion = { version = "0.6.0", features = ["async_tokio"] }
 [[bench]]
 name = "sql-catalog-projection-once"
 harness = false
+
+[lints.rust]
+# so the #[cfg(benchmarking)] tag doesn't create warnings
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(benchmarking)'] }
