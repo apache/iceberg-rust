@@ -18,10 +18,10 @@
 //! It's challenging to make storage with reproducible delays for benchmarks. Variance in performance can
 //! tamper with results. Additionally, benchmarks can benefit from granular control of exactly how long
 //! the latency will be.
-//! 
+//!
 //! To solve this problem, we have an extra **usually not included** storage type for benchmarks. This is
 //! almost exactly the same as the memory catalog, except with a preset latency with each read and write.
-//! 
+//!
 //! THIS CODE SHOULD NOT AND IS NOT INCLUDED IN REGULAR DISTRIBUTIONS OF `iceberg-rs`. To include it,
 //! you must pass RUSTFLAGS="--cfg benchmarking" to `cargo`.
 
@@ -33,8 +33,8 @@ use opendal::raw::{
 };
 use opendal::services::MemoryConfig;
 use opendal::{Operator, Result};
-use tokio::time::sleep;
 use rand::*;
+use tokio::time::sleep;
 
 pub(crate) fn benchmarking_config_build() -> Result<Operator> {
     Ok(Operator::from_config(MemoryConfig::default())?

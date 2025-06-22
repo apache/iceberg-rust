@@ -28,7 +28,7 @@ use walkdir::WalkDir;
 
 /// As of now, write support for tables is not complete for iceberg rust, so we can't construct
 /// tables for benchmarking ourselves.
-/// 
+///
 /// As a temporary (and admittedly ugly) measure, we run a python script to generate the tables
 /// in a temp directory instead and then migrate all files created to a memory-storage `FileIO`.
 /// When write support is complete, we can easily swap out the Python scripts and do this natively.
