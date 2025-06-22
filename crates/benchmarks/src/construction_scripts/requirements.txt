@@ -1,0 +1,3 @@
+python dependancies:
+pyiceberg[sql-sqlite]
+pyarrow
