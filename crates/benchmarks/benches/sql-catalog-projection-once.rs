@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
-use benchmarks::{copy_dir_to_fileio, construct_table};
+use benchmarks::{construct_table, copy_dir_to_fileio};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::TryStreamExt;
 use iceberg::io::FileIOBuilder;
@@ -30,8 +30,17 @@ use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 use tokio::runtime::Runtime;
 
 pub fn bench_sql_catalog_projection_once(c: &mut Criterion) {
+    #[cfg(not(benchmarking))]
+    {
+        eprintln!(r#"benchmarking flag not enabled, must pass RUSTFLAGS="--cfg benchmarking""#);
+        return;
+    }
+
+    #[allow(unreachable_code)]
     let mut group = c.benchmark_group("sql_catalog_projection_once");
-    group.measurement_time(Duration::from_secs(20)).sample_size(50);
+    group
+        .measurement_time(Duration::from_secs(20))
+        .sample_size(50);
 
     let table_dir = construct_table("sql-catalog-taxicab");
     let mut db_path = table_dir.clone();
