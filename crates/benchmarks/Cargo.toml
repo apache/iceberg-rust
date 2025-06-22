@@ -39,5 +39,5 @@ sqlx = { version = "0.8.6", features = ["any", "runtime-tokio", "sqlite"] }
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 
 [[bench]]
-name = "sql-catalog-scanning-taxicab"
+name = "sql-catalog-projection-once"
 harness = false

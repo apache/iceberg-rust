@@ -23,4 +23,4 @@ This command includes it: `RUSTFLAGS="--cfg benchmarking" cargo bench`
 
 ## Existing benchmarks
 
-- `sql-catalog-scanning-taxicab`: Benchmarks scanning two columns from one month of NYC taxicab data.
+- `sql-catalog-projection-once`: Benchmarks scanning the NYC taxicab data and projecting two columns.

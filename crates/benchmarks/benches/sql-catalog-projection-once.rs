@@ -29,10 +29,10 @@ use iceberg::{Catalog, TableIdent};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 use tokio::runtime::Runtime;
 
-pub fn bench_1_taxicab_query(c: &mut Criterion) {
-    let mut group = c.benchmark_group("single_read_taxicab_sql_catalog");
+pub fn bench_sql_catalog_projection_once(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sql_catalog_projection_once");
     // request times are very sporadic, so we need a lower confidence level for reasonable results
-    group.measurement_time(Duration::from_secs(25)).confidence_level(0.8);
+    group.measurement_time(Duration::from_secs(20)).sample_size(50);
 
     let table_dir = run_construction_script("sql-catalog-taxicab");
     let mut db_path = table_dir.clone();
@@ -40,19 +40,24 @@ pub fn bench_1_taxicab_query(c: &mut Criterion) {
     let uri = format!("sqlite:{}", db_path.to_str().unwrap());
 
     group.bench_function(
-        "single_read_taxicab_sql_catalog",
+        "sql_catalog_projection_once",
         // iter custom is not ideal, but criterion doesn't let us have a custom async setup which is really annoying
         |b| {
-            b.to_async(Runtime::new().unwrap()).iter_custom(async |_| {
-                let table = setup_table(table_dir.clone(), uri.clone()).await;
+            b.to_async(Runtime::new().unwrap()).iter_custom(async |n| {
+                let mut total_elapsed = Duration::default();
 
-                let start = Instant::now();
-                let output = scan_table(black_box(table)).await;
-                let end = Instant::now();
+                for _ in 0..n {
+                    let table = setup_table(table_dir.clone(), uri.clone()).await;
 
-                drop(black_box(output));
+                    let start = Instant::now();
+                    let output = scan_table(black_box(table)).await;
+                    let dur = start.elapsed();
 
-                end - start
+                    drop(black_box(output));
+                    total_elapsed += dur;
+                }
+
+                total_elapsed
             })
         },
     );
@@ -93,5 +98,5 @@ async fn scan_table(table: Table) -> Vec<RecordBatch> {
     stream.try_collect().await.unwrap()
 }
 
-criterion_group!(benches, bench_1_taxicab_query);
+criterion_group!(benches, bench_sql_catalog_projection_once);
 criterion_main!(benches);
