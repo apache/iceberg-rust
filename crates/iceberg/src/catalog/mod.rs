@@ -909,11 +909,13 @@ mod tests {
     use std::fmt::Debug;
     use std::fs::File;
     use std::io::BufReader;
+
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use uuid::uuid;
 
     use super::ViewUpdate;
+    use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
@@ -922,9 +924,10 @@ mod tests {
         UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
         ViewVersion,
     };
-    use crate::{NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate};
-    use crate::io::FileIOBuilder;
     use crate::table::Table;
+    use crate::{
+        NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate,
+    };
 
     #[test]
     fn test_parent_namespace() {
@@ -2137,7 +2140,7 @@ mod tests {
             },
         );
     }
-    
+
     #[test]
     fn test_table_commit() {
         let table = {
@@ -2146,7 +2149,7 @@ mod tests {
                 env!("CARGO_MANIFEST_DIR"),
                 "TableMetadataV2Valid.json"
             ))
-                .unwrap();
+            .unwrap();
             let reader = BufReader::new(file);
             let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
 
@@ -2158,35 +2161,33 @@ mod tests {
                 .build()
                 .unwrap()
         };
-        
+
         let updates = vec![
-            TableUpdate::SetLocation { 
-                location: "s3://bucket/test/new_location/metadata/v2.json".to_string(), 
+            TableUpdate::SetLocation {
+                location: "s3://bucket/test/new_location/metadata/v2.json".to_string(),
             },
             TableUpdate::SetProperties {
                 updates: vec![
                     ("prop1".to_string(), "v1".to_string()),
                     ("prop2".to_string(), "v2".to_string()),
                 ]
-                    .into_iter()
-                    .collect(),
-            }
+                .into_iter()
+                .collect(),
+            },
         ];
-        
-        let requirements = vec![
-            TableRequirement::UuidMatch {
-                uuid: table.metadata().table_uuid
-            }
-        ];
+
+        let requirements = vec![TableRequirement::UuidMatch {
+            uuid: table.metadata().table_uuid,
+        }];
 
         let table_commit = TableCommit::builder()
             .ident(table.identifier().to_owned())
             .updates(updates)
             .requirements(requirements)
             .build();
-        
+
         let updated_table = table_commit.apply(table).unwrap();
-        
+
         assert_eq!(
             updated_table.metadata().properties.get("prop1").unwrap(),
             "v1"
