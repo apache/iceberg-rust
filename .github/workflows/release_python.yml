@@ -28,7 +28,7 @@ env:
   rust_msrv: "1.85"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
