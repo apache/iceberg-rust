@@ -42,9 +42,27 @@ jobs:
     steps:
       - run: echo 'The Publish workflow passed or was manually triggered'
 
-  sdist:
+  validate-release-tag:
     runs-on: ubuntu-latest
     needs: [check-cargo-publish]
+    steps:
+      - name: Validate release tag format
+        # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
+        # Valid formats: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
+        run: |
+          RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
+          echo "Validating release tag: $RELEASE_TAG"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "❌ Invalid release tag format: $RELEASE_TAG"
+            echo "Expected format: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>"
+            echo "Examples: v0.4.0, v1.2.3-rc.1"
+            exit 1
+          fi
+          echo "✅ Release tag format is valid: $RELEASE_TAG"
+
+  sdist:
+    runs-on: ubuntu-latest
+    needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -60,7 +78,7 @@ jobs:
 
   wheels:
     runs-on: "${{ matrix.os }}"
-    needs: [check-cargo-publish]
+    needs: [validate-release-tag]
     strategy:
       matrix:
         include:
@@ -108,17 +126,6 @@ jobs:
       id-token: write # IMPORTANT: mandatory for trusted publishing
 
     steps:
-      - name: Validate release tag format
-        # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
-        run: |
-          RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
-          echo "Validating release tag: $RELEASE_TAG"
-          if [[ ! "$RELEASE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)? ]]; then
-            echo "❌ Invalid release tag format: $RELEASE_TAG"
-            exit 1
-          fi
-          echo "✅ Release tag format is valid"
-
       - name: Download all the dists
         uses: actions/download-artifact@v4
         with:
