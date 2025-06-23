@@ -22,6 +22,7 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
@@ -312,6 +313,30 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
+    }
+
+    /// Applies this [`TableCommit`] to the given [`Table`] as part of a catalog update.
+    /// Typically used by [`Catalog::update_table`] to validate requirements and apply metadata updates.
+    ///
+    /// Returns a new [`Table`] with updated metadata,
+    /// or an error if validation or application fails.
+    #[allow(dead_code)]
+    pub fn apply(&mut self, table: Table) -> Result<Table> {
+        // check requirements
+        let requirements = self.take_requirements();
+        for requirement in requirements {
+            requirement.check(Some(table.metadata()))?;
+        }
+
+        // apply updates to metadata builder
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
+
+        let updates = self.take_updates();
+        for update in updates {
+            metadata_builder = update.apply(metadata_builder)?;
+        }
+
+        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
     }
 }
 
@@ -898,7 +923,7 @@ mod tests {
         UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
         ViewVersion,
     };
-    use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
+    use crate::{NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
     #[test]
     fn test_parent_namespace() {
