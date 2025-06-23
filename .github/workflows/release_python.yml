@@ -93,6 +93,7 @@ jobs:
       
       - name: Set cargo version for RC
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        working-directory: "bindings/python"
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
           cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
@@ -132,6 +133,7 @@ jobs:
       
       - name: Set cargo version for RC
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        working-directory: "bindings/python"
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
           cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
