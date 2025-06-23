@@ -45,8 +45,12 @@ jobs:
   validate-release-tag:
     runs-on: ubuntu-latest
     needs: [check-cargo-publish]
+    outputs:
+      cargo-version: ${{ steps.validate.outputs.cargo-version }}
+      is-rc: ${{ steps.validate.outputs.is-rc }}
     steps:
       - name: Validate release tag format
+        id: validate
         # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
         # Valid formats: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
         run: |
@@ -59,12 +63,40 @@ jobs:
             exit 1
           fi
           echo "✅ Release tag format is valid: $RELEASE_TAG"
+          
+          # Strip 'v' prefix for cargo version
+          CARGO_VERSION="${RELEASE_TAG#v}"
+          echo "Cargo version (without v prefix): $CARGO_VERSION"
+          
+          # Check if this is a release candidate
+          if [[ "$RELEASE_TAG" =~ -rc\.[0-9]+$ ]]; then
+            IS_RC="true"
+            echo "This is a release candidate"
+          else
+            IS_RC="false"
+            echo "This is a stable release"
+          fi
+          
+          # Set outputs for other jobs to use
+          echo "cargo-version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "is-rc=$IS_RC" >> $GITHUB_OUTPUT
 
   sdist:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install cargo-edit
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        run: cargo install cargo-edit
+      
+      - name: Set cargo version for RC
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        run: |
+          echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
+          cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
+
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: "bindings/python"
@@ -93,6 +125,17 @@ jobs:
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install cargo-edit
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        run: cargo install cargo-edit
+      
+      - name: Set cargo version for RC
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        run: |
+          echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
+          cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: 3.9
