@@ -29,6 +29,7 @@ use iceberg::{Catalog, TableIdent};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 use tokio::runtime::Runtime;
 
+#[allow(unused_variables)]
 pub fn bench_sql_catalog_projection_once(c: &mut Criterion) {
     #[cfg(not(benchmarking))]
     {
@@ -88,11 +89,10 @@ async fn setup_table(table_dir: PathBuf, uri: String) -> Table {
         .warehouse_location(table_dir.to_str().unwrap().to_owned())
         .build();
     let catalog = SqlCatalog::new(config).await.unwrap();
-    let table = catalog
+    catalog
         .load_table(&TableIdent::from_strs(["default", "taxi_dataset"]).unwrap())
         .await
-        .expect(&format!("table_dir: {table_dir:?}"));
-    table
+        .unwrap()
 }
 
 async fn scan_table(table: Table) -> Vec<RecordBatch> {
