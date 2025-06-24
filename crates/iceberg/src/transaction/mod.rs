@@ -25,28 +25,25 @@
 //! Below is a basic example using the "fast-append" action:
 //!
 //! ```ignore
+//! use iceberg::transaction::{ApplyTransactionAction, Transaction};
+//! use iceberg::Catalog;
+//!
 //! // Create a transaction.
 //! let tx = Transaction::new(my_table);
 //!
 //! // Create a `FastAppendAction` which will not rewrite or append
 //! // to existing metadata. This will create a new manifest.
-//! let mut action = tx
-//!     .fast_append(None, Vec::new())
-//!     .expect("a transaction can be validated with this input");
+//! let action = tx.fast_append().add_data_files(my_data_files);
 //!
-//! action
-//!     .add_data_files(my_data_files)
-//!     .unwrap();
+//! // Apply the fast-append action to the given transaction, returning
+//! // the newly updated `Transaction`.
+//! let tx = action.apply(tx).unwrap();
 //!
-//! let tx = action
-//!     .apply()
-//!     .await
-//!     .unwrap();
 //!
 //! // End the transaction by committing to an `iceberg::Catalog`
 //! // implementation. This will cause a table update to occur.
 //! let table = tx
-//!     .commit(some_catalog_impl)
+//!     .commit(&some_catalog_impl)
 //!     .await
 //!     .unwrap();
 //! ```
