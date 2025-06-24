@@ -320,7 +320,6 @@ impl TableCommit {
     ///
     /// Returns a new [`Table`] with updated metadata,
     /// or an error if validation or application fails.
-    #[allow(dead_code)]
     pub fn apply(self, table: Table) -> Result<Table> {
         // check requirements
         for requirement in self.requirements {
