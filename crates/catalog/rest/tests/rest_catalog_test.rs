@@ -23,7 +23,7 @@ use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_test_utils::docker::DockerCompose;
@@ -346,9 +346,12 @@ async fn test_update_table() {
         &TableIdent::new(ns.name().clone(), "t1".to_string())
     );
 
+    let tx = Transaction::new(&table);
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
-        .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
+    let table2 = tx
+        .update_table_properties()
+        .set("prop1".to_string(), "v1".to_string())
+        .apply(tx)
         .unwrap()
         .commit(&catalog)
         .await

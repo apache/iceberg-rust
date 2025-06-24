@@ -51,188 +51,140 @@
 //!     .unwrap();
 //! ```
 
+/// The `ApplyTransactionAction` trait provides an `apply` method
+/// that allows users to apply a transaction action to a `Transaction`.
 mod action;
+pub use action::*;
 mod append;
 mod snapshot;
 mod sort_order;
+mod update_location;
+mod update_properties;
+mod upgrade_format_version;
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::mem::discriminant;
 use std::sync::Arc;
 
-use uuid::Uuid;
-
-use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::Result;
-use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
-use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+use crate::transaction::update_location::UpdateLocationAction;
+use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
+use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 pub struct Transaction {
-    base_table: Table,
-    current_table: Table,
+    table: Table,
     actions: Vec<BoxedTransactionAction>,
-    updates: Vec<TableUpdate>,
-    requirements: Vec<TableRequirement>,
 }
 
 impl Transaction {
     /// Creates a new transaction.
     pub fn new(table: &Table) -> Self {
         Self {
-            base_table: table.clone(),
-            current_table: table.clone(),
+            table: table.clone(),
             actions: vec![],
-            updates: vec![],
-            requirements: vec![],
         }
     }
 
-    fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
-        let mut metadata_builder = self.current_table.metadata().clone().into_builder(None);
+    fn update_table_metadata(table: Table, updates: &[TableUpdate]) -> Result<Table> {
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
         }
 
-        self.current_table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata));
-
-        Ok(())
+        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
     }
 
+    /// Applies an [`ActionCommit`] to the given [`Table`], returning a new [`Table`] with updated metadata.
+    /// Also appends any derived [`TableUpdate`]s and [`TableRequirement`]s to the provided vectors.
     fn apply(
-        &mut self,
-        updates: Vec<TableUpdate>,
-        requirements: Vec<TableRequirement>,
-    ) -> Result<()> {
+        table: Table,
+        mut action_commit: ActionCommit,
+        existing_updates: &mut Vec<TableUpdate>,
+        existing_requirements: &mut Vec<TableRequirement>,
+    ) -> Result<Table> {
+        let updates = action_commit.take_updates();
+        let requirements = action_commit.take_requirements();
+
         for requirement in &requirements {
-            requirement.check(Some(self.current_table.metadata()))?;
+            requirement.check(Some(table.metadata()))?;
         }
 
-        self.update_table_metadata(&updates)?;
+        let updated_table = Self::update_table_metadata(table, &updates)?;
 
-        self.updates.extend(updates);
+        existing_updates.extend(updates);
+        existing_requirements.extend(requirements);
 
-        // For the requirements, it does not make sense to add a requirement more than once
-        // For example, you cannot assert that the current schema has two different IDs
-        for new_requirement in requirements {
-            if self
-                .requirements
-                .iter()
-                .map(discriminant)
-                .all(|d| d != discriminant(&new_requirement))
-            {
-                self.requirements.push(new_requirement);
-            }
-        }
-
-        // # TODO
-        // Support auto commit later.
-
-        Ok(())
+        Ok(updated_table)
     }
 
     /// Sets table to a new version.
-    pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
-        let current_version = self.current_table.metadata().format_version();
-        match current_version.cmp(&format_version) {
-            Ordering::Greater => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot downgrade table version from {} to {}",
-                        current_version, format_version
-                    ),
-                ));
-            }
-            Ordering::Less => {
-                self.apply(vec![UpgradeFormatVersion { format_version }], vec![])?;
-            }
-            Ordering::Equal => {
-                // Do nothing.
-            }
-        }
-        Ok(self)
+    pub fn upgrade_table_version(&self) -> UpgradeFormatVersionAction {
+        UpgradeFormatVersionAction::new()
     }
 
     /// Update table's property.
-    pub fn set_properties(mut self, props: HashMap<String, String>) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetProperties { updates: props }], vec![])?;
-        Ok(self)
-    }
-
-    fn generate_unique_snapshot_id(&self) -> i64 {
-        let generate_random_id = || -> i64 {
-            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-            let snapshot_id = (lhs ^ rhs) as i64;
-            if snapshot_id < 0 {
-                -snapshot_id
-            } else {
-                snapshot_id
-            }
-        };
-        let mut snapshot_id = generate_random_id();
-        while self
-            .current_table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
-            snapshot_id = generate_random_id();
-        }
-        snapshot_id
+    pub fn update_table_properties(&self) -> UpdatePropertiesAction {
+        UpdatePropertiesAction::new()
     }
 
     /// Creates a fast append action.
-    pub fn fast_append(
-        self,
-        commit_uuid: Option<Uuid>,
-        key_metadata: Vec<u8>,
-    ) -> Result<FastAppendAction> {
-        let snapshot_id = self.generate_unique_snapshot_id();
-        FastAppendAction::new(
-            self,
-            snapshot_id,
-            commit_uuid.unwrap_or_else(Uuid::now_v7),
-            key_metadata,
-            HashMap::new(),
-        )
+    pub fn fast_append(&self) -> FastAppendAction {
+        FastAppendAction::new()
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(self) -> ReplaceSortOrderAction {
-        ReplaceSortOrderAction {
-            tx: self,
-            sort_fields: vec![],
-        }
-    }
-
-    /// Remove properties in table.
-    pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
-        self.apply(
-            vec![TableUpdate::RemoveProperties { removals: keys }],
-            vec![],
-        )?;
-        Ok(self)
+    pub fn replace_sort_order(&self) -> ReplaceSortOrderAction {
+        ReplaceSortOrderAction::new()
     }
 
     /// Set the location of table
-    pub fn set_location(mut self, location: String) -> Result<Self> {
-        self.apply(vec![TableUpdate::SetLocation { location }], vec![])?;
-        Ok(self)
+    pub fn update_location(&self) -> UpdateLocationAction {
+        UpdateLocationAction::new()
     }
 
     /// Commit transaction.
-    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+        if self.actions.is_empty() {
+            // nothing to commit
+            return Ok(self.table.clone());
+        }
+
+        self.do_commit(catalog).await
+    }
+
+    async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
+        let refreshed = catalog.load_table(self.table.identifier()).await?;
+
+        if self.table.metadata() != refreshed.metadata()
+            || self.table.metadata_location() != refreshed.metadata_location()
+        {
+            // current base is stale, use refreshed as base and re-apply transaction actions
+            self.table = refreshed.clone();
+        }
+
+        let mut current_table = self.table.clone();
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
+
+        for action in &self.actions {
+            let action_commit = Arc::clone(action).commit(&current_table).await?;
+            // apply action commit to current_table
+            current_table = Self::apply(
+                current_table,
+                action_commit,
+                &mut existing_updates,
+                &mut existing_requirements,
+            )?;
+        }
+
         let table_commit = TableCommit::builder()
-            .ident(self.base_table.identifier().clone())
-            .updates(self.updates)
-            .requirements(self.requirements)
+            .ident(self.table.identifier().to_owned())
+            .updates(existing_updates)
+            .requirements(existing_requirements)
             .build();
 
         catalog.update_table(table_commit).await
@@ -241,17 +193,15 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
 
+    use crate::TableIdent;
     use crate::io::FileIOBuilder;
-    use crate::spec::{FormatVersion, TableMetadata};
+    use crate::spec::TableMetadata;
     use crate::table::Table;
-    use crate::transaction::Transaction;
-    use crate::{TableIdent, TableUpdate};
 
-    fn make_v1_table() -> Table {
+    pub fn make_v1_table() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -306,110 +256,5 @@ mod tests {
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap()
-    }
-
-    #[test]
-    fn test_upgrade_table_version_v1_to_v2() {
-        let table = make_v1_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::UpgradeFormatVersion {
-                format_version: FormatVersion::V2
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_upgrade_table_version_v2_to_v2() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-
-        assert!(
-            tx.updates.is_empty(),
-            "Upgrade table to same version should not generate any updates"
-        );
-        assert!(
-            tx.requirements.is_empty(),
-            "Upgrade table to same version should not generate any requirements"
-        );
-    }
-
-    #[test]
-    fn test_downgrade_table_version() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.upgrade_table_version(FormatVersion::V1);
-
-        assert!(tx.is_err(), "Downgrade table version should fail!");
-    }
-
-    #[test]
-    fn test_set_table_property() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .set_properties(HashMap::from([("a".to_string(), "b".to_string())]))
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::SetProperties {
-                updates: HashMap::from([("a".to_string(), "b".to_string())])
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_remove_property() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .remove_properties(vec!["a".to_string(), "b".to_string()])
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::RemoveProperties {
-                removals: vec!["a".to_string(), "b".to_string()]
-            }],
-            tx.updates
-        );
-    }
-
-    #[test]
-    fn test_set_location() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .set_location(String::from("s3://bucket/prefix/new_table"))
-            .unwrap();
-
-        assert_eq!(
-            vec![TableUpdate::SetLocation {
-                location: String::from("s3://bucket/prefix/new_table")
-            }],
-            tx.updates
-        )
-    }
-
-    #[tokio::test]
-    async fn test_transaction_apply_upgrade() {
-        let table = make_v1_table();
-        let tx = Transaction::new(&table);
-        // Upgrade v1 to v1, do nothing.
-        let tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
-        // Upgrade v1 to v2, success.
-        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
-        assert_eq!(
-            vec![TableUpdate::UpgradeFormatVersion {
-                format_version: FormatVersion::V2
-            }],
-            tx.updates
-        );
-        // Upgrade v2 to v1, return error.
-        assert!(tx.upgrade_table_version(FormatVersion::V1).is_err());
     }
 }
