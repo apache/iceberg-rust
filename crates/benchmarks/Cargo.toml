@@ -45,3 +45,7 @@ harness = false
 [lints.rust]
 # so the #[cfg(benchmarking)] tag doesn't create warnings
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(benchmarking)'] }
+
+# this is done so we can get sqlite feature support without a warning
+[package.metadata.cargo-machete]
+ignored = ["sqlx"]
