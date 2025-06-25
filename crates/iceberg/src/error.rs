@@ -39,7 +39,7 @@ pub enum ErrorKind {
     /// Iceberg data is invalid.
     ///
     /// This error is returned when we try to read a table from iceberg but
-    /// failed to parse it's metadata or data file correctly.
+    /// failed to parse its metadata or data file correctly.
     ///
     /// The table could be invalid or corrupted.
     DataInvalid,
