@@ -43,7 +43,7 @@ impl ManifestEvaluatorBuilder {
     /// When enabled, the builder will apply NOT elimination to simplify the predicate
     /// before creating the evaluator.
     #[allow(unused)]
-    pub(crate) fn with_rewrite(mut self, rewrite_not: bool) -> Self {
+    pub(crate) fn with_rewrite_not(mut self, rewrite_not: bool) -> Self {
         self.rewrite_not = rewrite_not;
         self
     }
@@ -1503,7 +1503,7 @@ mod test {
 
         // Test without rewrite - should fail because NOT is not supported
         let evaluator = ManifestEvaluator::builder(filter.clone())
-            .with_rewrite(false)
+            .with_rewrite_not(false)
             .build();
         assert!(
             evaluator.eval(&manifest_file).is_err(),
@@ -1512,7 +1512,7 @@ mod test {
 
         // Test with rewrite enabled - should succeed
         let evaluator = ManifestEvaluator::builder(filter)
-            .with_rewrite(true)
+            .with_rewrite_not(true)
             .build();
         let result = evaluator.eval(&manifest_file)?;
         assert!(
