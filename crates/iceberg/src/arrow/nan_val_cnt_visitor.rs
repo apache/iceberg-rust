@@ -159,6 +159,8 @@ impl NanValueCountVisitor {
         let arrow_arr_partner_accessor = ArrowArrayAccessor {};
 
         let struct_arr = Arc::new(StructArray::from(batch)) as ArrayRef;
+        println!("----StructArray from record stream: {:?}", struct_arr);
+        println!("----Schema.as_struct from table: {:?}", schema.as_struct());
         visit_struct_with_partner(
             schema.as_struct(),
             &struct_arr,

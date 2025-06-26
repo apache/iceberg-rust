@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// todo fix encapsulation
 mod _serde;
+pub use _serde::*;
 
 mod data_file;
 pub use data_file::*;
