@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(dead_code)]
 use std::mem::take;
 use std::sync::Arc;
 
+use as_any::AsAny;
 use async_trait::async_trait;
 
 use crate::table::Table;
@@ -26,7 +26,7 @@ use crate::transaction::Transaction;
 use crate::{Result, TableRequirement, TableUpdate};
 
 /// A boxed, thread-safe reference to a `TransactionAction`.
-pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
+pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 
 /// A trait representing an atomic action that can be part of a transaction.
 ///
@@ -34,7 +34,7 @@ pub type BoxedTransactionAction = Arc<dyn TransactionAction>;
 /// Each action is responsible for generating the updates and requirements needed
 /// to modify the table metadata.
 #[async_trait]
-pub(crate) trait TransactionAction: Sync + Send {
+pub(crate) trait TransactionAction: AsAny + Sync + Send {
     /// Commits this action against the provided table and returns the resulting updates.
     /// NOTE: This function is intended for internal use only and should not be called directly by users.
     ///
@@ -108,6 +108,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
+    use as_any::Downcast;
     use async_trait::async_trait;
     use uuid::Uuid;
 
@@ -158,9 +159,12 @@ mod tests {
         let tx = Transaction::new(&table);
 
         let updated_tx = action.apply(tx).unwrap();
-
         // There should be one action in the transaction now
         assert_eq!(updated_tx.actions.len(), 1);
+
+        (*updated_tx.actions[0])
+            .downcast_ref::<TestAction>()
+            .expect("TestAction was not applied to Transaction!");
     }
 
     #[test]

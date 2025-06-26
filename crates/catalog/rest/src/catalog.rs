@@ -318,6 +318,22 @@ impl RestCatalog {
 
         Ok(file_io)
     }
+
+    /// Invalidate the current token without generating a new one. On the next request, the client
+    /// will attempt to generate a new token.
+    pub async fn invalidate_token(&self) -> Result<()> {
+        self.context().await?.client.invalidate_token().await
+    }
+
+    /// Invalidate the current token and set a new one. Generates a new token before invalidating
+    /// the current token, meaning the old token will be used until this function acquires the lock
+    /// and overwrites the token.
+    ///
+    /// If credential is invalid, or the request fails, this method will return an error and leave
+    /// the current token unchanged.
+    pub async fn regenerate_token(&self) -> Result<()> {
+        self.context().await?.client.regenerate_token().await
+    }
 }
 
 /// All requests and expected responses are derived from the REST catalog API spec:
@@ -802,7 +818,7 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
-    use iceberg::transaction::Transaction;
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
@@ -860,21 +876,27 @@ mod tests {
     }
 
     async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
-        create_oauth_mock_with_path(server, "/v1/oauth/tokens").await
+        create_oauth_mock_with_path(server, "/v1/oauth/tokens", "ey000000000000", 200).await
     }
 
-    async fn create_oauth_mock_with_path(server: &mut ServerGuard, path: &str) -> Mock {
-        server
-            .mock("POST", path)
-            .with_status(200)
-            .with_body(
-                r#"{
-                "access_token": "ey000000000000",
+    async fn create_oauth_mock_with_path(
+        server: &mut ServerGuard,
+        path: &str,
+        token: &str,
+        status: usize,
+    ) -> Mock {
+        let body = format!(
+            r#"{{
+                "access_token": "{token}",
                 "token_type": "Bearer",
                 "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "expires_in": 86400
-                }"#,
-            )
+            }}"#
+        );
+        server
+            .mock("POST", path)
+            .with_status(status)
+            .with_body(body)
             .expect(1)
             .create_async()
             .await
@@ -946,6 +968,129 @@ mod tests {
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_token() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
+                .await;
+        catalog.invalidate_token().await.unwrap();
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000001".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_token_failing_request() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
+                .await;
+        catalog.invalidate_token().await.unwrap();
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn test_regenerate_token() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
+                .await;
+        catalog.regenerate_token().await.unwrap();
+        oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
+        assert_eq!(token, Some("ey000000000001".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_regenerate_token_failing_request() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
+                .await;
+        let invalidate_result = catalog.regenerate_token().await;
+        assert!(invalidate_result.is_err());
+        oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
+
+        // original token is left intact
         assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
@@ -1026,7 +1171,9 @@ mod tests {
 
         let mut auth_server = Server::new_async().await;
         let auth_server_path = "/some/path";
-        let oauth_mock = create_oauth_mock_with_path(&mut auth_server, auth_server_path).await;
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut auth_server, auth_server_path, "ey000000000000", 200)
+                .await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -2093,6 +2240,17 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
+
         let update_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1")
             .with_status(200)
@@ -2125,8 +2283,11 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await
@@ -2204,6 +2365,7 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+        load_table_mock.assert_async().await
     }
 
     #[tokio::test]
@@ -2211,6 +2373,17 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let config_mock = create_config_mock(&mut server).await;
+
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
 
         let update_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1")
@@ -2250,8 +2423,11 @@ mod tests {
                 .unwrap()
         };
 
-        let table_result = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table_result = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await;
@@ -2267,5 +2443,6 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+        load_table_mock.assert_async().await;
     }
 }

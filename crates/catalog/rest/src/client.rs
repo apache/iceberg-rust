@@ -106,38 +106,7 @@ impl HttpClient {
         self.token.lock().await.clone()
     }
 
-    /// Authenticate the request by filling token.
-    ///
-    /// - If neither token nor credential is provided, this method will do nothing.
-    /// - If only credential is provided, this method will try to fetch token from the server.
-    /// - If token is provided, this method will use the token directly.
-    ///
-    /// # TODO
-    ///
-    /// Support refreshing token while needed.
-    async fn authenticate(&self, req: &mut Request) -> Result<()> {
-        // Clone the token from lock without holding the lock for entire function.
-        let token = self.token.lock().await.clone();
-
-        if self.credential.is_none() && token.is_none() {
-            return Ok(());
-        }
-
-        // Use token if provided.
-        if let Some(token) = &token {
-            req.headers_mut().insert(
-                http::header::AUTHORIZATION,
-                format!("Bearer {token}").parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Invalid token received from catalog server!",
-                    )
-                    .with_source(e)
-                })?,
-            );
-            return Ok(());
-        }
-
+    async fn exchange_credential_for_token(&self) -> Result<String> {
         // Credential must exist here.
         let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
             Error::new(
@@ -202,7 +171,61 @@ impl HttpClient {
             })?;
             Err(Error::from(e))
         }?;
-        let token = auth_res.access_token;
+        Ok(auth_res.access_token)
+    }
+
+    /// Invalidate the current token without generating a new one. On the next request, the client
+    /// will attempt to generate a new token.
+    pub(crate) async fn invalidate_token(&self) -> Result<()> {
+        *self.token.lock().await = None;
+        Ok(())
+    }
+
+    /// Invalidate the current token and set a new one. Generates a new token before invalidating
+    /// the current token, meaning the old token will be used until this function acquires the lock
+    /// and overwrites the token.
+    ///
+    /// If credential is invalid, or the request fails, this method will return an error and leave
+    /// the current token unchanged.
+    pub(crate) async fn regenerate_token(&self) -> Result<()> {
+        let new_token = self.exchange_credential_for_token().await?;
+        *self.token.lock().await = Some(new_token.clone());
+        Ok(())
+    }
+
+    /// Authenticate the request by filling token.
+    ///
+    /// - If neither token nor credential is provided, this method will do nothing.
+    /// - If only credential is provided, this method will try to fetch token from the server.
+    /// - If token is provided, this method will use the token directly.
+    ///
+    /// # TODO
+    ///
+    /// Support refreshing token while needed.
+    async fn authenticate(&self, req: &mut Request) -> Result<()> {
+        // Clone the token from lock without holding the lock for entire function.
+        let token = self.token.lock().await.clone();
+
+        if self.credential.is_none() && token.is_none() {
+            return Ok(());
+        }
+
+        // Use token if provided.
+        if let Some(token) = &token {
+            req.headers_mut().insert(
+                http::header::AUTHORIZATION,
+                format!("Bearer {token}").parse().map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid token received from catalog server!",
+                    )
+                    .with_source(e)
+                })?,
+            );
+            return Ok(());
+        }
+
+        let token = self.exchange_credential_for_token().await?;
         // Update token.
         *self.token.lock().await = Some(token.clone());
         // Insert token in request.
