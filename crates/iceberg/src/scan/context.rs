@@ -186,7 +186,7 @@ impl PlanContext {
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
-    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
+    ) -> Result<Vec<Result<ManifestFileContext>>> {
         let manifest_files = manifest_list.entries().iter();
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
@@ -230,7 +230,7 @@ impl PlanContext {
             filtered_mfcs.push(Ok(mfc));
         }
 
-        Ok(Box::new(filtered_mfcs.into_iter()))
+        Ok(filtered_mfcs)
     }
 
     fn create_manifest_file_context(

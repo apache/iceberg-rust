@@ -26,7 +26,7 @@ mod task;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use futures::channel::mpsc::{Sender, channel};
+use futures::channel::mpsc::{Receiver, Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
@@ -36,7 +36,7 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::runtime::spawn;
+use crate::runtime::{JoinHandle, spawn};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -336,56 +336,76 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
-        let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
-        let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
-
         // used to stream ManifestEntryContexts between stages of the file plan operation
         let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
+            channel(self.concurrency_limit_manifest_files);
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
-
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
+            channel(self.concurrency_limit_manifest_files);
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose partitions cannot match this
-        // scan's filter
+        // whose partitions cannot match this scan's filter
         let manifest_file_contexts = plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
-            delete_file_idx.clone(),
+            delete_file_idx,
             manifest_entry_delete_ctx_tx,
         )?;
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
+        // used to stream the results back to the caller
+        let (result_tx, file_scan_task_rx) = channel(self.concurrency_limit_manifest_entries);
 
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
-                .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
+        self.load_manifests(manifest_file_contexts, result_tx.clone());
+
+        // Process the delete file [`ManifestEntry`] stream in parallel
+        self.process_delete_manifest_entries(
+            manifest_entry_delete_ctx_rx,
+            delete_file_tx,
+            result_tx.clone(),
+        )
+        .await;
+
+        // Process the data file [`ManifestEntry`] stream in parallel
+        self.process_manifest_entries(manifest_entry_data_ctx_rx, result_tx);
+
+        Ok(file_scan_task_rx.boxed())
+    }
+
+    fn load_manifests(
+        &self,
+        manifest_files: Vec<Result<ManifestFileContext>>,
+        mut error_tx: Sender<Result<FileScanTask>>,
+    ) {
+        let concurrency_limit = self.concurrency_limit_manifest_files;
+        let _handle = spawn(async move {
+            let result = futures::stream::iter(manifest_files)
+                .try_for_each_concurrent(concurrency_limit, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
                 })
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_manifest_error.send(Err(error)).await;
+                let _ = error_tx.send(Err(error)).await;
             }
         });
+    }
 
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
-
-        // Process the delete file [`ManifestEntry`] stream in parallel
+    fn process_delete_manifest_entries(
+        &self,
+        manifest_entry_rx: Receiver<ManifestEntryContext>,
+        delete_file_tx: Sender<DeleteFileContext>,
+        mut error_tx: Sender<Result<FileScanTask>>,
+    ) -> JoinHandle<()> {
+        let concurrency_limit = self.concurrency_limit_manifest_entries;
         spawn(async move {
-            let result = manifest_entry_delete_ctx_rx
+            let result = manifest_entry_rx
                 .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
                 .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
+                    concurrency_limit,
                     |(manifest_entry_context, tx)| async move {
                         spawn(async move {
                             Self::process_delete_manifest_entry(manifest_entry_context, tx).await
@@ -396,19 +416,22 @@ impl TableScan {
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_delete_manifest_entry_error
-                    .send(Err(error))
-                    .await;
+                let _ = error_tx.send(Err(error)).await;
             }
         })
-        .await;
+    }
 
-        // Process the data file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_data_ctx_rx
+    fn process_manifest_entries(
+        &self,
+        manifest_entry_rx: Receiver<ManifestEntryContext>,
+        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
+    ) {
+        let concurrency_limit = self.concurrency_limit_manifest_entries;
+        let _handle = spawn(async move {
+            let result = manifest_entry_rx
                 .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
                 .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
+                    concurrency_limit,
                     |(manifest_entry_context, tx)| async move {
                         spawn(async move {
                             Self::process_data_manifest_entry(manifest_entry_context, tx).await
@@ -419,11 +442,9 @@ impl TableScan {
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
+                let _ = file_scan_task_tx.send(Err(error)).await;
             }
         });
-
-        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
