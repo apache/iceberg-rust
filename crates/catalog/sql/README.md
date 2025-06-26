@@ -35,5 +35,5 @@ For example, to include support for `sqlite` databases, these should both be inc
 ```toml
 [dependencies]
 iceberg-catalog-sql = "X.Y.Z"
-sqlx = { version = "X.Y.Z", features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "A.B.C", features = ["runtime-tokio", "sqlite"] }
 ```
