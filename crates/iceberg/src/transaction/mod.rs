@@ -16,6 +16,37 @@
 // under the License.
 
 //! This module contains transaction api.
+//!
+//! The transaction API enables changes to be made to an existing table.
+//!
+//! Note that this may also have side effects, such as producing new manifest
+//! files.
+//!
+//! Below is a basic example using the "fast-append" action:
+//!
+//! ```ignore
+//! use iceberg::transaction::{ApplyTransactionAction, Transaction};
+//! use iceberg::Catalog;
+//!
+//! // Create a transaction.
+//! let tx = Transaction::new(my_table);
+//!
+//! // Create a `FastAppendAction` which will not rewrite or append
+//! // to existing metadata. This will create a new manifest.
+//! let action = tx.fast_append().add_data_files(my_data_files);
+//!
+//! // Apply the fast-append action to the given transaction, returning
+//! // the newly updated `Transaction`.
+//! let tx = action.apply(tx).unwrap();
+//!
+//!
+//! // End the transaction by committing to an `iceberg::Catalog`
+//! // implementation. This will cause a table update to occur.
+//! let table = tx
+//!     .commit(&some_catalog_impl)
+//!     .await
+//!     .unwrap();
+//! ```
 
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
