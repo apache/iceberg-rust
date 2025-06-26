@@ -192,7 +192,12 @@ pub trait PartnerAccessor<P> {
     /// Get the struct partner from schema partner.
     fn struct_parner<'a>(&self, schema_partner: &'a P) -> Result<&'a P>;
     /// Get the field partner from struct partner.
-    fn field_partner<'a>(&self, struct_partner: &'a P, field: &NestedField) -> Result<&'a P>;
+    fn field_partner<'a>(
+        &self,
+        struct_partner: &'a P,
+        field: &NestedField,
+        field_pos: Option<usize>,
+    ) -> Result<&'a P>;
     /// Get the list element partner from list partner.
     fn list_element_partner<'a>(&self, list_partner: &'a P) -> Result<&'a P>;
     /// Get the map key partner from map partner.
@@ -253,8 +258,8 @@ pub fn visit_struct_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
     accessor: &A,
 ) -> Result<V::T> {
     let mut results = Vec::with_capacity(s.fields().len());
-    for field in s.fields() {
-        let field_partner = accessor.field_partner(partner, field)?;
+    for (pos, field) in s.fields().iter().enumerate() {
+        let field_partner = accessor.field_partner(partner, field, Some(pos))?;
         visitor.before_struct_field(field, field_partner)?;
         let result = visit_type_with_partner(&field.field_type, field_partner, visitor, accessor)?;
         visitor.after_struct_field(field, field_partner)?;

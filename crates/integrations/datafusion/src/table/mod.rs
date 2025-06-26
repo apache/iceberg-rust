@@ -24,8 +24,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::DataFusionError;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
@@ -34,7 +36,9 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::write::IcebergWriteExec;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
@@ -46,6 +50,8 @@ pub struct IcebergTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
+    /// The catalog that the table belongs to.
+    catalog: Option<Arc<dyn Catalog>>,
 }
 
 impl IcebergTableProvider {
@@ -54,6 +60,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -73,6 +80,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: Some(client),
         })
     }
 
@@ -84,6 +92,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: None,
         })
     }
 
@@ -108,6 +117,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            catalog: None,
         })
     }
 
@@ -156,6 +166,32 @@ impl TableProvider for IcebergTableProvider {
     {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+
+    async fn insert_into(
+        &self,
+        _state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        _insert_op: InsertOp,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let write_plan = Arc::new(IcebergWriteExec::new(
+            self.table.clone(),
+            input,
+            self.schema.clone(),
+        ));
+
+        if let Some(catalog) = self.catalog.clone() {
+            Ok(Arc::new(IcebergCommitExec::new(
+                self.table.clone(),
+                catalog,
+                write_plan,
+                self.schema.clone(),
+            )))
+        } else {
+            Err(DataFusionError::Execution(
+                "Catalog cannot be none for insert_into".to_string(),
+            ))
+        }
     }
 }
 

@@ -1,0 +1,288 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
+use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
+use datafusion::common::{DataFusionError, Result as DFResult};
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream_partitioned,
+};
+use futures::{StreamExt, TryStreamExt};
+use iceberg::Catalog;
+use iceberg::spec::{DataFile, DataFileSerde};
+use iceberg::table::Table;
+use iceberg::transaction::Transaction;
+use serde_json;
+
+use crate::to_datafusion_error;
+
+/// IcebergCommitExec is responsible for collecting results from multiple IcebergWriteExec
+/// instances and using Transaction::fast_append to commit the data files written.
+pub(crate) struct IcebergCommitExec {
+    table: Table,
+    catalog: Arc<dyn Catalog>,
+    write_plan: Arc<dyn ExecutionPlan>,
+    schema: ArrowSchemaRef,
+    count_schema: ArrowSchemaRef,
+    plan_properties: PlanProperties,
+}
+
+impl IcebergCommitExec {
+    pub fn new(
+        table: Table,
+        catalog: Arc<dyn Catalog>,
+        write_plan: Arc<dyn ExecutionPlan>,
+        schema: ArrowSchemaRef,
+    ) -> Self {
+        let plan_properties = Self::compute_properties(schema.clone());
+
+        Self {
+            table,
+            catalog,
+            write_plan,
+            schema,
+            count_schema: Self::make_count_schema(),
+            plan_properties,
+        }
+    }
+
+    /// Compute the plan properties for this execution plan
+    fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
+    // Create a record batch with just the count of rows written
+    fn make_count_batch(count: u64) -> RecordBatch {
+        let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
+
+        RecordBatch::try_from_iter_with_nullable(vec![("count", count_array, false)]).unwrap()
+    }
+
+    fn make_count_schema() -> ArrowSchemaRef {
+        // Define a schema.
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            DataType::UInt64,
+            false,
+        )]))
+    }
+}
+
+impl Debug for IcebergCommitExec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IcebergCommitExec")
+    }
+}
+
+impl DisplayAs for IcebergCommitExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "IcebergCommitExec: table={}", self.table.identifier())
+            }
+            DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "IcebergCommitExec: table={}, schema={:?}",
+                    self.table.identifier(),
+                    self.schema
+                )
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "IcebergCommitExec: table={}", self.table.identifier())
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for IcebergCommitExec {
+    fn name(&self) -> &str {
+        "IcebergCommitExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.plan_properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.write_plan]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if children.len() != 1 {
+            return Err(DataFusionError::Internal(
+                "IcebergCommitExec expects exactly one child".to_string(),
+            ));
+        }
+
+        Ok(Arc::new(IcebergCommitExec::new(
+            self.table.clone(),
+            self.catalog.clone(),
+            children[0].clone(),
+            self.schema.clone(),
+        )))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> DFResult<SendableRecordBatchStream> {
+        // IcebergCommitExec only has one partition (partition 0)
+        if partition != 0 {
+            return Err(DataFusionError::Internal(format!(
+                "IcebergCommitExec only has one partition, but got partition {}",
+                partition
+            )));
+        }
+
+        let table = self.table.clone();
+        let input_plan = self.write_plan.clone();
+        let count_schema = Arc::clone(&self.count_schema);
+
+        // todo revisit this
+        let spec_id = self.table.metadata().default_partition_spec_id();
+        let partition_type = self.table.metadata().default_partition_type().clone();
+        let current_schema = self.table.metadata().current_schema().clone();
+
+        let _catalog = Arc::clone(&self.catalog);
+
+        // Process the input streams from all partitions and commit the data files
+        let stream = futures::stream::once(async move {
+            let mut data_files: Vec<DataFile> = Vec::new();
+            let mut total_count: u64 = 0;
+
+            // Execute and collect results from all partitions of the input plan
+            let batches = execute_stream_partitioned(input_plan, context)?;
+
+            // Collect all data files from this partition's stream
+            for mut batch_stream in batches {
+                while let Some(batch_result) = batch_stream.as_mut().next().await {
+                    let batch = batch_result?;
+
+                    let count_array = batch
+                        .column_by_name("count")
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Expected 'count' column in input batch".to_string(),
+                            )
+                        })?
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Expected 'count' column to be UInt64Array".to_string(),
+                            )
+                        })?;
+
+                    let files_array = batch
+                        .column_by_name("data_files")
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Expected 'data_files' column in input batch".to_string(),
+                            )
+                        })?
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Expected 'data_files' column to be StringArray".to_string(),
+                            )
+                        })?;
+
+                    // todo remove log
+                    println!("files_array to deserialize: {:?}", files_array);
+
+                    // Sum all values in the count_array
+                    total_count += count_array.iter().flatten().sum::<u64>();
+
+                    // Deserialize all data files from the StringArray
+                    let batch_files: Vec<DFResult<DataFile>> = (0..files_array.len())
+                        .map(|i| {
+                            let files_json = files_array.value(i);
+                            serde_json::from_str::<DataFileSerde>(files_json)
+                                .map_err(|e| {
+                                    DataFusionError::Internal(format!(
+                                        "Failed to deserialize data files: {}",
+                                        e
+                                    ))
+                                })?
+                                .try_into(spec_id, &partition_type, &current_schema)
+                                .map_err(to_datafusion_error)
+                        })
+                        .collect();
+
+                    // Collect results, propagating any errors
+                    let batch_files: Vec<DataFile> = batch_files
+                        .into_iter()
+                        .collect::<datafusion::common::Result<_>>()?;
+
+                    // Add all deserialized files to our collection
+                    data_files.extend(batch_files);
+                }
+            }
+
+            // If no data files were collected, return an empty result
+            if data_files.is_empty() {
+                return Ok(RecordBatch::new_empty(count_schema));
+            }
+
+            // Create a transaction and commit the data files
+            let tx = Transaction::new(&table);
+            let _action = tx.fast_append().add_data_files(data_files);
+
+            // todo uncomment this
+            // // Apply the action and commit the transaction
+            // let updated_table = action
+            //     .apply(tx)
+            //     .map_err(to_datafusion_error)?
+            //     .commit(catalog.as_ref())
+            //     .await
+            //     .map_err(to_datafusion_error)?;
+
+            Ok(Self::make_count_batch(total_count))
+        })
+        .boxed();
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.count_schema),
+            stream,
+        )))
+    }
+}

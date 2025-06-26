@@ -96,9 +96,10 @@ impl ManifestEntryV1 {
     }
 }
 
+/// todo doc
 #[serde_as]
 #[derive(Serialize, Deserialize)]
-pub(super) struct DataFileSerde {
+pub struct DataFileSerde {
     #[serde(default)]
     content: i32,
     file_path: String,
@@ -126,6 +127,7 @@ pub(super) struct DataFileSerde {
 }
 
 impl DataFileSerde {
+    /// todo doc
     pub fn try_from(
         value: super::DataFile,
         partition_type: &StructType,
@@ -160,6 +162,7 @@ impl DataFileSerde {
         })
     }
 
+    /// todo doc
     pub fn try_into(
         self,
         partition_spec_id: i32,
