@@ -28,6 +28,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::Serialize;
+use serde_with::{DurationNanoSeconds, serde_as};
+use tracing::{info, warn};
 
 use crate::TableIdent;
 use crate::expr::Predicate;
@@ -43,7 +46,7 @@ pub(crate) trait MetricsReporter: Debug + Send + Sync {
 }
 
 /// An enum of all metrics reports.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub(crate) enum MetricsReport {
     /// A Table Scan report that contains all relevant information from a Table Scan.
     Scan {
@@ -61,8 +64,10 @@ pub(crate) enum MetricsReport {
 }
 
 /// Carries all metrics for a particular scan.
-#[derive(Debug)]
+#[serde_as]
+#[derive(Debug, Serialize)]
 pub(crate) struct ScanMetrics {
+    #[serde_as(as = "DurationNanoSeconds<u64>")]
     pub(crate) total_planning_duration: Duration,
 
     // Manfiest-level metrics, computed by walking the snapshot's manifest list
@@ -127,6 +132,9 @@ pub(crate) struct LoggingMetricsReporter {}
 #[async_trait]
 impl MetricsReporter for LoggingMetricsReporter {
     async fn report(&self, report: MetricsReport) {
-        println!("Reporting metrics: {:?}", report);
+        match serde_json::to_string(&report) {
+            Ok(json) => info!(report = json, "Reporting metrics"),
+            Err(e) => warn!("Failed to serialize metrics report: {}", e),
+        }
     }
 }
