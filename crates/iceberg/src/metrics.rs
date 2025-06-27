@@ -36,7 +36,11 @@ use crate::TableIdent;
 use crate::expr::Predicate;
 use crate::spec::SchemaId;
 
-/// This trait defines the basic API for reporting metrics for operations to a Table.
+/// This trait defines the API for reporting metrics of table operations.
+///
+/// Refer to the [Iceberg docs] for details.
+///
+/// [Iceberg docs]: https://iceberg.apache.org/docs/latest/metrics-reporting/
 #[async_trait]
 pub(crate) trait MetricsReporter: Debug + Send + Sync {
     /// Indicates that an operation is done by reporting a MetricsReport.
@@ -128,6 +132,12 @@ struct Counter {
 /// A reporter that logs the metrics to the console.
 #[derive(Clone, Debug)]
 pub(crate) struct LoggingMetricsReporter {}
+
+impl LoggingMetricsReporter {
+    pub(crate) fn new() -> Self {
+        Self {}
+    }
+}
 
 #[async_trait]
 impl MetricsReporter for LoggingMetricsReporter {

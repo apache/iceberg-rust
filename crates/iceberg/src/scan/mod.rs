@@ -36,6 +36,7 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
+use crate::metrics::{LoggingMetricsReporter, MetricsReporter};
 use crate::runtime::{JoinHandle, spawn};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
@@ -59,6 +60,9 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    /// If None, we default to a LoggingReporter.
+    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -77,6 +81,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            metrics_reporter: None,
         }
     }
 
@@ -98,6 +103,17 @@ impl<'a> TableScanBuilder<'a> {
         // calls rewrite_not to remove Not nodes, which must be absent
         // when applying the manifest evaluator
         self.filter = Some(predicate.rewrite_not());
+        self
+    }
+
+    /// Sets the metrics reporter to use for this scan.
+    ///
+    /// If unset, we default to a LoggingReporter.
+    pub(crate) fn with_metrics_reporter(
+        mut self,
+        metrics_reporter: Arc<Box<dyn MetricsReporter>>,
+    ) -> Self {
+        self.metrics_reporter = Some(metrics_reporter);
         self
     }
 
@@ -185,6 +201,17 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
+        let metrics_reporter = match self.metrics_reporter {
+            Some(metrics_reporter) => metrics_reporter,
+            None => {
+                // When a table scan is constructed directly (not by a catalog),
+                // and the user didn't provide a metrics reporter, then we
+                // construct a new one.
+                let reporter: Box<dyn MetricsReporter> = Box::new(LoggingMetricsReporter::new());
+                Arc::new(reporter)
+            }
+        };
+
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -209,6 +236,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        metrics_reporter,
                     });
                 };
                 current_snapshot_id.clone()
@@ -299,6 +327,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            metrics_reporter,
         })
     }
 }
@@ -327,6 +356,8 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    metrics_reporter: Arc<Box<dyn MetricsReporter>>,
 }
 
 impl TableScan {

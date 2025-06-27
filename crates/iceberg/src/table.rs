@@ -23,6 +23,7 @@ use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
+use crate::metrics::MetricsReporter;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
@@ -36,6 +37,7 @@ pub struct TableBuilder {
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
+    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
 }
 
 impl TableBuilder {
@@ -48,6 +50,7 @@ impl TableBuilder {
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
+            metrics_reporter: None,
         }
     }
 
@@ -95,6 +98,16 @@ impl TableBuilder {
         self
     }
 
+    /// sets the implementation used to report metrics about operations on this
+    /// table.
+    pub(crate) fn with_metrics_reporter(
+        mut self,
+        metrics_reporter: Arc<Box<dyn MetricsReporter>>,
+    ) -> Self {
+        self.metrics_reporter = Some(metrics_reporter);
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -105,6 +118,7 @@ impl TableBuilder {
             readonly,
             disable_cache,
             cache_size_bytes,
+            metrics_reporter,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -146,6 +160,7 @@ impl TableBuilder {
             identifier,
             readonly,
             object_cache,
+            metrics_reporter,
         })
     }
 }
@@ -159,6 +174,7 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
+    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
 }
 
 impl Table {
@@ -204,7 +220,11 @@ impl Table {
 
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
-        TableScanBuilder::new(self)
+        if let Some(metrics_reporter) = &self.metrics_reporter {
+            TableScanBuilder::new(self).with_metrics_reporter(Arc::clone(metrics_reporter))
+        } else {
+            TableScanBuilder::new(self)
+        }
     }
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.
