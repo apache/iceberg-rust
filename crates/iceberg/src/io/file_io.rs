@@ -21,10 +21,18 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use opendal::Operator;
 use url::Url;
 
 use super::storage::{OpenDalStorage, Storage};
 use crate::{Error, ErrorKind, Result};
+
+/// Configuration property for setting the chunk size for IO write operations.
+///
+/// This is useful for FileIO operations which may use multipart uploads (e.g. for S3)
+/// where consistent chunk sizes of a certain size may be more optimal. Some services
+/// like Cloudlare R2 requires all chunk sizes to be consistent except for the last.
+pub const IO_CHUNK_SIZE: &str = "io.write.chunk-size";
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -131,7 +139,34 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.inner.new_output(path.as_ref())
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let path = path.as_ref().to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(OutputFile::new_with_op(
+            self.inner.clone(),
+            path,
+            op,
+            relative_path_pos,
+            self.get_write_chunk_size()?,
+        ))
+    }
+
+    fn get_write_chunk_size(&self) -> Result<Option<usize>> {
+        match self.builder.props.get(IO_CHUNK_SIZE) {
+            Some(chunk_size) => {
+                let parsed_chunk_size = chunk_size.parse::<usize>().map_err(|_err| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Invalid {}: Cannot parse to unsigned integer.",
+                            IO_CHUNK_SIZE,
+                        ),
+                    )
+                })?;
+                Ok(Some(parsed_chunk_size))
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -338,12 +373,40 @@ pub struct OutputFile {
     storage: Arc<dyn Storage>,
     // Absolute path of file.
     path: String,
+    // Relative path of file to uri, starts at [`relative_path_pos`]
+    relative_path_pos: Option<usize>,
+    // Optional direct operator for configuring writer behavior.
+    op: Option<Operator>,
+    // Chunk size for write operations to ensure consistent size of multipart chunks
+    chunk_size: Option<usize>,
 }
 
 impl OutputFile {
     /// Creates a new output file.
     pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
-        Self { storage, path }
+        Self {
+            storage,
+            path,
+            relative_path_pos: None,
+            op: None,
+            chunk_size: None,
+        }
+    }
+
+    pub(crate) fn new_with_op(
+        storage: Arc<dyn Storage>,
+        path: String,
+        op: Operator,
+        relative_path_pos: usize,
+        chunk_size: Option<usize>,
+    ) -> Self {
+        Self {
+            storage,
+            path,
+            relative_path_pos: Some(relative_path_pos),
+            op: Some(op),
+            chunk_size,
+        }
     }
 
     /// Relative path to root uri.
@@ -378,7 +441,9 @@ impl OutputFile {
     /// Calling `write` will overwrite the file if it exists.
     /// For continuous writing, use [`Self::writer`].
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
-        self.storage.write(&self.path, bs).await
+        let mut writer = self.writer().await?;
+        writer.write(bs).await?;
+        writer.close().await
     }
 
     /// Creates output file for continuous writing.
@@ -387,6 +452,14 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
+        if let (Some(op), Some(relative_path_pos)) = (&self.op, self.relative_path_pos) {
+            let mut writer = op.writer_with(&self.path[relative_path_pos..]);
+            if let Some(chunk_size) = self.chunk_size {
+                writer = writer.chunk(chunk_size);
+            }
+            return Ok(Box::new(writer.await?));
+        }
+
         self.storage.writer(&self.path).await
     }
 }
@@ -403,6 +476,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
+    use crate::io::IO_CHUNK_SIZE;
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
@@ -545,5 +619,17 @@ mod tests {
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_set_chunk_size() {
+        let io = FileIOBuilder::new("memory")
+            .with_prop(IO_CHUNK_SIZE, 32 * 1024 * 1024)
+            .build()
+            .unwrap();
+
+        let path = format!("{}/1.txt", TempDir::new().unwrap().path().to_str().unwrap());
+        let output_file = io.new_output(&path).unwrap();
+        assert_eq!(Some(32 * 1024 * 1024), output_file.chunk_size);
     }
 }
