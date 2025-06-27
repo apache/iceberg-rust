@@ -134,6 +134,8 @@ pub struct Error {
 
     source: Option<anyhow::Error>,
     backtrace: Backtrace,
+
+    retryable: bool,
 }
 
 impl Display for Error {
@@ -225,7 +227,15 @@ impl Error {
             // `Backtrace::capture()` will check if backtrace has been enabled
             // internally. It's zero cost if backtrace is disabled.
             backtrace: Backtrace::capture(),
+
+            retryable: false,
         }
+    }
+
+    /// Set retryable of the error.
+    pub fn with_retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
     }
 
     /// Add more context in error.
