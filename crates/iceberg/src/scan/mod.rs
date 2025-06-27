@@ -373,7 +373,7 @@ impl TableScan {
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(self.concurrency_limit_manifest_files);
 
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+        let (delete_file_idx, delete_file_tx, index_metrics_rx) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
