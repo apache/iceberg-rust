@@ -1899,9 +1899,13 @@ pub mod tests {
 
         assert_eq!(snapshots.len(), 2, "Test fixture should have two snapshots");
 
-        // First snapshot is the parent of the second
-        let first_snapshot_id = snapshots[0].snapshot_id();
-        let second_snapshot_id = snapshots[1].snapshot_id();
+        // Determine the correct order by snapshot IDs (since validation requires to_snapshot_id > from_snapshot_id)
+        // Sort snapshots by snapshot_id to ensure consistent ordering
+        let mut snapshot_ids: Vec<i64> = snapshots.iter().map(|s| s.snapshot_id()).collect();
+        snapshot_ids.sort();
+
+        let first_snapshot_id = snapshot_ids[0];
+        let second_snapshot_id = snapshot_ids[1];
 
         // Create an incremental scan from first to second snapshot
         let table_scan = fixture
@@ -2045,67 +2049,67 @@ pub mod tests {
 
         // We need to set up snapshots for the remaining tests
         let snapshots = table.metadata().snapshots().collect::<Vec<_>>();
-        if snapshots.len() >= 2 {
-            let first_snapshot_id = snapshots[0].snapshot_id();
-            let second_snapshot_id = snapshots[1].snapshot_id();
+        assert_eq!(snapshots.len(), 2, "Test fixture should have two snapshots");
 
-            // Test case 3: from_snapshot_id doesn't exist but to_snapshot_id does
-            let result = table
-                .scan()
-                .from_snapshot_id(999998) // Non-existent
-                .to_snapshot_id(second_snapshot_id) // Existent
-                .build();
+        // Sort snapshots by snapshot_id to ensure consistent ordering
+        let mut snapshot_ids: Vec<i64> = snapshots.iter().map(|s| s.snapshot_id()).collect();
+        snapshot_ids.sort();
 
-            assert!(
-                result.is_err(),
-                "Should fail when from_snapshot_id does not exist"
-            );
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                "DataInvalid => from_snapshot_id 999998 not found",
-                "Should have correct error message for non-existent from_snapshot_id"
-            );
+        let first_snapshot_id = snapshot_ids[0];
+        let second_snapshot_id = snapshot_ids[1];
 
-            // Determine which snapshot is newer based on snapshot IDs
-            let (older_snapshot_id, newer_snapshot_id) = if first_snapshot_id < second_snapshot_id {
-                (first_snapshot_id, second_snapshot_id)
-            } else {
-                (second_snapshot_id, first_snapshot_id)
-            };
+        // Test case 3: from_snapshot_id doesn't exist but to_snapshot_id does
+        let result = table
+            .scan()
+            .from_snapshot_id(999998) // Non-existent
+            .to_snapshot_id(second_snapshot_id) // Existent
+            .build();
 
-            // Test case 4: Reversed snapshot order (to_snapshot_id <= from_snapshot_id)
-            let result = table
-                .scan()
-                .from_snapshot_id(newer_snapshot_id) // Later snapshot
-                .to_snapshot_id(older_snapshot_id) // Earlier snapshot
-                .build();
+        assert!(
+            result.is_err(),
+            "Should fail when from_snapshot_id does not exist"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => from_snapshot_id 999998 not found",
+            "Should have correct error message for non-existent from_snapshot_id"
+        );
 
-            assert!(
-                result.is_err(),
-                "Should fail when to_snapshot_id <= from_snapshot_id"
-            );
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
-                "Should have correct error message for reversed snapshot order"
-            );
+        // Determine which snapshot is newer based on snapshot IDs
+        let (older_snapshot_id, newer_snapshot_id) = (first_snapshot_id, second_snapshot_id);
 
-            // Test case 5: Equal snapshot IDs (empty range)
-            let result = table
-                .scan()
-                .from_snapshot_id(older_snapshot_id)
-                .to_snapshot_id(older_snapshot_id)
-                .build();
+        // Test case 4: Reversed snapshot order (to_snapshot_id <= from_snapshot_id)
+        let result = table
+            .scan()
+            .from_snapshot_id(newer_snapshot_id) // Later snapshot
+            .to_snapshot_id(older_snapshot_id) // Earlier snapshot
+            .build();
 
-            assert!(
-                result.is_err(),
-                "Should fail when from_snapshot_id == to_snapshot_id"
-            );
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
-                "Should have correct error message for equal snapshot IDs"
-            );
-        }
+        assert!(
+            result.is_err(),
+            "Should fail when to_snapshot_id <= from_snapshot_id"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
+            "Should have correct error message for reversed snapshot order"
+        );
+
+        // Test case 5: Equal snapshot IDs (empty range)
+        let result = table
+            .scan()
+            .from_snapshot_id(older_snapshot_id)
+            .to_snapshot_id(older_snapshot_id)
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should fail when from_snapshot_id == to_snapshot_id"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
+            "Should have correct error message for equal snapshot IDs"
+        );
     }
 }
