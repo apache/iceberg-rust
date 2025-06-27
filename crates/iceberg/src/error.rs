@@ -61,8 +61,8 @@ pub enum ErrorKind {
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
 
-    /// Commit failed due to outdated metadata
-    CommitFailed,
+    /// Catalog commit failed due to outdated metadata
+    CatalogCommitConflicts,
 }
 
 impl ErrorKind {
@@ -83,7 +83,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
-            ErrorKind::CommitFailed => "CommitFailed",
+            ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
         }
     }
 }
