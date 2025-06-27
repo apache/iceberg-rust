@@ -29,8 +29,8 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [features]
-default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
-storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
+default = ["storage-memory", "storage-fs", "storage-s3","storage-hdfs-native", "tokio"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3","storage-hdfs-native", "storage-gcs"]
 
 storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
@@ -38,7 +38,7 @@ storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
 storage-s3 = ["opendal/services-s3"]
-
+storage-hdfs-native = ["opendal/services-hdfs-native"]
 async-std = ["dep:async-std"]
 tokio = ["tokio/rt-multi-thread"]
 
