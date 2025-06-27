@@ -155,7 +155,7 @@
 <a href=#155 id=155 data-nosnippet>155</a>            .unwrap()
 <a href=#156 id=156 data-nosnippet>156</a>            .insert(
 <a href=#157 id=157 data-nosnippet>157</a>                spec_id,
-<a href=#158 id=158 data-nosnippet>158</a>                Arc::new(ManifestEvaluator::new(partition_filter.as_ref().clone())),
+<a href=#158 id=158 data-nosnippet>158</a>                Arc::new(ManifestEvaluator::builder(partition_filter.as_ref().clone()).build()),
 <a href=#159 id=159 data-nosnippet>159</a>            );
 <a href=#160 id=160 data-nosnippet>160</a>
 <a href=#161 id=161 data-nosnippet>161</a>        <span class="kw">let </span>read = <span class="self">self
