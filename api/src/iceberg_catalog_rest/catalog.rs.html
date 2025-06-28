@@ -768,8 +768,8 @@
 <a href=#768 id=768 data-nosnippet>768</a>            }
 <a href=#769 id=769 data-nosnippet>769</a>            StatusCode::CONFLICT =&gt; {
 <a href=#770 id=770 data-nosnippet>770</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#771 id=771 data-nosnippet>771</a>                    ErrorKind::Unexpected,
-<a href=#772 id=772 data-nosnippet>772</a>                    <span class="string">"CommitFailedException, one or more requirements failed. The client may retry."</span>,
+<a href=#771 id=771 data-nosnippet>771</a>                    ErrorKind::CatalogCommitConflicts,
+<a href=#772 id=772 data-nosnippet>772</a>                    <span class="string">"CatalogCommitConflicts, one or more requirements failed. The client may retry."</span>,
 <a href=#773 id=773 data-nosnippet>773</a>                )
 <a href=#774 id=774 data-nosnippet>774</a>                .with_retryable(<span class="bool-val">true</span>));
 <a href=#775 id=775 data-nosnippet>775</a>            }
