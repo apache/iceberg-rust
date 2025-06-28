@@ -74,6 +74,7 @@ use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
+#[derive(Clone)]
 pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
@@ -154,7 +155,7 @@ impl Transaction {
     pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
             // nothing to commit
-            return Ok(self.table.clone());
+            return Ok(self.table);
         }
 
         self.do_commit(catalog).await
