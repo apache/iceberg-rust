@@ -3702,7 +3702,7 @@ dependencies = [
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "iceberg_test_utils",
- "ordered-float 4.6.0",
+ "ordered-float 2.10.1",
  "parquet",
  "tokio",
  "uuid",
@@ -7463,9 +7463,9 @@ dependencies = [
 
 [[package]]
 name = "volo-thrift"
-version = "0.10.7"
+version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8056b033392c5044369d8a4dfb8b582fdc1cb00e7bdc48039c7b3f938ac2bb96"
+checksum = "a4a41a936651c3b8206339898466fd4f39596cfedf789e5ee6a8d02a45feb45f"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
