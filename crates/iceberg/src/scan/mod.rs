@@ -21,10 +21,12 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+use futures::channel::oneshot;
 mod metrics;
 mod task;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Receiver, Sender, channel};
@@ -37,9 +39,9 @@ use crate::delete_file_index::DeleteFileIndex, DeleteIndexMetrics};
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::metrics::{LoggingMetricsReporter, MetricsReporter};
+use crate::metrics::{LoggingMetricsReporter, MetricsReport, MetricsReporter};
 use crate::runtime::{JoinHandle, spawn};
-use crate::scan::metrics::{FileMetricsUpdate, ManifestMetrics};
+use crate::scan::metrics::{FileMetricsUpdate, ManifestMetrics, aggregate_metrics};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -372,6 +374,9 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
+        // Initialize scan metrics for reporting.
+        let plan_start_time = Instant::now();
+
         // used to stream ManifestEntryContexts between stages of the file plan operation
         let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
             channel(self.concurrency_limit_manifest_files);
@@ -411,6 +416,16 @@ impl TableScan {
         // Process the data file [`ManifestEntry`] stream in parallel
         let (data_file_metrics_tx, data_file_metrics_rx) = channel(1);
         self.process_manifest_entries(manifest_entry_data_ctx_rx, result_tx, data_file_metrics_tx);
+
+        self.report_metrics(
+            plan_start_time,
+            plan_context,
+            data_file_metrics_rx,
+            delete_file_metrics_rx,
+            index_metrics_rx,
+            manifest_metrics,
+        )
+        .await;
 
         Ok(file_scan_task_rx.boxed())
     }
@@ -497,6 +512,51 @@ impl TableScan {
                 let _ = file_scan_task_tx.send(Err(error)).await;
             }
         });
+    }
+
+    async fn report_metrics(
+        &self,
+        plan_start_time: Instant,
+        plan_context: &PlanContext,
+        data_file_metrics_rx: Receiver<FileMetricsUpdate>,
+        delete_file_metrics_rx: Receiver<FileMetricsUpdate>,
+        index_metrics_rx: oneshot::Receiver<DeleteIndexMetrics>,
+        manifest_metrics: ManifestMetrics,
+    ) {
+        let table = self.table.clone();
+        let snapshot_id = plan_context.snapshot.snapshot_id();
+        let filter = plan_context.predicate.clone();
+        let schema_id = plan_context.snapshot_schema.schema_id();
+        let projected_field_ids = plan_context.field_ids.clone();
+        let projected_field_names = self.column_names.clone();
+
+        let metrics_reporter = Arc::clone(&self.metrics_reporter);
+        spawn({
+            let metrics = aggregate_metrics(
+                plan_start_time,
+                manifest_metrics,
+                data_file_metrics_rx,
+                delete_file_metrics_rx,
+                index_metrics_rx,
+            )
+            .await;
+
+            async move {
+                let report = MetricsReport::Scan {
+                    table,
+                    snapshot_id,
+                    filter,
+                    schema_id,
+                    projected_field_ids,
+                    projected_field_names,
+                    metadata: HashMap::new(),
+                    metrics: Arc::new(metrics),
+                };
+
+                metrics_reporter.report(report).await;
+            }
+        })
+        .await;
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
