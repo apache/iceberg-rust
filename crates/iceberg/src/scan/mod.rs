@@ -379,12 +379,13 @@ impl TableScan {
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this scan's filter
-        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
-            manifest_entry_data_ctx_tx,
-            delete_file_idx,
-            manifest_entry_delete_ctx_tx,
-        )?;
+        let (manifest_file_contexts, manifest_metrics) = plan_context
+            .build_manifest_file_contexts(
+                manifest_list,
+                manifest_entry_data_ctx_tx,
+                delete_file_idx,
+                manifest_entry_delete_ctx_tx,
+            )?;
 
         // used to stream the results back to the caller
         let (result_tx, file_scan_task_rx) = channel(self.concurrency_limit_manifest_entries);
