@@ -43,7 +43,7 @@ use crate::scan::metrics::{FileMetricsUpdate, ManifestMetrics};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
@@ -228,6 +228,7 @@ impl<'a> TableScanBuilder<'a> {
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
+                        table: self.table.identifier().clone(),
                         batch_size: self.batch_size,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
@@ -319,6 +320,7 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         Ok(TableScan {
+            table: self.table.identifier().clone(),
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
@@ -336,6 +338,8 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
+    table: TableIdent,
+
     /// A [PlanContext], if this table has at least one snapshot, otherwise None.
     ///
     /// If this is None, then the scan contains no rows.
