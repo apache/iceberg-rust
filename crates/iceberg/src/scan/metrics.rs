@@ -25,3 +25,9 @@ pub(crate) struct ManifestMetrics {
     pub(crate) scanned_data_manifests: u32,
     pub(crate) scanned_delete_manifests: u32,
 }
+
+/// Represents an update to a single data or delete file.
+pub(crate) enum FileMetricsUpdate {
+    Skipped,
+    Scanned { size_in_bytes: u64 },
+}

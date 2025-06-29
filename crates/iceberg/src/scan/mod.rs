@@ -38,6 +38,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metrics::{LoggingMetricsReporter, MetricsReporter};
 use crate::runtime::{JoinHandle, spawn};
+use crate::scan::metrics::{FileMetricsUpdate, ManifestMetrics};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -393,15 +394,18 @@ impl TableScan {
         self.load_manifests(manifest_file_contexts, result_tx.clone());
 
         // Process the delete file [`ManifestEntry`] stream in parallel
+        let (delete_file_metrics_tx, delete_file_metrics_rx) = channel(1);
         self.process_delete_manifest_entries(
             manifest_entry_delete_ctx_rx,
             delete_file_tx,
             result_tx.clone(),
+            delete_file_metrics_tx,
         )
         .await;
 
         // Process the data file [`ManifestEntry`] stream in parallel
-        self.process_manifest_entries(manifest_entry_data_ctx_rx, result_tx);
+        let (data_file_metrics_tx, data_file_metrics_rx) = channel(1);
+        self.process_manifest_entries(manifest_entry_data_ctx_rx, result_tx, data_file_metrics_tx);
 
         Ok(file_scan_task_rx.boxed())
     }
@@ -430,16 +434,22 @@ impl TableScan {
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         delete_file_tx: Sender<DeleteFileContext>,
         mut error_tx: Sender<Result<FileScanTask>>,
+        metrics_update_tx: Sender<FileMetricsUpdate>,
     ) -> JoinHandle<()> {
         let concurrency_limit = self.concurrency_limit_manifest_entries;
         spawn(async move {
             let result = manifest_entry_rx
-                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit,
-                    |(manifest_entry_context, tx)| async move {
+                    |(manifest_entry_context, file_tx, metrics_tx)| async move {
                         spawn(async move {
-                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
+                            Self::process_delete_manifest_entry(
+                                manifest_entry_context,
+                                file_tx,
+                                metrics_tx,
+                            )
+                            .await
                         })
                         .await
                     },
@@ -456,16 +466,22 @@ impl TableScan {
         &self,
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
+        metrics_update_tx: Sender<FileMetricsUpdate>,
     ) {
         let concurrency_limit = self.concurrency_limit_manifest_entries;
         let _handle = spawn(async move {
             let result = manifest_entry_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit,
-                    |(manifest_entry_context, tx)| async move {
+                    |(manifest_entry_context, task_tx, metrics_tx)| async move {
                         spawn(async move {
-                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
+                            Self::process_data_manifest_entry(
+                                manifest_entry_context,
+                                task_tx,
+                                metrics_tx,
+                            )
+                            .await
                         })
                         .await
                     },
@@ -508,9 +524,11 @@ impl TableScan {
     async fn process_data_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
+        mut metrics_tx: Sender<FileMetricsUpdate>,
     ) -> Result<()> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
+            metrics_tx.send(FileMetricsUpdate::Skipped).await?;
             return Ok(());
         }
 
@@ -539,6 +557,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
                 return Ok(());
             }
 
@@ -548,6 +567,7 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
+                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
                 return Ok(());
             }
         }
@@ -555,8 +575,12 @@ impl TableScan {
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
+        let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
+        let file_scan_task = manifest_entry_context.into_file_scan_task().await?;
+
+        file_scan_task_tx.send(Ok(file_scan_task)).await?;
+        metrics_tx
+            .send(FileMetricsUpdate::Scanned { size_in_bytes })
             .await?;
 
         Ok(())
@@ -565,9 +589,11 @@ impl TableScan {
     async fn process_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
+        mut metrics_tx: Sender<FileMetricsUpdate>,
     ) -> Result<()> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
+            metrics_tx.send(FileMetricsUpdate::Skipped).await?;
             return Ok(());
         }
 
@@ -591,6 +617,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
                 return Ok(());
             }
         }
@@ -600,6 +627,11 @@ impl TableScan {
                 manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
             })
+            .await?;
+
+        let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
+        metrics_tx
+            .send(FileMetricsUpdate::Scanned { size_in_bytes })
             .await?;
 
         Ok(())
