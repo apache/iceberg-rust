@@ -7437,9 +7437,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "volo"
-version = "0.10.6"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13832c5e356d13ae8944fa06ef9cf64ea24ea14c0a2e347c4ead078c927d4ade"
+checksum = "7a7cb968b0ee56542a3571eb84180d5433ba0f838a6be97c5505cf17c80f7448"
 dependencies = [
  "async-broadcast",
  "dashmap",
