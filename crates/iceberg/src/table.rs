@@ -37,7 +37,7 @@ pub struct TableBuilder {
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
-    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl TableBuilder {
@@ -100,10 +100,7 @@ impl TableBuilder {
 
     /// sets the implementation used to report metrics about operations on this
     /// table.
-    pub(crate) fn with_metrics_reporter(
-        mut self,
-        metrics_reporter: Arc<Box<dyn MetricsReporter>>,
-    ) -> Self {
+    pub(crate) fn metrics_reporter(mut self, metrics_reporter: Arc<dyn MetricsReporter>) -> Self {
         self.metrics_reporter = Some(metrics_reporter);
         self
     }
@@ -174,7 +171,7 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
-    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl Table {

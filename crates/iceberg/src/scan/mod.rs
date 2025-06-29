@@ -62,7 +62,7 @@ pub struct TableScanBuilder<'a> {
     row_selection_enabled: bool,
 
     /// If None, we default to a LoggingReporter.
-    metrics_reporter: Option<Arc<Box<dyn MetricsReporter>>>,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -111,7 +111,7 @@ impl<'a> TableScanBuilder<'a> {
     /// If unset, we default to a LoggingReporter.
     pub(crate) fn with_metrics_reporter(
         mut self,
-        metrics_reporter: Arc<Box<dyn MetricsReporter>>,
+        metrics_reporter: Arc<dyn MetricsReporter>,
     ) -> Self {
         self.metrics_reporter = Some(metrics_reporter);
         self
@@ -207,8 +207,7 @@ impl<'a> TableScanBuilder<'a> {
                 // When a table scan is constructed directly (not by a catalog),
                 // and the user didn't provide a metrics reporter, then we
                 // construct a new one.
-                let reporter: Box<dyn MetricsReporter> = Box::new(LoggingMetricsReporter::new());
-                Arc::new(reporter)
+                Arc::new(LoggingMetricsReporter::new())
             }
         };
 
@@ -357,7 +356,7 @@ pub struct TableScan {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
 
-    metrics_reporter: Arc<Box<dyn MetricsReporter>>,
+    metrics_reporter: Arc<dyn MetricsReporter>,
 }
 
 impl TableScan {
