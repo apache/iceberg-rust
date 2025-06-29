@@ -463,14 +463,23 @@ impl TableScan {
                 .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit,
-                    |(manifest_entry_context, file_tx, metrics_tx)| async move {
+                    |(manifest_entry, mut file_tx, mut metrics_tx)| async move {
                         spawn(async move {
-                            Self::process_delete_manifest_entry(
-                                manifest_entry_context,
-                                file_tx,
-                                metrics_tx,
-                            )
-                            .await
+                            let delete_file =
+                                Self::filter_delete_manifest_entry(manifest_entry).await?;
+
+                            let metrics_update = if let Some(delete_file) = delete_file {
+                                let size_in_bytes = delete_file.manifest_entry.file_size_in_bytes();
+                                file_tx.send(delete_file).await?;
+
+                                FileMetricsUpdate::Scanned { size_in_bytes }
+                            } else {
+                                FileMetricsUpdate::Skipped
+                            };
+
+                            metrics_tx.send(metrics_update).await?;
+
+                            Ok(())
                         })
                         .await
                     },
@@ -495,14 +504,22 @@ impl TableScan {
                 .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit,
-                    |(manifest_entry_context, task_tx, metrics_tx)| async move {
+                    |(manifest_entry, mut task_tx, mut metrics_tx)| async move {
                         spawn(async move {
-                            Self::process_data_manifest_entry(
-                                manifest_entry_context,
-                                task_tx,
-                                metrics_tx,
-                            )
-                            .await
+                            let file_task =
+                                Self::filter_data_manifest_entry(manifest_entry).await?;
+
+                            let metrics_update = if let Some(file_task) = file_task {
+                                let size_in_bytes = file_task.length;
+                                task_tx.send(Ok(file_task)).await?;
+
+                                FileMetricsUpdate::Scanned { size_in_bytes }
+                            } else {
+                                FileMetricsUpdate::Skipped
+                            };
+
+                            metrics_tx.send(metrics_update).await?;
+                            Ok(())
                         })
                         .await
                     },
@@ -587,15 +604,12 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
-    async fn process_data_manifest_entry(
+    async fn filter_data_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-        mut metrics_tx: Sender<FileMetricsUpdate>,
-    ) -> Result<()> {
+    ) -> Result<Option<FileScanTask>> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            metrics_tx.send(FileMetricsUpdate::Skipped).await?;
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry for a delete file
@@ -623,8 +637,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
-                return Ok(());
+                return Ok(None);
             }
 
             // skip any data file whose metrics don't match this scan's filter
@@ -633,34 +646,24 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
-                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
-                return Ok(());
+                return Ok(None);
             }
         }
 
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
-        let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
         let file_scan_task = manifest_entry_context.into_file_scan_task().await?;
 
-        file_scan_task_tx.send(Ok(file_scan_task)).await?;
-        metrics_tx
-            .send(FileMetricsUpdate::Scanned { size_in_bytes })
-            .await?;
-
-        Ok(())
+        Ok(Some(file_scan_task))
     }
 
-    async fn process_delete_manifest_entry(
+    async fn filter_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut delete_file_ctx_tx: Sender<DeleteFileContext>,
-        mut metrics_tx: Sender<FileMetricsUpdate>,
-    ) -> Result<()> {
+    ) -> Result<Option<DeleteFileContext>> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            metrics_tx.send(FileMetricsUpdate::Skipped).await?;
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry that is not for a delete file
@@ -683,24 +686,18 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                metrics_tx.send(FileMetricsUpdate::Skipped).await?;
-                return Ok(());
+                return Ok(None);
             }
         }
 
-        delete_file_ctx_tx
-            .send(DeleteFileContext {
-                manifest_entry: manifest_entry_context.manifest_entry.clone(),
-                partition_spec_id: manifest_entry_context.partition_spec_id,
-            })
-            .await?;
+        let delete_file_ctx = DeleteFileContext {
+            manifest_entry: manifest_entry_context.manifest_entry.clone(),
+            partition_spec_id: manifest_entry_context.partition_spec_id,
+        };
 
-        let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
-        metrics_tx
-            .send(FileMetricsUpdate::Scanned { size_in_bytes })
-            .await?;
+        // let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
 
-        Ok(())
+        Ok(Some(delete_file_ctx))
     }
 }
 
