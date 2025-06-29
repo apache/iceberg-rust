@@ -717,11 +717,12 @@ pub mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
+    use async_trait::async_trait;
     use futures::{TryStreamExt, stream};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -734,6 +735,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
+    use crate::metrics::{MetricsReport, MetricsReporter, ScanMetrics};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
@@ -745,6 +747,7 @@ pub mod tests {
     pub struct TableTestFixture {
         pub table_location: String,
         pub table: Table,
+        metrics_reporter: Arc<TestMetricsReporter>,
     }
 
     impl TableTestFixture {
@@ -777,17 +780,21 @@ pub mod tests {
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -816,17 +823,21 @@ pub mod tests {
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -865,17 +876,21 @@ pub mod tests {
                 .partition_specs
                 .insert(0, table_metadata.default_spec.clone());
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -1310,6 +1325,27 @@ pub mod tests {
 
                 // writer must be closed to write footer
                 writer.close().unwrap();
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestMetricsReporter {
+        last_report: Mutex<Option<MetricsReport>>,
+    }
+
+    #[async_trait]
+    impl MetricsReporter for TestMetricsReporter {
+        async fn report(&self, report: MetricsReport) {
+            let mut guard = self.last_report.lock().unwrap();
+            *guard = Some(report);
+        }
+    }
+
+    impl TestMetricsReporter {
+        fn new() -> Self {
+            Self {
+                last_report: Mutex::new(None),
             }
         }
     }
@@ -1951,5 +1987,79 @@ pub mod tests {
             deletes: vec![],
         };
         test_fn(task);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reporter() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture.table.scan().select(["x", "y"]).build().unwrap();
+
+        // Consume the table scan's results to finish the planning process, and
+        // send a report.
+        let _batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let report_guard = fixture.metrics_reporter.last_report.lock().unwrap();
+        assert!(report_guard.is_some());
+        let report = report_guard.as_ref().unwrap();
+
+        match report {
+            MetricsReport::Scan {
+                table,
+                snapshot_id,
+                filter,
+                schema_id,
+                projected_field_ids,
+                projected_field_names,
+                metrics,
+                metadata,
+            } => {
+                assert_eq!(table, fixture.table.identifier());
+                assert_eq!(
+                    snapshot_id,
+                    &fixture.table.metadata().current_snapshot_id().unwrap()
+                );
+                assert!(filter.is_none());
+                assert_eq!(schema_id, &fixture.table.metadata().current_schema_id);
+                assert_eq!(projected_field_ids, &Arc::new(vec![1, 2]));
+                assert_eq!(
+                    projected_field_names,
+                    &Some(vec!["x".to_string(), "y".to_string()])
+                );
+
+                assert_metrics(metrics);
+
+                assert!(metadata.is_empty())
+            }
+        }
+    }
+
+    fn assert_metrics(metrics: &Arc<ScanMetrics>) {
+        assert!(!metrics.total_planning_duration.is_zero());
+        assert_eq!(metrics.total_data_manifests, 1);
+        assert_eq!(metrics.total_delete_manifests, 0);
+        assert_eq!(metrics.skipped_data_manifests, 0);
+        assert_eq!(metrics.skipped_delete_manifests, 0);
+        assert_eq!(metrics.scanned_data_manifests, 1);
+        assert_eq!(metrics.scanned_delete_manifests, 0);
+
+        assert_eq!(metrics.result_data_files, 2);
+        assert_eq!(metrics.skipped_data_files, 1);
+        assert_eq!(metrics.total_file_size_in_bytes, 200);
+
+        assert_eq!(metrics.result_delete_files, 0);
+        assert_eq!(metrics.skipped_delete_files, 0);
+        assert_eq!(metrics.total_delete_file_size_in_bytes, 0);
+
+        assert_eq!(metrics.indexed_delete_files, 0);
+        assert_eq!(metrics.equality_delete_files, 0);
+        assert_eq!(metrics.positional_delete_files, 0);
     }
 }
