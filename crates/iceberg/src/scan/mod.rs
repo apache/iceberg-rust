@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod metrics;
 mod task;
 
 use std::sync::Arc;
@@ -32,7 +33,7 @@ use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
-use crate::delete_file_index::DeleteFileIndex;
+use crate::delete_file_index::DeleteFileIndex, DeleteIndexMetrics};
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
