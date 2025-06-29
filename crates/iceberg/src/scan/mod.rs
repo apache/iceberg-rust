@@ -25,6 +25,7 @@ use futures::channel::oneshot;
 mod metrics;
 mod task;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,7 +36,7 @@ use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
-use crate::delete_file_index::DeleteFileIndex, DeleteIndexMetrics};
+use crate::delete_file_index::{DeleteFileIndex, DeleteIndexMetrics};
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
