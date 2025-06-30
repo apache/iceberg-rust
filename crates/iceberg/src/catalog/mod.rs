@@ -17,6 +17,8 @@
 
 //! Catalog API for Apache Iceberg
 
+pub mod memory;
+
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;

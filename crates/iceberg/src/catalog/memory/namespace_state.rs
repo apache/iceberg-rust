@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, hash_map};
 
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use itertools::Itertools;
 
 // Represents the state of a namespace
