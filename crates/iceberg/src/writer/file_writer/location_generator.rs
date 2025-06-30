@@ -47,29 +47,19 @@ impl DefaultLocationGenerator {
     /// Create a new `DefaultLocationGenerator`.
     pub fn new(table_metadata: TableMetadata) -> Result<Self> {
         let table_location = table_metadata.location();
-        let rel_dir_path = {
-            let prop = table_metadata.properties();
-            let data_location = prop
-                .get(WRITE_DATA_LOCATION)
-                .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
-            if let Some(data_location) = data_location {
-                data_location.strip_prefix(table_location).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "data location {} is not a subpath of table location {}",
-                            data_location, table_location
-                        ),
-                    )
-                })?
-            } else {
-                DEFAULT_DATA_DIR
-            }
-        };
-
-        Ok(Self {
-            dir_path: format!("{}{}", table_location, rel_dir_path),
-        })
+        let prop = table_metadata.properties();
+        let data_location = prop
+            .get(WRITE_DATA_LOCATION)
+            .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
+        if let Some(data_location) = data_location {
+            Ok(Self {
+                dir_path: data_location.clone(),
+            })
+        } else {
+            Ok(Self {
+                dir_path: format!("{}{}", table_location, DEFAULT_DATA_DIR),
+            })
+        }
     }
 }
 
