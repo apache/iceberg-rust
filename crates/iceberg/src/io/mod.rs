@@ -74,6 +74,8 @@ pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]
 mod storage_azdls;
+#[cfg(benchmarking)]
+mod storage_benchmarking;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
 #[cfg(feature = "storage-gcs")]
@@ -87,6 +89,8 @@ mod storage_s3;
 
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;
+#[cfg(benchmarking)]
+use storage_benchmarking::*;
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
