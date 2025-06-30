@@ -563,6 +563,16 @@ pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSche
 
 fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
     vec![
+        // Content is always 1.
+        Arc::new(NestedField::builder()
+            .id(134)
+            .name("content")
+            .required(false)
+            .field_type(Type::Primitive(PrimitiveType::Int))
+            .initial_default(Some(serde_json::Value::Number(1.into())))
+            .write_default(Some(serde_json::Value::Number(1.into())))
+            .build()
+        ),
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
