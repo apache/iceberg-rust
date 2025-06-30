@@ -21,7 +21,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use crate::spec::{DataFileFormat, TableMetadata};
-use crate::{Error, ErrorKind, Result};
+use crate::Result;
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
@@ -51,15 +51,12 @@ impl DefaultLocationGenerator {
         let data_location = prop
             .get(WRITE_DATA_LOCATION)
             .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
-        if let Some(data_location) = data_location {
-            Ok(Self {
-                dir_path: data_location.clone(),
-            })
+        let dir_path = if let Some(data_location) = data_location {
+            data_location.clone()
         } else {
-            Ok(Self {
-                dir_path: format!("{}{}", table_location, DEFAULT_DATA_DIR),
-            })
-        }
+            format!("{}{}", table_location, DEFAULT_DATA_DIR)
+        };
+        Ok(Self { dir_path })
     }
 }
 
