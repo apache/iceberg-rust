@@ -21,6 +21,10 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
+use itertools::Itertools;
+use uuid::Uuid;
+
+use super::namespace_state::NamespaceState;
 use crate::io::FileIO;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
@@ -28,10 +32,6 @@ use crate::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use itertools::Itertools;
-use uuid::Uuid;
-
-use super::namespace_state::NamespaceState;
 
 /// namespace `location` property
 const LOCATION: &str = "location";
@@ -291,12 +291,12 @@ mod tests {
     use std::hash::Hash;
     use std::iter::FromIterator;
 
-    use crate::io::FileIOBuilder;
-    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use regex::Regex;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::io::FileIOBuilder;
+    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();

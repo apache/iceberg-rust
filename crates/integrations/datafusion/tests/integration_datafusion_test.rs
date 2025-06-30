@@ -26,9 +26,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use iceberg::io::FileIOBuilder;
+use iceberg::memory::MemoryCatalog;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
-use iceberg::memory::MemoryCatalog;
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
