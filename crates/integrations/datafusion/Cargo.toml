@@ -37,6 +37,5 @@ iceberg = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-iceberg-catalog-memory = { workspace = true }
 parquet = { workspace = true }
 tempfile = { workspace = true }

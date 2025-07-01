@@ -22,12 +22,10 @@
 //! ## Scan A Table
 //!
 //! ```rust, ignore
-//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
-//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use futures::TryStreamExt;
 //! use iceberg::io::{FileIO, FileIOBuilder};
+//! use iceberg::memory::MemoryCatalog;
 //! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
