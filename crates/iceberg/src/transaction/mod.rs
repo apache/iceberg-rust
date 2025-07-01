@@ -51,6 +51,9 @@
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
+
+use std::collections::HashMap;
+
 pub use action::*;
 mod append;
 mod snapshot;
@@ -61,6 +64,9 @@ mod update_statistics;
 mod upgrade_format_version;
 
 use std::sync::Arc;
+use std::time::Duration;
+
+use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 
 use crate::error::Result;
 use crate::table::Table;
@@ -152,13 +158,59 @@ impl Transaction {
     }
 
     /// Commit transaction.
-    pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
             // nothing to commit
             return Ok(self.table);
         }
 
-        self.do_commit(catalog).await
+        let backoff = Self::build_backoff(self.table.metadata().properties());
+        let tx = self;
+
+        (|mut tx: Transaction| async {
+            let result = tx.do_commit(catalog).await;
+            (tx, result)
+        })
+        .retry(backoff)
+        .context(tx)
+        .sleep(tokio::time::sleep)
+        .when(|e| e.retryable())
+        .await
+        .1
+    }
+
+    fn build_backoff(props: &HashMap<String, String>) -> ExponentialBackoff {
+        ExponentialBuilder::new()
+            .with_min_delay(Duration::from_millis(
+                props
+                    .get("commit.retry.min-wait-ms")
+                    .map(|s| s.parse())
+                    .unwrap_or_else(|| Ok(100))
+                    .expect("Invalid value for commit.retry.min-wait-ms"),
+            ))
+            .with_max_delay(Duration::from_millis(
+                props
+                    .get("commit.retry.max-wait-ms")
+                    .map(|s| s.parse())
+                    .unwrap_or_else(|| Ok(60 * 1000))
+                    .expect("Invalid value for commit.retry.max-wait-ms"),
+            ))
+            .with_total_delay(Some(Duration::from_millis(
+                props
+                    .get("commit.retry.total-timeout-ms")
+                    .map(|s| s.parse())
+                    .unwrap_or_else(|| Ok(30 * 60 * 1000))
+                    .expect("Invalid value for commit.retry.total-timeout-ms"),
+            )))
+            .with_max_times(
+                props
+                    .get("commit.retry.num-retries")
+                    .map(|s| s.parse())
+                    .unwrap_or_else(|| Ok(4))
+                    .expect("Invalid value for commit.retry.num-retries"),
+            )
+            .with_factor(2.0)
+            .build()
     }
 
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {

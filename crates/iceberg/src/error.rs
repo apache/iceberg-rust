@@ -320,6 +320,11 @@ impl Error {
         self.kind
     }
 
+    /// Return error's retryable status
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+
     /// Return error's message.
     #[inline]
     pub fn message(&self) -> &str {
