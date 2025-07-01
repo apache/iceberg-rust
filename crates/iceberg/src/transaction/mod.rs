@@ -172,8 +172,8 @@ impl Transaction {
             (tx, result)
         })
         .retry(backoff)
-        .context(tx)
         .sleep(tokio::time::sleep)
+        .context(tx)
         .when(|e| e.retryable())
         .await
         .1
