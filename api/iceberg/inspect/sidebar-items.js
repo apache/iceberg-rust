@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ManifestsTable","MetadataTable","SnapshotsTable"]};
+window.SIDEBAR_ITEMS = {"enum":["MetadataTableType"],"struct":["ManifestsTable","MetadataTable","MetadataTableTypeIter","SnapshotsTable"]};
