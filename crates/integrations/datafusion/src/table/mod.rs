@@ -29,7 +29,8 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, Result, TableIdent};
+use tokio::sync::RwLock;
 
 use crate::physical_plan::scan::IcebergTableScan;
 
@@ -38,37 +39,41 @@ use crate::physical_plan::scan::IcebergTableScan;
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
     /// A table in the catalog.
-    table: Table,
+    table: Arc<RwLock<Table>>,
+    /// The identifier to the table in the catalog.
+    table_identifier: TableIdent,
     /// Table snapshot id that will be queried via this provider.
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
+    /// A reference to the catalog that this table provider belongs to.
+    catalog: Option<Arc<dyn Catalog>>,
 }
 
 impl IcebergTableProvider {
     pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
+        let table_identifier = table.identifier().clone();
         IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier,
             snapshot_id: None,
             schema,
+            catalog: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
-    pub(crate) async fn try_new(
-        client: Arc<dyn Catalog>,
-        namespace: NamespaceIdent,
-        name: impl Into<String>,
-    ) -> Result<Self> {
-        let ident = TableIdent::new(namespace, name.into());
-        let table = client.load_table(&ident).await?;
+    pub async fn try_new(client: Arc<dyn Catalog>, table_name: TableIdent) -> Result<Self> {
+        let table = client.load_table(&table_name).await?;
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier: table_name,
             snapshot_id: None,
+            catalog: Some(client),
             schema,
         })
     }
@@ -76,10 +81,13 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
+        let table_identifier = table.identifier().clone();
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier,
             snapshot_id: None,
+            catalog: None,
             schema,
         })
     }
@@ -87,6 +95,7 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table_snapshot(table: Table, snapshot_id: i64) -> Result<Self> {
+        let table_identifier = table.identifier().clone();
         let snapshot = table
             .metadata()
             .snapshot_by_id(snapshot_id)
@@ -102,10 +111,29 @@ impl IcebergTableProvider {
         let schema = snapshot.schema(table.metadata())?;
         let schema = Arc::new(schema_to_arrow_schema(&schema)?);
         Ok(IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier,
             snapshot_id: Some(snapshot_id),
+            catalog: None,
             schema,
         })
+    }
+
+    /// Refreshes the table metadata to the latest snapshot.
+    ///
+    /// Requires that this TableProvider was created with a
+    /// reference to the catalog to load the updated table from.
+    pub async fn refresh_table_metadata(&self) -> Result<Table> {
+        let Some(catalog) = &self.catalog else {
+            return Err(Error::new(ErrorKind::Unexpected, "Table provider could not refresh table metadata because no catalog client was provided".to_string()));
+        };
+
+        let updated_table = catalog.load_table(&self.table_identifier).await?;
+
+        let mut table_guard = self.table.write().await;
+        *table_guard = updated_table.clone();
+
+        Ok(updated_table)
     }
 }
 
@@ -130,8 +158,13 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        // Get the latest table metadata from the catalog if it exists
+        let table = match self.refresh_table_metadata().await.ok() {
+            Some(table) => table,
+            None => self.table.read().await.clone(),
+        };
         Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
+            table,
             self.snapshot_id,
             self.schema.clone(),
             projection,
