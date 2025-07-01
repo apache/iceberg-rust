@@ -153,7 +153,14 @@ impl RecordBatchTransformer {
                 )?
             }
             Some(BatchTransform::ModifySchema { target_schema }) => {
-                record_batch.with_schema(target_schema.clone())?
+                let options = RecordBatchOptions::default()
+                    .with_match_field_names(false)
+                    .with_row_count(Some(record_batch.num_rows()));
+                RecordBatch::try_new_with_options(
+                    target_schema.clone(),
+                    record_batch.columns().to_vec(),
+                    &options,
+                )?
             }
             None => {
                 self.batch_transform = Some(Self::generate_batch_transform(
