@@ -62,7 +62,7 @@ pub(crate) enum MetricsReport {
         // TODO: We could default to listing all field names, if all are selected
         // check what Java is doing.
         projected_field_names: Option<Vec<String>>,
-        metrics: Box<ScanMetrics>,
+        metrics: Arc<ScanMetrics>,
         metadata: HashMap<String, String>,
     },
 }
