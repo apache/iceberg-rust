@@ -99,7 +99,7 @@ impl ManifestEntryV1 {
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 pub(super) struct DataFileSerde {
-    #[serde(default = "default_to_zero")]
+    #[serde(default)]
     content: i32,
     file_path: String,
     file_format: String,
@@ -123,10 +123,6 @@ pub(super) struct DataFileSerde {
     referenced_data_file: Option<String>,
     content_offset: Option<i64>,
     content_size_in_bytes: Option<i64>,
-}
-
-fn default_to_zero() -> i32 {
-    0
 }
 
 impl DataFileSerde {
