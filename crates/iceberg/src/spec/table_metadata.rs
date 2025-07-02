@@ -82,16 +82,24 @@ pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partitio
 /// Default value for the max number of partitions to keep summary stats for.
 pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
 
+/// Property key for number of commit retries.
 pub const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+/// Default value for number of commit retries.
 pub const COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
 
+/// Property key for minimum wait time (ms) between retries.
 pub const COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
+/// Default value for minimum wait time (ms) between retries.
 pub const COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
 
+/// Property key for maximum wait time (ms) between retries.
 pub const COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
+/// Default value for maximum wait time (ms) between retries.
 pub const COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
 
+/// Property key for total maximum retry time (ms).
 pub const COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
+/// Default value for total maximum retry time (ms).
 pub const COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
 
 /// Reserved Iceberg table properties list.
