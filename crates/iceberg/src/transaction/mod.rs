@@ -69,6 +69,11 @@ use std::time::Duration;
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 
 use crate::error::Result;
+use crate::spec::{
+    COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT, COMMIT_MIN_RETRY_WAIT_MS,
+    COMMIT_MIN_RETRY_WAIT_MS_DEFAULT, COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT,
+    COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+};
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
@@ -78,7 +83,6 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
-use crate::spec::{COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT, COMMIT_MIN_RETRY_WAIT_MS, COMMIT_MIN_RETRY_WAIT_MS_DEFAULT, COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT, COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT};
 
 /// Table transaction.
 #[derive(Clone)]
