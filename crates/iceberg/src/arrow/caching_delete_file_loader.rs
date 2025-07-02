@@ -356,10 +356,12 @@ impl CachingDeleteFileLoader {
                 let mut row_predicate = AlwaysTrue;
                 for &mut (ref mut column, ref field_name) in &mut datum_columns_with_names {
                     if let Some(item) = column.next() {
-                        if let Some(datum) = item? {
-                            row_predicate = row_predicate
-                                .and(Reference::new(field_name.clone()).equal_to(datum.clone()));
-                        }
+                        let cell_predicate = if let Some(datum) = item? {
+                            Reference::new(field_name.clone()).equal_to(datum.clone())
+                        } else {
+                            Reference::new(field_name.clone()).is_null()
+                        };
+                        row_predicate = row_predicate.and(cell_predicate)
                     }
                 }
                 result_predicate = result_predicate.and(row_predicate.not());
@@ -485,7 +487,7 @@ mod tests {
         .expect("error parsing batch stream");
         println!("{}", parsed_eq_delete);
 
-        let expected = "(((y != 1) OR (z != 100)) OR (a != \"HELP\")) AND (y != 2)".to_string();
+        let expected = "(((y != 1) OR (z != 100)) OR (a != \"HELP\")) AND (((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
     }
