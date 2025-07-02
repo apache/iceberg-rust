@@ -398,4 +398,75 @@ mod tests {
 
         assert_eq!(data_files, actual_data_file);
     }
+
+    #[tokio::test]
+    async fn test_data_file_serialize_deserialize_v1() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::optional(
+                        1,
+                        "v1",
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                    Arc::new(NestedField::optional(
+                        2,
+                        "v2",
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    Arc::new(NestedField::optional(
+                        3,
+                        "v3",
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let data_files = vec![DataFile {
+            content: DataContentType::Data,
+            file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 1,
+            file_size_in_bytes: 875,
+            column_sizes: HashMap::from([(1,47),(2,48),(3,52)]),
+            value_counts: HashMap::from([(1,1),(2,1),(3,1)]),
+            null_value_counts: HashMap::from([(1,0),(2,0),(3,0)]),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
+            upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
+            key_metadata: None,
+            split_offsets: vec![4],
+            equality_ids: vec![],
+            sort_order_id: Some(0),
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }];
+
+        let mut buffer = Vec::new();
+        let _ = write_data_files_to_avro(
+            &mut buffer,
+            data_files.clone().into_iter(),
+            &StructType::new(vec![]),
+            FormatVersion::V1,
+        )
+        .unwrap();
+
+        let actual_data_file = read_data_files_from_avro(
+            &mut Cursor::new(buffer),
+            &schema,
+            0,
+            &StructType::new(vec![]),
+            FormatVersion::V1,
+        )
+        .unwrap();
+
+       assert_eq!(actual_data_file[0].content, DataContentType::Data) 
+
+
+    }
 }
