@@ -78,6 +78,7 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::spec::{COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT, COMMIT_MIN_RETRY_WAIT_MS, COMMIT_MIN_RETRY_WAIT_MS_DEFAULT, COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT, COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT};
 
 /// Table transaction.
 #[derive(Clone)]
@@ -183,30 +184,30 @@ impl Transaction {
         ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(
                 props
-                    .get("commit.retry.min-wait-ms")
+                    .get(COMMIT_MIN_RETRY_WAIT_MS)
                     .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(100))
+                    .unwrap_or_else(|| Ok(COMMIT_MIN_RETRY_WAIT_MS_DEFAULT))
                     .expect("Invalid value for commit.retry.min-wait-ms"),
             ))
             .with_max_delay(Duration::from_millis(
                 props
-                    .get("commit.retry.max-wait-ms")
+                    .get(COMMIT_MAX_RETRY_WAIT_MS)
                     .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(60 * 1000))
+                    .unwrap_or_else(|| Ok(COMMIT_MAX_RETRY_WAIT_MS_DEFAULT))
                     .expect("Invalid value for commit.retry.max-wait-ms"),
             ))
             .with_total_delay(Some(Duration::from_millis(
                 props
-                    .get("commit.retry.total-timeout-ms")
+                    .get(COMMIT_TOTAL_RETRY_TIME_MS)
                     .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(30 * 60 * 1000))
+                    .unwrap_or_else(|| Ok(COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT))
                     .expect("Invalid value for commit.retry.total-timeout-ms"),
             )))
             .with_max_times(
                 props
-                    .get("commit.retry.num-retries")
+                    .get(COMMIT_NUM_RETRIES)
                     .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(4))
+                    .unwrap_or_else(|| Ok(COMMIT_NUM_RETRIES_DEFAULT))
                     .expect("Invalid value for commit.retry.num-retries"),
             )
             .with_factor(2.0)

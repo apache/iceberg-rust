@@ -82,6 +82,18 @@ pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partitio
 /// Default value for the max number of partitions to keep summary stats for.
 pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
 
+pub const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+pub const COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
+
+pub const COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
+pub const COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
+
+pub const COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
+pub const COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
+
+pub const COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
+pub const COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
+
 /// Reserved Iceberg table properties list.
 ///
 /// Reserved table properties are only used to control behaviors when creating or updating a
