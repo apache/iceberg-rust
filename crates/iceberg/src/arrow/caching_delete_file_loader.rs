@@ -18,23 +18,20 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    StringArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
-};
+use arrow_array::{Array, Int64Array, StringArray};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::DeleteFilter;
-use crate::arrow::arrow_schema_to_schema;
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, Datum, NestedFieldRef, PrimitiveType, SchemaRef};
+use crate::spec::{DataContentType, Datum, SchemaRef};
 use crate::{Error, ErrorKind, Result};
 
 #[derive(Clone, Debug)]
@@ -342,8 +339,30 @@ impl CachingDeleteFileLoader {
                 // only use columns that are in the set of equality_ids for this delete file
                 .filter(|(field, value)| equality_ids.contains(&value.id))
                 .map(|(column, field)| {
-                    let col_as_datum_vec = arrow_array_to_datum_iterator(column, field);
-                    col_as_datum_vec.map(|c| (c, field.name.to_string()))
+                    let lit_vec = arrow_primitive_to_literal(column, &field.field_type)?;
+
+                    let primitive_type = field.field_type.as_primitive_type().ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "field is not a primitive type",
+                    ))?;
+
+                    let datum_iterator: Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>>> =
+                        Box::new(lit_vec.into_iter().map(move |c| {
+                            c.map(|literal| {
+                                literal
+                                    .as_primitive_literal()
+                                    .map(|primitive_literal| {
+                                        Datum::new(primitive_type.clone(), primitive_literal)
+                                    })
+                                    .ok_or(Error::new(
+                                        ErrorKind::Unexpected,
+                                        "failed to convert to primitive literal",
+                                    ))
+                            })
+                            .transpose()
+                        }));
+
+                    Ok::<_, Error>((datum_iterator, field.name.to_string()))
                 })
                 .try_collect()?;
 
@@ -371,90 +390,13 @@ impl CachingDeleteFileLoader {
     }
 }
 
-macro_rules! prim_to_datum {
-    ($column:ident, $arr:ty, $dat:path) => {{
-        let arr = $column.as_any().downcast_ref::<$arr>().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("could not downcast ArrayRef to {}", stringify!($arr)),
-        ))?;
-        Ok(Box::new(arr.iter().map(|val| Ok(val.map($dat)))))
-    }};
-}
-
-fn eq_col_unsupported(ty: &str) -> Error {
-    Error::new(
-        ErrorKind::FeatureUnsupported,
-        format!(
-            "Equality deletes where a predicate acts upon a {} column are not yet supported",
-            ty
-        ),
-    )
-}
-
-fn arrow_array_to_datum_iterator<'a>(
-    column: &'a ArrayRef,
-    field: &NestedFieldRef,
-) -> Result<Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>> + 'a>> {
-    match field.field_type.as_primitive_type() {
-        Some(primitive_type) => match primitive_type {
-            PrimitiveType::Int => prim_to_datum!(column, Int32Array, Datum::int),
-            PrimitiveType::Boolean => {
-                prim_to_datum!(column, BooleanArray, Datum::bool)
-            }
-            PrimitiveType::Long => prim_to_datum!(column, Int64Array, Datum::long),
-            PrimitiveType::Float => {
-                prim_to_datum!(column, Float32Array, Datum::float)
-            }
-            PrimitiveType::Double => {
-                prim_to_datum!(column, Float64Array, Datum::double)
-            }
-            PrimitiveType::String => {
-                prim_to_datum!(column, StringArray, Datum::string)
-            }
-            PrimitiveType::Date => prim_to_datum!(column, Date32Array, Datum::date),
-            PrimitiveType::Timestamp => {
-                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamp_micros)
-            }
-            PrimitiveType::Timestamptz => {
-                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamptz_micros)
-            }
-            PrimitiveType::TimestampNs => {
-                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamp_nanos)
-            }
-            PrimitiveType::TimestamptzNs => {
-                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamptz_nanos)
-            }
-            PrimitiveType::Time => {
-                let arr = column
-                    .as_any()
-                    .downcast_ref::<Time64MicrosecondArray>()
-                    .ok_or(Error::new(
-                        ErrorKind::Unexpected,
-                        "could not downcast ArrayRef to Time64MicrosecondArray",
-                    ))?;
-                Ok(Box::new(arr.iter().map(|val| match val {
-                    None => Ok(None),
-                    Some(val) => Datum::time_micros(val).map(Some),
-                })))
-            }
-            PrimitiveType::Decimal { .. } => Err(eq_col_unsupported("Decimal")),
-            PrimitiveType::Uuid => Err(eq_col_unsupported("Uuid")),
-            PrimitiveType::Fixed(_) => Err(eq_col_unsupported("Fixed")),
-            PrimitiveType::Binary => Err(eq_col_unsupported("Binary")),
-        },
-        None => Err(eq_col_unsupported(
-            "non-primitive (i.e. Struct, List, or Map)",
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
 
-    use arrow_array::{Int64Array, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
