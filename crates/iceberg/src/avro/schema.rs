@@ -57,14 +57,14 @@ fn literal_to_json(literal: &crate::spec::Literal) -> Result<Value> {
                     )
                 })?,
             )),
-            crate::spec::PrimitiveLiteral::Double(d) => Ok(Value::Number(
-                Number::from_f64(d.0).ok_or_else(|| {
+            crate::spec::PrimitiveLiteral::Double(d) => {
+                Ok(Value::Number(Number::from_f64(d.0).ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         "Failed to convert double to json number",
                     )
-                })?,
-            )),
+                })?))
+            }
             crate::spec::PrimitiveLiteral::String(s) => Ok(Value::String(s.clone())),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,

@@ -323,10 +323,10 @@ mod tests {
 
     #[test]
     fn test_parse_negative_manifest_entry() {
-        let entries = vec![
-            I64Entry { key: 1, value: -1 },
-            I64Entry { key: 2, value: 3 },
-        ];
+        let entries = vec![I64Entry { key: 1, value: -1 }, I64Entry {
+            key: 2,
+            value: 3,
+        }];
 
         let ret = parse_i64_entry(entries).unwrap();
 
