@@ -24,8 +24,7 @@ use typed_builder::TypedBuilder;
 use crate::avro::schema_to_avro_schema;
 use crate::error::Result;
 use crate::spec::{
-    DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, ManifestFile, MapType,
-    NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
+    DataContentType, DataFile, ListType, Literal, ManifestFile, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, StructType, Type, INITIAL_SEQUENCE_NUMBER
 };
 use crate::{Error, ErrorKind};
 
@@ -236,7 +235,7 @@ static CONTENT: Lazy<NestedFieldRef> = {
             134,
             "content",
             Type::Primitive(PrimitiveType::Int),
-        ))
+        ).with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1))))
     })
 };
 
@@ -563,16 +562,6 @@ pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSche
 
 fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
     vec![
-        // Content is always 1.
-        Arc::new(NestedField::builder()
-            .id(134)
-            .name("content")
-            .required(false)
-            .field_type(Type::Primitive(PrimitiveType::Int))
-            .initial_default(Some(serde_json::Value::Number(1.into())))
-            .write_default(Some(serde_json::Value::Number(1.into())))
-            .build()
-        ),
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
