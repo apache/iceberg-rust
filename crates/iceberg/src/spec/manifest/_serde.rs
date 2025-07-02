@@ -99,7 +99,7 @@ impl ManifestEntryV1 {
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 pub(super) struct DataFileSerde {
-    #[serde(default)]
+    #[serde(default = "default_to_zero")]
     content: i32,
     file_path: String,
     file_format: String,
@@ -123,6 +123,10 @@ pub(super) struct DataFileSerde {
     referenced_data_file: Option<String>,
     content_offset: Option<i64>,
     content_size_in_bytes: Option<i64>,
+}
+
+fn default_to_zero() -> i32 {
+    0
 }
 
 impl DataFileSerde {
@@ -400,7 +404,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_data_file_serialize_deserialize_v1() {
+    async fn test_data_file_serialize_deserialize_v1_data_on_v2_reader() {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -461,7 +465,7 @@ mod tests {
             &schema,
             0,
             &StructType::new(vec![]),
-            FormatVersion::V1,
+            FormatVersion::V2,
         )
         .unwrap();
 
