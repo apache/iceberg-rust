@@ -43,6 +43,41 @@ const MAP_LOGICAL_TYPE: &str = "map";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
+fn literal_to_json(literal: &crate::spec::Literal) -> Result<Value> {
+    match literal {
+        crate::spec::Literal::Primitive(p) => match p {
+            crate::spec::PrimitiveLiteral::Boolean(b) => Ok(Value::Bool(*b)),
+            crate::spec::PrimitiveLiteral::Int(i) => Ok(Value::Number(Number::from(*i))),
+            crate::spec::PrimitiveLiteral::Long(l) => Ok(Value::Number(Number::from(*l))),
+            crate::spec::PrimitiveLiteral::Float(f) => Ok(Value::Number(
+                Number::from_f64(f.0 as f64).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Failed to convert float to json number",
+                    )
+                })?,
+            )),
+            crate::spec::PrimitiveLiteral::Double(d) => Ok(Value::Number(
+                Number::from_f64(d.0).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Failed to convert double to json number",
+                    )
+                })?,
+            )),
+            crate::spec::PrimitiveLiteral::String(s) => Ok(Value::String(s.clone())),
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Unsupported literal type to convert to json",
+            )),
+        },
+        _ => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unsupported literal type to convert to json",
+        )),
+    }
+}
+
 struct SchemaToAvroSchema {
     schema: String,
 }
@@ -92,9 +127,12 @@ impl SchemaVisitor for SchemaToAvroSchema {
             custom_attributes: Default::default(),
         };
 
-        if !field.required {
+        if let Some(default) = &field.initial_default {
+            avro_record_field.default = Some(literal_to_json(default)?);
+        } else if !field.required {
             avro_record_field.default = Some(Value::Null);
         }
+
         avro_record_field.custom_attributes.insert(
             FIELD_ID_PROP.to_string(),
             Value::Number(Number::from(field.id)),

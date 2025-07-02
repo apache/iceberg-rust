@@ -234,7 +234,7 @@ static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(
             NestedField::required(134, "content", Type::Primitive(PrimitiveType::Int))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(0))),
         )
     })
 };
