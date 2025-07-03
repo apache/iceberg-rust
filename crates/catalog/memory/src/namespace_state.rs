@@ -29,6 +29,8 @@ pub(crate) struct NamespaceState {
     namespaces: HashMap<String, NamespaceState>,
     // Mapping of tables to metadata locations in this namespace
     table_metadata_locations: HashMap<String, String>,
+    // Mapping of tables to metadata dir locations in this namespace
+    table_metadata_dirs: HashMap<String, String>,
 }
 
 fn no_such_namespace_err<T>(namespace_ident: &NamespaceIdent) -> Result<T> {
@@ -175,6 +177,7 @@ impl NamespaceState {
                     properties,
                     namespaces: HashMap::new(),
                     table_metadata_locations: HashMap::new(),
+                    table_metadata_dirs: HashMap::new(),
                 });
 
                 Ok(())
@@ -266,6 +269,7 @@ impl NamespaceState {
     pub(crate) fn insert_new_table(
         &mut self,
         table_ident: &TableIdent,
+        table_metadata_dir: String,
         metadata_location: String,
     ) -> Result<()> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
@@ -277,9 +281,45 @@ impl NamespaceState {
             hash_map::Entry::Occupied(_) => table_already_exists_err(table_ident),
             hash_map::Entry::Vacant(entry) => {
                 let _ = entry.insert(metadata_location);
-
+                let dir = namespace
+                    .table_metadata_dirs
+                    .insert(table_ident.name().to_string(), table_metadata_dir);
+                // New table should not have a metadata dir.
+                assert_eq!(dir, None);
                 Ok(())
             }
+        }
+    }
+
+    pub(crate) fn update_table(
+        &mut self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<()> {
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
+
+        match namespace
+            .table_metadata_locations
+            .entry(table_ident.name().to_string())
+        {
+            hash_map::Entry::Occupied(mut entry) => {
+                let _ = entry.insert(metadata_location);
+                Ok(())
+            }
+            hash_map::Entry::Vacant(_) => no_such_table_err(table_ident),
+        }
+    }
+
+    /// Return the metadata dir of the given table or an error if doesn't exist
+    pub(crate) fn get_existing_table_metadata_dir(
+        &self,
+        table_ident: &TableIdent,
+    ) -> Result<&String> {
+        let namespace = self.get_namespace(table_ident.namespace())?;
+
+        match namespace.table_metadata_dirs.get(table_ident.name()) {
+            None => no_such_table_err(table_ident),
+            Some(table_metadata_dir) => Ok(table_metadata_dir),
         }
     }
 
@@ -292,7 +332,10 @@ impl NamespaceState {
             .remove(table_ident.name())
         {
             None => no_such_table_err(table_ident),
-            Some(metadata_location) => Ok(metadata_location),
+            Some(metadata_location) => {
+                let _ = namespace.table_metadata_dirs.remove(table_ident.name());
+                Ok(metadata_location)
+            }
         }
     }
 }
