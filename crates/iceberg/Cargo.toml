@@ -67,6 +67,7 @@ expect-test = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+mockall = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 num-bigint = { workspace = true }

@@ -255,13 +255,17 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
+    use std::sync::Arc;
 
-    use crate::TableIdent;
+    use crate::catalog::MockCatalog;
     use crate::io::FileIOBuilder;
     use crate::spec::TableMetadata;
     use crate::table::Table;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::{Error, ErrorKind, TableIdent};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -318,5 +322,175 @@ mod tests {
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap()
+    }
+
+    /// Helper function to create a test table with retry properties
+    fn setup_test_table(num_retries: &str) -> Table {
+        let table = make_v2_table();
+
+        // Set retry properties
+        let mut props = HashMap::new();
+        props.insert("commit.retry.min-wait-ms".to_string(), "10".to_string());
+        props.insert("commit.retry.max-wait-ms".to_string(), "100".to_string());
+        props.insert(
+            "commit.retry.total-timeout-ms".to_string(),
+            "1000".to_string(),
+        );
+        props.insert(
+            "commit.retry.num-retries".to_string(),
+            num_retries.to_string(),
+        );
+
+        // Update table properties
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(props)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        table.with_metadata(Arc::new(metadata))
+    }
+
+    /// Helper function to create a transaction with a simple update action
+    fn create_test_transaction(table: &Table) -> Transaction {
+        let tx = Transaction::new(table);
+        tx.update_table_properties()
+            .set("test.key".to_string(), "test.value".to_string())
+            .apply(tx)
+            .unwrap()
+    }
+
+    /// Helper function to set up a mock catalog with retryable errors
+    fn setup_mock_catalog_with_retryable_errors(
+        success_after_attempts: Option<u32>,
+        expected_calls: usize,
+    ) -> MockCatalog {
+        let mut mock_catalog = MockCatalog::new();
+
+        mock_catalog
+            .expect_load_table()
+            .returning_st(|_| Box::pin(async move { Ok(make_v2_table()) }));
+
+        mock_catalog
+            .expect_update_table()
+            .times(expected_calls)
+            .returning_st(move |_| {
+                if let Some(attempts) = success_after_attempts {
+                    static mut ATTEMPTS: u32 = 0;
+                    unsafe {
+                        ATTEMPTS += 1;
+                        if ATTEMPTS <= attempts {
+                            Box::pin(async move {
+                                Err(Error::new(
+                                    ErrorKind::CatalogCommitConflicts,
+                                    "Commit conflict",
+                                )
+                                .with_retryable(true))
+                            })
+                        } else {
+                            Box::pin(async move { Ok(make_v2_table()) })
+                        }
+                    }
+                } else {
+                    // Always fail with retryable error
+                    Box::pin(async move {
+                        Err(
+                            Error::new(ErrorKind::CatalogCommitConflicts, "Commit conflict")
+                                .with_retryable(true),
+                        )
+                    })
+                }
+            });
+
+        mock_catalog
+    }
+
+    /// Helper function to set up a mock catalog with non-retryable error
+    fn setup_mock_catalog_with_non_retryable_error() -> MockCatalog {
+        let mut mock_catalog = MockCatalog::new();
+
+        mock_catalog
+            .expect_load_table()
+            .returning_st(|_| Box::pin(async move { Ok(make_v2_table()) }));
+
+        mock_catalog
+            .expect_update_table()
+            .times(1) // Should only be called once since error is not retryable
+            .returning_st(move |_| {
+                Box::pin(async move {
+                    Err(Error::new(ErrorKind::Unexpected, "Non-retryable error")
+                        .with_retryable(false))
+                })
+            });
+
+        mock_catalog
+    }
+
+    #[tokio::test]
+    async fn test_commit_retryable_error() {
+        // Create a test table with retry properties
+        let table = setup_test_table("3");
+
+        // Create a transaction with a simple update action
+        let tx = create_test_transaction(&table);
+
+        // Create a mock catalog that fails twice then succeeds
+        let mock_catalog = setup_mock_catalog_with_retryable_errors(Some(2), 3);
+
+        // Commit the transaction
+        let result = tx.commit(&mock_catalog).await;
+
+        // Verify the result
+        assert!(result.is_ok(), "Transaction should eventually succeed");
+    }
+
+    #[tokio::test]
+    async fn test_commit_non_retryable_error() {
+        // Create a test table with retry properties
+        let table = setup_test_table("3");
+
+        // Create a transaction with a simple update action
+        let tx = create_test_transaction(&table);
+
+        // Create a mock catalog that fails with non-retryable error
+        let mock_catalog = setup_mock_catalog_with_non_retryable_error();
+
+        // Commit the transaction
+        let result = tx.commit(&mock_catalog).await;
+
+        // Verify the result
+        assert!(result.is_err(), "Transaction should fail immediately");
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::Unexpected);
+            assert_eq!(err.message(), "Non-retryable error");
+            assert!(!err.retryable(), "Error should not be retryable");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_commit_max_retries_exceeded() {
+        // Create a test table with retry properties (only allow 2 retries)
+        let table = setup_test_table("2");
+
+        // Create a transaction with a simple update action
+        let tx = create_test_transaction(&table);
+
+        // Create a mock catalog that always fails with retryable error
+        let mock_catalog = setup_mock_catalog_with_retryable_errors(None, 3); // Initial attempt + 2 retries = 3 total attempts
+
+        // Commit the transaction
+        let result = tx.commit(&mock_catalog).await;
+
+        // Verify the result
+        assert!(result.is_err(), "Transaction should fail after max retries");
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+            assert_eq!(err.message(), "Commit conflict");
+            assert!(err.retryable(), "Error should be retryable");
+        }
     }
 }
