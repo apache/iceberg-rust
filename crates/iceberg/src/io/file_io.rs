@@ -43,6 +43,8 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
 /// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
 /// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+/// | Hdfs               | `storage-hdfs-native`     | `hdfs`|
+
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
@@ -532,6 +534,9 @@ mod tests {
 
         let io = FileIO::from_path("s3://bucket/a").unwrap();
         assert_eq!("s3", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("hdfs://tmp/a").unwrap();
+        assert_eq!("hdfs", io.scheme_str.unwrap().as_str());
 
         let io = FileIO::from_path("tmp/||c");
         assert!(io.is_err());
