@@ -1777,7 +1777,6 @@ pub mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
@@ -1792,7 +1791,6 @@ pub mod tests {
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
