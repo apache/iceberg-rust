@@ -16,6 +16,37 @@
 // under the License.
 
 //! This module contains transaction api.
+//!
+//! The transaction API enables changes to be made to an existing table.
+//!
+//! Note that this may also have side effects, such as producing new manifest
+//! files.
+//!
+//! Below is a basic example using the "fast-append" action:
+//!
+//! ```ignore
+//! use iceberg::transaction::{ApplyTransactionAction, Transaction};
+//! use iceberg::Catalog;
+//!
+//! // Create a transaction.
+//! let tx = Transaction::new(my_table);
+//!
+//! // Create a `FastAppendAction` which will not rewrite or append
+//! // to existing metadata. This will create a new manifest.
+//! let action = tx.fast_append().add_data_files(my_data_files);
+//!
+//! // Apply the fast-append action to the given transaction, returning
+//! // the newly updated `Transaction`.
+//! let tx = action.apply(tx).unwrap();
+//!
+//!
+//! // End the transaction by committing to an `iceberg::Catalog`
+//! // implementation. This will cause a table update to occur.
+//! let table = tx
+//!     .commit(&some_catalog_impl)
+//!     .await
+//!     .unwrap();
+//! ```
 
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
@@ -26,6 +57,7 @@ mod snapshot;
 mod sort_order;
 mod update_location;
 mod update_properties;
+mod update_statistics;
 mod upgrade_format_version;
 
 use std::sync::Arc;
@@ -37,10 +69,12 @@ use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
+#[derive(Clone)]
 pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
@@ -112,11 +146,16 @@ impl Transaction {
         UpdateLocationAction::new()
     }
 
+    /// Update the statistics of table
+    pub fn update_statistics(&self) -> UpdateStatisticsAction {
+        UpdateStatisticsAction::new()
+    }
+
     /// Commit transaction.
     pub async fn commit(mut self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
             // nothing to commit
-            return Ok(self.table.clone());
+            return Ok(self.table);
         }
 
         self.do_commit(catalog).await

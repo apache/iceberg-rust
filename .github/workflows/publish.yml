@@ -20,7 +20,10 @@ name: Publish
 on:
   push:
     tags:
-      - "*"
+      # Trigger this workflow when tag follows the versioning format: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
+      # Example valid tags: v0.4.0, v0.4.0-rc.1
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
   workflow_dispatch:
 
 env:
@@ -40,8 +43,7 @@ jobs:
           - "crates/catalog/hms"
           - "crates/catalog/memory"
           - "crates/catalog/rest"
-          # sql is not ready for release yet.
-          # - "crates/catalog/sql"
+          - "crates/catalog/sql"
           - "crates/integrations/datafusion"
     steps:
       - uses: actions/checkout@v4

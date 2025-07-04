@@ -28,6 +28,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::expr::visitors::bound_predicate_visitor::visit as visit_bound;
 use crate::expr::visitors::predicate_visitor::visit;
 use crate::expr::visitors::rewrite_not::RewriteNotVisitor;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
@@ -710,6 +711,63 @@ pub enum BoundPredicate {
 impl BoundPredicate {
     pub(crate) fn and(self, other: BoundPredicate) -> BoundPredicate {
         BoundPredicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
+    }
+
+    pub(crate) fn or(self, other: BoundPredicate) -> BoundPredicate {
+        BoundPredicate::Or(LogicalExpression::new([Box::new(self), Box::new(other)]))
+    }
+
+    pub(crate) fn negate(self) -> BoundPredicate {
+        match self {
+            BoundPredicate::AlwaysTrue => BoundPredicate::AlwaysFalse,
+            BoundPredicate::AlwaysFalse => BoundPredicate::AlwaysTrue,
+            BoundPredicate::And(expr) => BoundPredicate::Or(LogicalExpression::new(
+                expr.inputs.map(|expr| Box::new(expr.negate())),
+            )),
+            BoundPredicate::Or(expr) => BoundPredicate::And(LogicalExpression::new(
+                expr.inputs.map(|expr| Box::new(expr.negate())),
+            )),
+            BoundPredicate::Not(expr) => {
+                let LogicalExpression { inputs: [input_0] } = expr;
+                *input_0
+            }
+            BoundPredicate::Unary(expr) => {
+                BoundPredicate::Unary(UnaryExpression::new(expr.op.negate(), expr.term))
+            }
+            BoundPredicate::Binary(expr) => BoundPredicate::Binary(BinaryExpression::new(
+                expr.op.negate(),
+                expr.term,
+                expr.literal,
+            )),
+            BoundPredicate::Set(expr) => BoundPredicate::Set(SetExpression::new(
+                expr.op.negate(),
+                expr.term,
+                expr.literals,
+            )),
+        }
+    }
+
+    /// Simplifies the expression by removing `NOT` predicates,
+    /// directly negating the inner expressions instead. The transformation
+    /// applies logical laws (such as De Morgan's laws) to
+    /// recursively negate and simplify inner expressions within `NOT`
+    /// predicates.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::ops::Not;
+    ///
+    /// use iceberg::expr::{Bind, BoundPredicate, Reference};
+    /// use iceberg::spec::Datum;
+    ///
+    /// // This would need to be bound first, but the concept is:
+    /// // let expression = bound_predicate.not();
+    /// // let result = expression.rewrite_not();
+    /// ```
+    pub fn rewrite_not(self) -> BoundPredicate {
+        visit_bound(&mut RewriteNotVisitor::new(), &self)
+            .expect("RewriteNotVisitor guarantees always success")
     }
 }
 
@@ -1446,5 +1504,187 @@ mod tests {
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"True"#);
         test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_binary() {
+        let schema = table_schema_simple();
+
+        // Test NOT elimination on binary predicates: NOT(bar < 10) => bar >= 10
+        let predicate = Reference::new("bar").less_than(Datum::int(10)).not();
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // The result should be bar >= 10
+        let expected_predicate = Reference::new("bar").greater_than_or_equal_to(Datum::int(10));
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(&format!("{result}"), "bar >= 10");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_unary() {
+        let schema = table_schema_simple();
+
+        // Test NOT elimination on unary predicates: NOT(foo IS NULL) => foo IS NOT NULL
+        let predicate = Reference::new("foo").is_null().not();
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // The result should be foo IS NOT NULL
+        let expected_predicate = Reference::new("foo").is_not_null();
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(&format!("{result}"), "foo IS NOT NULL");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_set() {
+        let schema = table_schema_simple();
+
+        // Test NOT elimination on set predicates: NOT(bar IN (10, 20)) => bar NOT IN (10, 20)
+        let predicate = Reference::new("bar")
+            .is_in([Datum::int(10), Datum::int(20)])
+            .not();
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // The result should be bar NOT IN (10, 20)
+        let expected_predicate = Reference::new("bar").is_not_in([Datum::int(10), Datum::int(20)]);
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        // Note: HashSet order may vary, so we check that it contains the expected format
+        let result_str = format!("{result}");
+        assert!(
+            result_str.contains("bar NOT IN")
+                && result_str.contains("10")
+                && result_str.contains("20")
+        );
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_and_demorgan() {
+        let schema = table_schema_simple();
+
+        // Test De Morgan's law: NOT(A AND B) = (NOT A) OR (NOT B)
+        // NOT((bar < 10) AND (foo IS NULL)) => (bar >= 10) OR (foo IS NOT NULL)
+        let predicate = Reference::new("bar")
+            .less_than(Datum::int(10))
+            .and(Reference::new("foo").is_null())
+            .not();
+
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // Expected: (bar >= 10) OR (foo IS NOT NULL)
+        let expected_predicate = Reference::new("bar")
+            .greater_than_or_equal_to(Datum::int(10))
+            .or(Reference::new("foo").is_not_null());
+
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(&format!("{result}"), "(bar >= 10) OR (foo IS NOT NULL)");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_or_demorgan() {
+        let schema = table_schema_simple();
+
+        // Test De Morgan's law: NOT(A OR B) = (NOT A) AND (NOT B)
+        // NOT((bar < 10) OR (foo IS NULL)) => (bar >= 10) AND (foo IS NOT NULL)
+        let predicate = Reference::new("bar")
+            .less_than(Datum::int(10))
+            .or(Reference::new("foo").is_null())
+            .not();
+
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // Expected: (bar >= 10) AND (foo IS NOT NULL)
+        let expected_predicate = Reference::new("bar")
+            .greater_than_or_equal_to(Datum::int(10))
+            .and(Reference::new("foo").is_not_null());
+
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(&format!("{result}"), "(bar >= 10) AND (foo IS NOT NULL)");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_double_negative() {
+        let schema = table_schema_simple();
+
+        // Test double negative elimination: NOT(NOT(bar < 10)) => bar < 10
+        let predicate = Reference::new("bar").less_than(Datum::int(10)).not().not();
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // The result should be bar < 10 (original predicate)
+        let expected_predicate = Reference::new("bar").less_than(Datum::int(10));
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(&format!("{result}"), "bar < 10");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_always_true_false() {
+        let schema = table_schema_simple();
+
+        // Test NOT(AlwaysTrue) => AlwaysFalse
+        let predicate = Reference::new("bar").is_not_null().not(); // This becomes NOT(AlwaysTrue) since bar is required
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        assert_eq!(result, BoundPredicate::AlwaysFalse);
+        assert_eq!(&format!("{result}"), "False");
+
+        // Test NOT(AlwaysFalse) => AlwaysTrue
+        let predicate2 = Reference::new("bar").is_null().not(); // This becomes NOT(AlwaysFalse) since bar is required
+        let bound_predicate2 = predicate2.bind(schema, true).unwrap();
+        let result2 = bound_predicate2.rewrite_not();
+
+        assert_eq!(result2, BoundPredicate::AlwaysTrue);
+        assert_eq!(&format!("{result2}"), "True");
+    }
+
+    #[test]
+    fn test_bound_predicate_rewrite_not_complex_nested() {
+        let schema = table_schema_simple();
+
+        // Test complex nested expression:
+        // NOT(NOT((bar >= 10) AND (foo IS NOT NULL)) OR (bar < 5))
+        // Should become: ((bar >= 10) AND (foo IS NOT NULL)) AND (bar >= 5)
+        let inner_predicate = Reference::new("bar")
+            .greater_than_or_equal_to(Datum::int(10))
+            .and(Reference::new("foo").is_not_null())
+            .not();
+
+        let complex_predicate = inner_predicate
+            .or(Reference::new("bar").less_than(Datum::int(5)))
+            .not();
+
+        let bound_predicate = complex_predicate.bind(schema.clone(), true).unwrap();
+        let result = bound_predicate.rewrite_not();
+
+        // Expected: ((bar >= 10) AND (foo IS NOT NULL)) AND (bar >= 5)
+        // This is because NOT(NOT(A) OR B) = A AND NOT(B)
+        let expected_predicate = Reference::new("bar")
+            .greater_than_or_equal_to(Datum::int(10))
+            .and(Reference::new("foo").is_not_null())
+            .and(Reference::new("bar").greater_than_or_equal_to(Datum::int(5)));
+
+        let expected_bound = expected_predicate.bind(schema, true).unwrap();
+
+        assert_eq!(result, expected_bound);
+        assert_eq!(
+            &format!("{result}"),
+            "((bar >= 10) AND (foo IS NOT NULL)) AND (bar >= 5)"
+        );
     }
 }
