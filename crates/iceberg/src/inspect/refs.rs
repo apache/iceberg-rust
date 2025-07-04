@@ -120,6 +120,7 @@ impl<'a> RefsTable<'a> {
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
+    use futures::TryStreamExt;
 
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{SnapshotReference, SnapshotRetention};
@@ -145,14 +146,16 @@ mod tests {
         let batch_stream = table.inspect().refs().scan().await.unwrap();
 
         check_record_batches(
-        batch_stream,
-        expect![[r#"Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            batch_stream.try_collect::<Vec<_>>().await.unwrap(),
+            expect![[
+                r#"Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
 Field { name: "type", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
 Field { name: "max_reference_age_in_ms", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
 Field { name: "min_snapshots_to_keep", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
-Field { name: "max_snapshot_age_in_ms", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#]],
-        expect![[r#"name: StringArray
+Field { name: "max_snapshot_age_in_ms", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#
+            ]],
+            expect![[r#"name: StringArray
 [
   "test",
   "main",
@@ -182,8 +185,8 @@ max_snapshot_age_in_ms: PrimitiveArray<Int64>
   null,
   null,
 ]"#]],
-        &[], // No columns to skip initially
-        None, // No sort column initially
-    ).await;
+            &[],  // No columns to skip initially
+            None, // No sort column initially
+        );
     }
 }
