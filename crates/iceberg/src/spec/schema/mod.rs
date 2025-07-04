@@ -114,11 +114,14 @@ impl SchemaBuilder {
 
     /// Set identifier field ids.
     pub fn with_identifier_field_ids(mut self, ids: impl IntoIterator<Item = i32>) -> Self {
-        if self.identifier_field_ids.is_some() {
-            self.identifier_field_ids.as_mut().unwrap().extend(ids);
+                match self.identifier_field_ids {
+            Some(mut identifier_field_ids) => {
+                identifier_field_ids.extend(ids);
+                self.identifier_field_ids = Some(identifier_field_ids);
+                self
+            }
+            None => self,
         }
-
-        self
     }
 
     /// Set alias to filed id mapping.
