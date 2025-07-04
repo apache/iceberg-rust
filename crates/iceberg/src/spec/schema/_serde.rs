@@ -104,10 +104,15 @@ impl From<Schema> for SchemaV2 {
     fn from(value: Schema) -> Self {
         SchemaV2 {
             schema_id: value.schema_id,
-            identifier_field_ids: if value.identifier_field_ids.is_empty() {
-                None
-            } else {
-                Some(value.identifier_field_ids.into_iter().collect())
+            identifier_field_ids: match value.identifier_field_ids {
+                None => None,
+                Some(identifier_field_ids) => {
+                    if identifier_field_ids.is_empty() {
+                        None
+                    } else {
+                        Some(identifier_field_ids.into_iter().collect())
+                    }
+                }
             },
             fields: value.r#struct,
         }
@@ -118,10 +123,15 @@ impl From<Schema> for SchemaV1 {
     fn from(value: Schema) -> Self {
         SchemaV1 {
             schema_id: Some(value.schema_id),
-            identifier_field_ids: if value.identifier_field_ids.is_empty() {
-                None
-            } else {
-                Some(value.identifier_field_ids.into_iter().collect())
+            identifier_field_ids: match value.identifier_field_ids {
+                None => None,
+                Some(identifier_field_ids) => {
+                    if identifier_field_ids.is_empty() {
+                        None
+                    } else {
+                        Some(identifier_field_ids.into_iter().collect())
+                    }
+                }
             },
             fields: value.r#struct,
         }
