@@ -121,9 +121,9 @@ impl<'a> RefsTable<'a> {
 mod tests {
     use expect_test::expect;
 
-    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{SnapshotReference, SnapshotRetention};
+    use crate::test_utils::check_record_batches;
 
     #[tokio::test]
     async fn test_refs_table() {
