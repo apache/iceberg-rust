@@ -15,19 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Not;
 
-use arrow_array::{Int64Array, StringArray};
+use arrow_array::{Array, Int64Array, StringArray};
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::DeleteFilter;
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
-use crate::expr::Predicate;
+use crate::expr::Predicate::AlwaysTrue;
+use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, SchemaRef};
+use crate::spec::{DataContentType, Datum, SchemaRef};
 use crate::{Error, ErrorKind, Result};
 
 #[derive(Clone, Debug)]
@@ -43,6 +47,7 @@ enum DeleteFileContext {
     PosDels(ArrowRecordBatchStream),
     FreshEqDel {
         batch_stream: ArrowRecordBatchStream,
+        equality_ids: HashSet<i32>,
         sender: tokio::sync::oneshot::Sender<Predicate>,
     },
 }
@@ -224,6 +229,7 @@ impl CachingDeleteFileLoader {
                     )
                     .await?,
                     sender,
+                    equality_ids: HashSet::from_iter(task.equality_ids.clone()),
                 })
             }
 
@@ -247,9 +253,11 @@ impl CachingDeleteFileLoader {
             DeleteFileContext::FreshEqDel {
                 sender,
                 batch_stream,
+                equality_ids,
             } => {
                 let predicate =
-                    Self::parse_equality_deletes_record_batch_stream(batch_stream).await?;
+                    Self::parse_equality_deletes_record_batch_stream(batch_stream, equality_ids)
+                        .await?;
 
                 sender
                     .send(predicate)
@@ -308,27 +316,177 @@ impl CachingDeleteFileLoader {
         Ok(result)
     }
 
-    /// Parses record batch streams from individual equality delete files
-    ///
-    /// Returns an unbound Predicate for each batch stream
     async fn parse_equality_deletes_record_batch_stream(
-        streams: ArrowRecordBatchStream,
+        mut stream: ArrowRecordBatchStream,
+        equality_ids: HashSet<i32>,
     ) -> Result<Predicate> {
-        // TODO
+        let mut result_predicate = AlwaysTrue;
 
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "parsing of equality deletes is not yet supported",
-        ))
+        while let Some(record_batch) = stream.next().await {
+            let record_batch = record_batch?;
+
+            if record_batch.num_columns() == 0 {
+                return Ok(AlwaysTrue);
+            }
+
+            let batch_schema_arrow = record_batch.schema();
+            let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
+
+            let mut datum_columns_with_names: Vec<_> = record_batch
+                .columns()
+                .iter()
+                .zip(batch_schema_iceberg.as_struct().fields())
+                // only use columns that are in the set of equality_ids for this delete file
+                .filter(|(field, value)| equality_ids.contains(&value.id))
+                .map(|(column, field)| {
+                    let lit_vec = arrow_primitive_to_literal(column, &field.field_type)?;
+
+                    let primitive_type = field.field_type.as_primitive_type().ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "field is not a primitive type",
+                    ))?;
+
+                    let datum_iterator: Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>>> =
+                        Box::new(lit_vec.into_iter().map(move |c| {
+                            c.map(|literal| {
+                                literal
+                                    .as_primitive_literal()
+                                    .map(|primitive_literal| {
+                                        Datum::new(primitive_type.clone(), primitive_literal)
+                                    })
+                                    .ok_or(Error::new(
+                                        ErrorKind::Unexpected,
+                                        "failed to convert to primitive literal",
+                                    ))
+                            })
+                            .transpose()
+                        }));
+
+                    Ok::<_, Error>((datum_iterator, field.name.to_string()))
+                })
+                .try_collect()?;
+
+            // consume all the iterators in lockstep, creating per-row predicates that get combined
+            // into a single final predicate
+
+            // (2025-06-12) can't use `is_empty` as it depends on unstable library feature `exact_size_is_empty`
+            #[allow(clippy::len_zero)]
+            while datum_columns_with_names[0].0.len() > 0 {
+                let mut row_predicate = AlwaysTrue;
+                for &mut (ref mut column, ref field_name) in &mut datum_columns_with_names {
+                    if let Some(item) = column.next() {
+                        let cell_predicate = if let Some(datum) = item? {
+                            Reference::new(field_name.clone()).equal_to(datum.clone())
+                        } else {
+                            Reference::new(field_name.clone()).is_null()
+                        };
+                        row_predicate = row_predicate.and(cell_predicate)
+                    }
+                }
+                result_predicate = result_predicate.and(row_predicate.not());
+            }
+        }
+        Ok(result_predicate.rewrite_not())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+
+    #[tokio::test]
+    async fn test_delete_file_loader_parse_equality_deletes() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
+
+        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let record_batch_stream = basic_delete_file_loader
+            .parquet_to_batch_stream(&eq_delete_file_path)
+            .await
+            .expect("could not get batch stream");
+
+        let eq_ids = HashSet::from_iter(vec![2, 3, 4]);
+
+        let parsed_eq_delete = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            record_batch_stream,
+            eq_ids,
+        )
+        .await
+        .expect("error parsing batch stream");
+        println!("{}", parsed_eq_delete);
+
+        let expected = "(((y != 1) OR (z != 100)) OR (a != \"HELP\")) AND (((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL))".to_string();
+
+        assert_eq!(parsed_eq_delete.to_string(), expected);
+    }
+
+    fn setup_write_equality_delete_file_1(table_location: &str) -> String {
+        let col_y_vals = vec![1, 2];
+        let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
+
+        let col_z_vals = vec![Some(100), None];
+        let col_z = Arc::new(Int64Array::from(col_z_vals)) as ArrayRef;
+
+        let col_a_vals = vec![Some("HELP"), None];
+        let col_a = Arc::new(StringArray::from(col_a_vals)) as ArrayRef;
+
+        let equality_delete_schema = {
+            let fields = vec![
+                arrow_schema::Field::new("y", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                ),
+                arrow_schema::Field::new("z", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+                ),
+                arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let equality_deletes_to_write =
+            RecordBatch::try_new(equality_delete_schema.clone(), vec![col_y, col_z, col_a])
+                .unwrap();
+
+        let path = format!("{}/equality-deletes-1.parquet", &table_location);
+
+        let file = File::create(&path).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file,
+            equality_deletes_to_write.schema(),
+            Some(props.clone()),
+        )
+        .unwrap();
+
+        writer
+            .write(&equality_deletes_to_write)
+            .expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        path
+    }
 
     #[tokio::test]
     async fn test_caching_delete_file_loader_load_deletes() {
