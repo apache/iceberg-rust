@@ -42,6 +42,11 @@ impl<'a> MetadataTable<'a> {
     pub fn manifests(&self) -> ManifestsTable {
         ManifestsTable::new(self.0)
     }
+
+    /// Get the refs table.
+    pub fn refs(&self) -> crate::inspect::RefsTable {
+        crate::inspect::RefsTable::new(self.0)
+    }
 }
 
 #[cfg(test)]
