@@ -58,7 +58,7 @@ pub struct Schema {
     r#struct: StructType,
     schema_id: SchemaId,
     highest_field_id: i32,
-    identifier_field_ids: HashSet<i32>,
+    identifier_field_ids: Option<HashSet<i32>>,
 
     alias_to_id: BiHashMap<String, i32>,
     id_to_field: HashMap<i32, NestedFieldRef>,
@@ -86,7 +86,7 @@ pub struct SchemaBuilder {
     schema_id: i32,
     fields: Vec<NestedFieldRef>,
     alias_to_id: BiHashMap<String, i32>,
-    identifier_field_ids: HashSet<i32>,
+    identifier_field_ids: Option<HashSet<i32>>,
     reassign_field_ids_from: Option<i32>,
 }
 
@@ -114,8 +114,14 @@ impl SchemaBuilder {
 
     /// Set identifier field ids.
     pub fn with_identifier_field_ids(mut self, ids: impl IntoIterator<Item = i32>) -> Self {
-        self.identifier_field_ids.extend(ids);
-        self
+        match self.identifier_field_ids {
+            Some(mut identifier_field_ids) => {
+                identifier_field_ids.extend(ids);
+                self.identifier_field_ids = Some(identifier_field_ids);
+                self
+            }
+            None => self,
+        }
     }
 
     /// Set alias to filed id mapping.
@@ -131,11 +137,14 @@ impl SchemaBuilder {
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
 
-        Self::validate_identifier_ids(
-            &r#struct,
-            &id_to_field,
-            self.identifier_field_ids.iter().copied(),
-        )?;
+        // Only validate identifier fields if they are set.
+        if let Some(identifier_field_ids) = &self.identifier_field_ids {
+            Self::validate_identifier_ids(
+                &r#struct,
+                &id_to_field,
+                identifier_field_ids.iter().copied(),
+            )?;
+        }
 
         let (name_to_id, id_to_name) = {
             let mut index = IndexByName::default();
@@ -168,16 +177,18 @@ impl SchemaBuilder {
         if let Some(start_from) = self.reassign_field_ids_from {
             let mut id_reassigner = ReassignFieldIds::new(start_from);
             let new_fields = id_reassigner.reassign_field_ids(schema.r#struct.fields().to_vec())?;
-            let new_identifier_field_ids =
-                id_reassigner.apply_to_identifier_fields(schema.identifier_field_ids)?;
             let new_alias_to_id = id_reassigner.apply_to_aliases(schema.alias_to_id.clone())?;
 
-            schema = Schema::builder()
+            let mut schema_builder = Schema::builder()
                 .with_schema_id(schema.schema_id)
-                .with_fields(new_fields)
-                .with_identifier_field_ids(new_identifier_field_ids)
-                .with_alias(new_alias_to_id)
-                .build()?;
+                .with_fields(new_fields);
+
+            if let Some(schema_identifier_field_ids) = schema.identifier_field_ids {
+                let new_identifier_field_ids =
+                    id_reassigner.apply_to_identifier_fields(schema_identifier_field_ids)?;
+                schema_builder = schema_builder.with_identifier_field_ids(new_identifier_field_ids);
+            }
+            schema = schema_builder.with_alias(new_alias_to_id).build()?;
         }
 
         Ok(schema)
@@ -310,7 +321,7 @@ impl Schema {
         SchemaBuilder {
             schema_id: DEFAULT_SCHEMA_ID,
             fields: vec![],
-            identifier_field_ids: HashSet::default(),
+            identifier_field_ids: None,
             alias_to_id: BiHashMap::default(),
             reassign_field_ids_from: None,
         }
@@ -377,8 +388,11 @@ impl Schema {
 
     /// Returns [`identifier_field_ids`].
     #[inline]
-    pub fn identifier_field_ids(&self) -> impl ExactSizeIterator<Item = i32> + '_ {
-        self.identifier_field_ids.iter().copied()
+    pub fn identifier_field_ids(&self) -> Option<impl ExactSizeIterator<Item = i32> + '_> {
+        match &self.identifier_field_ids {
+            Some(identifier_field_ids) => Some(identifier_field_ids.iter().copied()),
+            None => None,
+        }
     }
 
     /// Get field id by full name.
@@ -398,8 +412,19 @@ impl Schema {
 
     /// Check if this schema is identical to another schema semantically - excluding schema id.
     pub(crate) fn is_same_schema(&self, other: &SchemaRef) -> bool {
-        self.as_struct().eq(other.as_struct())
-            && self.identifier_field_ids().eq(other.identifier_field_ids())
+        let same_struct = self.as_struct().eq(other.as_struct());
+
+        let same_identifier_field_ids =
+            match (self.identifier_field_ids(), other.identifier_field_ids()) {
+                (None, None) => true,
+                (None, Some(_)) => false,
+                (Some(_), None) => false,
+                (Some(identifier_field_ids), Some(other_identifier_field_ids)) => {
+                    identifier_field_ids.eq(other_identifier_field_ids)
+                }
+            };
+
+        same_struct && same_identifier_field_ids
     }
 
     /// Change the schema id of this schema.
