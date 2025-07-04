@@ -114,7 +114,7 @@ impl SchemaBuilder {
 
     /// Set identifier field ids.
     pub fn with_identifier_field_ids(mut self, ids: impl IntoIterator<Item = i32>) -> Self {
-                match self.identifier_field_ids {
+        match self.identifier_field_ids {
             Some(mut identifier_field_ids) => {
                 identifier_field_ids.extend(ids);
                 self.identifier_field_ids = Some(identifier_field_ids);
