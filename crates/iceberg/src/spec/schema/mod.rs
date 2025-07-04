@@ -114,14 +114,11 @@ impl SchemaBuilder {
 
     /// Set identifier field ids.
     pub fn with_identifier_field_ids(mut self, ids: impl IntoIterator<Item = i32>) -> Self {
-        match self.identifier_field_ids {
-            Some(mut identifier_field_ids) => {
-                identifier_field_ids.extend(ids);
-                self.identifier_field_ids = Some(identifier_field_ids);
-                self
-            }
-            None => self,
+        if self.identifier_field_ids.is_some() {
+            self.identifier_field_ids.as_mut().unwrap().extend(ids);
         }
+
+        self
     }
 
     /// Set alias to filed id mapping.
@@ -389,10 +386,9 @@ impl Schema {
     /// Returns [`identifier_field_ids`].
     #[inline]
     pub fn identifier_field_ids(&self) -> Option<impl ExactSizeIterator<Item = i32> + '_> {
-        match &self.identifier_field_ids {
-            Some(identifier_field_ids) => Some(identifier_field_ids.iter().copied()),
-            None => None,
-        }
+        self.identifier_field_ids
+            .as_ref()
+            .map(|identifier_field_ids| identifier_field_ids.iter().copied())
     }
 
     /// Get field id by full name.
