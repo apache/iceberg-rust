@@ -41,9 +41,6 @@ pub struct FileScanTask {
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
-    /// The content type of the file to scan.
-    pub data_file_content: DataContentType,
-
     /// The format of the file to scan.
     pub data_file_format: DataFileFormat,
 
