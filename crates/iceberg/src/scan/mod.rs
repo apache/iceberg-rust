@@ -30,7 +30,6 @@ use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Receiver, Sender, channel};
-use futures::channel::oneshot;
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
@@ -42,7 +41,9 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metrics::{LoggingMetricsReporter, MetricsReport, MetricsReporter};
 use crate::runtime::{JoinHandle, spawn};
-use crate::scan::metrics::{FileMetricsUpdate, ManifestMetrics, aggregate_metrics};
+use crate::scan::metrics::{
+    DeleteFileMetrics, FileMetricsUpdate, ManifestMetrics, aggregate_metrics,
+};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -404,15 +405,12 @@ impl TableScan {
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
         self.load_manifests(manifest_file_contexts, result_tx.clone());
 
-        // Process the delete file [`ManifestEntry`] stream in parallel
-        let (delete_file_metrics_tx, delete_file_metrics_rx) = channel(1);
-        self.process_delete_manifest_entries(
+        let (_delete_file_handle, delete_file_metrics_handle) = self
+            .process_delete_manifest_entries(
             manifest_entry_delete_ctx_rx,
             delete_file_tx,
             result_tx.clone(),
-            delete_file_metrics_tx,
-        )
-        .await;
+            );
 
         // Process the data file [`ManifestEntry`] stream in parallel
         let (data_file_metrics_tx, data_file_metrics_rx) = channel(1);
@@ -422,7 +420,7 @@ impl TableScan {
             plan_start_time,
             plan_context,
             data_file_metrics_rx,
-            delete_file_metrics_rx,
+            delete_file_metrics_handle,
             index_metrics_handle,
             manifest_metrics,
         )
@@ -455,18 +453,34 @@ impl TableScan {
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         delete_file_tx: Sender<DeleteFileContext>,
         mut error_tx: Sender<Result<FileScanTask>>,
-        metrics_update_tx: Sender<FileMetricsUpdate>,
-    ) -> JoinHandle<()> {
+    ) -> (JoinHandle<()>, JoinHandle<DeleteFileMetrics>) {
         let concurrency_limit = self.concurrency_limit_manifest_entries;
-        spawn(async move {
+
+        let (metrics_update_tx, mut metrics_update_rx) = channel(1);
+        let metrics_handle = spawn(async move {
+            let mut accumulator = DeleteFileMetrics::default();
+
+            while let Some(update) = metrics_update_rx.next().await {
+                match update {
+                    FileMetricsUpdate::Skipped => accumulator.skipped_delete_files += 1,
+                    FileMetricsUpdate::Scanned { size_in_bytes } => {
+                        accumulator.total_delete_file_size_in_bytes += size_in_bytes;
+                        accumulator.result_delete_files += 1;
+                    }
+                }
+            }
+
+            accumulator
+        });
+
+        let delete_file_handle = spawn(async move {
             let result = manifest_entry_rx
                 .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit,
                     |(manifest_entry, mut file_tx, mut metrics_tx)| async move {
                         spawn(async move {
-                            let delete_file =
-                                Self::filter_delete_manifest_entry(manifest_entry).await?;
+                            let delete_file = Self::filter_delete_manifest_entry(manifest_entry)?;
 
                             let metrics_update = if let Some(delete_file) = delete_file {
                                 let size_in_bytes = delete_file.manifest_entry.file_size_in_bytes();
@@ -489,7 +503,9 @@ impl TableScan {
             if let Err(error) = result {
                 let _ = error_tx.send(Err(error)).await;
             }
-        })
+        });
+
+        (delete_file_handle, metrics_handle)
     }
 
     fn process_manifest_entries(
@@ -537,7 +553,7 @@ impl TableScan {
         plan_start_time: Instant,
         plan_context: &PlanContext,
         data_file_metrics_rx: Receiver<FileMetricsUpdate>,
-        delete_file_metrics_rx: Receiver<FileMetricsUpdate>,
+        delete_file_metrics_handle: JoinHandle<DeleteFileMetrics>,
         index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
         manifest_metrics: ManifestMetrics,
     ) {
@@ -554,7 +570,7 @@ impl TableScan {
                 plan_start_time,
                 manifest_metrics,
                 data_file_metrics_rx,
-                delete_file_metrics_rx,
+                delete_file_metrics_handle,
                 index_metrics_handle,
             )
             .await;
@@ -658,7 +674,7 @@ impl TableScan {
         Ok(Some(file_scan_task))
     }
 
-    async fn filter_delete_manifest_entry(
+    fn filter_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
     ) -> Result<Option<DeleteFileContext>> {
         // skip processing this manifest entry if it has been marked as deleted

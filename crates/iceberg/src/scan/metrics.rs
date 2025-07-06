@@ -19,7 +19,6 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use futures::channel::mpsc::Receiver;
-use futures::channel::oneshot;
 
 use crate::delete_file_index::DeleteIndexMetrics;
 use crate::metrics::ScanMetrics;
@@ -36,6 +35,13 @@ pub(crate) struct ManifestMetrics {
     pub(crate) scanned_delete_manifests: u32,
 }
 
+#[derive(Default)]
+pub(crate) struct DeleteFileMetrics {
+    pub(crate) result_delete_files: u32,
+    pub(crate) skipped_delete_files: u32,
+    pub(crate) total_delete_file_size_in_bytes: u64,
+}
+
 /// Represents an update to a single data or delete file.
 pub(crate) enum FileMetricsUpdate {
     Skipped,
@@ -48,7 +54,7 @@ pub(crate) async fn aggregate_metrics(
     planning_start: Instant,
     manifest_metrics: ManifestMetrics,
     mut data_file_metrics_rx: Receiver<FileMetricsUpdate>,
-    mut delete_file_metrics_rx: Receiver<FileMetricsUpdate>,
+    delete_file_metrics_handle: JoinHandle<DeleteFileMetrics>,
     index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
 ) -> ScanMetrics {
     // TODO: Double-check the order of blocking operations. We should start with
@@ -69,19 +75,7 @@ pub(crate) async fn aggregate_metrics(
         }
     }
 
-    let mut result_delete_files = 0;
-    let mut total_delete_file_size_in_bytes = 0;
-    let mut skipped_delete_files = 0;
-    while let Some(delete_file) = delete_file_metrics_rx.next().await {
-        match delete_file {
-            FileMetricsUpdate::Scanned { size_in_bytes } => {
-                result_delete_files += 1;
-                total_delete_file_size_in_bytes += size_in_bytes;
-            }
-            FileMetricsUpdate::Skipped => skipped_delete_files += 1,
-        }
-    }
-
+    let delete_file_metrics = delete_file_metrics_handle.await;
     let index_metrics = index_metrics_handle.await;
 
     // Only now (after consuming all metrics updates) do we know that
@@ -103,9 +97,9 @@ pub(crate) async fn aggregate_metrics(
         skipped_data_files,
         total_file_size_in_bytes,
 
-        result_delete_files,
-        skipped_delete_files,
-        total_delete_file_size_in_bytes,
+        result_delete_files: delete_file_metrics.result_delete_files,
+        skipped_delete_files: delete_file_metrics.skipped_delete_files,
+        total_delete_file_size_in_bytes: delete_file_metrics.total_delete_file_size_in_bytes,
 
         indexed_delete_files: index_metrics.indexed_delete_files,
         equality_delete_files: index_metrics.equality_delete_files,
