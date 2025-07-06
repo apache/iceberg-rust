@@ -190,6 +190,13 @@ impl PlanContext {
     ) -> Result<(Vec<Result<ManifestFileContext>>, ManifestMetrics)> {
         let manifest_files = manifest_list.entries().iter();
 
+        // TODO: Ideally we could ditch this intermediate Vec as we can return
+        // an iterator over the results. Updates to the manifest metrics somewhat
+        // complicate this because they need to be serialized somewhere, and an
+        // iterator can't easily take ownership of the metrics.
+        // A vec allows us to apply the mutations within this function.
+        // A vec also implicitly implements Send and Sync, meaning we can pass
+        // it around more easily in the concurrent planning step.
         let mut filtered_mfcs = vec![];
 
         let mut metrics = ManifestMetrics::default();
