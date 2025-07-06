@@ -3704,7 +3704,7 @@ dependencies = [
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "iceberg_test_utils",
- "ordered-float 2.10.1",
+ "ordered-float 4.6.0",
  "parquet",
  "tokio",
  "uuid",
