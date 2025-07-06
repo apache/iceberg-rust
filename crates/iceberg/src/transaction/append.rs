@@ -101,7 +101,7 @@ impl TransactionAction for FastAppendAction {
         );
 
         snapshot_producer
-            .commit(table, FastAppendOperation, DefaultManifestProcess)
+            .commit(FastAppendOperation, DefaultManifestProcess)
             .await
     }
 }
@@ -115,18 +115,24 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn delete_entries(
         &self,
-        _snapshot_produce: &SnapshotProducer,
+        _snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestEntry>> {
         Ok(vec![])
     }
 
-    async fn existing_manifest(&self, table: &Table) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = table.metadata().current_snapshot() else {
+    async fn existing_manifest(
+        &self,
+        snapshot_produce: &SnapshotProducer<'_>,
+    ) -> Result<Vec<ManifestFile>> {
+        let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
 
         let manifest_list = snapshot
-            .load_manifest_list(table.file_io(), &table.metadata_ref())
+            .load_manifest_list(
+                snapshot_produce.table.file_io(),
+                &snapshot_produce.table.metadata_ref(),
+            )
             .await?;
 
         Ok(manifest_list
