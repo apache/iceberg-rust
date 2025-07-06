@@ -23,6 +23,7 @@ use futures::channel::oneshot;
 
 use crate::delete_file_index::DeleteIndexMetrics;
 use crate::metrics::ScanMetrics;
+use crate::runtime::JoinHandle;
 
 /// Subset of [ScanMetrics] produced by manifest-handling functions.
 #[derive(Default)]
@@ -48,7 +49,7 @@ pub(crate) async fn aggregate_metrics(
     manifest_metrics: ManifestMetrics,
     mut data_file_metrics_rx: Receiver<FileMetricsUpdate>,
     mut delete_file_metrics_rx: Receiver<FileMetricsUpdate>,
-    index_metrics_rx: oneshot::Receiver<DeleteIndexMetrics>,
+    index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
 ) -> ScanMetrics {
     // TODO: Double-check the order of blocking operations. We should start with
     // result streams that we need to unblock first. This is because we attach
@@ -81,7 +82,7 @@ pub(crate) async fn aggregate_metrics(
         }
     }
 
-    let index_metrics = index_metrics_rx.await.unwrap();
+    let index_metrics = index_metrics_handle.await;
 
     // Only now (after consuming all metrics updates) do we know that
     // all concurrent work is finished and we can stop timing the

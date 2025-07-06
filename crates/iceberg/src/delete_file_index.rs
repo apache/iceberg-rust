@@ -21,11 +21,10 @@ use std::sync::{Arc, RwLock};
 
 use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
-use futures::channel::oneshot;
 use itertools::Itertools;
 use tokio::sync::Notify;
 
-use crate::runtime::spawn;
+use crate::runtime::{JoinHandle, spawn};
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
 
@@ -61,11 +60,15 @@ pub(crate) struct DeleteIndexMetrics {
 }
 
 impl DeleteFileIndex {
-    /// create a new `DeleteFileIndex` along with the sender that populates it with delete files
+    /// Create a new `DeleteFileIndex` along with the sender that populates it
+    /// with delete files
+    ///
+    /// It will asynchronously wait for all delete files to come in before it
+    /// starts indexing.
     pub(crate) fn new() -> (
         DeleteFileIndex,
         Sender<DeleteFileContext>,
-        oneshot::Receiver<DeleteIndexMetrics>,
+        JoinHandle<DeleteIndexMetrics>,
     ) {
         // TODO: what should the channel limit be?
         let (delete_file_tx, delete_file_rx) = channel(10);
@@ -75,9 +78,7 @@ impl DeleteFileIndex {
         )));
         let delete_file_stream = delete_file_rx.boxed();
 
-        let (metrics_tx, metrics_rx) = oneshot::channel();
-
-        spawn({
+        let metrics_handle = spawn({
             let state = state.clone();
             async move {
                 let delete_files = delete_file_stream.collect::<Vec<_>>().await;
@@ -92,11 +93,11 @@ impl DeleteFileIndex {
                 }
                 notify.notify_waiters();
 
-                metrics_tx.send(metrics).unwrap();
+                metrics
             }
         });
 
-        (DeleteFileIndex { state }, delete_file_tx, metrics_rx)
+        (DeleteFileIndex { state }, delete_file_tx, metrics_handle)
     }
 
     /// Gets all the delete files that apply to the specified data file.

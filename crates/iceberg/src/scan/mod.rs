@@ -21,7 +21,6 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
-use futures::channel::oneshot;
 mod metrics;
 mod task;
 
@@ -31,6 +30,7 @@ use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Receiver, Sender, channel};
+use futures::channel::oneshot;
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
@@ -384,7 +384,7 @@ impl TableScan {
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(self.concurrency_limit_manifest_files);
 
-        let (delete_file_idx, delete_file_tx, index_metrics_rx) = DeleteFileIndex::new();
+        let (delete_file_idx, delete_file_tx, index_metrics_handle) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
@@ -423,7 +423,7 @@ impl TableScan {
             plan_context,
             data_file_metrics_rx,
             delete_file_metrics_rx,
-            index_metrics_rx,
+            index_metrics_handle,
             manifest_metrics,
         )
         .await;
@@ -538,7 +538,7 @@ impl TableScan {
         plan_context: &PlanContext,
         data_file_metrics_rx: Receiver<FileMetricsUpdate>,
         delete_file_metrics_rx: Receiver<FileMetricsUpdate>,
-        index_metrics_rx: oneshot::Receiver<DeleteIndexMetrics>,
+        index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
         manifest_metrics: ManifestMetrics,
     ) {
         let table = self.table.clone();
@@ -555,7 +555,7 @@ impl TableScan {
                 manifest_metrics,
                 data_file_metrics_rx,
                 delete_file_metrics_rx,
-                index_metrics_rx,
+                index_metrics_handle,
             )
             .await;
 
