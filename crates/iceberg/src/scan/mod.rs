@@ -41,9 +41,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metrics::{LoggingMetricsReporter, MetricsReport, MetricsReporter};
 use crate::runtime::{JoinHandle, spawn};
-use crate::scan::metrics::{
-    DeleteFileMetrics, FileMetricsUpdate, ManifestMetrics, aggregate_metrics,
-};
+use crate::scan::metrics::{FileMetrics, FileMetricsUpdate, ManifestMetrics, aggregate_metrics};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -405,21 +403,25 @@ impl TableScan {
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
         self.load_manifests(manifest_file_contexts, result_tx.clone());
 
-        let (_delete_file_handle, delete_file_metrics_handle) = self
-            .process_delete_manifest_entries(
-            manifest_entry_delete_ctx_rx,
-            delete_file_tx,
-            result_tx.clone(),
+        let (delete_manifests_handle, delete_file_metrics_handle) = self
+            .spawn_process_delete_manifest_entries(
+                manifest_entry_delete_ctx_rx,
+                delete_file_tx,
+                result_tx.clone(),
             );
 
         // Process the data file [`ManifestEntry`] stream in parallel
         let (data_file_metrics_tx, data_file_metrics_rx) = channel(1);
-        self.process_manifest_entries(manifest_entry_data_ctx_rx, result_tx, data_file_metrics_tx);
+        let (_handle, data_file_metrics_handle) = self.spawn_process_manifest_entries(
+            manifest_entry_data_ctx_rx,
+            result_tx,
+            data_file_metrics_tx,
+        );
 
         self.report_metrics(
             plan_start_time,
             plan_context,
-            data_file_metrics_rx,
+            data_file_metrics_handle,
             delete_file_metrics_handle,
             index_metrics_handle,
             manifest_metrics,
@@ -448,30 +450,16 @@ impl TableScan {
         });
     }
 
-    fn process_delete_manifest_entries(
+    fn spawn_process_delete_manifest_entries(
         &self,
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         delete_file_tx: Sender<DeleteFileContext>,
         mut error_tx: Sender<Result<FileScanTask>>,
-    ) -> (JoinHandle<()>, JoinHandle<DeleteFileMetrics>) {
+    ) -> (JoinHandle<()>, JoinHandle<FileMetrics>) {
         let concurrency_limit = self.concurrency_limit_manifest_entries;
 
-        let (metrics_update_tx, mut metrics_update_rx) = channel(1);
-        let metrics_handle = spawn(async move {
-            let mut accumulator = DeleteFileMetrics::default();
-
-            while let Some(update) = metrics_update_rx.next().await {
-                match update {
-                    FileMetricsUpdate::Skipped => accumulator.skipped_delete_files += 1,
-                    FileMetricsUpdate::Scanned { size_in_bytes } => {
-                        accumulator.total_delete_file_size_in_bytes += size_in_bytes;
-                        accumulator.result_delete_files += 1;
-                    }
-                }
-            }
-
-            accumulator
-        });
+        let (metrics_update_tx, metrics_update_rx) = channel(1);
+        let metrics_handle = spawn(FileMetrics::accumulate(metrics_update_rx));
 
         let delete_file_handle = spawn(async move {
             let result = manifest_entry_rx
@@ -512,10 +500,13 @@ impl TableScan {
         &self,
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-        metrics_update_tx: Sender<FileMetricsUpdate>,
-    ) {
+    ) -> (JoinHandle<()>, JoinHandle<FileMetrics>) {
         let concurrency_limit = self.concurrency_limit_manifest_entries;
-        let _handle = spawn(async move {
+
+        let (metrics_update_tx, metrics_update_rx) = channel(1);
+        let metrics_handle = spawn(FileMetrics::accumulate(metrics_update_rx));
+
+        let handle = spawn(async move {
             let result = manifest_entry_rx
                 .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
@@ -546,17 +537,19 @@ impl TableScan {
                 let _ = file_scan_task_tx.send(Err(error)).await;
             }
         });
+
+        (handle, metrics_handle)
     }
 
     async fn report_metrics(
         &self,
         plan_start_time: Instant,
         plan_context: &PlanContext,
-        data_file_metrics_rx: Receiver<FileMetricsUpdate>,
-        delete_file_metrics_handle: JoinHandle<DeleteFileMetrics>,
+        data_file_metrics_handle: JoinHandle<FileMetrics>,
+        delete_file_metrics_handle: JoinHandle<FileMetrics>,
         index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
         manifest_metrics: ManifestMetrics,
-    ) {
+    ) -> JoinHandle<()> {
         let table = self.table.clone();
         let snapshot_id = plan_context.snapshot.snapshot_id();
         let filter = plan_context.predicate.clone();
@@ -565,32 +558,31 @@ impl TableScan {
         let projected_field_names = self.column_names.clone();
 
         let metrics_reporter = Arc::clone(&self.metrics_reporter);
-        spawn({
+        let handle = spawn(async move {
             let metrics = aggregate_metrics(
                 plan_start_time,
                 manifest_metrics,
-                data_file_metrics_rx,
+                data_file_metrics_handle,
                 delete_file_metrics_handle,
                 index_metrics_handle,
             )
             .await;
 
-            async move {
-                let report = MetricsReport::Scan {
-                    table,
-                    snapshot_id,
-                    filter,
-                    schema_id,
-                    projected_field_ids,
-                    projected_field_names,
-                    metadata: HashMap::new(),
-                    metrics: Arc::new(metrics),
-                };
+            let report = MetricsReport::Scan {
+                table,
+                snapshot_id,
+                filter,
+                schema_id,
+                projected_field_ids,
+                projected_field_names,
+                metadata: HashMap::new(),
+                metrics: Arc::new(metrics),
+            };
 
-                metrics_reporter.report(report).await;
-            }
-        })
-        .await;
+            metrics_reporter.report(report).await;
+        });
+
+        handle
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
