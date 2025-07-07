@@ -374,7 +374,7 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
-        // Initialize scan metrics for reporting.
+        // Start the planning phase timer.
         let plan_start_time = Instant::now();
 
         // used to stream ManifestEntryContexts between stages of the file plan operation
@@ -431,7 +431,7 @@ impl TableScan {
         mut error_tx: Sender<Result<FileScanTask>>,
     ) -> JoinHandle<()> {
         let concurrency_limit = self.concurrency_limit_manifest_files;
-        let handle = spawn(async move {
+        spawn(async move {
             let result = futures::stream::iter(manifest_files)
                 .try_for_each_concurrent(concurrency_limit, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
@@ -441,9 +441,7 @@ impl TableScan {
             if let Err(error) = result {
                 let _ = error_tx.send(Err(error)).await;
             }
-        });
-
-        handle
+        })
     }
 
     fn spawn_process_delete_manifest_entries(
@@ -554,7 +552,7 @@ impl TableScan {
         let projected_field_names = self.column_names.clone();
 
         let metrics_reporter = Arc::clone(&self.metrics_reporter);
-        let handle = spawn(async move {
+        spawn(async move {
             let metrics = aggregate_metrics(
                 plan_start_time,
                 manifest_metrics,
@@ -576,9 +574,7 @@ impl TableScan {
             };
 
             metrics_reporter.report(report).await;
-        });
-
-        handle
+        })
     }
 
     /// Returns an [`ArrowRecordBatchStream`].

@@ -74,7 +74,7 @@ pub(crate) enum MetricsReport {
 pub(crate) struct ScanMetrics {
     pub(crate) total_planning_duration: Duration,
 
-    // Manfiest-level metrics, computed by walking the snapshot's manifest list
+    // Manifest-level metrics, computed by walking the snapshot's manifest list
     // file entries and checking which manifests match the scan's predicates.
     pub(crate) total_data_manifests: u32,
     pub(crate) total_delete_manifests: u32,
