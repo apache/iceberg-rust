@@ -17,10 +17,10 @@
 
 //! This module contains the metrics reporting API for Iceberg.
 //!
-//! It is used to report table operations in a pluggable way. See [1] for more
-//! details.
+//! It is used to report table operations in a pluggable way. See the [docs]
+//! for more details.
 //!
-//! [1] https://iceberg.apache.org/docs/latest/metrics-reporting
+//! [docs] https://iceberg.apache.org/docs/latest/metrics-reporting
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -28,9 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Serialize;
-use serde_with::{DurationNanoSeconds, serde_as};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::TableIdent;
 use crate::expr::Predicate;
@@ -50,33 +48,35 @@ pub(crate) trait MetricsReporter: Debug + Send + Sync {
 }
 
 /// An enum of all metrics reports.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) enum MetricsReport {
     /// A Table Scan report that contains all relevant information from a Table Scan.
     Scan {
         table: TableIdent,
         snapshot_id: i64,
-        filter: Option<Arc<Predicate>>,
         schema_id: SchemaId,
-        projected_field_ids: Arc<Vec<i32>>,
-        // TODO: We could default to listing all field names, if all are selected
-        // check what Java is doing.
+
+        /// If None, the scan is an unfiltered full table scan.
+        filter: Option<Arc<Predicate>>,
+
+        /// If None, the scan projects all fields.
+        // TODO: We could default to listing all field names in those cases: check what Java is doing.
         projected_field_names: Option<Vec<String>>,
+        projected_field_ids: Arc<Vec<i32>>,
+
         metrics: Arc<ScanMetrics>,
         metadata: HashMap<String, String>,
     },
 }
 
 /// Carries all metrics for a particular scan.
-#[serde_as]
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct ScanMetrics {
-    #[serde_as(as = "DurationNanoSeconds<u64>")]
     pub(crate) total_planning_duration: Duration,
 
     // Manfiest-level metrics, computed by walking the snapshot's manifest list
     // file entries and checking which manifests match the scan's predicates.
-    pub(crate) total_data_manifests: u32, // TODO: Are these really just skipped+scanned?
+    pub(crate) total_data_manifests: u32,
     pub(crate) total_delete_manifests: u32,
     pub(crate) skipped_data_manifests: u32,
     pub(crate) skipped_delete_manifests: u32,
@@ -86,7 +86,7 @@ pub(crate) struct ScanMetrics {
     // Data file-level metrics.
     pub(crate) result_data_files: u32,
     pub(crate) skipped_data_files: u32,
-    pub(crate) total_file_size_in_bytes: u64, // TODO: should then all be u64s?
+    pub(crate) total_file_size_in_bytes: u64,
 
     // Delete file-level metrics.
     pub(crate) result_delete_files: u32,
@@ -96,37 +96,6 @@ pub(crate) struct ScanMetrics {
     pub(crate) indexed_delete_files: u32,
     pub(crate) equality_delete_files: u32,
     pub(crate) positional_delete_files: u32,
-}
-
-// TODO: This impl will provide public accessors for the fields, because
-// crate-external implementators will need to access them, while (so far) only
-// code within the crate will need to mutate them.
-impl ScanMetrics {
-    pub fn result_data_files(&self) -> Counter {
-        Counter {
-            value: self.result_data_files,
-            unit: "file".to_string(),
-        }
-    }
-
-    pub fn result_delete_files(&self) -> Counter {
-        Counter {
-            value: self.result_delete_files,
-            unit: "file".to_string(),
-        }
-    }
-
-    pub fn total_data_manifests(&self) -> Counter {
-        Counter {
-            value: self.total_data_manifests,
-            unit: "manifest".to_string(),
-        }
-    }
-}
-
-struct Counter {
-    value: u32,
-    unit: String,
 }
 
 /// A reporter that logs the metrics to the console.
@@ -142,9 +111,44 @@ impl LoggingMetricsReporter {
 #[async_trait]
 impl MetricsReporter for LoggingMetricsReporter {
     async fn report(&self, report: MetricsReport) {
-        match serde_json::to_string(&report) {
-            Ok(json) => info!(report = json, "Reporting metrics"),
-            Err(e) => warn!("Failed to serialize metrics report: {}", e),
+        match report {
+            MetricsReport::Scan {
+                table,
+                snapshot_id,
+                schema_id,
+                filter,
+                projected_field_names,
+                projected_field_ids,
+                metrics,
+                metadata,
+            } => {
+                info!(
+                    table = %table,
+                    snapshot_id = snapshot_id,
+                    schema_id = schema_id,
+                    filter = ?filter,
+                    projected_field_names = ?projected_field_names,
+                    projected_field_ids = ?projected_field_ids,
+                    scan_metrics.total_planning_duration = ?metrics.total_planning_duration,
+                    scan_metrics.total_data_manifests = metrics.total_data_manifests,
+                    scan_metrics.total_delete_manifests = metrics.total_delete_manifests,
+                    scan_metrics.scanned_data_manifests = metrics.scanned_data_manifests,
+                    scan_metrics.scanned_delete_manifests = metrics.scanned_delete_manifests,
+                    scan_metrics.skipped_data_manifests = metrics.skipped_data_manifests,
+                    scan_metrics.skipped_delete_manifests = metrics.skipped_delete_manifests,
+                    scan_metrics.result_data_files = metrics.result_data_files,
+                    scan_metrics.result_delete_files = metrics.result_delete_files,
+                    scan_metrics.skipped_data_files = metrics.skipped_data_files,
+                    scan_metrics.skipped_delete_files = metrics.skipped_delete_files,
+                    scan_metrics.total_file_size_in_bytes = metrics.total_file_size_in_bytes,
+                    scan_metrics.total_delete_file_size_in_bytes = metrics.total_delete_file_size_in_bytes,
+                    scan_metrics.indexed_delete_files = metrics.indexed_delete_files,
+                    scan_metrics.equality_delete_files = metrics.equality_delete_files,
+                    scan_metrics.positional_delete_files = metrics.positional_delete_files,
+                    metadata = ?metadata,
+                    "Received metrics report"
+                );
+            }
         }
     }
 }
