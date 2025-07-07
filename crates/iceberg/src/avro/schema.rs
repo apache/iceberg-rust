@@ -16,7 +16,6 @@
 // under the License.
 
 //! Conversion between iceberg and avro schema.
-use std::any::Any;
 use std::collections::BTreeMap;
 
 use apache_avro::Schema as AvroSchema;
@@ -28,7 +27,7 @@ use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 use crate::spec::{
-    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, RawLiteral, Schema,
+    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, RawLiteral, Schema,
     SchemaVisitor, StructType, Type, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
@@ -105,7 +104,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             position: 0,
             doc: field.doc.clone(),
             aliases: None,
-            default: default,
+            default,
             custom_attributes: Default::default(),
         };
 
