@@ -400,8 +400,7 @@ impl TableScan {
         // used to stream the results back to the caller
         let (result_tx, file_scan_task_rx) = channel(self.concurrency_limit_manifest_entries);
 
-        // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        self.load_manifests(manifest_file_contexts, result_tx.clone());
+        let _handle = self.spawn_fetch_manifests(manifest_file_contexts, result_tx.clone());
 
         let (delete_manifests_handle, delete_file_metrics_handle) = self
             .spawn_process_delete_manifest_entries(
@@ -409,35 +408,30 @@ impl TableScan {
                 delete_file_tx,
                 result_tx.clone(),
             );
+        delete_manifests_handle.await;
 
-        // Process the data file [`ManifestEntry`] stream in parallel
-        let (data_file_metrics_tx, data_file_metrics_rx) = channel(1);
-        let (_handle, data_file_metrics_handle) = self.spawn_process_manifest_entries(
-            manifest_entry_data_ctx_rx,
-            result_tx,
-            data_file_metrics_tx,
-        );
+        let (_handle, data_file_metrics_handle) =
+            self.spawn_process_manifest_entries(manifest_entry_data_ctx_rx, result_tx);
 
-        self.report_metrics(
+        let _handle = self.report_metrics(
             plan_start_time,
             plan_context,
             data_file_metrics_handle,
             delete_file_metrics_handle,
             index_metrics_handle,
             manifest_metrics,
-        )
-        .await;
+        );
 
         Ok(file_scan_task_rx.boxed())
     }
 
-    fn load_manifests(
+    fn spawn_fetch_manifests(
         &self,
         manifest_files: Vec<Result<ManifestFileContext>>,
         mut error_tx: Sender<Result<FileScanTask>>,
-    ) {
+    ) -> JoinHandle<()> {
         let concurrency_limit = self.concurrency_limit_manifest_files;
-        let _handle = spawn(async move {
+        let handle = spawn(async move {
             let result = futures::stream::iter(manifest_files)
                 .try_for_each_concurrent(concurrency_limit, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
@@ -448,6 +442,8 @@ impl TableScan {
                 let _ = error_tx.send(Err(error)).await;
             }
         });
+
+        handle
     }
 
     fn spawn_process_delete_manifest_entries(
@@ -461,7 +457,7 @@ impl TableScan {
         let (metrics_update_tx, metrics_update_rx) = channel(1);
         let metrics_handle = spawn(FileMetrics::accumulate(metrics_update_rx));
 
-        let delete_file_handle = spawn(async move {
+        let handle = spawn(async move {
             let result = manifest_entry_rx
                 .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
@@ -493,10 +489,10 @@ impl TableScan {
             }
         });
 
-        (delete_file_handle, metrics_handle)
+        (handle, metrics_handle)
     }
 
-    fn process_manifest_entries(
+    fn spawn_process_manifest_entries(
         &self,
         manifest_entry_rx: Receiver<ManifestEntryContext>,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
@@ -541,7 +537,7 @@ impl TableScan {
         (handle, metrics_handle)
     }
 
-    async fn report_metrics(
+    fn report_metrics(
         &self,
         plan_start_time: Instant,
         plan_context: &PlanContext,
