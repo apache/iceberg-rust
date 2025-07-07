@@ -28,8 +28,8 @@ use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 use crate::spec::{
-    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, visit_schema, Datum, RawLiteral,
+    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, RawLiteral, Schema,
+    SchemaVisitor, StructType, Type, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -43,8 +43,6 @@ const MAP_LOGICAL_TYPE: &str = "map";
 // # TODO: https://github.com/apache/iceberg-rust/issues/86
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
-
-
 
 struct SchemaToAvroSchema {
     schema: String,
