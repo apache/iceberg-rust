@@ -17,8 +17,8 @@
 
 use std::time::Instant;
 
-use futures::StreamExt;
 use futures::channel::mpsc::Receiver;
+use futures::{StreamExt, join};
 
 use crate::delete_file_index::DeleteIndexMetrics;
 use crate::metrics::ScanMetrics;
@@ -33,10 +33,11 @@ pub(crate) async fn aggregate_metrics(
     delete_file_metrics_handle: JoinHandle<FileMetrics>,
     index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
 ) -> ScanMetrics {
-    // TODO: Consider joining them instead.
-    let data_file_metrics = data_file_metrics_handle.await;
-    let delete_file_metrics = delete_file_metrics_handle.await;
-    let index_metrics = index_metrics_handle.await;
+    let (data_file_metrics, delete_file_metrics, index_metrics) = join!(
+        data_file_metrics_handle,
+        delete_file_metrics_handle,
+        index_metrics_handle
+    );
 
     // Only now (after consuming all metrics updates) do we know that
     // all concurrent work is finished and we can stop timing the
