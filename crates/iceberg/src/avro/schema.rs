@@ -116,6 +116,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
             field_schema = avro_optional(field_schema)?;
         }
 
+        let default = if let Some(default) = &field.initial_default {
+            Some(literal_to_json(default)?)
+        } else if !field.required {
+            Some(Value::Null)
+        } else {
+            None
+        };
+
         let mut avro_record_field = AvroRecordField {
             name: field.name.clone(),
             schema: field_schema,
@@ -123,15 +131,9 @@ impl SchemaVisitor for SchemaToAvroSchema {
             position: 0,
             doc: field.doc.clone(),
             aliases: None,
-            default: None,
+            default: default,
             custom_attributes: Default::default(),
         };
-
-        if let Some(default) = &field.initial_default {
-            avro_record_field.default = Some(literal_to_json(default)?);
-        } else if !field.required {
-            avro_record_field.default = Some(Value::Null);
-        }
 
         avro_record_field.custom_attributes.insert(
             FIELD_ID_PROP.to_string(),
