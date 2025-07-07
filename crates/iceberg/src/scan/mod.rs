@@ -207,12 +207,7 @@ impl<'a> TableScanBuilder<'a> {
     pub fn build(self) -> Result<TableScan> {
         let metrics_reporter = match self.metrics_reporter {
             Some(metrics_reporter) => metrics_reporter,
-            None => {
-                // When a table scan is constructed directly (not by a catalog),
-                // and the user didn't provide a metrics reporter, then we
-                // construct a new one.
-                Arc::new(LoggingMetricsReporter::new())
-            }
+            None => Arc::new(LoggingMetricsReporter::new()),
         };
 
         let snapshot = match self.snapshot_id {
