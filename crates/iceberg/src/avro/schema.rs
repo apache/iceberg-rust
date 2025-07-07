@@ -16,6 +16,7 @@
 // under the License.
 
 //! Conversion between iceberg and avro schema.
+use std::any::Any;
 use std::collections::BTreeMap;
 
 use apache_avro::Schema as AvroSchema;
@@ -28,7 +29,7 @@ use serde_json::{Number, Value};
 
 use crate::spec::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, visit_schema,
+    StructType, Type, visit_schema, Datum, RawLiteral,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -43,40 +44,7 @@ const MAP_LOGICAL_TYPE: &str = "map";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
-fn literal_to_json(literal: &crate::spec::Literal) -> Result<Value> {
-    match literal {
-        crate::spec::Literal::Primitive(p) => match p {
-            crate::spec::PrimitiveLiteral::Boolean(b) => Ok(Value::Bool(*b)),
-            crate::spec::PrimitiveLiteral::Int(i) => Ok(Value::Number(Number::from(*i))),
-            crate::spec::PrimitiveLiteral::Long(l) => Ok(Value::Number(Number::from(*l))),
-            crate::spec::PrimitiveLiteral::Float(f) => Ok(Value::Number(
-                Number::from_f64(f.0 as f64).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to convert float to json number",
-                    )
-                })?,
-            )),
-            crate::spec::PrimitiveLiteral::Double(d) => {
-                Ok(Value::Number(Number::from_f64(d.0).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to convert double to json number",
-                    )
-                })?))
-            }
-            crate::spec::PrimitiveLiteral::String(s) => Ok(Value::String(s.clone())),
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Unsupported literal type to convert to json",
-            )),
-        },
-        _ => Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Unsupported literal type to convert to json",
-        )),
-    }
-}
+
 
 struct SchemaToAvroSchema {
     schema: String,
@@ -116,8 +84,16 @@ impl SchemaVisitor for SchemaToAvroSchema {
             field_schema = avro_optional(field_schema)?;
         }
 
-        let default = if let Some(default) = &field.initial_default {
-            Some(literal_to_json(default)?)
+        let default = if let Some(literal) = &field.initial_default {
+            let raw_literal = RawLiteral::try_from(literal.clone(), &field.field_type)?;
+            let json_value = serde_json::to_value(raw_literal).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to serialize default value to json",
+                )
+                .with_source(e)
+            })?;
+            Some(json_value)
         } else if !field.required {
             Some(Value::Null)
         } else {
