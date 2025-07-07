@@ -100,6 +100,7 @@ impl TableBuilder {
 
     /// sets the implementation used to report metrics about operations on this
     /// table.
+    #[cfg(test)]
     pub(crate) fn metrics_reporter(mut self, metrics_reporter: Arc<dyn MetricsReporter>) -> Self {
         self.metrics_reporter = Some(metrics_reporter);
         self
