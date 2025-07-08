@@ -100,10 +100,7 @@ impl<'a> SnapshotProducer<'a> {
         }
     }
 
-    pub(crate) fn validate_added_data_files(
-        table: &Table,
-        added_data_files: &[DataFile],
-    ) -> Result<()> {
+    pub(crate) fn validate_added_data_files(&self, added_data_files: &[DataFile]) -> Result<()> {
         for data_file in added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
@@ -112,7 +109,7 @@ impl<'a> SnapshotProducer<'a> {
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
-            if table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
+            if self.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Data file partition spec id does not match table default partition spec id",
@@ -120,7 +117,7 @@ impl<'a> SnapshotProducer<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                table.metadata().default_partition_type(),
+                self.table.metadata().default_partition_type(),
             )?;
         }
 
@@ -128,7 +125,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub(crate) async fn validate_duplicate_files(
-        table: &Table,
+        &self,
         added_data_files: &[DataFile],
     ) -> Result<()> {
         let new_files: HashSet<&str> = added_data_files
@@ -137,12 +134,14 @@ impl<'a> SnapshotProducer<'a> {
             .collect();
 
         let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = table.metadata().current_snapshot() {
+        if let Some(current_snapshot) = self.table.metadata().current_snapshot() {
             let manifest_list = current_snapshot
-                .load_manifest_list(table.file_io(), &table.metadata_ref())
+                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
             for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
+                let manifest = manifest_list_entry
+                    .load_manifest(self.table.file_io())
+                    .await?;
                 for entry in manifest.entries() {
                     let file_path = entry.file_path();
                     if new_files.contains(file_path) && entry.is_alive() {

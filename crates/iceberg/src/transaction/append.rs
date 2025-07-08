@@ -84,14 +84,6 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        // validate added files
-        SnapshotProducer::validate_added_data_files(table, &self.added_data_files)?;
-
-        // Checks duplicate files
-        if self.check_duplicate {
-            SnapshotProducer::validate_duplicate_files(table, &self.added_data_files).await?;
-        }
-
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -99,6 +91,16 @@ impl TransactionAction for FastAppendAction {
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
         );
+
+        // validate added files
+        snapshot_producer.validate_added_data_files(&self.added_data_files)?;
+
+        // Checks duplicate files
+        if self.check_duplicate {
+            snapshot_producer
+                .validate_duplicate_files(&self.added_data_files)
+                .await?;
+        }
 
         snapshot_producer
             .commit(FastAppendOperation, DefaultManifestProcess)
