@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>, ensure_data_valid};
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">const </span>ELEMENT_ID: <span class="kw-2">&amp;</span>str = <span class="string">"element-id"</span>;
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">const </span>FILED_ID_PROP: <span class="kw-2">&amp;</span>str = <span class="string">"field-id"</span>;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">const </span>FIELD_ID_PROP: <span class="kw-2">&amp;</span>str = <span class="string">"field-id"</span>;
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">const </span>KEY_ID: <span class="kw-2">&amp;</span>str = <span class="string">"key-id"</span>;
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">const </span>VALUE_ID: <span class="kw-2">&amp;</span>str = <span class="string">"value-id"</span>;
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">const </span>UUID_BYTES: usize = <span class="number">16</span>;
@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a>            avro_record_field.default = <span class="prelude-val">Some</span>(Value::Null);
 <a href=#97 id=97 data-nosnippet>97</a>        }
 <a href=#98 id=98 data-nosnippet>98</a>        avro_record_field.custom_attributes.insert(
-<a href=#99 id=99 data-nosnippet>99</a>            FILED_ID_PROP.to_string(),
+<a href=#99 id=99 data-nosnippet>99</a>            FIELD_ID_PROP.to_string(),
 <a href=#100 id=100 data-nosnippet>100</a>            Value::Number(Number::from(field.id)),
 <a href=#101 id=101 data-nosnippet>101</a>        );
 <a href=#102 id=102 data-nosnippet>102</a>
@@ -178,7 +178,7 @@
 <a href=#178 id=178 data-nosnippet>178</a>                    custom_attributes: Default::default(),
 <a href=#179 id=179 data-nosnippet>179</a>                };
 <a href=#180 id=180 data-nosnippet>180</a>                field.custom_attributes.insert(
-<a href=#181 id=181 data-nosnippet>181</a>                    FILED_ID_PROP.to_string(),
+<a href=#181 id=181 data-nosnippet>181</a>                    FIELD_ID_PROP.to_string(),
 <a href=#182 id=182 data-nosnippet>182</a>                    Value::Number(Number::from(map.key_field.id)),
 <a href=#183 id=183 data-nosnippet>183</a>                );
 <a href=#184 id=184 data-nosnippet>184</a>                field
@@ -196,7 +196,7 @@
 <a href=#196 id=196 data-nosnippet>196</a>                    custom_attributes: Default::default(),
 <a href=#197 id=197 data-nosnippet>197</a>                };
 <a href=#198 id=198 data-nosnippet>198</a>                field.custom_attributes.insert(
-<a href=#199 id=199 data-nosnippet>199</a>                    FILED_ID_PROP.to_string(),
+<a href=#199 id=199 data-nosnippet>199</a>                    FIELD_ID_PROP.to_string(),
 <a href=#200 id=200 data-nosnippet>200</a>                    Value::Number(Number::from(map.value_field.id)),
 <a href=#201 id=201 data-nosnippet>201</a>                );
 <a href=#202 id=202 data-nosnippet>202</a>                field
@@ -444,7 +444,7 @@
 <a href=#444 id=444 data-nosnippet>444</a>        <span class="kw">let </span><span class="kw-2">mut </span>fields = Vec::with_capacity(field_types.len());
 <a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">for </span>(avro_field, field_type) <span class="kw">in </span>record.fields.iter().zip_eq(field_types) {
 <a href=#446 id=446 data-nosnippet>446</a>            <span class="kw">let </span>field_id =
-<a href=#447 id=447 data-nosnippet>447</a>                <span class="self">Self</span>::get_element_id_from_attributes(<span class="kw-2">&amp;</span>avro_field.custom_attributes, FILED_ID_PROP)<span class="question-mark">?</span>;
+<a href=#447 id=447 data-nosnippet>447</a>                <span class="self">Self</span>::get_element_id_from_attributes(<span class="kw-2">&amp;</span>avro_field.custom_attributes, FIELD_ID_PROP)<span class="question-mark">?</span>;
 <a href=#448 id=448 data-nosnippet>448</a>
 <a href=#449 id=449 data-nosnippet>449</a>            <span class="kw">let </span>optional = is_avro_optional(<span class="kw-2">&amp;</span>avro_field.schema);
 <a href=#450 id=450 data-nosnippet>450</a>
@@ -585,11 +585,11 @@
 <a href=#585 id=585 data-nosnippet>585</a>        })<span class="question-mark">?</span>;
 <a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">let </span>key_id = <span class="self">Self</span>::get_element_id_from_attributes(
 <a href=#587 id=587 data-nosnippet>587</a>            <span class="kw-2">&amp;</span>array.fields[<span class="number">0</span>].custom_attributes,
-<a href=#588 id=588 data-nosnippet>588</a>            FILED_ID_PROP,
+<a href=#588 id=588 data-nosnippet>588</a>            FIELD_ID_PROP,
 <a href=#589 id=589 data-nosnippet>589</a>        )<span class="question-mark">?</span>;
 <a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">let </span>value_id = <span class="self">Self</span>::get_element_id_from_attributes(
 <a href=#591 id=591 data-nosnippet>591</a>            <span class="kw-2">&amp;</span>array.fields[<span class="number">1</span>].custom_attributes,
-<a href=#592 id=592 data-nosnippet>592</a>            FILED_ID_PROP,
+<a href=#592 id=592 data-nosnippet>592</a>            FIELD_ID_PROP,
 <a href=#593 id=593 data-nosnippet>593</a>        )<span class="question-mark">?</span>;
 <a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">let </span>key_field = NestedField::map_key_element(key_id, key);
 <a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>value_field = NestedField::map_value_element(
