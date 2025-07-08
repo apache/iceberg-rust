@@ -27,8 +27,8 @@ use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 use crate::spec::{
-    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, RawLiteral, Schema,
-    SchemaVisitor, StructType, Type, visit_schema,
+    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -82,15 +82,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
         }
 
         let default = if let Some(literal) = &field.initial_default {
-            let raw_literal = RawLiteral::try_from(literal.clone(), &field.field_type)?;
-            let json_value = serde_json::to_value(raw_literal).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to serialize default value to json",
-                )
-                .with_source(e)
-            })?;
-            Some(json_value)
+            Some(literal.clone().try_into_json(&field.field_type)?)
         } else if !field.required {
             Some(Value::Null)
         } else {
