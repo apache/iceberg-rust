@@ -41,7 +41,7 @@ impl PyIcebergDataFusionTable {
     fn new(
         identifier: Vec<String>,
         metadata_location: String,
-        file_io_properties: Option<HashMap<String, String>>,
+        storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         let runtime = runtime();
 
@@ -52,7 +52,7 @@ impl PyIcebergDataFusionTable {
             let mut builder = FileIO::from_path(&metadata_location)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to init FileIO: {e}")))?;
 
-            if let Some(props) = file_io_properties {
+            if let Some(props) = storage_options {
                 builder = builder.with_props(props);
             }
 
