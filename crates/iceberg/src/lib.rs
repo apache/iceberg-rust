@@ -24,7 +24,7 @@
 //! ```rust, ignore
 //! use futures::TryStreamExt;
 //! use iceberg::io::{FileIO, FileIOBuilder};
-//! use iceberg::memory::MemoryCatalog;
+//! use iceberg::MemoryCatalog;
 //! use iceberg::{Catalog, Result, TableIdent};
 //!
 //! #[tokio::main]

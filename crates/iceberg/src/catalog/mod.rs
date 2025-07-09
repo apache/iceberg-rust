@@ -19,6 +19,8 @@
 
 pub mod memory;
 
+pub use memory::MemoryCatalog;
+
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
