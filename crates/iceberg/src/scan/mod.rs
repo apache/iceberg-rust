@@ -26,9 +26,8 @@ mod task;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -36,7 +35,6 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -336,94 +334,33 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
-        let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
-        let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
-
-        // used to stream ManifestEntryContexts between stages of the file plan operation
-        let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
-        let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
-
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
-
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
-
         let manifest_list = plan_context.get_manifest_list().await?;
 
-        // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose partitions cannot match this
-        // scan's filter
-        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
-            manifest_entry_data_ctx_tx,
-            delete_file_idx.clone(),
-            manifest_entry_delete_ctx_tx,
-        )?;
+        let (delete_contexts, data_contexts): (Vec<_>, Vec<_>) = plan_context
+            .build_manifest_file_context_iter(manifest_list)
+            .partition(|ctx| ctx.as_ref().map_or(true, |ctx| ctx.is_delete()));
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
+        let delete_file_index: DeleteFileIndex = TableScan::process_manifest_contexts(
+            delete_contexts,
+            self.concurrency_limit_manifest_files,
+            self.concurrency_limit_manifest_entries,
+            |ctx| async move { Self::process_delete_manifest_entry(ctx) },
+        )
+        .try_collect()
+        .await?;
 
-        // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
-                .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
-                    ctx.fetch_manifest_and_stream_manifest_entries().await
-                })
-                .await;
+        let delete_file_index = Arc::new(delete_file_index);
 
-            if let Err(error) = result {
-                let _ = channel_for_manifest_error.send(Err(error)).await;
-            }
-        });
-
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
-
-        // Process the delete file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_delete_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
-                    },
-                )
-                .await;
-
-            if let Err(error) = result {
-                let _ = channel_for_delete_manifest_entry_error
-                    .send(Err(error))
-                    .await;
-            }
-        })
-        .await;
-
-        // Process the data file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_data_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
-                    },
-                )
-                .await;
-
-            if let Err(error) = result {
-                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
-            }
-        });
-
-        Ok(file_scan_task_rx.boxed())
+        Ok(TableScan::process_manifest_contexts(
+            data_contexts,
+            self.concurrency_limit_manifest_files,
+            self.concurrency_limit_manifest_entries,
+            move |ctx| {
+                let delete_file_index = delete_file_index.clone();
+                async move { Self::process_data_manifest_entry(ctx, delete_file_index) }
+            },
+        )
+        .boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -453,13 +390,44 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
-    async fn process_data_manifest_entry(
-        manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-    ) -> Result<()> {
+    /// Helper method to process manifest file contexts into a stream of results
+    fn process_manifest_contexts<F, Fut, T>(
+        contexts: Vec<Result<ManifestFileContext>>,
+        concurrency_limit_manifest_files: usize,
+        concurrency_limit_manifest_entries: usize,
+        processor: F,
+    ) -> impl Stream<Item = Result<T>>
+    where
+        F: Fn(Result<ManifestEntryContext>) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = Result<Option<T>>> + Send + 'static,
+        T: Send + 'static,
+    {
+        futures::stream::iter(contexts)
+            .map(|ctx: Result<ManifestFileContext>| async move {
+                match ctx {
+                    Ok(ctx) => ctx.fetch_manifest_and_stream_entries().await,
+                    Err(error) => Err(error),
+                }
+            })
+            .buffer_unordered(concurrency_limit_manifest_files)
+            .try_flatten_unordered(None)
+            .map(move |ctx| {
+                let processor = processor.clone();
+                async move { processor(ctx).await }
+            })
+            .buffer_unordered(concurrency_limit_manifest_entries)
+            .try_filter_map(|opt_task| async move { Ok(opt_task) })
+    }
+
+    fn process_data_manifest_entry(
+        manifest_entry_context: Result<ManifestEntryContext>,
+        delete_file_index: Arc<DeleteFileIndex>,
+    ) -> Result<Option<FileScanTask>> {
+        let manifest_entry_context = manifest_entry_context?;
+
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry for a delete file
@@ -487,7 +455,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
+                return Ok(None);
             }
 
             // skip any data file whose metrics don't match this scan's filter
@@ -496,27 +464,26 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
-                return Ok(());
+                return Ok(None);
             }
         }
 
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
-            .await?;
-
-        Ok(())
+        Ok(Some(
+            manifest_entry_context.into_file_scan_task(delete_file_index)?,
+        ))
     }
 
-    async fn process_delete_manifest_entry(
-        manifest_entry_context: ManifestEntryContext,
-        mut delete_file_ctx_tx: Sender<DeleteFileContext>,
-    ) -> Result<()> {
+    fn process_delete_manifest_entry(
+        manifest_entry_context: Result<ManifestEntryContext>,
+    ) -> Result<Option<DeleteFileContext>> {
+        let manifest_entry_context = manifest_entry_context?;
+
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry that is not for a delete file
@@ -539,18 +506,14 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
+                return Ok(None);
             }
         }
 
-        delete_file_ctx_tx
-            .send(DeleteFileContext {
-                manifest_entry: manifest_entry_context.manifest_entry.clone(),
-                partition_spec_id: manifest_entry_context.partition_spec_id,
-            })
-            .await?;
-
-        Ok(())
+        Ok(Some(DeleteFileContext {
+            manifest_entry: manifest_entry_context.manifest_entry.clone(),
+            partition_spec_id: manifest_entry_context.partition_spec_id,
+        }))
     }
 }
 
