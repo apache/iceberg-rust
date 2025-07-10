@@ -84,14 +84,6 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        // validate added files
-        SnapshotProducer::validate_added_data_files(table, &self.added_data_files)?;
-
-        // Checks duplicate files
-        if self.check_duplicate {
-            SnapshotProducer::validate_duplicate_files(table, &self.added_data_files).await?;
-        }
-
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -100,8 +92,18 @@ impl TransactionAction for FastAppendAction {
             self.added_data_files.clone(),
         );
 
+        // validate added files
+        snapshot_producer.validate_added_data_files(&self.added_data_files)?;
+
+        // Checks duplicate files
+        if self.check_duplicate {
+            snapshot_producer
+                .validate_duplicate_files(&self.added_data_files)
+                .await?;
+        }
+
         snapshot_producer
-            .commit(table, FastAppendOperation, DefaultManifestProcess)
+            .commit(FastAppendOperation, DefaultManifestProcess)
             .await
     }
 }
@@ -115,18 +117,24 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn delete_entries(
         &self,
-        _snapshot_produce: &SnapshotProducer,
+        _snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestEntry>> {
         Ok(vec![])
     }
 
-    async fn existing_manifest(&self, table: &Table) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = table.metadata().current_snapshot() else {
+    async fn existing_manifest(
+        &self,
+        snapshot_produce: &SnapshotProducer<'_>,
+    ) -> Result<Vec<ManifestFile>> {
+        let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
 
         let manifest_list = snapshot
-            .load_manifest_list(table.file_io(), &table.metadata_ref())
+            .load_manifest_list(
+                snapshot_produce.table.file_io(),
+                &snapshot_produce.table.metadata_ref(),
+            )
             .await?;
 
         Ok(manifest_list
