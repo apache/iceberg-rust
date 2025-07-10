@@ -262,6 +262,26 @@ impl NamespaceState {
         }
     }
 
+    // Updates the metadata location of the given table or throws an error if it doesn't exist
+    pub(crate) fn update_existing_table_location(
+        &mut self,
+        table_ident: &TableIdent,
+        new_metadata_location: String,
+    ) -> Result<()> {
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
+        if !namespace
+            .table_metadata_locations
+            .contains_key(table_ident.name())
+        {
+            return no_such_table_err(table_ident);
+        }
+        namespace
+            .table_metadata_locations
+            .insert(table_ident.name().to_string(), new_metadata_location);
+
+        Ok(())
+    }
+
     // Inserts the given table or returns an error if it already exists
     pub(crate) fn insert_new_table(
         &mut self,

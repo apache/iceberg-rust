@@ -194,6 +194,11 @@ impl TableMetadataBuilder {
         )
     }
 
+    /// Returns whether or not the builder is tracking any changes
+    pub fn has_changes(&self) -> bool {
+        !self.changes.is_empty()
+    }
+
     /// Changes uuid of table metadata.
     pub fn assign_uuid(mut self, uuid: Uuid) -> Self {
         if self.metadata.table_uuid != uuid {
