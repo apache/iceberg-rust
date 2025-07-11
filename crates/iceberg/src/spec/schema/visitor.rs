@@ -190,7 +190,7 @@ pub trait SchemaWithPartnerVisitor<P> {
 /// Accessor used to get child partner from parent partner.
 pub trait PartnerAccessor<P> {
     /// Get the struct partner from schema partner.
-    fn struct_parner<'a>(&self, schema_partner: &'a P) -> Result<&'a P>;
+    fn struct_partner<'a>(&self, schema_partner: &'a P) -> Result<&'a P>;
     /// Get the field partner from struct partner.
     fn field_partner<'a>(&self, struct_partner: &'a P, field: &NestedField) -> Result<&'a P>;
     /// Get the list element partner from list partner.
@@ -274,7 +274,7 @@ pub fn visit_schema_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
 ) -> Result<V::T> {
     let result = visit_struct_with_partner(
         &schema.r#struct,
-        accessor.struct_parner(partner)?,
+        accessor.struct_partner(partner)?,
         visitor,
         accessor,
     )?;
