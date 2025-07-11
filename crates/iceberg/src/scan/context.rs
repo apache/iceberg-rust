@@ -145,6 +145,7 @@ pub(crate) struct PlanContext {
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
+    pub field_names: Arc<Vec<String>>,
     pub field_ids: Arc<Vec<i32>>,
 
     pub partition_filter_cache: Arc<PartitionFilterCache>,

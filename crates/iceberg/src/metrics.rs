@@ -59,9 +59,7 @@ pub(crate) enum MetricsReport {
         /// If None, the scan is an unfiltered full table scan.
         filter: Option<Arc<Predicate>>,
 
-        /// If None, the scan projects all fields.
-        // TODO: We could default to listing all field names in those cases: check what Java is doing.
-        projected_field_names: Option<Vec<String>>,
+        projected_field_names: Arc<Vec<String>>,
         projected_field_ids: Arc<Vec<i32>>,
 
         metrics: Arc<ScanMetrics>,
