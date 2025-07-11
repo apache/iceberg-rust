@@ -56,6 +56,9 @@ jobs:
       - name: Check toml format
         run: make check-toml
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Cargo format
         run: make check-fmt
 
@@ -88,6 +91,9 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
 
       - name: Build
         run: make build
@@ -150,6 +156,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Generate minimal versions lockfile
         run: |
           cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
