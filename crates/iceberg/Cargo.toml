@@ -97,6 +97,7 @@ expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
 

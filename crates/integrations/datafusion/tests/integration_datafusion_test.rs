@@ -29,8 +29,7 @@ use expect_test::expect;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
-use iceberg_catalog_memory::MemoryCatalog;
+use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
