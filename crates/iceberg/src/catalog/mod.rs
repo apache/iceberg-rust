@@ -19,8 +19,6 @@
 
 pub mod memory;
 
-pub use memory::MemoryCatalog;
-
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -30,6 +28,7 @@ use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
+pub use memory::MemoryCatalog;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;

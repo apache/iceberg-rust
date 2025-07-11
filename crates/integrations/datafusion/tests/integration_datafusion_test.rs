@@ -27,10 +27,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
 use iceberg::io::FileIOBuilder;
-use iceberg::MemoryCatalog;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
