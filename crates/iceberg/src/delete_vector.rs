@@ -38,6 +38,15 @@ impl DeleteVector {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
+
+    pub fn insert(&mut self, pos: u64) -> bool {
+        self.inner.insert(pos)
+    }
+
+    #[allow(unused)]
+    pub fn len(&self) -> u64 {
+        self.inner.len()
+    }
 }
 
 // Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.

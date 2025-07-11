@@ -195,7 +195,7 @@ pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs::File;
     use std::path::Path;
     use std::sync::Arc;
@@ -218,7 +218,7 @@ mod tests {
     const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
 
     #[tokio::test]
-    async fn test_delete_file_manager_load_deletes() {
+    async fn test_delete_file_filter_load_deletes() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
         let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
@@ -226,35 +226,59 @@ mod tests {
             .build()
             .unwrap();
 
-        // Note that with the delete file parsing not yet in place, all we can test here is that
-        // the call to the loader fails with the expected FeatureUnsupportedError.
-        let delete_file_manager = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
 
         let file_scan_tasks = setup(table_location);
 
-        let result = delete_file_manager
+        let delete_filter = delete_file_loader
             .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await
+            .unwrap()
             .unwrap();
 
-        assert!(result.is_err_and(|e| e.kind() == ErrorKind::FeatureUnsupported));
+        let result = delete_filter
+            .get_delete_vector(&file_scan_tasks[0])
+            .unwrap();
+        assert_eq!(result.lock().unwrap().len(), 12); // pos dels from pos del file 1 and 2
+
+        let delete_filter = delete_file_loader
+            .load_deletes(&file_scan_tasks[1].deletes, file_scan_tasks[1].schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let result = delete_filter
+            .get_delete_vector(&file_scan_tasks[1])
+            .unwrap();
+        assert_eq!(result.lock().unwrap().len(), 8); // no pos dels for file 3
     }
 
-    fn setup(table_location: &Path) -> Vec<FileScanTask> {
+    pub(crate) fn setup(table_location: &Path) -> Vec<FileScanTask> {
         let data_file_schema = Arc::new(Schema::builder().build().unwrap());
         let positional_delete_schema = create_pos_del_schema();
 
-        let file_path_values = vec![format!("{}/1.parquet", table_location.to_str().unwrap()); 8];
-        let pos_values = vec![0, 1, 3, 5, 6, 8, 1022, 1023];
-
-        let file_path_col = Arc::new(StringArray::from_iter_values(file_path_values));
-        let pos_col = Arc::new(Int64Array::from_iter_values(pos_values));
+        let file_path_values = [
+            vec![format!("{}/1.parquet", table_location.to_str().unwrap()); 8],
+            vec![format!("{}/1.parquet", table_location.to_str().unwrap()); 8],
+            vec![format!("{}/2.parquet", table_location.to_str().unwrap()); 8],
+        ];
+        let pos_values = [
+            vec![0i64, 1, 3, 5, 6, 8, 1022, 1023],
+            vec![0i64, 1, 3, 5, 20, 21, 22, 23],
+            vec![0i64, 1, 3, 5, 6, 8, 1022, 1023],
+        ];
 
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
 
         for n in 1..=3 {
+            let file_path_vals = file_path_values.get(n - 1).unwrap();
+            let file_path_col = Arc::new(StringArray::from_iter_values(file_path_vals));
+
+            let pos_vals = pos_values.get(n - 1).unwrap();
+            let pos_col = Arc::new(Int64Array::from_iter_values(pos_vals.clone()));
+
             let positional_deletes_to_write =
                 RecordBatch::try_new(positional_delete_schema.clone(), vec![
                     file_path_col.clone(),
@@ -309,8 +333,7 @@ mod tests {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: "".to_string(),
-                data_file_content: DataContentType::Data,
+                data_file_path: format!("{}/1.parquet", table_location.to_str().unwrap()),
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
@@ -321,20 +344,19 @@ mod tests {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: "".to_string(),
-                data_file_content: DataContentType::Data,
+                data_file_path: format!("{}/2.parquet", table_location.to_str().unwrap()),
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
-                deletes: vec![pos_del_2, pos_del_3],
+                deletes: vec![pos_del_3],
             },
         ];
 
         file_scan_tasks
     }
 
-    fn create_pos_del_schema() -> ArrowSchemaRef {
+    pub(crate) fn create_pos_del_schema() -> ArrowSchemaRef {
         let fields = vec![
             arrow_schema::Field::new("file_path", arrow_schema::DataType::Utf8, false)
                 .with_metadata(HashMap::from([(
