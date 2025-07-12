@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
+use futures::StreamExt;
+use futures::stream::BoxStream;
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -37,81 +37,73 @@ use crate::{Error, ErrorKind, Result};
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
     manifest_file: ManifestFile,
-
-    sender: Sender<ManifestEntryContext>,
-
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: DeleteFileIndex,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestEntryContext {
     pub manifest_entry: ManifestEntryRef,
-
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     pub field_ids: Arc<Vec<i32>>,
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
-    pub delete_file_index: DeleteFileIndex,
 }
 
 impl ManifestFileContext {
     /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
-    pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
+    /// streaming its constituent [`ManifestEntries`]
+    pub(crate) async fn fetch_manifest_and_stream_entries(
+        self,
+    ) -> Result<BoxStream<'static, Result<ManifestEntryContext>>> {
         let ManifestFileContext {
             object_cache,
             manifest_file,
             bound_predicates,
             snapshot_schema,
             field_ids,
-            mut sender,
             expression_evaluator_cache,
-            delete_file_index,
             ..
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
-        for manifest_entry in manifest.entries() {
-            let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
-                expression_evaluator_cache: expression_evaluator_cache.clone(),
-                field_ids: field_ids.clone(),
-                partition_spec_id: manifest_file.partition_spec_id,
-                bound_predicates: bound_predicates.clone(),
-                snapshot_schema: snapshot_schema.clone(),
-                delete_file_index: delete_file_index.clone(),
-            };
-
-            sender
-                .send(manifest_entry_context)
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
-                .await?;
+        Ok(async_stream::stream! {
+            for manifest_entry in manifest.entries() {
+                yield Ok(ManifestEntryContext {
+                    manifest_entry: manifest_entry.clone(),
+                    expression_evaluator_cache: expression_evaluator_cache.clone(),
+                    field_ids: field_ids.clone(),
+                    partition_spec_id: manifest_file.partition_spec_id,
+                    bound_predicates: bound_predicates.clone(),
+                    snapshot_schema: snapshot_schema.clone(),
+                });
+            }
         }
+        .boxed())
+    }
 
-        Ok(())
+    pub(crate) fn is_delete(&self) -> bool {
+        self.manifest_file.content == ManifestContentType::Deletes
     }
 }
 
 impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
-    pub(crate) async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        let deletes = self
-            .delete_file_index
-            .get_deletes_for_data_file(
-                self.manifest_entry.data_file(),
-                self.manifest_entry.sequence_number(),
-            )
-            .await;
+    pub(crate) fn into_file_scan_task(
+        self,
+        delete_file_index: Arc<DeleteFileIndex>,
+    ) -> Result<FileScanTask> {
+        let deletes = delete_file_index.get_deletes_for_data_file(
+            self.manifest_entry.data_file(),
+            self.manifest_entry.sequence_number(),
+        );
 
         Ok(FileScanTask {
             start: 0,
@@ -134,7 +126,7 @@ impl ManifestEntryContext {
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
 /// objects that are required to perform a scan file plan.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
@@ -152,6 +144,7 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
+    #[tracing::instrument(skip_all)]
     pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
         self.object_cache
             .as_ref()
@@ -180,66 +173,56 @@ impl PlanContext {
         Ok(partition_filter)
     }
 
-    pub(crate) fn build_manifest_file_contexts(
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            manifest_list.len = manifest_list.entries().len(),
+        )
+    )]
+    pub(crate) fn build_manifest_file_context_iter(
         &self,
         manifest_list: Arc<ManifestList>,
-        tx_data: Sender<ManifestEntryContext>,
-        delete_file_idx: DeleteFileIndex,
-        delete_file_tx: Sender<ManifestEntryContext>,
-    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let manifest_files = manifest_list.entries().iter();
+    ) -> impl Iterator<Item = Result<ManifestFileContext>> {
+        let has_predicate = self.predicate.is_some();
 
-        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
-        let mut filtered_mfcs = vec![];
+        (0..manifest_list.entries().len())
+            .map(move |i| manifest_list.entries()[i].clone())
+            .filter_map(move |manifest_file| {
+                // TODO: replace closure when `try_blocks` stabilizes
+                (|| {
+                    let partition_bound_predicate = if has_predicate {
+                        let predicate = self.get_partition_filter(&manifest_file)?;
 
-        for manifest_file in manifest_files {
-            let tx = if manifest_file.content == ManifestContentType::Deletes {
-                delete_file_tx.clone()
-            } else {
-                tx_data.clone()
-            };
+                        if !self
+                            .manifest_evaluator_cache
+                            .get(manifest_file.partition_spec_id, predicate.clone())
+                            .eval(&manifest_file)?
+                        {
+                            tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.skipped");
+                            metrics::counter!("iceberg.scan.manifest_file.skipped", "reason" => "partition").increment(1);
+                            return Ok(None); // Skip this file.
+                        }
+                        Some(predicate)
+                    } else {
+                        None
+                    };
 
-            let partition_bound_predicate = if self.predicate.is_some() {
-                let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
+                    tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.included");
+                    metrics::counter!("iceberg.scan.manifest_file.included").increment(1);
 
-                // evaluate the ManifestFile against the partition filter. Skip
-                // if it cannot contain any matching rows
-                if !self
-                    .manifest_evaluator_cache
-                    .get(
-                        manifest_file.partition_spec_id,
-                        partition_bound_predicate.clone(),
-                    )
-                    .eval(manifest_file)?
-                {
-                    continue;
-                }
-
-                Some(partition_bound_predicate)
-            } else {
-                None
-            };
-
-            let mfc = self.create_manifest_file_context(
-                manifest_file,
-                partition_bound_predicate,
-                tx,
-                delete_file_idx.clone(),
-            );
-
-            filtered_mfcs.push(Ok(mfc));
-        }
-
-        Ok(Box::new(filtered_mfcs.into_iter()))
+                    let context = self
+                        .create_manifest_file_context(manifest_file, partition_bound_predicate)?;
+                    Ok(Some(context))
+                })()
+                .transpose()
+            })
     }
 
     fn create_manifest_file_context(
         &self,
-        manifest_file: &ManifestFile,
+        manifest_file: ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
-        sender: Sender<ManifestEntryContext>,
-        delete_file_index: DeleteFileIndex,
-    ) -> ManifestFileContext {
+    ) -> Result<ManifestFileContext> {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
                 (partition_filter, &self.snapshot_bound_predicate)
@@ -252,15 +235,13 @@ impl PlanContext {
                 None
             };
 
-        ManifestFileContext {
-            manifest_file: manifest_file.clone(),
+        Ok(ManifestFileContext {
+            manifest_file,
             bound_predicates,
-            sender,
             object_cache: self.object_cache.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
-            delete_file_index,
-        }
+        })
     }
 }
