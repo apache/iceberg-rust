@@ -144,6 +144,7 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
+    #[tracing::instrument(skip_all)]
     pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
         self.object_cache
             .as_ref()
@@ -172,6 +173,12 @@ impl PlanContext {
         Ok(partition_filter)
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            manifest_list.len = manifest_list.entries().len(),
+        )
+    )]
     pub(crate) fn build_manifest_file_context_iter(
         &self,
         manifest_list: Arc<ManifestList>,
@@ -191,6 +198,8 @@ impl PlanContext {
                             .get(manifest_file.partition_spec_id, predicate.clone())
                             .eval(&manifest_file)?
                         {
+                            tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.skipped");
+                            metrics::counter!("iceberg.scan.manifest_file.skipped", "reason" => "partition").increment(1);
                             return Ok(None); // Skip this file.
                         }
                         Some(predicate)
@@ -198,9 +207,11 @@ impl PlanContext {
                         None
                     };
 
+                    tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.included");
+                    metrics::counter!("iceberg.scan.manifest_file.included").increment(1);
+
                     let context = self
                         .create_manifest_file_context(manifest_file, partition_bound_predicate)?;
-
                     Ok(Some(context))
                 })()
                 .transpose()

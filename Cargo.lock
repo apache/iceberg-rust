@@ -3534,6 +3534,7 @@ dependencies = [
  "futures",
  "iceberg_test_utils",
  "itertools 0.13.0",
+ "metrics",
  "moka",
  "murmur3",
  "num-bigint",
@@ -3557,6 +3558,7 @@ dependencies = [
  "tera",
  "thrift",
  "tokio",
+ "tracing",
  "typed-builder 0.20.1",
  "url",
  "uuid",
@@ -4418,6 +4420,16 @@ dependencies = [
  "paste",
  "rustc-hash 2.1.1",
  "tokio",
+]
+
+[[package]]
+name = "metrics"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
+dependencies = [
+ "ahash 0.8.11",
+ "portable-atomic",
 ]
 
 [[package]]

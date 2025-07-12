@@ -37,6 +37,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
+use crate::traced_stream::TracedStream;
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
@@ -330,7 +331,11 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        let span = tracing::trace_span!("plan_files");
+        let _entered = span.enter();
+
         let Some(plan_context) = self.plan_context.as_ref() else {
+            tracing::debug!("file plan requested for a table with no snapshots");
             return Ok(Box::pin(futures::stream::empty()));
         };
 
@@ -351,7 +356,7 @@ impl TableScan {
 
         let delete_file_index = Arc::new(delete_file_index);
 
-        Ok(TableScan::process_manifest_contexts(
+        let stream = TableScan::process_manifest_contexts(
             data_contexts,
             self.concurrency_limit_manifest_files,
             self.concurrency_limit_manifest_entries,
@@ -360,7 +365,9 @@ impl TableScan {
                 async move { Self::process_data_manifest_entry(ctx, delete_file_index) }
             },
         )
-        .boxed())
+        .boxed();
+
+        Ok(Box::pin(TracedStream::new(stream, span.clone())))
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -419,19 +426,27 @@ impl TableScan {
             .try_filter_map(|opt_task| async move { Ok(opt_task) })
     }
 
+    #[tracing::instrument(skip_all, fields(file_path))]
     fn process_data_manifest_entry(
         manifest_entry_context: Result<ManifestEntryContext>,
         delete_file_index: Arc<DeleteFileIndex>,
     ) -> Result<Option<FileScanTask>> {
         let manifest_entry_context = manifest_entry_context?;
+        tracing::Span::current().record(
+            "file_path",
+            manifest_entry_context.manifest_entry.file_path(),
+        );
 
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
+            metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "not_alive")
+                .increment(1);
             return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
+            tracing::error!("Encountered an entry for a delete file in a data file manifest");
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Encountered an entry for a delete file in a data file manifest",
@@ -455,6 +470,8 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "partition")
+                    .increment(1);
                 return Ok(None);
             }
 
@@ -464,6 +481,8 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
+                metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "file_metrics")
+                    .increment(1);
                 return Ok(None);
             }
         }
@@ -471,23 +490,32 @@ impl TableScan {
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
+        metrics::counter!("iceberg.scan.data_file.included").increment(1);
         Ok(Some(
             manifest_entry_context.into_file_scan_task(delete_file_index)?,
         ))
     }
 
+    #[tracing::instrument(skip_all, fields(file_path))]
     fn process_delete_manifest_entry(
         manifest_entry_context: Result<ManifestEntryContext>,
     ) -> Result<Option<DeleteFileContext>> {
         let manifest_entry_context = manifest_entry_context?;
+        tracing::Span::current().record(
+            "file_path",
+            manifest_entry_context.manifest_entry.file_path(),
+        );
 
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
+            metrics::counter!("iceberg.scan.delete_file.skipped", "reason" => "not_alive")
+                .increment(1);
             return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
+            tracing::error!("Encountered an entry for a data file in a delete manifest");
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Encountered an entry for a data file in a delete manifest",
@@ -506,10 +534,13 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                metrics::counter!("iceberg.scan.delete_file.skipped", "reason" => "partition")
+                    .increment(1);
                 return Ok(None);
             }
         }
 
+        metrics::counter!("iceberg.scan.delete_file.included").increment(1);
         Ok(Some(DeleteFileContext {
             manifest_entry: manifest_entry_context.manifest_entry.clone(),
             partition_spec_id: manifest_entry_context.partition_spec_id,

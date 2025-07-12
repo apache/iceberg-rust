@@ -85,6 +85,7 @@ impl ObjectCache {
 
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
+    #[tracing::instrument(skip_all)]
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
             return manifest_file
