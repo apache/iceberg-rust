@@ -55,7 +55,7 @@
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use crate::MemoryCatalog;
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -112,7 +112,7 @@
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use crate::MemoryCatalog;
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
