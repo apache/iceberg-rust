@@ -38,7 +38,7 @@
 //! own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)
 //!
 //! # Simple example for the data file writer used parquet physical format:
-//! ```rust, ignore
+//! ```rust
 //! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
 //! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::sync::Arc;
@@ -55,7 +55,7 @@
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
-//! use crate::MemoryCatalog;
+//! use iceberg::MemoryCatalog;
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -97,7 +97,7 @@
 //! ```
 //!
 //! # Custom writer to record latency
-//! ```rust, ignore
+//! ```rust
 //! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
 //! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
 //! use std::time::Instant;
@@ -112,7 +112,7 @@
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 //! use iceberg::{Catalog, Result, TableIdent};
-//! use crate::MemoryCatalog;
+//! use iceberg::MemoryCatalog;
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
