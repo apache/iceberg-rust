@@ -54,8 +54,7 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -111,8 +110,7 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
