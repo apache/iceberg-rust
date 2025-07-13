@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/memory/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_memory" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f280acf4c 2025-02-19)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-6dad6058.js" ><script src="../../static.files/storage-3a5871a4.js"></script><script defer src="../../static.files/src-script-b8d3f215.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5332ae0c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_memory/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/catalog/memory/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f280acf4c 2025-02-19)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-6dad6058.js" ><script src="../../../../static.files/storage-3a5871a4.js"></script><script defer src="../../../../static.files/src-script-b8d3f215.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5332ae0c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/catalog/memory/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -21,17 +21,17 @@
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>futures::lock::Mutex;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>iceberg::io::FileIO;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>iceberg::spec::{TableMetadata, TableMetadataBuilder};
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>iceberg::table::Table;
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>iceberg::{
-<a href=#28 id=28 data-nosnippet>28</a>    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, <span class="prelude-ty">Result</span>, TableCommit, TableCreation,
-<a href=#29 id=29 data-nosnippet>29</a>    TableIdent,
-<a href=#30 id=30 data-nosnippet>30</a>};
-<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>itertools::Itertools;
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>uuid::Uuid;
-<a href=#33 id=33 data-nosnippet>33</a>
-<a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span><span class="kw">crate</span>::namespace_state::NamespaceState;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>itertools::Itertools;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>uuid::Uuid;
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">super</span>::namespace_state::NamespaceState;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::spec::{TableMetadata, TableMetadataBuilder};
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">crate</span>::table::Table;
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use crate</span>::{
+<a href=#32 id=32 data-nosnippet>32</a>    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, <span class="prelude-ty">Result</span>, TableCommit, TableCreation,
+<a href=#33 id=33 data-nosnippet>33</a>    TableIdent,
+<a href=#34 id=34 data-nosnippet>34</a>};
 <a href=#35 id=35 data-nosnippet>35</a>
 <a href=#36 id=36 data-nosnippet>36</a><span class="doccomment">/// namespace `location` property
 <a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">const </span>LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"location"</span>;
@@ -291,12 +291,12 @@
 <a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">use </span>std::hash::Hash;
 <a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">use </span>std::iter::FromIterator;
 <a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span>iceberg::io::FileIOBuilder;
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use </span>iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">use </span>regex::Regex;
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">use </span>tempfile::TempDir;
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span>regex::Regex;
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
 <a href=#300 id=300 data-nosnippet>300</a>
 <a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">fn </span>temp_path() -&gt; String {
 <a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();

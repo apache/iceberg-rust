@@ -35,7 +35,7 @@ own writer and implement writer trait for them so that the custom writer can int
 };
 <span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 <span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
-<span class="kw">use </span>iceberg_catalog_memory::MemoryCatalog;
+<span class="kw">use </span><span class="kw">crate</span>::MemoryCatalog;
 <span class="kw">use </span>parquet::file::properties::WriterProperties;
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -89,7 +89,7 @@ own writer and implement writer trait for them so that the custom writer can int
 };
 <span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 <span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
-<span class="kw">use </span>iceberg_catalog_memory::MemoryCatalog;
+<span class="kw">use </span><span class="kw">crate</span>::MemoryCatalog;
 <span class="kw">use </span>parquet::file::properties::WriterProperties;
 
 <span class="attr">#[derive(Clone)]
