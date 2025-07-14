@@ -19,9 +19,7 @@ a writer can split the data automatelly according to partition and write down as
 <p>User can create specific writer builder, combine them and build the writer finally. Also user can custom
 own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)</p>
 <h2 id="simple-example-for-the-data-file-writer-used-parquet-physical-format"><a class="doc-anchor" href="#simple-example-for-the-data-file-writer-used-parquet-physical-format">§</a>Simple example for the data file writer used parquet physical format:</h2>
-<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// This example uses `iceberg_catalog_memory`, which isn't enabled by default.
-// To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
-</span><span class="kw">use </span>std::sync::Arc;
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 <span class="kw">use </span>async_trait::async_trait;
@@ -34,8 +32,7 @@ own writer and implement writer trait for them so that the custom writer can int
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 <span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-<span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
-<span class="kw">use </span><span class="kw">crate</span>::MemoryCatalog;
+<span class="kw">use </span>iceberg::{Catalog, MemoryCatalog, <span class="prelude-ty">Result</span>, TableIdent};
 <span class="kw">use </span>parquet::file::properties::WriterProperties;
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -43,7 +40,9 @@ own writer and implement writer trait for them so that the custom writer can int
     </span><span class="kw">let </span>file_io = FileIOBuilder::new(<span class="string">"memory"</span>).build()<span class="question-mark">?</span>;
     <span class="comment">// Connect to a catalog.
     </span><span class="kw">let </span>catalog = MemoryCatalog::new(file_io, <span class="prelude-val">None</span>);
-    <span class="comment">// Load table from catalog.
+    <span class="comment">// Add customized code to create a table first.
+
+    // Load table from catalog.
     </span><span class="kw">let </span>table = catalog
         .load_table(<span class="kw-2">&amp;</span>TableIdent::from_strs([<span class="string">"hello"</span>, <span class="string">"world"</span>])<span class="question-mark">?</span>)
         .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -75,9 +74,7 @@ own writer and implement writer trait for them so that the custom writer can int
     <span class="prelude-val">Ok</span>(())
 }</code></pre></div>
 <h2 id="custom-writer-to-record-latency"><a class="doc-anchor" href="#custom-writer-to-record-latency">§</a>Custom writer to record latency</h2>
-<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// This example uses `iceberg_catalog_memory`, which isn't enabled by default.
-// To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
-</span><span class="kw">use </span>std::time::Instant;
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::time::Instant;
 
 <span class="kw">use </span>arrow_array::RecordBatch;
 <span class="kw">use </span>iceberg::io::FileIOBuilder;
@@ -88,8 +85,7 @@ own writer and implement writer trait for them so that the custom writer can int
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 <span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-<span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
-<span class="kw">use </span><span class="kw">crate</span>::MemoryCatalog;
+<span class="kw">use </span>iceberg::{Catalog, MemoryCatalog, <span class="prelude-ty">Result</span>, TableIdent};
 <span class="kw">use </span>parquet::file::properties::WriterProperties;
 
 <span class="attr">#[derive(Clone)]
@@ -141,10 +137,14 @@ own writer and implement writer trait for them so that the custom writer can int
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="comment">// Build your file IO.
-    </span><span class="kw">let </span>file_io = FileIOBuilder::new(<span class="string">"memory"</span>).build()<span class="question-mark">?</span>;
+    </span><span class="kw">use </span>iceberg::NamespaceIdent;
+    <span class="kw">let </span>file_io = FileIOBuilder::new(<span class="string">"memory"</span>).build()<span class="question-mark">?</span>;
     <span class="comment">// Connect to a catalog.
     </span><span class="kw">let </span>catalog = MemoryCatalog::new(file_io, <span class="prelude-val">None</span>);
-    <span class="comment">// Load table from catalog.
+
+    <span class="comment">// Add customized code to create a table first.
+
+    // Load table from catalog.
     </span><span class="kw">let </span>table = catalog
         .load_table(<span class="kw-2">&amp;</span>TableIdent::from_strs([<span class="string">"hello"</span>, <span class="string">"world"</span>])<span class="question-mark">?</span>)
         .<span class="kw">await</span><span class="question-mark">?</span>;
