@@ -21,7 +21,7 @@
 //!
 //! ## Scan A Table
 //!
-//! ```rust, ignore
+//! ```rust, no_run
 //! use futures::TryStreamExt;
 //! use iceberg::io::{FileIO, FileIOBuilder};
 //! use iceberg::MemoryCatalog;
