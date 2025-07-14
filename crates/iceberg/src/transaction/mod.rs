@@ -70,9 +70,10 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWi
 
 use crate::error::Result;
 use crate::spec::{
-    COMMIT_MAX_RETRY_WAIT_MS, COMMIT_MAX_RETRY_WAIT_MS_DEFAULT, COMMIT_MIN_RETRY_WAIT_MS,
-    COMMIT_MIN_RETRY_WAIT_MS_DEFAULT, COMMIT_NUM_RETRIES, COMMIT_NUM_RETRIES_DEFAULT,
-    COMMIT_TOTAL_RETRY_TIME_MS, COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+    PROPERTY_COMMIT_MAX_RETRY_WAIT_MS, PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
+    PROPERTY_COMMIT_MIN_RETRY_WAIT_MS, PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
+    PROPERTY_COMMIT_NUM_RETRIES, PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
+    PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS, PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
 };
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
@@ -82,7 +83,7 @@ use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
@@ -169,7 +170,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let backoff = Self::build_backoff(self.table.metadata().properties());
+        let backoff = Self::build_backoff(self.table.metadata().properties())?;
         let tx = self;
 
         (|mut tx: Transaction| async {
@@ -184,38 +185,55 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: &HashMap<String, String>) -> ExponentialBackoff {
-        ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(
-                props
-                    .get(COMMIT_MIN_RETRY_WAIT_MS)
-                    .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(COMMIT_MIN_RETRY_WAIT_MS_DEFAULT))
-                    .expect("Invalid value for commit.retry.min-wait-ms"),
-            ))
-            .with_max_delay(Duration::from_millis(
-                props
-                    .get(COMMIT_MAX_RETRY_WAIT_MS)
-                    .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(COMMIT_MAX_RETRY_WAIT_MS_DEFAULT))
-                    .expect("Invalid value for commit.retry.max-wait-ms"),
-            ))
-            .with_total_delay(Some(Duration::from_millis(
-                props
-                    .get(COMMIT_TOTAL_RETRY_TIME_MS)
-                    .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT))
-                    .expect("Invalid value for commit.retry.total-timeout-ms"),
-            )))
-            .with_max_times(
-                props
-                    .get(COMMIT_NUM_RETRIES)
-                    .map(|s| s.parse())
-                    .unwrap_or_else(|| Ok(COMMIT_NUM_RETRIES_DEFAULT))
-                    .expect("Invalid value for commit.retry.num-retries"),
-            )
+    fn build_backoff(props: &HashMap<String, String>) -> Result<ExponentialBackoff> {
+        let min_delay = match props.get(PROPERTY_COMMIT_MIN_RETRY_WAIT_MS) {
+            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid value for commit.retry.min-wait-ms",
+                )
+                .with_source(e)
+            })?,
+            None => PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
+        };
+        let max_delay = match props.get(PROPERTY_COMMIT_MAX_RETRY_WAIT_MS) {
+            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid value for commit.retry.max-wait-ms",
+                )
+                .with_source(e)
+            })?,
+            None => PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
+        };
+        let total_delay = match props.get(PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS) {
+            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid value for commit.retry.total-timeout-ms",
+                )
+                .with_source(e)
+            })?,
+            None => PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+        };
+        let max_times = match props.get(PROPERTY_COMMIT_NUM_RETRIES) {
+            Some(value_str) => value_str.parse::<usize>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid value for commit.retry.num-retries",
+                )
+                .with_source(e)
+            })?,
+            None => PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
+        };
+
+        Ok(ExponentialBuilder::new()
+            .with_min_delay(Duration::from_millis(min_delay))
+            .with_max_delay(Duration::from_millis(max_delay))
+            .with_total_delay(Some(Duration::from_millis(total_delay)))
+            .with_max_times(max_times)
             .with_factor(2.0)
-            .build()
+            .build())
     }
 
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
@@ -259,6 +277,7 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIOBuilder;
@@ -375,25 +394,22 @@ mod tests {
             .expect_load_table()
             .returning_st(|_| Box::pin(async move { Ok(make_v2_table()) }));
 
+        let attempts = AtomicU32::new(0);
         mock_catalog
             .expect_update_table()
             .times(expected_calls)
             .returning_st(move |_| {
-                if let Some(attempts) = success_after_attempts {
-                    static mut ATTEMPTS: u32 = 0;
-                    unsafe {
-                        ATTEMPTS += 1;
-                        if ATTEMPTS <= attempts {
-                            Box::pin(async move {
-                                Err(Error::new(
-                                    ErrorKind::CatalogCommitConflicts,
-                                    "Commit conflict",
-                                )
-                                .with_retryable(true))
-                            })
-                        } else {
-                            Box::pin(async move { Ok(make_v2_table()) })
-                        }
+                if let Some(success_after_attempts) = success_after_attempts {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    if attempts.load(Ordering::SeqCst) <= success_after_attempts {
+                        Box::pin(async move {
+                            Err(
+                                Error::new(ErrorKind::CatalogCommitConflicts, "Commit conflict")
+                                    .with_retryable(true),
+                            )
+                        })
+                    } else {
+                        Box::pin(async move { Ok(make_v2_table()) })
                     }
                 } else {
                     // Always fail with retryable error
