@@ -24,8 +24,7 @@
 //! ```rust, no_run
 //! use futures::TryStreamExt;
 //! use iceberg::io::{FileIO, FileIOBuilder};
-//! use iceberg::MemoryCatalog;
-//! use iceberg::{Catalog, Result, TableIdent};
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
