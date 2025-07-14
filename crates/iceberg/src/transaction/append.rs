@@ -108,7 +108,7 @@ impl TransactionAction for FastAppendAction {
     }
 }
 
-struct FastAppendOperation;
+pub(crate) struct FastAppendOperation;
 
 impl SnapshotProduceOperation for FastAppendOperation {
     fn operation(&self) -> Operation {
