@@ -24,6 +24,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.6.0] - 2025-07-14
+
+* chore(deps): Bump ordered-float from 2.10.1 to 4.6.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1374
+* fix: upgrade spark version by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1384
+* feat: Introduce snapshot summary properties by @dentiny in https://github.com/apache/iceberg-rust/pull/1336
+* Change `FieldSummary` `{upper,lower}_bound` to `ByteBuf` by @Fokko in https://github.com/apache/iceberg-rust/pull/1369
+* Revert "feat: Introduce snapshot summary properties (#1336)" by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1390
+* fix(iceberg-catalog-rest): set application/x-www-form-urlencoded content-type header for oauth2 request by @Erigara in https://github.com/apache/iceberg-rust/pull/1393
+* feat: set snapshot summary property in append action by @dentiny in https://github.com/apache/iceberg-rust/pull/1391
+* chore(deps): Bump aws-sdk-glue from 1.97.0 to 1.98.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1403
+* chore(deps): Bump aws-sdk-s3tables from 1.22.0 to 1.23.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1402
+* chore(deps): Bump ordered-float from 2.10.1 to 4.6.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1401
+* Change download link to the `0.5.1` artifacts by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1410
+* feat(storage-azdls): Add Azure Datalake Storage support by @DerGut in https://github.com/apache/iceberg-rust/pull/1368
+* Add catalog builder trait by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1261
+* chore: Add manifest metadata accessor by @dentiny in https://github.com/apache/iceberg-rust/pull/1399
+* [readme] Add moonlink to iceberg-rust users by @dentiny in https://github.com/apache/iceberg-rust/pull/1418
+* Fix the minio config by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1419
+* fix(iceberg): add_files correctly check duplicates by @Erigara in https://github.com/apache/iceberg-rust/pull/1395
+* fix: fix float compare order by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1416
+* bug(storage-azdls): Fix inferred WASB endpoint by @DerGut in https://github.com/apache/iceberg-rust/pull/1417
+* chore(deps): Bump crate-ci/typos from 1.32.0 to 1.33.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1424
+* chore(deps): Bump aws-sdk-glue from 1.98.0 to 1.99.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1423
+* Fix bug reporting project versions by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1425
+* Scan Delete Support Part 4: Delete File Loading; Skeleton for Processing by @sdd in https://github.com/apache/iceberg-rust/pull/982
+* chore(deps): Bump aws-sdk-s3tables from 1.23.0 to 1.25.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1422
+* fix: incorrect storage descriptor when creating tables in GlueCatalog by @geruh in https://github.com/apache/iceberg-rust/pull/1429
+* feat(transaction): Add TransactionAction and related classes by @CTTY in https://github.com/apache/iceberg-rust/pull/1420
+* feat(transaction): Make Transaction own base_table by @CTTY in https://github.com/apache/iceberg-rust/pull/1421
+* Make `key-metadata` optional by @Fokko in https://github.com/apache/iceberg-rust/pull/1434
+* Rename iceberg-cli crate to iceberg-playground by @xxchan in https://github.com/apache/iceberg-rust/pull/1427
+* feat(transaction): Implement TransactionAction for updata_loc, update_props, and upgrade_format by @CTTY in https://github.com/apache/iceberg-rust/pull/1433
+* chore(deps): Bump ordered-float from 2.10.1 to 4.6.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1445
+* chore(deps): Bump aws-config from 1.6.2 to 1.6.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1447
+* chore(deps): Bump serde_with from 3.12.0 to 3.13.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1446
+* [ci] fix pypi publishing trigger by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1444
+* feat: Public accessors for `last_column_id` and `last_partition_id` by @c-thiel in https://github.com/apache/iceberg-rust/pull/1438
+* feat(transaction): Implement TransactionAction for ReplaceSortOrderAction by @CTTY in https://github.com/apache/iceberg-rust/pull/1441
+* feat(transaction): Implement TransactionAction for FastAppendAction by @CTTY in https://github.com/apache/iceberg-rust/pull/1448
+* fix: fix rewrite_not to process complex nested not by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1431
+* Add how to verify release doc by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1426
+* Update link to how to verify release. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1461
+* feat(transaction): Remove current_table, updates, and requirements from Transaction by @CTTY in https://github.com/apache/iceberg-rust/pull/1451
+* [infra] publish rc to pypi as part of release process by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1449
+* feat(catalog): Add TableCommit::apply to help update metadata by @CTTY in https://github.com/apache/iceberg-rust/pull/1464
+* feat(iceberg-catalog-rest): expose invalidate_token, regenerate_token APIs by @cmcarthur in https://github.com/apache/iceberg-rust/pull/1465
+* feat: Support non-default adls-authority-host by @c-thiel in https://github.com/apache/iceberg-rust/pull/1439
+* docs: add `Transaction` example by @jdockerty in https://github.com/apache/iceberg-rust/pull/1436
+* feat(transaction): Add UpdateStatisticsAction by @CTTY in https://github.com/apache/iceberg-rust/pull/1359
+* feat: add retryable property for Error by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1383
+* refine: refine manifest_evaluator to reject not explicitly by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1462
+* feat(catalog): Add ErrorKind::CatalogCommitConflicts by @CTTY in https://github.com/apache/iceberg-rust/pull/1452
+* Allowing publishing iceberg-catalog-sql in workflow. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1473
+* chore(deps): Bump volo-thrift from 0.10.7 to 0.10.8 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1476
+* chore(deps): Bump volo from 0.10.6 to 0.10.7 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1477
+* chore(deps): Bump the arrow-parquet group with 5 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1475
+* chore: make Transaction cloneable by @dentiny in https://github.com/apache/iceberg-rust/pull/1474
+* fix: fix location generator by @chenzl25 in https://github.com/apache/iceberg-rust/pull/1479
+* Scan Delete Support Part 5: Positional Delete Parsing by @sdd in https://github.com/apache/iceberg-rust/pull/1011
+* fix: fix batch transform modify schema by @chenzl25 in https://github.com/apache/iceberg-rust/pull/1483
+* feat(datafusion): support metadata tables for Datafusion by @xxchan in https://github.com/apache/iceberg-rust/pull/879
+* refine: add new_manifest_writer in SnapshotProducer by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1481
+* refine: remove data_file_content in FileScanTask by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1485
+* chore(deps): Bump crate-ci/typos from 1.33.1 to 1.34.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1491
+* chore(deps): Bump serde_with from 3.13.0 to 3.14.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1494
+* chore(deps): Bump tokio from 1.45.0 to 1.46.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1493
+* chore(deps): Bump the arrow-parquet group with 4 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1492
+* typo: FILED_ID_PROP -> FIELD_ID_PROP by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1497
+* refactor: Move memory catalog into core by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1480
+* Remove unnecessary `ignore` attribute  in doc. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1504
+
 ## [v0.5.0] - 2025-05-19
 * io: add support for role arn and external id s3 props by @mattheusv in https://github.com/apache/iceberg-rust/pull/553
 * fix: ensure S3 and GCS integ tests are conditionally compiled only when the storage-s3 and storage-gcs features are enabled by @sdd in https://github.com/apache/iceberg-rust/pull/552
@@ -861,4 +932,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Docs: Add required Cargo version to install guide by @manuzhang in https://github.com/apache/iceberg-rust/pull/191
 * chore(deps): Update opendal requirement from 0.44 to 0.45 by @dependabot in https://github.com/apache/iceberg-rust/pull/195
 
+[v0.6.0]: https://github.com/apache/iceberg-rust/compare/v0.5.1...v0.6.0
 [v0.3.0]: https://github.com/apache/iceberg-rust/compare/v0.2.0...v0.3.0
