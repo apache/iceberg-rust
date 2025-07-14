@@ -130,6 +130,12 @@ impl ManifestEntry {
         self.snapshot_id
     }
 
+    /// File sequence number
+    #[inline]
+    pub fn file_sequence_number(&self) -> Option<i64> {
+        self.file_sequence_number
+    }
+
     /// Data sequence number.
     #[inline]
     pub fn sequence_number(&self) -> Option<i64> {
