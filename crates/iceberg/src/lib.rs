@@ -87,3 +87,4 @@ pub mod writer;
 
 mod delete_vector;
 pub mod puffin;
+mod traced_stream;

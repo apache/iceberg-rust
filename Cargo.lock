@@ -594,6 +594,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3499,6 +3521,7 @@ dependencies = [
  "arrow-string",
  "as-any",
  "async-std",
+ "async-stream",
  "async-trait",
  "base64 0.22.1",
  "bimap",
@@ -3511,6 +3534,7 @@ dependencies = [
  "futures",
  "iceberg_test_utils",
  "itertools 0.13.0",
+ "metrics",
  "moka",
  "murmur3",
  "num-bigint",
@@ -3535,6 +3559,7 @@ dependencies = [
  "tera",
  "thrift",
  "tokio",
+ "tracing",
  "typed-builder 0.20.1",
  "url",
  "uuid",
@@ -4391,6 +4416,16 @@ dependencies = [
  "paste",
  "rustc-hash 2.1.1",
  "tokio",
+]
+
+[[package]]
+name = "metrics"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
+dependencies = [
+ "ahash 0.8.11",
+ "portable-atomic",
 ]
 
 [[package]]
