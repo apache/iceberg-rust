@@ -3496,7 +3496,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-cache-moka"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "iceberg",
  "moka",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-glue"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3584,7 +3584,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-hms"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-rest"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3633,7 +3633,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-s3tables"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3650,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-sql"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "iceberg",
@@ -3667,7 +3667,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-examples"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "futures",
  "iceberg",
@@ -3692,7 +3692,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-integration-tests"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -3711,7 +3711,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-playground"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3731,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-sqllogictest"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3745,7 +3745,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg_test_utils"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "tracing",
  "tracing-subscriber",
