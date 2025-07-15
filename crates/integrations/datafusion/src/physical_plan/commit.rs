@@ -31,7 +31,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream_partitioned,
 };
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use iceberg::Catalog;
 use iceberg::spec::{DataFile, DataFileSerde};
 use iceberg::table::Table;
