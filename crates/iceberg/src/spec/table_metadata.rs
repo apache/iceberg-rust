@@ -684,6 +684,12 @@ impl TableMetadata {
 
         Ok(())
     }
+
+    /// Returns snapshot references.
+    #[inline]
+    pub fn snapshot_refs(&self) -> &HashMap<String, SnapshotReference> {
+        &self.refs
+    }
 }
 
 pub(super) mod _serde {

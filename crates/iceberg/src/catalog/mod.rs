@@ -293,7 +293,7 @@ pub struct TableCreation {
 /// [`TableCommit`] directly.
 /// Users are supposed to use [`crate::transaction::Transaction`] to update table.
 #[derive(Debug, TypedBuilder)]
-#[builder(build_method(vis = "pub(crate)"))]
+#[builder(build_method(vis = "pub"))]
 pub struct TableCommit {
     /// The table ident.
     ident: TableIdent,
