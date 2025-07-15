@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["__create_namespace","__create_table","__drop_namespace","__drop_table","__get_namespace","__list_namespaces","__list_tables","__load_table","__namespace_exists","__rename_table","__table_exists","__update_namespace","__update_table"]};
