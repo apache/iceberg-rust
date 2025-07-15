@@ -740,6 +740,17 @@ impl Catalog for RestCatalog {
         }
     }
 
+    async fn register_table(
+        &self,
+        _table_ident: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Updating a table is not supported yet",
+        ))
+    }
+
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
         let context = self.context().await?;
 

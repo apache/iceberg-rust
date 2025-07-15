@@ -473,6 +473,17 @@ impl Catalog for S3TablesCatalog {
         Ok(())
     }
 
+    async fn register_table(
+        &self,
+        _table_ident: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Updating a table is not supported yet",
+        ))
+    }
+
     /// Updates an existing table within the s3tables catalog.
     ///
     /// This function is still in development and will always return an error.

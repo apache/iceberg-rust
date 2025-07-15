@@ -276,6 +276,26 @@ impl Catalog for MemoryCatalog {
         Ok(())
     }
 
+    async fn register_table(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+        root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
+
+        let input_file = self.file_io.new_input(metadata_location.clone())?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        Table::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .build()
+    }
+
     /// Update a table to the catalog.
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
