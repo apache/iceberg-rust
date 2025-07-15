@@ -776,7 +776,7 @@ impl Catalog for SqlCatalog {
     ) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
+            "Registering a table is not supported yet",
         ))
     }
 

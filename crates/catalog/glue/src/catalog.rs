@@ -635,7 +635,7 @@ impl Catalog for GlueCatalog {
     ) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
+            "Registering a table is not supported yet",
         ))
     }
 
