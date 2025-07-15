@@ -22,6 +22,8 @@ use opendal::layers::RetryLayer;
 use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
+#[cfg(feature = "storage-hdfs-native")]
+use opendal::services::HdfsNativeConfig;
 #[cfg(feature = "storage-oss")]
 use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
@@ -62,6 +64,8 @@ pub(crate) enum Storage {
         configured_scheme: AzureStorageScheme,
         config: Arc<AzdlsConfig>,
     },
+    #[cfg(feature = "storage-hdfs-native")]
+    HdfsNative { config: Arc<HdfsNativeConfig> },
 }
 
 impl Storage {
@@ -96,6 +100,10 @@ impl Storage {
                     configured_scheme: scheme,
                 })
             }
+            #[cfg(feature = "storage-hdfs-native")]
+            Scheme::HdfsNative => Ok(Self::HdfsNative {
+                config: super::hdfs_native_config_parse(props)?.into(),
+            }),
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -192,12 +200,28 @@ impl Storage {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
+            #[cfg(feature = "storage-hdfs-native")]
+            Storage::HdfsNative { config } => {
+                let op = super::hdfs_native_config_build(config)?;
+
+                // Check prefix of hdfs path.
+                let prefix = config.name_node.clone().unwrap_or_default();
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid hdfs url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
                 not(feature = "storage-oss"),
                 not(feature = "storage-azdls"),
+                not(feature = "storage-hdfs-native")
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -221,6 +245,7 @@ impl Storage {
             "gs" | "gcs" => Ok(Scheme::Gcs),
             "oss" => Ok(Scheme::Oss),
             "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
+            "hdfs" => Ok(Scheme::HdfsNative),
             s => Ok(s.parse::<Scheme>()?),
         }
     }

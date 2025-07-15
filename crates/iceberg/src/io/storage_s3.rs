@@ -66,6 +66,14 @@ pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 
+
+/// Property aws region
+pub const AWS_REGION_NAME: &str = "region_name";
+/// Property aws access key
+pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
+/// Property aws secret access key
+pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
+
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
     let mut cfg = S3Config::default();
@@ -75,13 +83,22 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
     if let Some(access_key_id) = m.remove(S3_ACCESS_KEY_ID) {
         cfg.access_key_id = Some(access_key_id);
     };
+    if let Some(access_key_id) = m.remove(AWS_ACCESS_KEY_ID) {
+        cfg.access_key_id = Some(access_key_id);
+    };
     if let Some(secret_access_key) = m.remove(S3_SECRET_ACCESS_KEY) {
+        cfg.secret_access_key = Some(secret_access_key);
+    };
+    if let Some(secret_access_key) = m.remove(AWS_SECRET_ACCESS_KEY) {
         cfg.secret_access_key = Some(secret_access_key);
     };
     if let Some(session_token) = m.remove(S3_SESSION_TOKEN) {
         cfg.session_token = Some(session_token);
     };
     if let Some(region) = m.remove(S3_REGION) {
+        cfg.region = Some(region);
+    };
+    if let Some(region) = m.remove(AWS_REGION_NAME) {
         cfg.region = Some(region);
     };
     if let Some(region) = m.remove(CLIENT_REGION) {
@@ -147,6 +164,8 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         }
     };
 
+
+    
     Ok(cfg)
 }
 
