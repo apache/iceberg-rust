@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [v0.6.0] - 2025-07-14
 
+### Breaking Changes
+
+* **API Changes:**
+  * Change `FieldSummary` `{upper,lower}_bound` field types to `ByteBuf` (#1369)
+  * Make `Transaction` own `base_table` instead of borrowing (#1421)
+  * Remove `current_table`, `updates`, and `requirements` fields from `Transaction` (#1451)
+  * Remove `data_file_content` field from `FileScanTask` (#1485)
+
+* **Module Reorganization:**
+  * Rename `iceberg-cli` crate to `iceberg-playground` (#1427)
+  * Move memory catalog from separate module into core (#1480)
+
+### All Changes
+
 * chore(deps): Bump ordered-float from 2.10.1 to 4.6.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1374
 * fix: upgrade spark version by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1384
 * feat: Introduce snapshot summary properties by @dentiny in https://github.com/apache/iceberg-rust/pull/1336
