@@ -36,7 +36,6 @@ use iceberg::Catalog;
 use iceberg::spec::{DataFile, DataFileSerde};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
-use serde_json;
 
 use crate::to_datafusion_error;
 
