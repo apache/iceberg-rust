@@ -3676,6 +3676,7 @@ dependencies = [
  "futures",
  "iceberg",
  "parquet",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
