@@ -410,8 +410,13 @@ impl Schema {
     }
 
     /// Return A HashMap matching field ids to field names.
-    pub(crate) fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
+    pub fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
         &self.id_to_name
+    }
+
+    /// Return a hashmap matching field ids to nested fields.
+    pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
+        &self.id_to_field
     }
 }
 

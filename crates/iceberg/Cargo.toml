@@ -57,6 +57,7 @@ arrow-string = { workspace = true }
 as-any = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
+backon = { workspace = true }
 base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
@@ -95,6 +96,7 @@ zstd = { workspace = true }
 ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+mockall = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }

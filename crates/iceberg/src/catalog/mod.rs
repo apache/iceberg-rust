@@ -29,6 +29,8 @@ use std::sync::Arc;
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
 pub use memory::MemoryCatalog;
+#[cfg(test)]
+use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -43,6 +45,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)

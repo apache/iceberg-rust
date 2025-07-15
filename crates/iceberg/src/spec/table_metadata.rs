@@ -98,6 +98,26 @@ pub const RESERVED_PROPERTIES: [&str; 9] = [
     PROPERTY_DEFAULT_SORT_ORDER,
 ];
 
+/// Property key for number of commit retries.
+pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+/// Default value for number of commit retries.
+pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
+
+/// Property key for minimum wait time (ms) between retries.
+pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
+/// Default value for minimum wait time (ms) between retries.
+pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
+
+/// Property key for maximum wait time (ms) between retries.
+pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
+/// Default value for maximum wait time (ms) between retries.
+pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
+
+/// Property key for total maximum retry time (ms).
+pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
+/// Default value for total maximum retry time (ms).
+pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
+
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
