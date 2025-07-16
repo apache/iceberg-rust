@@ -34,7 +34,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
-use iceberg::spec::{DataFileFormat, DataFileSerde, FormatVersion};
+use iceberg::spec::{DataFileFormat, FormatVersion, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::CurrentFileStatus;
 use iceberg::writer::file_writer::location_generator::{
@@ -208,19 +208,10 @@ impl ExecutionPlan for IcebergWriteExec {
                         DataFusionError::Execution(format!("Failed to build data file: {}", e))
                     })?;
 
-                    // Convert to DataFileSerde
-                    let serde = DataFileSerde::try_from(data_file, &partition_type, is_version_1)
-                        .map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Failed to convert to DataFileSerde: {}",
-                            e
-                        ))
-                    })?;
-
                     // Serialize to JSON
-                    let json = serde_json::to_string(&serde).map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to serialize to JSON: {}", e))
-                    })?;
+                    let json =
+                        serialize_data_file_to_json(data_file, &partition_type, is_version_1)
+                            .map_err(to_datafusion_error)?;
 
                     println!("Serialized data file: {}", json); // todo remove log
                     Ok(json)
@@ -244,8 +235,8 @@ mod tests {
 
     use datafusion::arrow::array::StringArray;
     use iceberg::spec::{
-        DataFile, DataFileBuilder, DataFileFormat, DataFileSerde, PartitionSpec, PrimitiveType,
-        Schema, Struct, Type,
+        DataFile, DataFileBuilder, DataFileFormat, PartitionSpec, PrimitiveType, Schema, Struct,
+        Type, deserialize_data_file_from_json, serialize_data_file_to_json,
     };
 
     // todo move this to DataFileSerde?
@@ -316,8 +307,7 @@ mod tests {
         let serialized_files = data_files
             .into_iter()
             .map(|f| {
-                let serde = DataFileSerde::try_from(f, &partition_type, is_version_1).unwrap();
-                let json = serde_json::to_string(&serde).unwrap();
+                let json = serialize_data_file_to_json(f, &partition_type, is_version_1).unwrap();
                 println!("Test serialized data file: {}", json);
                 json
             })
@@ -343,14 +333,13 @@ mod tests {
         let deserialized_files: Vec<DataFile> = serialized_files
             .into_iter()
             .map(|json| {
-                // First deserialize to DataFileSerde
-                let data_file_serde: DataFileSerde =
-                    serde_json::from_str(&json).expect("Failed to deserialize to DataFileSerde");
-
-                // Then convert to DataFile
-                let data_file = data_file_serde
-                    .try_into(partition_spec.spec_id(), &partition_type, &schema)
-                    .expect("Failed to convert DataFileSerde to DataFile");
+                let data_file = deserialize_data_file_from_json(
+                    &json,
+                    partition_spec.spec_id(),
+                    &partition_type,
+                    &schema,
+                )
+                .unwrap();
 
                 println!("Deserialized DataFile: {:?}", data_file);
                 data_file

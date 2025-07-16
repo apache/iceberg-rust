@@ -33,7 +33,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::Catalog;
-use iceberg::spec::{DataFile, DataFileSerde};
+use iceberg::spec::{DataFile, deserialize_data_file_from_json};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 
@@ -234,18 +234,18 @@ impl ExecutionPlan for IcebergCommitExec {
                     total_count += count_array.iter().flatten().sum::<u64>();
 
                     // Deserialize all data files from the StringArray
-                    let batch_files: Vec<DataFile> = (0..files_array.len())
-                        .map(|i| -> DFResult<DataFile> {
+                    let batch_files: Vec<DataFile> = files_array
+                        .into_iter()
+                        .flatten()
+                        .map(|f| -> DFResult<DataFile> {
                             // Parse JSON to DataFileSerde and convert to DataFile
-                            serde_json::from_str::<DataFileSerde>(files_array.value(i))
-                                .map_err(|e| {
-                                    DataFusionError::Internal(format!(
-                                        "Failed to deserialize data files: {}",
-                                        e
-                                    ))
-                                })?
-                                .try_into(spec_id, &partition_type, &current_schema)
-                                .map_err(to_datafusion_error)
+                            deserialize_data_file_from_json(
+                                f,
+                                spec_id,
+                                &partition_type,
+                                &current_schema,
+                            )
+                            .map_err(to_datafusion_error)
                         })
                         .collect::<datafusion::common::Result<_>>()?;
 
