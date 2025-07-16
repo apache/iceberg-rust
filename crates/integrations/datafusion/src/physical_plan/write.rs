@@ -207,17 +207,21 @@ impl ExecutionPlan for IcebergWriteExec {
                     let data_file = builder.partition_spec_id(spec_id).build().map_err(|e| {
                         DataFusionError::Execution(format!("Failed to build data file: {}", e))
                     })?;
-                    
+
                     // Convert to DataFileSerde
-                    let serde = DataFileSerde::try_from(data_file, &partition_type, is_version_1).map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to convert to DataFileSerde: {}", e))
+                    let serde = DataFileSerde::try_from(data_file, &partition_type, is_version_1)
+                        .map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Failed to convert to DataFileSerde: {}",
+                            e
+                        ))
                     })?;
-                    
+
                     // Serialize to JSON
                     let json = serde_json::to_string(&serde).map_err(|e| {
                         DataFusionError::Execution(format!("Failed to serialize to JSON: {}", e))
                     })?;
-                    
+
                     println!("Serialized data file: {}", json); // todo remove log
                     Ok(json)
                 })
