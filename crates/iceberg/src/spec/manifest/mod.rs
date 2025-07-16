@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// todo fix encapsulation
 mod _serde;
-pub use _serde::*;
 
 mod data_file;
 pub use data_file::*;
@@ -35,7 +33,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::error::Result;
+use crate::error::{Error, ErrorKind, Result};
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -119,6 +117,38 @@ impl Manifest {
             entries: entries.into_iter().map(Arc::new).collect(),
         }
     }
+}
+
+/// Serialize a DataFile to a JSON string.
+pub fn serialize_data_file_to_json(
+    data_file: DataFile,
+    partition_type: &super::StructType,
+    is_version_1: bool,
+) -> Result<String> {
+    let serde = _serde::DataFileSerde::try_from(data_file, partition_type, is_version_1)?;
+    serde_json::to_string(&serde).map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Failed to serialize DataFile to JSON: {}", e),
+        )
+    })
+}
+
+/// Deserialize a DataFile from a JSON string.
+pub fn deserialize_data_file_from_json(
+    json: &str,
+    partition_spec_id: i32,
+    partition_type: &super::StructType,
+    schema: &Schema,
+) -> Result<DataFile> {
+    let serde = serde_json::from_str::<_serde::DataFileSerde>(json).map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Failed to deserialize JSON to DataFile: {}", e),
+        )
+    })?;
+
+    serde.try_into(partition_spec_id, partition_type, schema)
 }
 
 #[cfg(test)]
