@@ -30,6 +30,7 @@ repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
@@ -44,6 +45,7 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 ctor = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }

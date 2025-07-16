@@ -15,14 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg REST API implementation.
+use base64::Engine;
+use iceberg_catalog_rest::auth::{AuthManager, BasicAuthManager, NoopAuthManager};
 
-#![deny(missing_docs)]
+#[tokio::test]
+async fn test_noop_auth_manager() {
+    let auth_manager = NoopAuthManager;
+    let header = auth_manager.auth_header().await;
+    assert!(header.is_none());
+}
 
-/// Authentication for the REST catalog.
-pub mod auth;
-mod catalog;
-mod client;
-mod types;
-
-pub use catalog::*;
+#[tokio::test]
+async fn test_basic_auth_manager() {
+    let username = "testuser";
+    let password = "testpassword";
+    let auth_manager = BasicAuthManager::new(username, password);
+    let header = auth_manager.auth_header().await;
+    assert!(header.is_some());
+    let expected_token = base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{}", username, password).as_bytes());
+    assert_eq!(header.unwrap(), format!("Basic {}", expected_token));
+}
