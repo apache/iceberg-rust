@@ -19,7 +19,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, StructArray, UInt64Array};
 use datafusion::arrow::datatypes::{
     DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -74,7 +74,7 @@ impl IcebergWriteExec {
     }
 
     // Create a record batch with count and serialized data files
-    fn make_result_batch(count: u64, data_files: Vec<String>) -> RecordBatch {
+    fn make_result_batch(count: u64, data_files: Vec<String>) -> DFResult<RecordBatch> {
         let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
         let files_array = Arc::new(StringArray::from(data_files)) as ArrayRef;
 
@@ -82,7 +82,6 @@ impl IcebergWriteExec {
             ("count", count_array, false),
             ("data_files", files_array, false),
         ])
-        .unwrap()
     }
 
     fn make_result_schema() -> ArrowSchemaRef {
@@ -199,7 +198,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 })
                 .collect::<Vec<String>>();
 
-            Ok(Self::make_result_batch(count, data_files))
+            Ok(Self::make_result_batch(count, data_files)?)
         })
         .boxed();
 
