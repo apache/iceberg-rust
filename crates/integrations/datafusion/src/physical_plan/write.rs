@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt64Array};
@@ -34,13 +35,18 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
-use iceberg::spec::{DataFileFormat, FormatVersion, serialize_data_file_to_json};
+use iceberg::spec::{
+    DataFileFormat, FormatVersion, PROPERTY_DEFAULT_FILE_FORMAT,
+    PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT, serialize_data_file_to_json,
+};
 use iceberg::table::Table;
-use iceberg::writer::CurrentFileStatus;
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder};
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
@@ -157,21 +163,50 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        let parquet_writer_fut = ParquetWriterBuilder::new(
-            WriterProperties::default(),
-            self.table.metadata().current_schema().clone(),
-            self.table.file_io().clone(),
-            DefaultLocationGenerator::new(self.table.metadata().clone())
-                .map_err(to_datafusion_error)?,
-            // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(
-                "datafusion".to_string(),
-                Some(Uuid::now_v7().to_string()),
-                DataFileFormat::Parquet,
-            ),
-        )
-        .build();
+        // todo non-default partition spec?
+        let spec_id = self.table.metadata().default_partition_spec_id();
+        let partition_type = self.table.metadata().default_partition_type().clone();
+        let is_version_1 = self.table.metadata().format_version() == FormatVersion::V1;
 
+        // Check data file format
+        let file_format = DataFileFormat::from_str(
+            self.table
+                .metadata()
+                .properties()
+                .get(PROPERTY_DEFAULT_FILE_FORMAT)
+                .unwrap_or(&PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
+        )
+        .map_err(to_datafusion_error)?;
+        if file_format != DataFileFormat::Parquet {
+            return Err(to_datafusion_error(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "File format {} is not supported for insert_into yet!",
+                    file_format
+                ),
+            )));
+        }
+
+        // Create data file writer builder
+        let data_file_writer_builder = DataFileWriterBuilder::new(
+            ParquetWriterBuilder::new(
+                WriterProperties::default(),
+                self.table.metadata().current_schema().clone(),
+                self.table.file_io().clone(),
+                DefaultLocationGenerator::new(self.table.metadata().clone())
+                    .map_err(to_datafusion_error)?,
+                // todo filename prefix/suffix should be configurable
+                DefaultFileNameGenerator::new(
+                    "datafusion".to_string(),
+                    Some(Uuid::now_v7().to_string()),
+                    file_format,
+                ),
+            ),
+            None,
+            spec_id,
+        );
+
+        // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
             Arc::new(
@@ -182,18 +217,16 @@ impl ExecutionPlan for IcebergWriteExec {
             Arc::clone(&context),
         )?;
 
-        // todo non-default partition spec?
-        let spec_id = self.table.metadata().default_partition_spec_id();
-        let partition_type = self.table.metadata().default_partition_type().clone();
-        let is_version_1 = self.table.metadata().format_version() == FormatVersion::V1;
-
+        // Create write stream
         let stream = futures::stream::once(async move {
-            let mut writer = parquet_writer_fut.await.map_err(to_datafusion_error)?;
+            let mut writer = data_file_writer_builder
+                .build()
+                .await
+                .map_err(to_datafusion_error)?;
             let mut input_stream = data;
 
-            while let Some(batch_res) = input_stream.next().await {
-                let batch = batch_res?;
-                writer.write(&batch).await.map_err(to_datafusion_error)?;
+            while let Some(batch) = input_stream.next().await {
+                writer.write(batch?).await.map_err(to_datafusion_error)?;
             }
 
             let count = writer.current_row_num() as u64;
@@ -202,12 +235,7 @@ impl ExecutionPlan for IcebergWriteExec {
             // Convert builders to data files and then to JSON strings
             let data_files: Vec<String> = data_file_builders
                 .into_iter()
-                .map(|mut builder| -> DFResult<String> {
-                    // Build the data file
-                    let data_file = builder.partition_spec_id(spec_id).build().map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to build data file: {}", e))
-                    })?;
-
+                .map(|data_file| -> DFResult<String> {
                     // Serialize to JSON
                     let json =
                         serialize_data_file_to_json(data_file, &partition_type, is_version_1)
