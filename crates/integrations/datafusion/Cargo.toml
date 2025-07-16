@@ -36,7 +36,6 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
-serde_json = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
