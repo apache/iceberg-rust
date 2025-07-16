@@ -80,10 +80,12 @@ impl IcebergCommitExec {
     }
 
     // Create a record batch with just the count of rows written
-    fn make_count_batch(count: u64) -> RecordBatch {
+    fn make_count_batch(count: u64) -> DFResult<RecordBatch> {
         let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
-        RecordBatch::try_from_iter_with_nullable(vec![("count", count_array, false)]).unwrap()
+        RecordBatch::try_from_iter_with_nullable(vec![("count", count_array, false)]).map_err(|e| {
+            DataFusionError::ArrowError(e, Some("Failed to make count batch!".to_string()))
+        })
     }
 
     fn make_count_schema() -> ArrowSchemaRef {
@@ -232,10 +234,10 @@ impl ExecutionPlan for IcebergCommitExec {
                     total_count += count_array.iter().flatten().sum::<u64>();
 
                     // Deserialize all data files from the StringArray
-                    let batch_files: Vec<DFResult<DataFile>> = (0..files_array.len())
-                        .map(|i| {
-                            let files_json = files_array.value(i);
-                            serde_json::from_str::<DataFileSerde>(files_json)
+                    let batch_files: Vec<DataFile> = (0..files_array.len())
+                        .map(|i| -> DFResult<DataFile> {
+                            // Parse JSON to DataFileSerde and convert to DataFile
+                            serde_json::from_str::<DataFileSerde>(files_array.value(i))
                                 .map_err(|e| {
                                     DataFusionError::Internal(format!(
                                         "Failed to deserialize data files: {}",
@@ -245,11 +247,6 @@ impl ExecutionPlan for IcebergCommitExec {
                                 .try_into(spec_id, &partition_type, &current_schema)
                                 .map_err(to_datafusion_error)
                         })
-                        .collect();
-
-                    // Collect results, propagating any errors
-                    let batch_files: Vec<DataFile> = batch_files
-                        .into_iter()
                         .collect::<datafusion::common::Result<_>>()?;
 
                     // Add all deserialized files to our collection
@@ -275,7 +272,7 @@ impl ExecutionPlan for IcebergCommitExec {
             //     .await
             //     .map_err(to_datafusion_error)?;
 
-            Ok(Self::make_count_batch(total_count))
+            Self::make_count_batch(total_count)
         })
         .boxed();
 
