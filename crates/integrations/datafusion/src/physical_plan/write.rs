@@ -29,9 +29,12 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_input_stream,
+};
 use futures::StreamExt;
-use iceberg::spec::{DataFile, DataFileFormat, DataFileSerde, FormatVersion};
+use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::spec::{DataFileFormat, DataFileSerde, FormatVersion};
 use iceberg::table::Table;
 use iceberg::writer::CurrentFileStatus;
 use iceberg::writer::file_writer::location_generator::{
@@ -39,6 +42,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder};
 use parquet::file::properties::WriterProperties;
+use uuid::Uuid;
 
 use crate::to_datafusion_error;
 
@@ -159,14 +163,24 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table.file_io().clone(),
             DefaultLocationGenerator::new(self.table.metadata().clone())
                 .map_err(to_datafusion_error)?,
-            // todo actual filename
-            DefaultFileNameGenerator::new("what".to_string(), None, DataFileFormat::Parquet),
+            // todo filename prefix/suffix should be configurable
+            DefaultFileNameGenerator::new(
+                "datafusion".to_string(),
+                Some(Uuid::now_v7().to_string()),
+                DataFileFormat::Parquet,
+            ),
         )
         .build();
 
-        // todo repartition
-        let data = self.input.execute(partition, context)?;
-        let result_schema = Arc::clone(&self.result_schema);
+        let data = execute_input_stream(
+            Arc::clone(&self.input),
+            Arc::new(
+                schema_to_arrow_schema(self.table.metadata().current_schema())
+                    .map_err(to_datafusion_error)?,
+            ),
+            partition,
+            Arc::clone(&context),
+        )?;
 
         // todo non-default partition spec?
         let spec_id = self.table.metadata().default_partition_spec_id();
@@ -175,7 +189,6 @@ impl ExecutionPlan for IcebergWriteExec {
 
         let stream = futures::stream::once(async move {
             let mut writer = parquet_writer_fut.await.map_err(to_datafusion_error)?;
-
             let mut input_stream = data;
 
             while let Some(batch_res) = input_stream.next().await {
@@ -186,28 +199,36 @@ impl ExecutionPlan for IcebergWriteExec {
             let count = writer.current_row_num() as u64;
             let data_file_builders = writer.close().await.map_err(to_datafusion_error)?;
 
-            // Convert builders to data files
-            let data_files = data_file_builders
+            // Convert builders to data files and then to JSON strings
+            let data_files: Vec<String> = data_file_builders
                 .into_iter()
-                .map(|mut builder| builder.partition_spec_id(spec_id).build().unwrap())
-                .collect::<Vec<DataFile>>();
-
-            let data_files = data_files
-                .into_iter()
-                .map(|f| {
-                    let serde = DataFileSerde::try_from(f, &partition_type, is_version_1).unwrap();
-                    let json = serde_json::to_string(&serde).unwrap();
+                .map(|mut builder| -> DFResult<String> {
+                    // Build the data file
+                    let data_file = builder.partition_spec_id(spec_id).build().map_err(|e| {
+                        DataFusionError::Execution(format!("Failed to build data file: {}", e))
+                    })?;
+                    
+                    // Convert to DataFileSerde
+                    let serde = DataFileSerde::try_from(data_file, &partition_type, is_version_1).map_err(|e| {
+                        DataFusionError::Execution(format!("Failed to convert to DataFileSerde: {}", e))
+                    })?;
+                    
+                    // Serialize to JSON
+                    let json = serde_json::to_string(&serde).map_err(|e| {
+                        DataFusionError::Execution(format!("Failed to serialize to JSON: {}", e))
+                    })?;
+                    
                     println!("Serialized data file: {}", json); // todo remove log
-                    json
+                    Ok(json)
                 })
-                .collect::<Vec<String>>();
+                .collect::<DFResult<Vec<String>>>()?;
 
-            Ok(Self::make_result_batch(count, data_files)?)
+            Self::make_result_batch(count, data_files)
         })
         .boxed();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            result_schema,
+            Arc::clone(&self.result_schema),
             stream,
         )))
     }
