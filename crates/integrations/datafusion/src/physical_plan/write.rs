@@ -19,11 +19,12 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, StructArray, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{
     DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use datafusion::common::Result as DFResult;
+use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -82,6 +83,9 @@ impl IcebergWriteExec {
             ("count", count_array, false),
             ("data_files", files_array, false),
         ])
+        .map_err(|e| {
+            DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string()))
+        })
     }
 
     fn make_result_schema() -> ArrowSchemaRef {
