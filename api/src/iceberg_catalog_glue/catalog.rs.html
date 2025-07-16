@@ -628,10 +628,21 @@
 <a href=#628 id=628 data-nosnippet>628</a>        }
 <a href=#629 id=629 data-nosnippet>629</a>    }
 <a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#632 id=632 data-nosnippet>632</a>        <span class="prelude-val">Err</span>(Error::new(
-<a href=#633 id=633 data-nosnippet>633</a>            ErrorKind::FeatureUnsupported,
-<a href=#634 id=634 data-nosnippet>634</a>            <span class="string">"Updating a table is not supported yet"</span>,
-<a href=#635 id=635 data-nosnippet>635</a>        ))
-<a href=#636 id=636 data-nosnippet>636</a>    }
-<a href=#637 id=637 data-nosnippet>637</a>}</code></pre></div></section></main></body></html>
+<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">async fn </span>register_table(
+<a href=#632 id=632 data-nosnippet>632</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#633 id=633 data-nosnippet>633</a>        _table_ident: <span class="kw-2">&amp;</span>TableIdent,
+<a href=#634 id=634 data-nosnippet>634</a>        _metadata_location: String,
+<a href=#635 id=635 data-nosnippet>635</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+<a href=#636 id=636 data-nosnippet>636</a>        <span class="prelude-val">Err</span>(Error::new(
+<a href=#637 id=637 data-nosnippet>637</a>            ErrorKind::FeatureUnsupported,
+<a href=#638 id=638 data-nosnippet>638</a>            <span class="string">"Registering a table is not supported yet"</span>,
+<a href=#639 id=639 data-nosnippet>639</a>        ))
+<a href=#640 id=640 data-nosnippet>640</a>    }
+<a href=#641 id=641 data-nosnippet>641</a>
+<a href=#642 id=642 data-nosnippet>642</a>    <span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+<a href=#643 id=643 data-nosnippet>643</a>        <span class="prelude-val">Err</span>(Error::new(
+<a href=#644 id=644 data-nosnippet>644</a>            ErrorKind::FeatureUnsupported,
+<a href=#645 id=645 data-nosnippet>645</a>            <span class="string">"Updating a table is not supported yet"</span>,
+<a href=#646 id=646 data-nosnippet>646</a>        ))
+<a href=#647 id=647 data-nosnippet>647</a>    }
+<a href=#648 id=648 data-nosnippet>648</a>}</code></pre></div></section></main></body></html>
