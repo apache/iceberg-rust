@@ -276,6 +276,26 @@ impl Catalog for MemoryCatalog {
         Ok(())
     }
 
+    async fn register_table(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+        root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
+
+        let input_file = self.file_io.new_input(metadata_location.clone())?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        Table::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .build()
+    }
+
     /// Update a table to the catalog.
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
@@ -1695,6 +1715,50 @@ mod tests {
                 "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_table() {
+        // Create a catalog and namespace
+        let catalog = new_memory_catalog();
+        let namespace_ident = NamespaceIdent::new("test_namespace".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // Create a table to get a valid metadata file
+        let source_table_ident = TableIdent::new(namespace_ident.clone(), "source_table".into());
+        create_table(&catalog, &source_table_ident).await;
+
+        // Get the metadata location from the source table
+        let source_table = catalog.load_table(&source_table_ident).await.unwrap();
+        let metadata_location = source_table.metadata_location().unwrap().to_string();
+
+        // Register a new table using the same metadata location
+        let register_table_ident =
+            TableIdent::new(namespace_ident.clone(), "register_table".into());
+        let registered_table = catalog
+            .register_table(&register_table_ident, metadata_location.clone())
+            .await
+            .unwrap();
+
+        // Verify the registered table has the correct identifier
+        assert_eq!(registered_table.identifier(), &register_table_ident);
+
+        // Verify the registered table has the correct metadata location
+        assert_eq!(
+            registered_table.metadata_location().unwrap().to_string(),
+            metadata_location
+        );
+
+        // Verify the table exists in the catalog
+        assert!(catalog.table_exists(&register_table_ident).await.unwrap());
+
+        // Verify we can load the registered table
+        let loaded_table = catalog.load_table(&register_table_ident).await.unwrap();
+        assert_eq!(loaded_table.identifier(), &register_table_ident);
+        assert_eq!(
+            loaded_table.metadata_location().unwrap().to_string(),
+            metadata_location
         );
     }
 }
