@@ -27,11 +27,11 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_input_stream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    execute_input_stream,
 };
 use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
@@ -41,10 +41,10 @@ use iceberg::spec::{
 };
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
@@ -61,7 +61,7 @@ pub(crate) struct IcebergWriteExec {
 
 impl IcebergWriteExec {
     pub fn new(table: Table, input: Arc<dyn ExecutionPlan>, schema: ArrowSchemaRef) -> Self {
-        let plan_properties = Self::compute_properties(schema.clone());
+        let plan_properties = Self::compute_properties(&input, schema.clone());
 
         Self {
             table,
@@ -71,16 +71,15 @@ impl IcebergWriteExec {
         }
     }
 
-    /// todo: Copied from scan.rs
-    fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
-        // TODO:
-        // This is more or less a placeholder, to be replaced
-        // once we support output-partitioning
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: ArrowSchemaRef,
+    ) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 
@@ -101,8 +100,8 @@ impl IcebergWriteExec {
     fn make_result_schema() -> ArrowSchemaRef {
         // Define a schema.
         Arc::new(ArrowSchema::new(vec![
-            Field::new("data_files", DataType::Utf8, false),
             Field::new("count", DataType::UInt64, false),
+            Field::new("data_files", DataType::Utf8, false),
         ]))
     }
 }
