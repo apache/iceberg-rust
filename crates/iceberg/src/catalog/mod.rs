@@ -17,6 +17,8 @@
 
 //! Catalog API for Apache Iceberg
 
+pub mod memory;
+
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -26,6 +28,9 @@ use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
+pub use memory::MemoryCatalog;
+#[cfg(test)]
+use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -40,6 +45,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
@@ -93,6 +99,9 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
+
+    /// Register an existing table to the catalog.
+    async fn register_table(&self, table: &TableIdent, metadata_location: String) -> Result<Table>;
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;

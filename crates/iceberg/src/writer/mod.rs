@@ -38,9 +38,7 @@
 //! own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)
 //!
 //! # Simple example for the data file writer used parquet physical format:
-//! ```rust, ignore
-//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
-//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
+//! ```rust, no_run
 //! use std::sync::Arc;
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
@@ -54,8 +52,7 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -63,6 +60,8 @@
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
+//!     // Add customized code to create a table first.
+//!
 //!     // Load table from catalog.
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
@@ -97,9 +96,7 @@
 //! ```
 //!
 //! # Custom writer to record latency
-//! ```rust, ignore
-//! // This example uses `iceberg_catalog_memory`, which isn't enabled by default.
-//! // To run this, add `iceberg-catalog-memory` as a dependency in your Cargo.toml.
+//! ```rust, no_run
 //! use std::time::Instant;
 //!
 //! use arrow_array::RecordBatch;
@@ -111,8 +108,7 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
@@ -164,9 +160,13 @@
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Build your file IO.
+//!     use iceberg::NamespaceIdent;
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
+//!
+//!     // Add customized code to create a table first.
+//!
 //!     // Load table from catalog.
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)

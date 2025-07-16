@@ -60,6 +60,9 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+
+    /// Catalog commit failed due to outdated metadata
+    CatalogCommitConflicts,
 }
 
 impl ErrorKind {
@@ -80,6 +83,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
+            ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
         }
     }
 }
@@ -134,6 +138,8 @@ pub struct Error {
 
     source: Option<anyhow::Error>,
     backtrace: Backtrace,
+
+    retryable: bool,
 }
 
 impl Display for Error {
@@ -225,7 +231,15 @@ impl Error {
             // `Backtrace::capture()` will check if backtrace has been enabled
             // internally. It's zero cost if backtrace is disabled.
             backtrace: Backtrace::capture(),
+
+            retryable: false,
         }
+    }
+
+    /// Set retryable of the error.
+    pub fn with_retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
     }
 
     /// Add more context in error.
@@ -304,6 +318,11 @@ impl Error {
     /// Users can use this method to check error's kind and take actions.
     pub fn kind(&self) -> ErrorKind {
         self.kind
+    }
+
+    /// Return error's retryable status
+    pub fn retryable(&self) -> bool {
+        self.retryable
     }
 
     /// Return error's message.

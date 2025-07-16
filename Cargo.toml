@@ -31,7 +31,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 homepage = "https://rust.iceberg.apache.org/"
-version = "0.5.1"
+version = "0.6.0"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
@@ -55,6 +55,7 @@ async-std = "1.12"
 async-trait = "0.1.88"
 aws-config = "1.6.1"
 aws-sdk-glue = "1.39"
+backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"
 bytes = "1.10"
@@ -74,15 +75,15 @@ fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.1"
 http = "1.2"
-iceberg = { version = "0.5.1", path = "./crates/iceberg" }
-iceberg-catalog-memory = { version = "0.5.1", path = "./crates/catalog/memory" }
-iceberg-catalog-rest = { version = "0.5.1", path = "./crates/catalog/rest" }
-iceberg-datafusion = { version = "0.5.1", path = "./crates/integrations/datafusion" }
+iceberg = { version = "0.6.0", path = "./crates/iceberg" }
+iceberg-catalog-rest = { version = "0.6.0", path = "./crates/catalog/rest" }
+iceberg-datafusion = { version = "0.6.0", path = "./crates/integrations/datafusion" }
 indicatif = "0.17"
 itertools = "0.13"
 linkedbytes = "0.1.8"
 metainfo = "0.7.14"
 mimalloc = "0.1.46"
+mockall = "0.13.1"
 mockito = "1"
 motore-macros = "0.4.3"
 murmur3 = "0.5.2"
@@ -107,6 +108,7 @@ serde_repr = "0.1.16"
 serde_with = "3.4"
 sqllogictest = "0.28"
 stacker = "0.1.20"
+strum = "0.27"
 tempfile = "3.18"
 tera = "1"
 thrift = "0.17.0"

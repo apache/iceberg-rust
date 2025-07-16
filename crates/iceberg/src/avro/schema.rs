@@ -33,7 +33,7 @@ use crate::spec::{
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
 const ELEMENT_ID: &str = "element-id";
-const FILED_ID_PROP: &str = "field-id";
+const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const UUID_BYTES: usize = 16;
@@ -81,6 +81,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
             field_schema = avro_optional(field_schema)?;
         }
 
+        let default = if let Some(literal) = &field.initial_default {
+            Some(literal.clone().try_into_json(&field.field_type)?)
+        } else if !field.required {
+            Some(Value::Null)
+        } else {
+            None
+        };
+
         let mut avro_record_field = AvroRecordField {
             name: field.name.clone(),
             schema: field_schema,
@@ -88,15 +96,12 @@ impl SchemaVisitor for SchemaToAvroSchema {
             position: 0,
             doc: field.doc.clone(),
             aliases: None,
-            default: None,
+            default,
             custom_attributes: Default::default(),
         };
 
-        if !field.required {
-            avro_record_field.default = Some(Value::Null);
-        }
         avro_record_field.custom_attributes.insert(
-            FILED_ID_PROP.to_string(),
+            FIELD_ID_PROP.to_string(),
             Value::Number(Number::from(field.id)),
         );
 
@@ -178,7 +183,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
                     custom_attributes: Default::default(),
                 };
                 field.custom_attributes.insert(
-                    FILED_ID_PROP.to_string(),
+                    FIELD_ID_PROP.to_string(),
                     Value::Number(Number::from(map.key_field.id)),
                 );
                 field
@@ -196,7 +201,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
                     custom_attributes: Default::default(),
                 };
                 field.custom_attributes.insert(
-                    FILED_ID_PROP.to_string(),
+                    FIELD_ID_PROP.to_string(),
                     Value::Number(Number::from(map.value_field.id)),
                 );
                 field
@@ -444,7 +449,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         let mut fields = Vec::with_capacity(field_types.len());
         for (avro_field, field_type) in record.fields.iter().zip_eq(field_types) {
             let field_id =
-                Self::get_element_id_from_attributes(&avro_field.custom_attributes, FILED_ID_PROP)?;
+                Self::get_element_id_from_attributes(&avro_field.custom_attributes, FIELD_ID_PROP)?;
 
             let optional = is_avro_optional(&avro_field.schema);
 
@@ -585,11 +590,11 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         })?;
         let key_id = Self::get_element_id_from_attributes(
             &array.fields[0].custom_attributes,
-            FILED_ID_PROP,
+            FIELD_ID_PROP,
         )?;
         let value_id = Self::get_element_id_from_attributes(
             &array.fields[1].custom_attributes,
-            FILED_ID_PROP,
+            FIELD_ID_PROP,
         )?;
         let key_field = NestedField::map_key_element(key_id, key);
         let value_field = NestedField::map_value_element(

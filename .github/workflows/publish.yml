@@ -41,10 +41,8 @@ jobs:
           - "crates/iceberg"
           - "crates/catalog/glue"
           - "crates/catalog/hms"
-          - "crates/catalog/memory"
           - "crates/catalog/rest"
-          # sql is not ready for release yet.
-          # - "crates/catalog/sql"
+          - "crates/catalog/sql"
           - "crates/integrations/datafusion"
     steps:
       - uses: actions/checkout@v4
