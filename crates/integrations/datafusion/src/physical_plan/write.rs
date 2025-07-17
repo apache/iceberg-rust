@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{
     DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -45,7 +45,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
@@ -83,26 +83,22 @@ impl IcebergWriteExec {
         )
     }
 
-    // Create a record batch with count and serialized data files
-    fn make_result_batch(count: u64, data_files: Vec<String>) -> DFResult<RecordBatch> {
-        let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
+    // Create a record batch with serialized data files
+    fn make_result_batch(data_files: Vec<String>) -> DFResult<RecordBatch> {
         let files_array = Arc::new(StringArray::from(data_files)) as ArrayRef;
 
-        RecordBatch::try_from_iter_with_nullable(vec![
-            ("count", count_array, false),
-            ("data_files", files_array, false),
-        ])
-        .map_err(|e| {
-            DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string()))
-        })
+        RecordBatch::try_from_iter_with_nullable(vec![("data_files", files_array, false)]).map_err(
+            |e| DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string())),
+        )
     }
 
     fn make_result_schema() -> ArrowSchemaRef {
         // Define a schema.
-        Arc::new(ArrowSchema::new(vec![
-            Field::new("count", DataType::UInt64, false),
-            Field::new("data_files", DataType::Utf8, false),
-        ]))
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data_files",
+            DataType::Utf8,
+            false,
+        )]))
     }
 }
 
@@ -238,7 +234,6 @@ impl ExecutionPlan for IcebergWriteExec {
                 writer.write(batch?).await.map_err(to_datafusion_error)?;
             }
 
-            let count = writer.current_row_num() as u64;
             let data_file_builders = writer.close().await.map_err(to_datafusion_error)?;
 
             // Convert builders to data files and then to JSON strings
@@ -255,7 +250,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 })
                 .collect::<DFResult<Vec<String>>>()?;
 
-            Self::make_result_batch(count, data_files)
+            Self::make_result_batch(data_files)
         })
         .boxed();
 

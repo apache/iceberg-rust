@@ -187,7 +187,7 @@ impl ExecutionPlan for IcebergCommitExec {
         // Process the input streams from all partitions and commit the data files
         let stream = futures::stream::once(async move {
             let mut data_files: Vec<DataFile> = Vec::new();
-            let mut total_count: u64 = 0;
+            let mut total_record_count: u64 = 0;
 
             // Execute and collect results from all partitions of the input plan
             let batches = execute_stream_partitioned(input_plan, context)?;
@@ -196,21 +196,6 @@ impl ExecutionPlan for IcebergCommitExec {
             for mut batch_stream in batches {
                 while let Some(batch_result) = batch_stream.as_mut().next().await {
                     let batch = batch_result?;
-
-                    let count_array = batch
-                        .column_by_name("count")
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Expected 'count' column in input batch".to_string(),
-                            )
-                        })?
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Expected 'count' column to be UInt64Array".to_string(),
-                            )
-                        })?;
 
                     let files_array = batch
                         .column_by_name("data_files")
@@ -230,9 +215,6 @@ impl ExecutionPlan for IcebergCommitExec {
                     // todo remove log
                     println!("files_array to deserialize: {:?}", files_array);
 
-                    // Sum all values in the count_array
-                    total_count += count_array.iter().flatten().sum::<u64>();
-
                     // Deserialize all data files from the StringArray
                     let batch_files: Vec<DataFile> = files_array
                         .into_iter()
@@ -248,6 +230,9 @@ impl ExecutionPlan for IcebergCommitExec {
                             .map_err(to_datafusion_error)
                         })
                         .collect::<datafusion::common::Result<_>>()?;
+
+                    // add record_counts from the current batch to total record count
+                    total_record_count += batch_files.iter().map(|f| f.record_count()).sum::<u64>();
 
                     // Add all deserialized files to our collection
                     data_files.extend(batch_files);
@@ -272,7 +257,7 @@ impl ExecutionPlan for IcebergCommitExec {
             //     .await
             //     .map_err(to_datafusion_error)?;
 
-            Self::make_count_batch(total_count)
+            Self::make_count_batch(total_record_count)
         })
         .boxed();
 
