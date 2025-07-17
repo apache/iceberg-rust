@@ -69,7 +69,7 @@ impl IcebergCommitExec {
         }
     }
 
-    /// Compute the plan properties for this execution plan
+    // Compute the plan properties for this execution plan
     fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
