@@ -331,43 +331,71 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let span = tracing::trace_span!("plan_files");
-        let _entered = span.enter();
-
         let Some(plan_context) = self.plan_context.as_ref() else {
             tracing::debug!("file plan requested for a table with no snapshots");
             return Ok(Box::pin(futures::stream::empty()));
         };
 
+        let root_span = tracing::info_span!(
+            "iceberg.scan.plan",
+            iceberg.scan.predicate = plan_context.predicate.as_ref().map(|p| p.to_string()),
+            iceberg.scan.snapshot_id = plan_context.snapshot.snapshot_id(),
+            iceberg.scan.case_sensitive = plan_context.case_sensitive,
+            iceberg.scan.field_ids = ?plan_context.field_ids.as_ref(),
+        );
+        let _entered = root_span.enter();
+
         let manifest_list = plan_context.get_manifest_list().await?;
 
-        let (delete_contexts, data_contexts): (Vec<_>, Vec<_>) = plan_context
-            .build_manifest_file_context_iter(manifest_list)
-            .partition(|ctx| ctx.as_ref().map_or(true, |ctx| ctx.is_delete()));
+        let (delete_contexts, data_contexts) =
+            plan_context.build_manifest_file_contexts(manifest_list);
 
-        let delete_file_index: DeleteFileIndex = TableScan::process_manifest_contexts(
-            delete_contexts,
-            self.concurrency_limit_manifest_files,
-            self.concurrency_limit_manifest_entries,
-            |ctx| async move { Self::process_delete_manifest_entry(ctx) },
-        )
-        .try_collect()
-        .await?;
+        let delete_file_index = self.build_delete_file_index(delete_contexts).await?;
 
-        let delete_file_index = Arc::new(delete_file_index);
-
+        let stream_span = tracing::debug_span!(
+            parent: &root_span,
+            "iceberg.scan.plan.process_data_file_manifests"
+        );
+        let stream_span_outer_clone = stream_span.clone();
         let stream = TableScan::process_manifest_contexts(
             data_contexts,
             self.concurrency_limit_manifest_files,
             self.concurrency_limit_manifest_entries,
-            move |ctx| {
+            move |ctx, _span| {
                 let delete_file_index = delete_file_index.clone();
                 async move { Self::process_data_manifest_entry(ctx, delete_file_index) }
             },
+            stream_span,
         )
         .boxed();
 
-        Ok(Box::pin(TracedStream::new(stream, span.clone())))
+        Ok(Box::pin(TracedStream::new(stream, vec![
+            root_span.clone(),
+            stream_span_outer_clone,
+        ])))
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        name = "iceberg.scan.plan.process_delete_file_manifests",
+        level = "debug",
+        fields(iceberg.scan.plan.delete_file_manifest.count = delete_contexts.len()),
+    )]
+    async fn build_delete_file_index(
+        &self,
+        delete_contexts: Vec<Result<ManifestFileContext>>,
+    ) -> Result<Arc<DeleteFileIndex>> {
+        let delete_file_index: DeleteFileIndex = TableScan::process_manifest_contexts(
+            delete_contexts,
+            self.concurrency_limit_manifest_files,
+            self.concurrency_limit_manifest_entries,
+            |ctx, _span| async move { Self::process_delete_manifest_entry(ctx) },
+            tracing::Span::current(),
+        )
+        .try_collect()
+        .await?;
+
+        Ok(Arc::new(delete_file_index))
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -403,43 +431,51 @@ impl TableScan {
         concurrency_limit_manifest_files: usize,
         concurrency_limit_manifest_entries: usize,
         processor: F,
+        span: tracing::Span,
     ) -> impl Stream<Item = Result<T>>
     where
-        F: Fn(Result<ManifestEntryContext>) -> Fut + Send + Sync + 'static + Clone,
+        F: Fn(Result<ManifestEntryContext>, tracing::Span) -> Fut + Send + Sync + 'static + Clone,
         Fut: Future<Output = Result<Option<T>>> + Send + 'static,
         T: Send + 'static,
     {
+        let processor_span_clone = span.clone();
+        let fetcher_span_clone = span.clone();
         futures::stream::iter(contexts)
-            .map(|ctx: Result<ManifestFileContext>| async move {
-                match ctx {
-                    Ok(ctx) => ctx.fetch_manifest_and_stream_entries().await,
-                    Err(error) => Err(error),
+            .map(move |ctx: Result<ManifestFileContext>| {
+                let fetcher_span = fetcher_span_clone.clone();
+                async move {
+                    match ctx {
+                        Ok(ctx) => ctx.fetch_manifest_and_stream_entries(fetcher_span).await,
+                        Err(error) => Err(error),
+                    }
                 }
             })
             .buffer_unordered(concurrency_limit_manifest_files)
             .try_flatten_unordered(None)
             .map(move |ctx| {
-                let processor = processor.clone();
-                async move { processor(ctx).await }
+                let span = processor_span_clone.clone();
+                let proc = processor.clone();
+                async move { proc(ctx, span).await }
             })
             .buffer_unordered(concurrency_limit_manifest_entries)
             .try_filter_map(|opt_task| async move { Ok(opt_task) })
+            .boxed()
     }
 
-    #[tracing::instrument(skip_all, fields(file_path))]
     fn process_data_manifest_entry(
         manifest_entry_context: Result<ManifestEntryContext>,
         delete_file_index: Arc<DeleteFileIndex>,
     ) -> Result<Option<FileScanTask>> {
         let manifest_entry_context = manifest_entry_context?;
-        tracing::Span::current().record(
-            "file_path",
-            manifest_entry_context.manifest_entry.file_path(),
-        );
+
+        let span = manifest_entry_context.span.clone();
+        let _guard = span.enter();
 
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "not_alive")
+            span.record("iceberg.scan.plan.data_file.skipped", true);
+            span.record("iceberg.scan.plan.data_file.skipped_reason", "not_alive");
+            metrics::counter!("iceberg.scan.plan.data_file.skipped", "reason" => "not_alive")
                 .increment(1);
             return Ok(None);
         }
@@ -470,7 +506,9 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "partition")
+                span.record("iceberg.scan.plan.data_file.skipped", true);
+                span.record("iceberg.scan.plan.data_file.skipped_reason", "partition");
+                metrics::counter!("iceberg.scan.plan.data_file.skipped", "reason" => "partition")
                     .increment(1);
                 return Ok(None);
             }
@@ -481,7 +519,9 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
-                metrics::counter!("iceberg.scan.data_file.skipped", "reason" => "file_metrics")
+                span.record("iceberg.scan.plan.data_file.skipped", true);
+                span.record("iceberg.scan.plan.data_file.skipped_reason", "file_metrics");
+                metrics::counter!("iceberg.scan.plan.data_file.skipped", "reason" => "file_metrics")
                     .increment(1);
                 return Ok(None);
             }
@@ -490,25 +530,37 @@ impl TableScan {
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
-        metrics::counter!("iceberg.scan.data_file.included").increment(1);
+        span.record("iceberg.scan.plan.data_file.skipped", false);
+        metrics::counter!("iceberg.scan.plan.data_file.included").increment(1);
         Ok(Some(
             manifest_entry_context.into_file_scan_task(delete_file_index)?,
         ))
     }
 
-    #[tracing::instrument(skip_all, fields(file_path))]
+    #[tracing::instrument(
+        skip_all,
+        level = "debug",
+        fields(
+            iceberg.scan.plan.delete_file.file_path,
+            iceberg.scan.plan.delete_file.skipped,
+            iceberg.scan.plan.delete_file.skipped_reason,
+        )
+    )]
     fn process_delete_manifest_entry(
         manifest_entry_context: Result<ManifestEntryContext>,
     ) -> Result<Option<DeleteFileContext>> {
         let manifest_entry_context = manifest_entry_context?;
         tracing::Span::current().record(
-            "file_path",
+            "iceberg.scan.plan.delete_file.file_path",
             manifest_entry_context.manifest_entry.file_path(),
         );
 
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            metrics::counter!("iceberg.scan.delete_file.skipped", "reason" => "not_alive")
+            tracing::Span::current().record("iceberg.scan.plan.delete_file.skipped", true);
+            tracing::Span::current()
+                .record("iceberg.scan.plan.delete_file.skipped_reason", "not_alive");
+            metrics::counter!("iceberg.scan.plan.delete_file.skipped", "reason" => "not_alive")
                 .increment(1);
             return Ok(None);
         }
@@ -534,13 +586,19 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                metrics::counter!("iceberg.scan.delete_file.skipped", "reason" => "partition")
+                tracing::Span::current().record("iceberg.scan.plan.delete_file.skipped", true);
+                tracing::Span::current().record(
+                    "iceberg.scan.plan.delete_file.skipped_reason",
+                    "partition_not_matched",
+                );
+                metrics::counter!("iceberg.scan.plan.delete_file.skipped", "reason" => "partition")
                     .increment(1);
                 return Ok(None);
             }
         }
 
-        metrics::counter!("iceberg.scan.delete_file.included").increment(1);
+        tracing::Span::current().record("iceberg.scan.plan.delete_file.skipped", false);
+        metrics::counter!("iceberg.scan.plan.delete_file.included").increment(1);
         Ok(Some(DeleteFileContext {
             manifest_entry: manifest_entry_context.manifest_entry.clone(),
             partition_spec_id: manifest_entry_context.partition_spec_id,

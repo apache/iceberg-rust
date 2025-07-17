@@ -39,7 +39,7 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
     /// provided [`DataFile`]'s metrics. Used by [`TableScan`] to
     /// see if this `DataFile` contains data that could match
     /// the scan's filter.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "trace")]
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
         data_file: &'a DataFile,

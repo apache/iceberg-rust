@@ -38,3 +38,6 @@ parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 ordered-float = "2.10.1"
+
+metrics-exporter-prometheus = "0.17"
+init-tracing-opentelemetry = { version = "0.28", features = ["tracing_subscriber_ext"] }

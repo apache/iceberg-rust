@@ -59,7 +59,7 @@ async fn test_scan_all_type() {
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
         .with_fields(vec![
-            // test all type
+            // test all types
             NestedField::required(1, "int", Type::Primitive(PrimitiveType::Int)).into(),
             NestedField::required(2, "long", Type::Primitive(PrimitiveType::Long)).into(),
             NestedField::required(3, "float", Type::Primitive(PrimitiveType::Float)).into(),

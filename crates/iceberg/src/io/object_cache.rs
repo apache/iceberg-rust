@@ -85,7 +85,12 @@ impl ObjectCache {
 
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(
+        skip_all,
+        name = "iceberg.object_cache.get_manifest"
+        level = "debug",
+        fields(iceberg.object_cache.manifest.cache_hit)
+    )]
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
             return manifest_file
@@ -102,13 +107,23 @@ impl ObjectCache {
             .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file))
             .await
             .map_err(|err| {
+                tracing::error!(
+                    iceberg.error_msg = %err.to_string(),
+                    "failed to load manifest from cache"
+                );
                 Error::new(
                     ErrorKind::Unexpected,
                     format!("Failed to load manifest {}", manifest_file.manifest_path),
                 )
                 .with_source(err)
-            })?
-            .into_value();
+            })?;
+
+        tracing::Span::current().record(
+            "iceberg.object_cache.manifest.cache_hit",
+            cache_entry.is_fresh(),
+        );
+
+        let cache_entry = cache_entry.into_value();
 
         match cache_entry {
             CachedItem::Manifest(arc_manifest) => Ok(arc_manifest),

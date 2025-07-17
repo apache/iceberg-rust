@@ -25,11 +25,19 @@ pub mod shared_tests;
 static DOCKER_CONTAINERS: OnceLock<Arc<TestFixture>> = OnceLock::new();
 
 pub fn get_shared_containers() -> &'static Arc<TestFixture> {
-    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests")))
+    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests", true)))
+}
+
+pub fn get_shared_containers_no_tracing_sub() -> &'static Arc<TestFixture> {
+    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests", false)))
 }
 
 #[dtor]
 fn shutdown() {
+    if std::env::var("ICEBERG_INTEG_TEST_PERSISTENT_DOCKER_STACK").is_ok() {
+        return;
+    }
+
     if let Some(fixture) = DOCKER_CONTAINERS.get() {
         fixture._docker_compose.down()
     }

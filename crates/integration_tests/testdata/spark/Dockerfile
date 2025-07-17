@@ -50,8 +50,10 @@ RUN chmod u+x /opt/spark/sbin/* && \
 
 WORKDIR '/home/'
 
-COPY entrypoint.sh .
-COPY provision.py .
+CMD ls /tmp -lha
+
+# COPY entrypoint.sh .
+# COPY provision.py .
 
 HEALTHCHECK --retries=120 --interval=1s \
   CMD ls /tmp/ready || exit 1

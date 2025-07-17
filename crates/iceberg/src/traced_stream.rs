@@ -6,14 +6,14 @@ use tracing::Span;
 
 pub struct TracedStream<S> {
     stream: S,
-    _span: Span,
+    _spans: Vec<Span>,
 }
 
 impl<S> TracedStream<S> {
-    pub fn new(stream: S, span: Span) -> Self {
+    pub fn new(stream: S, spans: Vec<Span>) -> Self {
         Self {
             stream,
-            _span: span,
+            _spans: spans,
         }
     }
 }
@@ -25,7 +25,11 @@ where S: Stream + Unpin
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let _entered = this._span.enter();
+        let _entered = this
+            ._spans
+            .iter()
+            .map(|span| span.enter())
+            .collect::<Vec<_>>();
         Pin::new(&mut this.stream).poll_next(cx)
     }
 }

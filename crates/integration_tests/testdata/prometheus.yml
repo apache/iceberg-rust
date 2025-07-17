@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+    metrics_path: /minio/v2/metrics/cluster
+    scrape_interval: 5s
+
+  - job_name: 'iceberg-rest'
+    static_configs:
+      - targets: ['rest:8181']
+    metrics_path: /metrics
+    scrape_interval: 5s
+
+  - job_name: 'integration-tests'
+    static_configs:
+      - targets: [ 'tests:9000' ]
+    metrics_path: /metrics
+    scrape_interval: 1s

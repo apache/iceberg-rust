@@ -29,6 +29,7 @@ use crate::cmd::{get_cmd_output, get_cmd_output_result, run_command};
 pub struct DockerCompose {
     project_name: String,
     docker_compose_dir: String,
+    keep_running: bool,
 }
 
 impl DockerCompose {
@@ -36,7 +37,12 @@ impl DockerCompose {
         Self {
             project_name: project_name.to_string(),
             docker_compose_dir: docker_compose_dir.to_string(),
+            keep_running: false,
         }
+    }
+
+    pub fn keep_running(&mut self) {
+        self.keep_running = true;
     }
 
     pub fn project_name(&self) -> &str {
@@ -67,7 +73,32 @@ impl DockerCompose {
         }
     }
 
+    pub fn is_running(&self) -> bool {
+        let mut cmd = Command::new("docker");
+        cmd.args(vec![
+            "compose",
+            "-p",
+            self.project_name.as_str(),
+            "ps",
+            "--status",
+            "running",
+            "--quiet",
+        ]);
+        cmd.current_dir(&self.docker_compose_dir);
+
+        let result = get_cmd_output_result(cmd, "Check if containers are running".to_string());
+        match result {
+            Ok(output) => !output.trim().is_empty(),
+            Err(_) => false,
+        }
+    }
+
     pub fn up(&self) {
+        if self.is_running() {
+            println!("Docker compose stack is already running, reusing existing containers");
+            return;
+        }
+
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 
@@ -138,6 +169,8 @@ impl DockerCompose {
 
 impl Drop for DockerCompose {
     fn drop(&mut self) {
-        self.down()
+        if !self.keep_running {
+            self.down()
+        }
     }
 }

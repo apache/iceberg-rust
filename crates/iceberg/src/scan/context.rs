@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use tracing::Instrument;
+use tracing::field::Empty;
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -31,6 +33,7 @@ use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, SchemaRef, SnapshotRef,
     TableMetadataRef,
 };
+use crate::traced_stream::TracedStream;
 use crate::{Error, ErrorKind, Result};
 
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
@@ -53,6 +56,7 @@ pub(crate) struct ManifestEntryContext {
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
+    pub(crate) span: tracing::Span,
 }
 
 impl ManifestFileContext {
@@ -60,7 +64,17 @@ impl ManifestFileContext {
     /// streaming its constituent [`ManifestEntries`]
     pub(crate) async fn fetch_manifest_and_stream_entries(
         self,
+        parent_span: tracing::Span,
     ) -> Result<BoxStream<'static, Result<ManifestEntryContext>>> {
+        let manifest_span = tracing::debug_span!(
+            parent: &parent_span,
+            "iceberg.scan.plan.process_manifest",
+            iceberg.scan.plan.manifest.file_path = self.manifest_file.manifest_path,
+            iceberg.scan.plan.manifest.entries_count = Empty,
+        );
+
+        let span = manifest_span.clone();
+
         let ManifestFileContext {
             object_cache,
             manifest_file,
@@ -71,10 +85,30 @@ impl ManifestFileContext {
             ..
         } = self;
 
-        let manifest = object_cache.get_manifest(&manifest_file).await?;
+        let (manifest, manifest_file) = async move {
+            let manifest = object_cache.get_manifest(&manifest_file).await;
+            (manifest, manifest_file)
+        }
+        .instrument(manifest_span.clone())
+        .await;
+        let manifest = manifest?;
 
-        Ok(async_stream::stream! {
+        span.record(
+            "iceberg.scan.plan.manifest.entries_count",
+            manifest.entries().len(),
+        );
+
+        let stream = async_stream::stream! {
             for manifest_entry in manifest.entries() {
+                let manifest_entry_span = tracing::debug_span!(
+                    parent: span.clone(),
+                    "iceberg.scan.plan.process_data_file",
+                    iceberg.scam.plan.data_file.file_path = manifest_entry.file_path(),
+                    "iceberg.scan.plan_data_file.type" = Empty,
+                    iceberg.scan.plan.data_file.skipped = Empty,
+                    iceberg.scan.plan.data_file.skipped_reason = Empty,
+                );
+
                 yield Ok(ManifestEntryContext {
                     manifest_entry: manifest_entry.clone(),
                     expression_evaluator_cache: expression_evaluator_cache.clone(),
@@ -82,10 +116,15 @@ impl ManifestFileContext {
                     partition_spec_id: manifest_file.partition_spec_id,
                     bound_predicates: bound_predicates.clone(),
                     snapshot_schema: snapshot_schema.clone(),
+                    span: manifest_entry_span,
                 });
             }
         }
-        .boxed())
+        .boxed();
+
+        Ok(Box::pin(TracedStream::new(stream, vec![
+            manifest_span.clone(),
+        ])))
     }
 
     pub(crate) fn is_delete(&self) -> bool {
@@ -144,7 +183,11 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(
+        skip_all,
+        level = "debug",
+        fields(iceberg.scan.plan.manifest_list.file_path = ?self.snapshot.manifest_list()),
+    )]
     pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
         self.object_cache
             .as_ref()
@@ -175,14 +218,19 @@ impl PlanContext {
 
     #[tracing::instrument(
         skip_all,
+        level = "debug",
+        name = "iceberg.scan.plan.process_manifest_list",
         fields(
-            manifest_list.len = manifest_list.entries().len(),
+            iceberg.scan.plan.manifest_list.entries_count = manifest_list.entries().len(),
         )
     )]
-    pub(crate) fn build_manifest_file_context_iter(
+    pub(crate) fn build_manifest_file_contexts(
         &self,
         manifest_list: Arc<ManifestList>,
-    ) -> impl Iterator<Item = Result<ManifestFileContext>> {
+    ) -> (
+        Vec<Result<ManifestFileContext>>,
+        Vec<Result<ManifestFileContext>>,
+    ) {
         let has_predicate = self.predicate.is_some();
 
         (0..manifest_list.entries().len())
@@ -198,8 +246,12 @@ impl PlanContext {
                             .get(manifest_file.partition_spec_id, predicate.clone())
                             .eval(&manifest_file)?
                         {
-                            tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.skipped");
-                            metrics::counter!("iceberg.scan.manifest_file.skipped", "reason" => "partition").increment(1);
+                            tracing::debug!(
+                                iceberg.scan.plan.manifest.file_path = manifest_file.manifest_path,
+                                iceberg.scan.plan.manifest.skip_reason = "partition",
+                                "iceberg.scan.plan.manifest_file.skipped"
+                            );
+                            metrics::counter!("iceberg.scan.plan.manifest_file.skipped", "reason" => "partition").increment(1);
                             return Ok(None); // Skip this file.
                         }
                         Some(predicate)
@@ -207,8 +259,7 @@ impl PlanContext {
                         None
                     };
 
-                    tracing::trace!(file_path = manifest_file.manifest_path, "iceberg.scan.manifest_file.included");
-                    metrics::counter!("iceberg.scan.manifest_file.included").increment(1);
+                    metrics::counter!("iceberg.scan.plan.manifest_file.included").increment(1);
 
                     let context = self
                         .create_manifest_file_context(manifest_file, partition_bound_predicate)?;
@@ -216,6 +267,7 @@ impl PlanContext {
                 })()
                 .transpose()
             })
+            .partition(|ctx| ctx.as_ref().map_or(true, |ctx| ctx.is_delete()))
     }
 
     fn create_manifest_file_context(

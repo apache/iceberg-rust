@@ -29,16 +29,22 @@ pub struct TestFixture {
     pub catalog_config: RestCatalogConfig,
 }
 
-pub fn set_test_fixture(func: &str) -> TestFixture {
-    set_up();
-    let docker_compose = DockerCompose::new(
+pub fn set_test_fixture(func: &str, set_up_tracing_subscriber: bool) -> TestFixture {
+    if set_up_tracing_subscriber {
+        set_up();
+    }
+    let mut docker_compose = DockerCompose::new(
         normalize_test_name(format!("{}_{func}", module_path!())),
         format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
     );
 
-    // Stop any containers from previous runs and start new ones
-    docker_compose.down();
-    docker_compose.up();
+    if std::env::var("ICEBERG_INTEG_TEST_PERSISTENT_DOCKER_STACK").is_err() {
+        // Stop any containers from previous runs and start new ones
+        docker_compose.down();
+        docker_compose.up();
+    } else {
+        docker_compose.keep_running();
+    }
 
     let rest_catalog_ip = docker_compose.get_container_ip("rest");
     let minio_ip = docker_compose.get_container_ip("minio");

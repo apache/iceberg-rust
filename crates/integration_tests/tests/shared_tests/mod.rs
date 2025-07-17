@@ -27,6 +27,7 @@ mod append_data_file_test;
 mod append_partition_data_file_test;
 mod conflict_commit_test;
 mod datafusion;
+mod observability;
 mod read_evolved_schema;
 mod read_positional_deletes;
 mod scan_all_type;
