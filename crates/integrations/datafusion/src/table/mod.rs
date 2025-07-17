@@ -162,7 +162,7 @@ impl TableProvider for IcebergTableProvider {
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
-    ) -> std::result::Result<Vec<TableProviderFilterPushDown>, datafusion::error::DataFusionError>
+    ) -> std::result::Result<Vec<TableProviderFilterPushDown>, DataFusionError>
     {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
@@ -174,24 +174,31 @@ impl TableProvider for IcebergTableProvider {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if !self.table.metadata().default_partition_spec().is_unpartitioned() {
+            // TODO add insert into support for partitioned tables
+            return Err(DataFusionError::NotImplemented(
+                "IcebergTableProvider::insert_into does not support partitioned tables yet".to_string()
+            ));
+        }
+
+        let Some(catalog) = self.catalog.clone() else {
+            return Err(DataFusionError::Execution(
+                "Catalog cannot be none for insert_into".to_string(),
+            ));
+        };
+
         let write_plan = Arc::new(IcebergWriteExec::new(
             self.table.clone(),
             input,
             self.schema.clone(),
         ));
 
-        if let Some(catalog) = self.catalog.clone() {
-            Ok(Arc::new(IcebergCommitExec::new(
-                self.table.clone(),
-                catalog,
-                write_plan,
-                self.schema.clone(),
-            )))
-        } else {
-            Err(DataFusionError::Execution(
-                "Catalog cannot be none for insert_into".to_string(),
-            ))
-        }
+        Ok(Arc::new(IcebergCommitExec::new(
+            self.table.clone(),
+            catalog,
+            write_plan,
+            self.schema.clone(),
+        )))
     }
 }
 
