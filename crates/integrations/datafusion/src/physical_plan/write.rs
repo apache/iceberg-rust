@@ -27,7 +27,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -61,7 +61,7 @@ pub(crate) struct IcebergWriteExec {
 
 impl IcebergWriteExec {
     pub fn new(table: Table, input: Arc<dyn ExecutionPlan>, schema: ArrowSchemaRef) -> Self {
-        let plan_properties = Self::compute_properties(&input, schema.clone());
+        let plan_properties = Self::compute_properties(&input, schema);
 
         Self {
             table,
@@ -77,7 +77,7 @@ impl IcebergWriteExec {
     ) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            input.output_partitioning().clone(),
+            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             input.pipeline_behavior(),
             input.boundedness(),
         )
@@ -147,14 +147,24 @@ impl ExecutionPlan for IcebergWriteExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
+        vec![&self.input]
     }
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        Ok(self)
+        if children.len() != 1 {
+            return Err(DataFusionError::Internal(
+                "IcebergWriteExec expects exactly one child".to_string(),
+            ));
+        }
+
+        Ok(Arc::new(Self::new(
+            self.table.clone(),
+            Arc::clone(&children[0]),
+            self.schema(),
+        )))
     }
 
     fn execute(
