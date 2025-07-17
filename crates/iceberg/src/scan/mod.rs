@@ -456,8 +456,7 @@ impl TableScan {
                         .send(Err(error))
                         .await;
                 }
-            })
-            .await;
+            });
         }
 
         let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
