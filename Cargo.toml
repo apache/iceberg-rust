@@ -122,3 +122,4 @@ uuid = { version = "1.16", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.6"
 zstd = "0.13.2"
+hdfs-native = { version = "0.10" }
