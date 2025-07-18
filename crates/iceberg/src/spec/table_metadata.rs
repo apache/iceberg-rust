@@ -3089,9 +3089,7 @@ mod tests {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
 
         // Use an existing test metadata from the test files
-        let metadata_path = "testdata/table_metadata/TableMetadataV2Valid.json";
-        let metadata_content = fs::read_to_string(metadata_path).unwrap();
-        let original_metadata: TableMetadata = serde_json::from_str(&metadata_content).unwrap();
+        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Define the metadata location
         let metadata_location = format!("{}/metadata.json", temp_path);
