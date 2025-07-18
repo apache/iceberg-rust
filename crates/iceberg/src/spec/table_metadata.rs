@@ -37,6 +37,7 @@ use super::{
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
+use crate::io::FileIO;
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -683,6 +684,27 @@ impl TableMetadata {
         }
 
         Ok(())
+    }
+}
+
+/// Utility for reading and writing table metadata.
+pub struct TableMetadataIO;
+
+impl TableMetadataIO {
+    /// Read table metadata from the given location.
+    pub async fn read(file_io: &FileIO, metadata_location: &str) -> Result<TableMetadata> {
+        let input_file = file_io.new_input(metadata_location)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        Ok(metadata)
+    }
+
+    /// Write table metadata to the given location.
+    pub async fn write(file_io: &FileIO, metadata: &TableMetadata, metadata_location: &str) -> Result<()> {
+        file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(metadata)?.into())
+            .await
     }
 }
 
@@ -1355,9 +1377,11 @@ mod tests {
 
     use anyhow::Result;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, TableMetadataIO};
+    use crate::io::FileIOBuilder;
     use crate::TableCreation;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -3049,5 +3073,56 @@ mod tests {
                 })
             )])
         );
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_io_read_write() {
+        // Create a temporary directory for our test
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        
+        // Use an existing test metadata from the test files
+        let metadata_path = "testdata/table_metadata/TableMetadataV2Valid.json";
+        let metadata_content = fs::read_to_string(metadata_path).unwrap();
+        let original_metadata: TableMetadata = serde_json::from_str(&metadata_content).unwrap();
+        
+        // Define the metadata location
+        let metadata_location = format!("{}/metadata.json", temp_path);
+        
+        // Write the metadata
+        TableMetadataIO::write(&file_io, &original_metadata, &metadata_location).await.unwrap();
+        
+        // Verify the file exists
+        assert!(fs::metadata(&metadata_location).is_ok());
+        
+        // Read the metadata back
+        let read_metadata = TableMetadataIO::read(&file_io, &metadata_location).await.unwrap();
+        
+        // Verify the metadata matches
+        assert_eq!(read_metadata.format_version, original_metadata.format_version);
+        assert_eq!(read_metadata.table_uuid, original_metadata.table_uuid);
+        assert_eq!(read_metadata.location, original_metadata.location);
+        assert_eq!(read_metadata.last_sequence_number, original_metadata.last_sequence_number);
+        assert_eq!(read_metadata.last_updated_ms, original_metadata.last_updated_ms);
+        assert_eq!(read_metadata.last_column_id, original_metadata.last_column_id);
+        assert_eq!(read_metadata.current_schema_id, original_metadata.current_schema_id);
+        assert_eq!(read_metadata.last_partition_id, original_metadata.last_partition_id);
+        assert_eq!(read_metadata.default_sort_order_id, original_metadata.default_sort_order_id);
+        assert_eq!(read_metadata.properties, original_metadata.properties);
+    }
+    
+    #[tokio::test]
+    async fn test_table_metadata_io_read_nonexistent_file() {
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        
+        // Try to read a non-existent file
+        let result = TableMetadataIO::read(&file_io, "/nonexistent/path/metadata.json").await;
+        
+        // Verify it returns an error
+        assert!(result.is_err());
     }
 }
