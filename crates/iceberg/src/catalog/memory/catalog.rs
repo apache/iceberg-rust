@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use super::namespace_state::NamespaceState;
 use crate::io::FileIO;
-use crate::spec::{TableMetadata, TableMetadataBuilder, TableMetadataIO};
+use crate::spec::{TableMetadataBuilder, TableMetadataIO};
 use crate::table::Table;
 use crate::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,

@@ -23,7 +23,7 @@ use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
     FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
 };
-use iceberg::spec::{TableMetadata, TableMetadataBuilder, TableMetadataIO};
+use iceberg::spec::{TableMetadataBuilder, TableMetadataIO};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
