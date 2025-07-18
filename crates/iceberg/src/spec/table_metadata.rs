@@ -1379,7 +1379,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadata, TableMetadataBuilder};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::TableCreation;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
