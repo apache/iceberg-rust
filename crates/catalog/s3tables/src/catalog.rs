@@ -25,7 +25,7 @@ use aws_sdk_s3tables::operation::get_table::GetTableOutput;
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::types::OpenTableFormat;
 use iceberg::io::{FileIO, FileIOBuilder};
-use iceberg::spec::{TableMetadataBuilder, TableMetadataIO};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -334,7 +334,7 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        TableMetadataIO::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
 
         // update metadata location
         self.s3tables_client
@@ -386,7 +386,7 @@ impl Catalog for S3TablesCatalog {
                 ),
             )
         })?;
-        let metadata = TableMetadataIO::read(&self.file_io, metadata_location).await?;
+        let metadata = TableMetadata::read(&self.file_io, metadata_location).await?;
 
         let table = Table::builder()
             .identifier(table_ident.clone())

@@ -23,7 +23,7 @@ use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
     FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
 };
-use iceberg::spec::{TableMetadataBuilder, TableMetadataIO};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -395,7 +395,7 @@ impl Catalog for GlueCatalog {
             .metadata;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        TableMetadataIO::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
 
         let glue_table = convert_to_glue_table(
             &table_name,
@@ -460,7 +460,7 @@ impl Catalog for GlueCatalog {
             Some(table) => {
                 let metadata_location = get_metadata_location(&table.parameters)?;
 
-                let metadata = TableMetadataIO::read(&self.file_io, &metadata_location).await?;
+                let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
 
                 Table::builder()
                     .file_io(self.file_io())

@@ -465,6 +465,26 @@ impl TableMetadata {
         self.encryption_keys.get(key_id)
     }
 
+    /// Read table metadata from the given location.
+    pub async fn read(file_io: &FileIO, metadata_location: &str) -> Result<TableMetadata> {
+        let input_file = file_io.new_input(metadata_location)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        Ok(metadata)
+    }
+
+    /// Write table metadata to the given location.
+    pub async fn write(
+        file_io: &FileIO,
+        metadata: &TableMetadata,
+        metadata_location: &str,
+    ) -> Result<()> {
+        file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(metadata)?.into())
+            .await
+    }
+
     /// Normalize this partition spec.
     ///
     /// This is an internal method
@@ -684,31 +704,6 @@ impl TableMetadata {
         }
 
         Ok(())
-    }
-}
-
-/// Utility for reading and writing table metadata.
-pub struct TableMetadataIO;
-
-impl TableMetadataIO {
-    /// Read table metadata from the given location.
-    pub async fn read(file_io: &FileIO, metadata_location: &str) -> Result<TableMetadata> {
-        let input_file = file_io.new_input(metadata_location)?;
-        let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-        Ok(metadata)
-    }
-
-    /// Write table metadata to the given location.
-    pub async fn write(
-        file_io: &FileIO,
-        metadata: &TableMetadata,
-        metadata_location: &str,
-    ) -> Result<()> {
-        file_io
-            .new_output(metadata_location)?
-            .write(serde_json::to_vec(metadata)?.into())
-            .await
     }
 }
 
@@ -1384,7 +1379,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, TableMetadataIO};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadata, TableMetadataBuilder};
     use crate::TableCreation;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
@@ -3095,7 +3090,7 @@ mod tests {
         let metadata_location = format!("{}/metadata.json", temp_path);
 
         // Write the metadata
-        TableMetadataIO::write(&file_io, &original_metadata, &metadata_location)
+        TableMetadata::write(&file_io, &original_metadata, &metadata_location)
             .await
             .unwrap();
 
@@ -3103,7 +3098,7 @@ mod tests {
         assert!(fs::metadata(&metadata_location).is_ok());
 
         // Read the metadata back
-        let read_metadata = TableMetadataIO::read(&file_io, &metadata_location)
+        let read_metadata = TableMetadata::read(&file_io, &metadata_location)
             .await
             .unwrap();
 
@@ -3117,7 +3112,7 @@ mod tests {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
 
         // Try to read a non-existent file
-        let result = TableMetadataIO::read(&file_io, "/nonexistent/path/metadata.json").await;
+        let result = TableMetadata::read(&file_io, "/nonexistent/path/metadata.json").await;
 
         // Verify it returns an error
         assert!(result.is_err());

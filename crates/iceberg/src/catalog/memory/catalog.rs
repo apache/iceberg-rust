@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use super::namespace_state::NamespaceState;
 use crate::io::FileIO;
-use crate::spec::{TableMetadataBuilder, TableMetadataIO};
+use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -210,7 +210,7 @@ impl Catalog for MemoryCatalog {
             Uuid::new_v4()
         );
 
-        TableMetadataIO::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
@@ -227,7 +227,7 @@ impl Catalog for MemoryCatalog {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let metadata = TableMetadataIO::read(&self.file_io, metadata_location).await?;
+        let metadata = TableMetadata::read(&self.file_io, metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io.clone())
@@ -279,7 +279,7 @@ impl Catalog for MemoryCatalog {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
         root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
 
-        let metadata = TableMetadataIO::read(&self.file_io, &metadata_location).await?;
+        let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io.clone())

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
-use iceberg::spec::{TableMetadataBuilder, TableMetadataIO};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -642,7 +642,7 @@ impl Catalog for SqlCatalog {
             .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
             .map_err(from_sqlx_error)?;
 
-        let metadata = TableMetadataIO::read(&self.fileio, &tbl_metadata_location).await?;
+        let metadata = TableMetadata::read(&self.fileio, &tbl_metadata_location).await?;
 
         Ok(Table::builder()
             .file_io(self.fileio.clone())
@@ -706,7 +706,7 @@ impl Catalog for SqlCatalog {
             Uuid::new_v4()
         );
 
-        TableMetadataIO::write(&self.fileio, &tbl_metadata, &tbl_metadata_location).await?;
+        TableMetadata::write(&self.fileio, &tbl_metadata, &tbl_metadata_location).await?;
 
         self.execute(&format!(
             "INSERT INTO {CATALOG_TABLE_NAME}

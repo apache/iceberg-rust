@@ -26,7 +26,7 @@ use hive_metastore::{
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
 };
 use iceberg::io::FileIO;
-use iceberg::spec::{TableMetadataBuilder, TableMetadataIO};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -353,7 +353,7 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        TableMetadataIO::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
@@ -403,7 +403,7 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let metadata = TableMetadataIO::read(&self.file_io, &metadata_location).await?;
+        let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io())
