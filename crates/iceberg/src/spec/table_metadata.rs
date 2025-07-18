@@ -3110,37 +3110,7 @@ mod tests {
             .unwrap();
 
         // Verify the metadata matches
-        assert_eq!(
-            read_metadata.format_version,
-            original_metadata.format_version
-        );
-        assert_eq!(read_metadata.table_uuid, original_metadata.table_uuid);
-        assert_eq!(read_metadata.location, original_metadata.location);
-        assert_eq!(
-            read_metadata.last_sequence_number,
-            original_metadata.last_sequence_number
-        );
-        assert_eq!(
-            read_metadata.last_updated_ms,
-            original_metadata.last_updated_ms
-        );
-        assert_eq!(
-            read_metadata.last_column_id,
-            original_metadata.last_column_id
-        );
-        assert_eq!(
-            read_metadata.current_schema_id,
-            original_metadata.current_schema_id
-        );
-        assert_eq!(
-            read_metadata.last_partition_id,
-            original_metadata.last_partition_id
-        );
-        assert_eq!(
-            read_metadata.default_sort_order_id,
-            original_metadata.default_sort_order_id
-        );
-        assert_eq!(read_metadata.properties, original_metadata.properties);
+        assert_eq!(read_metadata, original_metadata);
     }
 
     #[tokio::test]
