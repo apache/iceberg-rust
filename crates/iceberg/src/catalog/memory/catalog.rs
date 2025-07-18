@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use futures::lock::Mutex;
+use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 use uuid::Uuid;
 
@@ -45,13 +45,30 @@ pub struct MemoryCatalog {
 }
 
 impl MemoryCatalog {
-    /// Creates an memory catalog.
+    /// Creates a memory catalog.
     pub fn new(file_io: FileIO, warehouse_location: Option<String>) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
             file_io,
             warehouse_location,
         }
+    }
+
+    /// Loads a table from the locked namespace state.
+    async fn load_table_from_locked_state(
+        &self,
+        table_ident: &TableIdent,
+        root_namespace_state: &MutexGuard<'_, NamespaceState>,
+    ) -> Result<Table> {
+        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
+        let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
+
+        Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()
     }
 }
 
@@ -226,15 +243,8 @@ impl Catalog for MemoryCatalog {
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
-        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
-
-        Table::builder()
-            .file_io(self.file_io.clone())
-            .metadata_location(metadata_location.clone())
-            .metadata(metadata)
-            .identifier(table_ident.clone())
-            .build()
+        self.load_table_from_locked_state(table_ident, &root_namespace_state)
+            .await
     }
 
     /// Drop a table from the catalog.
@@ -289,12 +299,29 @@ impl Catalog for MemoryCatalog {
             .build()
     }
 
-    /// Update a table to the catalog.
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "MemoryCatalog does not currently support updating tables.",
-        ))
+    /// Update a table in the catalog.
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        // Updates the current table version and writes a new metadata file.
+        let current_table = self
+            .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
+            .await?;
+
+        // Apply TableCommit to get staged table
+        let staged_table = commit.apply(current_table)?;
+
+        // Write table metadata to the new location
+        TableMetadata::write(
+            staged_table.file_io(),
+            staged_table.metadata(),
+            &MetadataLocation::from_str(staged_table.metadata_location().unwrap())?,
+        ).await?;
+
+        // Flip the pointer to reference the new metadata file.
+        let updated_table = root_namespace_state.commit_table_update(staged_table)?;
+
+        Ok(updated_table)
     }
 }
 
@@ -303,13 +330,18 @@ mod tests {
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
+    use std::vec;
 
     use regex::Regex;
     use tempfile::TempDir;
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::spec::{
+        NestedField, NullOrder, PROPERTY_COMMIT_NUM_RETRIES, PartitionSpec, PrimitiveType, Schema,
+        SortOrder, Type,
+    };
+    use crate::transaction::{ApplyTransactionAction, Transaction};
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
@@ -348,8 +380,8 @@ mod tests {
             .unwrap()
     }
 
-    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
-        let _ = catalog
+    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) -> Table {
+        catalog
             .create_table(
                 &table_ident.namespace,
                 TableCreation::builder()
@@ -358,13 +390,21 @@ mod tests {
                     .build(),
             )
             .await
-            .unwrap();
+            .unwrap()
     }
 
     async fn create_tables<C: Catalog>(catalog: &C, table_idents: Vec<&TableIdent>) {
         for table_ident in table_idents {
             create_table(catalog, table_ident).await;
         }
+    }
+
+    async fn create_table_with_namespace<C: Catalog>(catalog: &C) -> Table {
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(catalog, &namespace_ident).await;
+
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        create_table(catalog, &table_ident).await
     }
 
     fn assert_table_eq(table: &Table, expected_table_ident: &TableIdent, expected_schema: &Schema) {
@@ -1705,7 +1745,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
+                "TableAlreadyExists => Cannot create table {:?}. Table already exists.",
                 &dst_table_ident
             ),
         );
@@ -1753,5 +1793,138 @@ mod tests {
             loaded_table.metadata_location().unwrap().to_string(),
             metadata_location
         );
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let catalog = new_memory_catalog();
+
+        let table = create_table_with_namespace(&catalog).await;
+
+        // Assert the table doesn't contain the update yet
+        assert!(!table.metadata().properties().contains_key("key"));
+
+        // Update table metadata
+        let tx = Transaction::new(&table);
+        let updated_table = tx
+            .update_table_properties()
+            .set("key".to_string(), "value".to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated_table.metadata().properties().get("key").unwrap(),
+            "value"
+        );
+
+        assert_eq!(table.identifier(), updated_table.identifier());
+        assert_eq!(table.metadata().uuid(), updated_table.metadata().uuid());
+        assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
+        assert_ne!(table.metadata_location(), updated_table.metadata_location());
+
+        println!("left: {:?}", table.metadata().metadata_log());
+        println!("right: {:?}", updated_table.metadata().metadata_log());
+        assert!(
+            table.metadata().metadata_log().len() < updated_table.metadata().metadata_log().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_fails_if_commit_conflicts() {
+        let catalog = new_memory_catalog();
+        let base_table = create_table_with_namespace(&catalog).await;
+
+        // Turn off retry to test conflict
+        let tx = Transaction::new(&base_table);
+        let base_table = tx
+            .update_table_properties()
+            .set(PROPERTY_COMMIT_NUM_RETRIES.to_string(), "0".to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        // Update the table by adding a new sort order.
+        let tx = Transaction::new(&base_table);
+        let _sort_table = tx
+            .replace_sort_order()
+            .asc("foo", NullOrder::First)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        // Try to update the "now old" table again with a different sort order.
+        let tx = Transaction::new(&base_table);
+        let err = tx
+            .replace_sort_order()
+            .desc("foo", NullOrder::Last)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+
+        // The second transaction should fail because it didn't take the new update
+        // into account.
+        println!("{}", err.message()); // todo remove this
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert!(
+            err.message()
+                .contains("Default sort order id does not match")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_fails_if_table_doesnt_exist() {
+        let catalog = new_memory_catalog();
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // This table is not known to the catalog.
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        let table = build_table(table_ident);
+
+        let tx = Transaction::new(&table);
+        let err = tx
+            .update_table_properties()
+            .set("key".to_string(), "value".to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    fn build_table(ident: TableIdent) -> Table {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table_creation = TableCreation::builder()
+            .name(ident.name().to_string())
+            .schema(simple_table_schema())
+            .location(location)
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .identifier(ident)
+            .metadata(metadata)
+            .file_io(file_io)
+            .build()
+            .unwrap()
     }
 }

@@ -168,6 +168,12 @@ impl Table {
         self
     }
 
+    /// Sets the [`Table`] metadata location and returns an updated instance.
+    pub(crate) fn with_metadata_location(mut self, metadata_location: String) -> Self {
+        self.metadata_location = Some(metadata_location);
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()

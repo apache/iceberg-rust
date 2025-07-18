@@ -335,14 +335,31 @@ impl TableCommit {
             requirement.check(Some(table.metadata()))?;
         }
 
-        // apply updates to metadata builder
-        let mut metadata_builder = table.metadata().clone().into_builder(None);
+        // get current metadata location
+        let current_metadata_location =
+            table.metadata_location().ok_or(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Failed to apply commit, table metadata location is not set for table: {}",
+                    table.identifier()
+                ),
+            ))?;
 
+        // apply updates to metadata builder
+        let mut metadata_builder = table
+            .metadata()
+            .clone()
+            .into_builder(Some(current_metadata_location));
         for update in self.updates {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
+        // Bump the version of metadata
+        let new_metadata_location = current_metadata_location.with_next_version();
+
+        Ok(table
+            .with_metadata(Arc::new(metadata_builder.build()?.metadata))
+            .with_metadata_location(new_metadata_location.to_string()))
     }
 }
 

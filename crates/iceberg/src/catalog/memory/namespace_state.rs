@@ -16,9 +16,12 @@
 // under the License.
 
 use std::collections::{HashMap, hash_map};
+use std::str::FromStr;
 
 use itertools::Itertools;
 
+use crate::spec::MetadataLocation;
+use crate::table::Table;
 use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 // Represents the state of a namespace
@@ -29,7 +32,7 @@ pub(crate) struct NamespaceState {
     // Namespaces nested inside this namespace
     namespaces: HashMap<String, NamespaceState>,
     // Mapping of tables to metadata locations in this namespace
-    table_metadata_locations: HashMap<String, String>,
+    table_metadata_locations: HashMap<String, MetadataLocation>,
 }
 
 fn no_such_namespace_err<T>(namespace_ident: &NamespaceIdent) -> Result<T> {
@@ -254,7 +257,10 @@ impl NamespaceState {
     }
 
     // Returns the metadata location of the given table or an error if doesn't exist
-    pub(crate) fn get_existing_table_location(&self, table_ident: &TableIdent) -> Result<&String> {
+    pub(crate) fn get_existing_table_location(
+        &self,
+        table_ident: &TableIdent,
+    ) -> Result<&MetadataLocation> {
         let namespace = self.get_namespace(table_ident.namespace())?;
 
         match namespace.table_metadata_locations.get(table_ident.name()) {
@@ -267,7 +273,7 @@ impl NamespaceState {
     pub(crate) fn insert_new_table(
         &mut self,
         table_ident: &TableIdent,
-        metadata_location: String,
+        location: MetadataLocation,
     ) -> Result<()> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
@@ -277,7 +283,7 @@ impl NamespaceState {
         {
             hash_map::Entry::Occupied(_) => table_already_exists_err(table_ident),
             hash_map::Entry::Vacant(entry) => {
-                let _ = entry.insert(metadata_location);
+                let _ = entry.insert(location);
 
                 Ok(())
             }
@@ -285,7 +291,10 @@ impl NamespaceState {
     }
 
     // Removes the given table or returns an error if doesn't exist
-    pub(crate) fn remove_existing_table(&mut self, table_ident: &TableIdent) -> Result<String> {
+    pub(crate) fn remove_existing_table(
+        &mut self,
+        table_ident: &TableIdent,
+    ) -> Result<MetadataLocation> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
         match namespace
@@ -295,5 +304,23 @@ impl NamespaceState {
             None => no_such_table_err(table_ident),
             Some(metadata_location) => Ok(metadata_location),
         }
+    }
+
+    /// Updates the metadata location of the given table or returns an error if doesn't exist
+    pub(crate) fn commit_table_update(&mut self, staged_table: Table) -> Result<Table> {
+        let namespace = self.get_mut_namespace(staged_table.identifier().namespace())?;
+
+        let _ = namespace
+            .table_metadata_locations
+            .insert(
+                staged_table.identifier().name().to_string(),
+                MetadataLocation::from_str(staged_table.metadata_location().unwrap())?,
+            )
+            .ok_or(Error::new(
+                ErrorKind::TableNotFound,
+                format!("No such table: {:?}", staged_table.identifier()),
+            ))?;
+
+        Ok(staged_table)
     }
 }
