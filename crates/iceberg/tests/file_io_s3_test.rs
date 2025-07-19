@@ -18,7 +18,7 @@
 //! Integration tests for FileIO S3.
 #[cfg(all(test, feature = "storage-s3"))]
 mod tests {
-    use std::net::SocketAddr;
+    use std::net::{IpAddr, SocketAddr};
     use std::sync::{Arc, RwLock};
 
     use async_trait::async_trait;
@@ -55,9 +55,7 @@ mod tests {
     async fn get_file_io() -> FileIO {
         set_up();
 
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        let container_ip = docker_compose.get_container_ip("minio");
+        let container_ip = get_container_ip("minio");
         let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
 
         FileIOBuilder::new("s3")
@@ -69,6 +67,12 @@ mod tests {
             ])
             .build()
             .unwrap()
+    }
+
+    fn get_container_ip(service_name: &str) -> IpAddr {
+        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+        let docker_compose = guard.as_ref().unwrap();
+        docker_compose.get_container_ip(service_name)
     }
 
     #[tokio::test]
@@ -197,10 +201,7 @@ mod tests {
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
 
         // Get container info for endpoint
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        let container_ip = docker_compose.get_container_ip("minio");
-        drop(guard);
+        let container_ip = get_container_ip("minio");
         let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
 
         // Build FileIO with custom credential loader
@@ -229,10 +230,7 @@ mod tests {
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
 
         // Get container info for endpoint
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        let container_ip = docker_compose.get_container_ip("minio");
-        drop(guard);
+        let container_ip = get_container_ip("minio");
         let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
 
         // Build FileIO with custom credential loader

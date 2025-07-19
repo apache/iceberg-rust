@@ -70,10 +70,7 @@ pub(crate) enum Storage {
 impl Storage {
     /// Convert iceberg config to opendal config.
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
-        let aws_customized_credential_load = file_io_builder
-            .extension::<CustomAwsCredentialLoader>()
-            .map(Arc::unwrap_or_clone);
-        let (scheme_str, props) = file_io_builder.into_parts();
+        let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {
@@ -85,7 +82,9 @@ impl Storage {
             Scheme::S3 => Ok(Self::S3 {
                 configured_scheme: scheme_str,
                 config: super::s3_config_parse(props)?.into(),
-                customized_credential_load: aws_customized_credential_load,
+                customized_credential_load: extensions
+                    .get::<CustomAwsCredentialLoader>()
+                    .map(Arc::unwrap_or_clone),
             }),
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => Ok(Self::Gcs {

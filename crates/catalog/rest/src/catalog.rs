@@ -17,13 +17,12 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
-use std::any::{Any, TypeId};
+use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::io::FileIO;
+use iceberg::io::{self, FileIO};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -243,7 +242,7 @@ pub struct RestCatalog {
     user_config: RestCatalogConfig,
     ctx: OnceCell<RestContext>,
     /// Extensions for the FileIOBuilder.
-    file_io_extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    file_io_extensions: io::Extensions,
 }
 
 impl RestCatalog {
@@ -252,14 +251,13 @@ impl RestCatalog {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
-            file_io_extensions: HashMap::default(),
+            file_io_extensions: io::Extensions::default(),
         }
     }
 
     /// Add an extension to the file IO builder.
     pub fn with_file_io_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.file_io_extensions
-            .insert(TypeId::of::<T>(), Arc::new(ext));
+        self.file_io_extensions.add(ext);
         self
     }
 
