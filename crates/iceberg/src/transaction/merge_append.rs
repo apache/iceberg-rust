@@ -26,10 +26,11 @@ use crate::Result;
 use crate::io::FileIO;
 use crate::spec::{DataFile, ManifestContentType, ManifestFile, ManifestStatus, ManifestWriter};
 use crate::table::Table;
-use crate::transaction::append::FastAppendOperation;
+use crate::transaction::append::AppendOperation;
 use crate::transaction::snapshot::{DefaultManifestProcess, ManifestProcess, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::utils::bin::ListPacker;
+use crate::utils::parse_property;
 
 /// MergeAppendAction is a transaction action similar to fast append except that it will merge manifests
 /// based on the target size.
@@ -57,24 +58,21 @@ const MANIFEST_MERGE_ENABLED_DEFAULT: bool = false;
 
 impl MergeAppendAction {
     pub(crate) fn new(table: &Table) -> Result<Self> {
-        let target_size_bytes: u32 = table
-            .metadata()
-            .properties()
-            .get(MANIFEST_TARGET_SIZE_BYTES)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
-        let min_count_to_merge: u32 = table
-            .metadata()
-            .properties()
-            .get(MANIFEST_MIN_MERGE_COUNT)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_MIN_MERGE_COUNT_DEFAULT);
-        let merge_enabled = table
-            .metadata()
-            .properties()
-            .get(MANIFEST_MERGE_ENABLED)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_MERGE_ENABLED_DEFAULT);
+        let target_size_bytes: u32 = parse_property(
+            table.metadata().properties(),
+            MANIFEST_TARGET_SIZE_BYTES,
+            MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
+        )?;
+        let min_count_to_merge: u32 = parse_property(
+            table.metadata().properties(),
+            MANIFEST_MIN_MERGE_COUNT,
+            MANIFEST_MIN_MERGE_COUNT_DEFAULT,
+        )?;
+        let merge_enabled = parse_property(
+            table.metadata().properties(),
+            MANIFEST_MERGE_ENABLED,
+            MANIFEST_MERGE_ENABLED_DEFAULT,
+        )?;
         Ok(Self {
             check_duplicate: true,
             target_size_bytes,
@@ -140,14 +138,14 @@ impl TransactionAction for MergeAppendAction {
 
         if self.merge_enabled {
             snapshot_producer
-                .commit(FastAppendOperation, MergeManifsetProcess {
+                .commit(AppendOperation, MergeManifsetProcess {
                     target_size_bytes: self.target_size_bytes,
                     min_count_to_merge: self.min_count_to_merge,
                 })
                 .await
         } else {
             snapshot_producer
-                .commit(FastAppendOperation, DefaultManifestProcess)
+                .commit(AppendOperation, DefaultManifestProcess)
                 .await
         }
     }
@@ -228,7 +226,6 @@ impl MergeManifestManager {
             packer.pack(group_manifests, |manifest| manifest.manifest_length as u32);
 
         let manifest_merge_futures = manifest_bins
-            .into_iter()
             .map(|manifest_bin| {
                 if manifest_bin.len() == 1 {
                     Ok(Box::pin(async { Ok(manifest_bin) })
