@@ -21,9 +21,10 @@ use std::sync::{Arc, RwLock};
 
 use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
+use itertools::Itertools;
 use tokio::sync::Notify;
 
-use crate::runtime::spawn;
+use crate::runtime::{JoinHandle, spawn};
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
 
@@ -51,33 +52,52 @@ struct PopulatedDeleteFileIndex {
     // TODO: Deletion Vector support
 }
 
+#[derive(Debug)]
+pub(crate) struct DeleteIndexMetrics {
+    pub(crate) indexed_delete_files: u32,
+    pub(crate) equality_delete_files: u32,
+    pub(crate) positional_delete_files: u32,
+}
+
 impl DeleteFileIndex {
-    /// create a new `DeleteFileIndex` along with the sender that populates it with delete files
-    pub(crate) fn new() -> (DeleteFileIndex, Sender<DeleteFileContext>) {
+    /// Create a new `DeleteFileIndex` along with the sender that populates it
+    /// with delete files
+    ///
+    /// It will asynchronously wait for all delete files to come in before it
+    /// starts indexing.
+    pub(crate) fn new() -> (
+        DeleteFileIndex,
+        Sender<DeleteFileContext>,
+        JoinHandle<DeleteIndexMetrics>,
+    ) {
         // TODO: what should the channel limit be?
-        let (tx, rx) = channel(10);
+        let (delete_file_tx, delete_file_rx) = channel(10);
         let notify = Arc::new(Notify::new());
         let state = Arc::new(RwLock::new(DeleteFileIndexState::Populating(
             notify.clone(),
         )));
-        let delete_file_stream = rx.boxed();
+        let delete_file_stream = delete_file_rx.boxed();
 
-        spawn({
+        let metrics_handle = spawn({
             let state = state.clone();
             async move {
                 let delete_files = delete_file_stream.collect::<Vec<_>>().await;
 
                 let populated_delete_file_index = PopulatedDeleteFileIndex::new(delete_files);
 
+                let metrics = populated_delete_file_index.metrics();
+
                 {
                     let mut guard = state.write().unwrap();
                     *guard = DeleteFileIndexState::Populated(populated_delete_file_index);
                 }
                 notify.notify_waiters();
+
+                metrics
             }
         });
 
-        (DeleteFileIndex { state }, tx)
+        (DeleteFileIndex { state }, delete_file_tx, metrics_handle)
     }
 
     /// Gets all the delete files that apply to the specified data file.
@@ -207,4 +227,21 @@ impl PopulatedDeleteFileIndex {
 
         results
     }
+
+    fn metrics(&self) -> DeleteIndexMetrics {
+        // We count both partitioned and globally applied equality deletes.
+        let equality_delete_files =
+            flattened_len(&self.eq_deletes_by_partition) + self.global_deletes.len() as u32;
+        let positional_delete_files = flattened_len(&self.pos_deletes_by_partition);
+
+        DeleteIndexMetrics {
+            indexed_delete_files: equality_delete_files + positional_delete_files,
+            equality_delete_files,
+            positional_delete_files,
+        }
+    }
+}
+
+fn flattened_len(map: &HashMap<Struct, Vec<Arc<DeleteFileContext>>>) -> u32 {
+    map.values().flatten().try_len().unwrap_or(0) as u32
 }
