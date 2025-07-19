@@ -26,6 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
+use futures::StreamExt;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
@@ -429,6 +430,72 @@ async fn test_metadata_table() -> Result<()> {
         &[],
         None,
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), "my_table", None)?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    let provider = ctx.catalog("catalog").unwrap();
+    let schema = provider.schema("test_provider_get_table_schema").unwrap();
+
+    let table = schema.table("my_table").await.unwrap().unwrap();
+    let table_schema = table.schema();
+
+    let expected = [("foo1", &DataType::Int32), ("foo2", &DataType::Utf8)];
+
+    for (field, exp) in table_schema.fields().iter().zip(expected.iter()) {
+        assert_eq!(field.name(), exp.0);
+        assert_eq!(field.data_type(), exp.1);
+        assert!(!field.is_nullable())
+    }
+
+    let df = ctx
+        .sql("insert into catalog.test_provider_get_table_schema.my_table values (1, 'alan'),(2, 'turing')")
+        .await
+        .unwrap();
+
+    let task_ctx = Arc::new(df.task_ctx());
+    let plan = df.create_physical_plan().await.unwrap();
+    let mut stream = plan.execute(0, task_ctx).unwrap();
+
+    while let Some(batch_result) = stream.next().await {
+        match batch_result {
+            Ok(batch) => {
+                println!("Got RecordBatch with {} rows", batch.num_rows());
+                for column in batch.columns() {
+                    println!("{:?}", column);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading batch: {:?}", e);
+            }
+        }
+    }
+    // Ensure both the plan and the stream conform to the same schema
+    // assert_eq!(plan.schema(), stream.schema());
+    // assert_eq!(
+    //     stream.schema().as_ref(),
+    //     &ArrowSchema::new(vec![
+    //         Field::new("foo2", DataType::Utf8, false).with_metadata(HashMap::from([(
+    //             PARQUET_FIELD_ID_META_KEY.to_string(),
+    //             "2".to_string(),
+    //         )]))
+    //     ]),
+    // );
 
     Ok(())
 }
