@@ -41,7 +41,7 @@ use crate::client::{
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
-    RenameTableRequest,
+    RegisterTableRequest, RenameTableRequest,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -98,6 +98,10 @@ impl RestCatalogConfig {
 
     fn rename_table_endpoint(&self) -> String {
         self.url_prefixed(&["tables", "rename"])
+    }
+
+    fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
@@ -237,7 +241,7 @@ struct RestContext {
 pub struct RestCatalog {
     /// User config is stored as-is and never be changed.
     ///
-    /// It's could be different from the config fetched from the server and used at runtime.
+    /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
     ctx: OnceCell<RestContext>,
 }
@@ -745,10 +749,86 @@ impl Catalog for RestCatalog {
         _table_ident: &TableIdent,
         _metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(
+                Method::POST,
+                context
+                    .config
+                    .register_table_endpoint(_table_ident.namespace()),
+            )
+            .json(&RegisterTableRequest {
+                name: _table_ident.name.clone(),
+                metadata_location: _metadata_location.clone(),
+            })
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response: LoadTableResponse = match http_response.status() {
+            StatusCode::OK => {
+                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+            }
+            StatusCode::BAD_REQUEST => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Unexpected error while registering table.",
+                ));
+            }
+            StatusCode::UNAUTHORIZED => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Authenticated user does not have the necessary permissions.",
+                ));
+            }
+            StatusCode::FORBIDDEN => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Authenticated user does not have the necessary permissions.",
+                ));
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    "The namespace specified does not exist.",
+                ));
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::TableAlreadyExists,
+                    "The given table already exists.",
+                ));
+            }
+            StatusCode::SERVICE_UNAVAILABLE => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "The service is not ready to handle the request.",
+                ));
+            }
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "An unknown server-side problem occurred; the commit state is unknown.",
+                ));
+            }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+        };
+
+        let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            "Metadata location missing in `register_table` response!",
+        ))?;
+
+        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+
+        Table::builder()
+            .identifier(_table_ident.clone())
+            .file_io(file_io)
+            .metadata(response.metadata)
+            .metadata_location(metadata_location.clone())
+            .build()
     }
 
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
@@ -2456,5 +2536,88 @@ mod tests {
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
         load_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let register_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
+        let table_ident =
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
+        let metadata_location = String::from(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+        );
+
+        let table = catalog
+            .register_table(&table_ident, metadata_location)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
+            table.identifier()
+        );
+        assert_eq!(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+            table.metadata_location().unwrap()
+        );
+
+        config_mock.assert_async().await;
+        register_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table_404() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let register_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(404)
+            .with_body(
+                r#"
+{
+    "error": {
+        "message": "The namespace specified does not exist",
+        "type": "NoSuchNamespaceErrorException",
+        "code": 404
+    }
+}
+            "#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let table_ident =
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
+        let metadata_location = String::from(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+        );
+        let table = catalog
+            .register_table(&table_ident, metadata_location)
+            .await;
+
+        assert!(table.is_err());
+        assert!(table.err().unwrap().message().contains("does not exist"));
+
+        config_mock.assert_async().await;
+        register_table_mock.assert_async().await;
     }
 }
