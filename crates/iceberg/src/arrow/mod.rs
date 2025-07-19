@@ -27,6 +27,7 @@ pub(crate) mod caching_delete_file_loader;
 pub mod delete_file_loader;
 pub(crate) mod delete_filter;
 
+pub(crate) mod count_recording_record_batch_stream;
 mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;

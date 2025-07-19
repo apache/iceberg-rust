@@ -36,9 +36,16 @@ async fn test_observability() -> Result<(), IcebergError> {
         .load_table(&TableIdent::from_strs(["default", "nyc_taxi_trips"]).unwrap())
         .await?;
 
-    let predicate = Reference::new("vendor_id").equal_to(Datum::long(1));
+    let predicate = Reference::new("vendor_id")
+        .equal_to(Datum::long(1))
+        .and(Reference::new("pickup_longitude").greater_than(Datum::double(-74.0)))
+        .and(Reference::new("pickup_latitude").less_than(Datum::double(40.7)));
 
-    let scan = table.scan().with_filter(predicate).build()?;
+    let scan = table
+        .scan()
+        .with_filter(predicate)
+        .with_row_selection_enabled(true)
+        .build()?;
 
     let results = scan.to_arrow().await?.try_collect::<Vec<_>>().await?;
     assert!(!results.is_empty());

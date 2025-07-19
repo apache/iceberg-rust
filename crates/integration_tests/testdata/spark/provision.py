@@ -29,6 +29,16 @@ print("doing stuff...")
 spark = (
     SparkSession
         .builder
+        .appName("IcebergDemo")
+        .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.apache.iceberg:iceberg-aws-bundle:1.5.0")
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        # .config("spark.sql.catalog.rest", "org.apache.iceberg.spark.SparkCatalog")
+        # .config("spark.sql.catalog.rest.type", "rest")
+        # .config("spark.sql.catalog.rest.uri", "http://rest:8181")
+        # .config("spark.sql.catalog.rest.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        # .config("spark.sql.catalog.rest.warehouse", "s3://icebergdata/demo")
+        # .config("spark.sql.catalog.rest.s3.endpoint", "http://minio:9000")
+        # .config("spark.sql.defaultCatalog", "rest")
         .config("spark.sql.shuffle.partitions", "200")
         .config("spark.default.parallelism", "200")
         .config("spark.sql.adaptive.enabled", "true")
@@ -196,7 +206,10 @@ TBLPROPERTIES (
     'write.delete.mode'='merge-on-read',
     'write.update.mode'='merge-on-read',
     'write.merge.mode'='merge-on-read',
-    'format-version'='2'
+    'format-version'='2',
+    'write.parquet.row-group-size-bytes'='33554432',
+    'write.target-file-size-bytes'='134217728',
+    'write.parquet.page-row-limit'='20000'
 )
 """
 )
@@ -204,8 +217,8 @@ TBLPROPERTIES (
 print("Table created. Generating fake taxi trip data...")
 
 # Generate data in batches to avoid memory issues
-BATCH_SIZE = 100000
-TOTAL_ROWS = 1000000
+BATCH_SIZE = 100_000
+TOTAL_ROWS = 10_000_000
 NUM_BATCHES = TOTAL_ROWS // BATCH_SIZE
 
 # NYC coordinates boundaries (approximate)
@@ -379,7 +392,66 @@ for batch in range(NUM_BATCHES):
     rate = rows_processed / elapsed_time if elapsed_time > 0 else 0
     print(f"Inserted {rows_processed:,} rows. Rate: {rate:,.0f} rows/sec")
 
-print(f"\nCompleted! Generated {TOTAL_ROWS:,} taxi trip records.")
+print(f"\nCompleted! Generated {TOTAL_ROWS:,} taxi trip records. Rewriting data files to apply sort")
+
+print("Checking available system procedures...")
+
+try:
+    # Check if we can see system procedures
+    result = spark.sql("SHOW PROCEDURES").collect()
+    print("Available procedures:")
+    for row in result:
+        print(f"  {row}")
+except Exception as e:
+    print(f"Could not show procedures: {e}")
+
+try:
+    # Try to show procedures from the rest catalog specifically
+    result = spark.sql("SHOW PROCEDURES rest.system").collect()
+    print("Rest catalog procedures:")
+    for row in result:
+        print(f"  {row}")
+except Exception as e:
+    print(f"Could not show rest.system procedures: {e}")
+
+# Enable more verbose logging to see what's happening
+spark.sparkContext.setLogLevel("DEBUG")
+
+print("Attempting rewrite with more verbose error handling...")
+
+try:
+    result = spark.sql("""
+        CALL rest.system.rewrite_data_files(
+            'default.nyc_taxi_trips',
+            'sort',
+            'zorder(pickup_latitude, pickup_longitude)'
+        )
+    """)
+    print("Rewrite successful!")
+    result.show()
+except Exception as e:
+    print(f"Detailed error: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Try alternative syntax variations
+alternative_calls = [
+    "CALL system.rewrite_data_files('default.nyc_taxi_trips')",
+    "CALL rest.system.rewrite_data_files('default.nyc_taxi_trips')",
+    "CALL rest.system.rewrite_data_files(table => 'default.nyc_taxi_trips')",
+]
+
+for call_sql in alternative_calls:
+    try:
+        print(f"Trying: {call_sql}")
+        result = spark.sql(call_sql)
+        print("Success!")
+        result.show()
+        break
+    except Exception as e:
+        print(f"Failed: {e}")
+
 print(f"Total time: {time.time() - start_time:.2f} seconds")
+
 
 spark.stop()

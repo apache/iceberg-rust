@@ -44,6 +44,7 @@ use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 use tracing::Instrument;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+use crate::arrow::count_recording_record_batch_stream::CountRecordingRecordBatchStream;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
@@ -179,7 +180,17 @@ impl ArrowReader {
     #[tracing::instrument(
         skip_all,
         level = "debug",
-        name = "iceberg.scan.execute.process_data_file"
+        name = "iceberg.scan.execute.process_data_file",
+        fields(
+            iceberg.scan.execute.data_file.data_file_path = %task.data_file_path,
+            iceberg.scan.execute.data_file.row_groups.skipped_count,
+            iceberg.scan.execute.data_file.row_groups.selected_count,
+            iceberg.scan.execute.data_file.row_selection.skipped_count,
+            iceberg.scan.execute.data_file.row_selection.selected_count,
+            iceberg.scan.execute.data_file.rows.scanned_count,
+            iceberg.scan.execute.data_file.rows.selected_count,
+            iceberg.scan.execute.data_file.record_batches.count,
+        )
     )]
     async fn process_file_scan_task(
         task: FileScanTask,
@@ -255,6 +266,8 @@ impl ArrowReader {
         // by using a `RowSelection`.
         let mut selected_row_group_indices = None;
         let mut row_selection = None;
+        let mut selected_row_count: Option<u64> = task.record_count;
+        let mut skipped_row_count: u64 = 0;
 
         if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
@@ -277,6 +290,43 @@ impl ArrowReader {
                     &field_id_map,
                     &task.schema,
                 )?;
+
+                tracing::Span::current().record(
+                    "iceberg.scan.execute.data_file.row_groups.selected_count",
+                    result.len(),
+                );
+                tracing::Span::current().record(
+                    "iceberg.scan.execute.data_file.row_groups.skipped_count",
+                    record_batch_stream_builder.metadata().row_groups().len() - result.len(),
+                );
+                selected_row_count = Some(
+                    result
+                        .iter()
+                        .map(|&row_group_index| {
+                            record_batch_stream_builder
+                                .metadata()
+                                .row_group(row_group_index)
+                                .num_rows() as u64
+                        })
+                        .sum::<u64>(),
+                );
+                tracing::Span::current().record(
+                    "iceberg.scan.execute.data_file.row_groups.selected_row_count",
+                    selected_row_count.unwrap(),
+                );
+                skipped_row_count += (0..record_batch_stream_builder.metadata().row_groups().len())
+                    .filter(|&i| !result.contains(&i))
+                    .map(|i| {
+                        record_batch_stream_builder
+                            .metadata()
+                            .row_group(i)
+                            .num_rows() as u64
+                    })
+                    .sum::<u64>();
+                tracing::Span::current().record(
+                    "iceberg.scan.execute.data_file.row_groups.skipped_row_count",
+                    skipped_row_count,
+                );
 
                 selected_row_group_indices = Some(result);
             }
@@ -316,6 +366,20 @@ impl ArrowReader {
         }
 
         if let Some(row_selection) = row_selection {
+            let new_selected_row_count = row_selection.row_count() as u64;
+            tracing::Span::current().record(
+                "iceberg.scan.execute.data_file.row_selection.selected_count",
+                new_selected_row_count,
+            );
+
+            if let Some(selected_row_count) = selected_row_count {
+                tracing::Span::current().record(
+                    "iceberg.scan.execute.data_file.row_selection.skipped_count",
+                    selected_row_count - new_selected_row_count,
+                );
+            }
+            selected_row_count = Some(new_selected_row_count);
+
             record_batch_stream_builder =
                 record_batch_stream_builder.with_row_selection(row_selection);
         }
@@ -324,6 +388,11 @@ impl ArrowReader {
             record_batch_stream_builder =
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
+
+        tracing::Span::current().record(
+            "iceberg.scan.execute.data_file.rows.scanned_count",
+            selected_row_count,
+        );
 
         let stream_span = tracing::trace_span!("iceberg.scan.execute.process_data_file_stream");
         let stream_span_clone = stream_span.clone();
@@ -338,6 +407,13 @@ impl ArrowReader {
                 Err(err) => Err(err.into()),
             });
         drop(_guard);
+
+        let stream = Box::pin(CountRecordingRecordBatchStream::new(
+            stream,
+            span.clone(),
+            "iceberg.scan.execute.data_file.record_batches.count",
+            "iceberg.scan.execute.data_file.rows.selected_count",
+        ));
 
         Ok(Box::pin(TracedStream::new(stream, vec![
             parent_span,

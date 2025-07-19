@@ -43,6 +43,10 @@ pub fn set_test_fixture(func: &str, set_up_tracing_subscriber: bool) -> TestFixt
         docker_compose.down();
         docker_compose.up();
     } else {
+        // check if the containers are running and start them if not
+        if !docker_compose.is_running() {
+            docker_compose.up();
+        }
         docker_compose.keep_running();
     }
 
