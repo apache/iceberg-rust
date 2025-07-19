@@ -40,13 +40,10 @@ async fn test_observability() -> Result<(), IcebergError> {
 
     let scan = table.scan().with_filter(predicate).build()?;
 
-    let plan = scan.plan_files().await?;
+    let results = scan.to_arrow().await?.try_collect::<Vec<_>>().await?;
+    assert!(!results.is_empty());
 
-    let _file_scan_tasks: Vec<_> = plan.try_collect().await?;
-
-    assert!(!_file_scan_tasks.is_empty());
-
-    // flush otel otlp traces to Jaeger
+    // flush OTel OTLP traces to Jaeger
     drop(_guard);
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 

@@ -179,6 +179,7 @@ impl ObjectCache {
     }
 
     async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
+        tracing::trace!("iceberg.object_cache.cache_miss");
         let manifest = manifest_file.load_manifest(&self.file_io).await?;
 
         Ok(CachedItem::Manifest(Arc::new(manifest)))

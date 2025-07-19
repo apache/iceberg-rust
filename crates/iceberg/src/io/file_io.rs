@@ -280,6 +280,11 @@ impl InputFile {
     }
 
     /// Fetch and returns metadata of file.
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.io.build_data_file_metadata"
+    )]
     pub async fn metadata(&self) -> crate::Result<FileMetadata> {
         let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
 
@@ -302,6 +307,7 @@ impl InputFile {
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
+    #[tracing::instrument(skip_all, level = "trace", name = "iceberg.io.build_data_file_reader")]
     pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }

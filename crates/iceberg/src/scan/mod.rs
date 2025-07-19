@@ -400,6 +400,9 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
+        let root_span = tracing::info_span!("iceberg.scan.to_arrow",);
+        let _entered = root_span.enter();
+
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
             .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
             .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
@@ -409,10 +412,11 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder
+        let stream = arrow_reader_builder
             .build()
-            .read(self.plan_files().await?)
-            .await
+            .read(self.plan_files().await?)?;
+
+        Ok(Box::pin(TracedStream::new(stream, vec![root_span.clone()])) as ArrowRecordBatchStream)
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -1384,14 +1388,12 @@ pub mod tests {
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .await
             .unwrap();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .await
             .unwrap();
         let batch_2: Vec<_> = batch_stream.try_collect().await.unwrap();
 

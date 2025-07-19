@@ -41,6 +41,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
+use tracing::Instrument;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
@@ -54,6 +55,7 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+use crate::traced_stream::TracedStream;
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -138,16 +140,20 @@ pub struct ArrowReader {
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    pub async fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
+    #[tracing::instrument(skip_all, level = "info", name = "iceberg.scan.execute")]
+    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
         let batch_size = self.batch_size;
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
+        let span = tracing::Span::current();
+        let span_clone = span.clone();
 
         let stream = tasks
             .map_ok(move |task| {
                 let file_io = file_io.clone();
+                let file_span = span_clone.clone();
 
                 Self::process_file_scan_task(
                     task,
@@ -156,18 +162,25 @@ impl ArrowReader {
                     self.delete_file_loader.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
+                    file_span,
                 )
             })
             .map_err(|err| {
                 Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
             })
             .try_buffer_unordered(concurrency_limit_data_files)
-            .try_flatten_unordered(concurrency_limit_data_files);
+            .try_flatten_unordered(concurrency_limit_data_files)
+            .boxed();
 
-        Ok(Box::pin(stream) as ArrowRecordBatchStream)
+        Ok(Box::pin(TracedStream::new(stream, vec![span])) as ArrowRecordBatchStream)
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(
+        skip_all,
+        level = "debug",
+        name = "iceberg.scan.execute.process_data_file"
+    )]
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
@@ -175,7 +188,9 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
+        parent_span: tracing::Span,
     ) -> Result<ArrowRecordBatchStream> {
+        let span = tracing::Span::current();
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
@@ -310,19 +325,32 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        let stream_span = tracing::trace_span!("iceberg.scan.execute.process_data_file_stream");
+        let stream_span_clone = stream_span.clone();
+        let _guard = stream_span.enter();
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        let record_batch_stream =
-            record_batch_stream_builder
-                .build()?
-                .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
-                    Err(err) => Err(err.into()),
-                });
+        let stream = record_batch_stream_builder
+            .build()?
+            .map(move |batch| match batch {
+                Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                Err(err) => Err(err.into()),
+            });
+        drop(_guard);
 
-        Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+        Ok(Box::pin(TracedStream::new(stream, vec![
+            parent_span,
+            span,
+            stream_span_clone,
+        ])) as ArrowRecordBatchStream)
     }
 
+    #[tracing::instrument(
+        skip(file_io, should_load_page_index),
+        level = "trace",
+        name = "iceberg.scan.execute.create_parquet_record_batch_stream_builder"
+    )]
     pub(crate) async fn create_parquet_record_batch_stream_builder(
         data_file_path: &str,
         file_io: FileIO,
@@ -339,11 +367,19 @@ impl ArrowReader {
             .with_preload_page_index(should_load_page_index);
 
         // Create the record batch stream builder, which wraps the parquet file reader
-        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            parquet_file_reader,
-            ArrowReaderOptions::new(),
-        )
+        let span = tracing::trace_span!(
+            "iceberg.scan.execute.create_parquet_record_batch_stream_builder.build"
+        );
+        let record_batch_stream_builder = async move {
+            ParquetRecordBatchStreamBuilder::new_with_options(
+                parquet_file_reader,
+                ArrowReaderOptions::new(),
+            )
+            .await
+        }
+        .instrument(span)
         .await?;
+
         Ok(record_batch_stream_builder)
     }
 
@@ -352,6 +388,11 @@ impl ArrowReader {
     /// Using the Parquet page index, we build a `RowSelection` that rejects rows that are indicated
     /// as having been deleted by a positional delete, taking into account any row groups that have
     /// been skipped entirely by the filter predicate
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.scan.execute.build_deletes_row_selection"
+    )]
     fn build_deletes_row_selection(
         row_group_metadata_list: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
@@ -495,6 +536,11 @@ impl ArrowReader {
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.scan.execute.get_arrow_projection_mask"
+    )]
     fn get_arrow_projection_mask(
         field_ids: &[i32],
         iceberg_schema_of_task: &Schema,
@@ -615,6 +661,11 @@ impl ArrowReader {
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.scan.execute.get_row_filter"
+    )]
     fn get_row_filter(
         predicates: &BoundPredicate,
         parquet_schema: &SchemaDescriptor,
@@ -644,6 +695,11 @@ impl ArrowReader {
         Ok(RowFilter::new(vec![Box::new(arrow_predicate)]))
     }
 
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.scan.execute.get_selected_row_group_indices"
+    )]
     fn get_selected_row_group_indices(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
@@ -667,6 +723,11 @@ impl ArrowReader {
         Ok(results)
     }
 
+    #[tracing::instrument(
+        skip_all,
+        level = "trace",
+        name = "iceberg.scan.execute.get_row_selection_for_filter_predicate"
+    )]
     fn get_row_selection_for_filter_predicate(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
@@ -1751,7 +1812,6 @@ message schema {
 
         let result = reader
             .read(tasks)
-            .await
             .unwrap()
             .try_collect::<Vec<RecordBatch>>()
             .await

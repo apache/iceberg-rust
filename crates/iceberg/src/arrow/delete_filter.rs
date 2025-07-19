@@ -104,6 +104,7 @@ impl DeleteFilter {
     }
 
     /// Builds eq delete predicate for the provided task.
+    #[tracing::instrument(skip_all, level = "trace")]
     pub(crate) async fn build_equality_delete_predicate(
         &self,
         file_scan_task: &FileScanTask,
