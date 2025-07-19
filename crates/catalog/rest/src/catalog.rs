@@ -17,11 +17,12 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use iceberg::io::FileIO;
+use iceberg::io::{self, FileIO};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -240,6 +241,8 @@ pub struct RestCatalog {
     /// It's could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
     ctx: OnceCell<RestContext>,
+    /// Extensions for the FileIOBuilder.
+    file_io_extensions: io::Extensions,
 }
 
 impl RestCatalog {
@@ -248,7 +251,14 @@ impl RestCatalog {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
+            file_io_extensions: io::Extensions::default(),
         }
+    }
+
+    /// Add an extension to the file IO builder.
+    pub fn with_file_io_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.file_io_extensions.add(ext);
+        self
     }
 
     /// Gets the [`RestContext`] from the catalog.
@@ -307,7 +317,10 @@ impl RestCatalog {
         };
 
         let file_io = match warehouse_path.or(metadata_location) {
-            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
+            Some(url) => FileIO::from_path(url)?
+                .with_props(props)
+                .with_extensions(self.file_io_extensions.clone())
+                .build()?,
             None => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
