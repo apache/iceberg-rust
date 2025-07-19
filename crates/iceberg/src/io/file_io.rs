@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -176,6 +177,8 @@ pub struct FileIOBuilder {
     scheme_str: Option<String>,
     /// Arguments for operator.
     props: HashMap<String, String>,
+    /// Optional extensions to configure the underlying FileIO behavior.
+    extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
 }
 
 impl FileIOBuilder {
@@ -185,6 +188,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
+            extensions: HashMap::default(),
         }
     }
 
@@ -193,6 +197,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: None,
             props: HashMap::default(),
+            extensions: HashMap::default(),
         }
     }
 
@@ -217,6 +222,21 @@ impl FileIOBuilder {
         self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
         self
+    }
+
+    /// Add an extension to the file IO builder.
+    pub fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.insert(TypeId::of::<T>(), Arc::new(ext));
+        self
+    }
+
+    /// Fetch an extension from the file IO builder.
+    pub fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        let type_id = TypeId::of::<T>();
+        self.extensions
+            .get(&type_id)
+            .and_then(|arc_any| Arc::clone(arc_any).downcast::<T>().ok())
     }
 
     /// Builds [`FileIO`].
