@@ -21,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
-use reqsign::{AwsCredential, AwsCredentialLoad};
+pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
 use url::Url;
 
