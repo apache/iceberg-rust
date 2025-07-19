@@ -230,6 +230,15 @@ impl FileIOBuilder {
         self
     }
 
+    /// Adds multiple extensions to the file IO builder.
+    pub fn with_extensions(
+        mut self,
+        extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
     /// Fetch an extension from the file IO builder.
     pub fn extension<T>(&self) -> Option<Arc<T>>
     where T: 'static + Send + Sync + Clone {
