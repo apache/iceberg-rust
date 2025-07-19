@@ -266,7 +266,7 @@ impl MinMaxColAggregator {
         self.upper_bounds
             .entry(field_id)
             .and_modify(|e| {
-                if *e > datum {
+                if *e < datum {
                     *e = datum.clone()
                 }
             })
@@ -853,7 +853,9 @@ mod tests {
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
+            WriterProperties::builder()
+                .set_max_row_group_size(128)
+                .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
             file_io.clone(),
             location_gen,
