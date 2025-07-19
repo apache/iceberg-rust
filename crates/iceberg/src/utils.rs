@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::str::FromStr;
+
+use crate::{Error, ErrorKind, Result};
 
 // Use a default value of 1 as the safest option.
 // See https://doc.rust-lang.org/std/thread/fn.available_parallelism.html#limitations
@@ -41,11 +45,30 @@ pub(crate) fn available_parallelism() -> NonZeroUsize {
     })
 }
 
+pub(crate) fn parse_property<T>(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default_value: T,
+) -> Result<T>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    match properties.get(key) {
+        Some(s) => s.parse::<T>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid property value for key: {}", key),
+            )
+            .with_source(e)
+        }),
+        None => Ok(default_value),
+    }
+}
+
 pub mod bin {
     use std::iter::Iterator;
     use std::marker::PhantomData;
-
-    use itertools::Itertools;
 
     struct Bin<T> {
         bin_weight: u32,
@@ -91,8 +114,11 @@ pub mod bin {
             }
         }
 
-        pub fn pack<F>(&self, items: Vec<T>, weight_func: F) -> Vec<Vec<T>>
-        where F: Fn(&T) -> u32 {
+        pub fn pack<I, F>(&self, items: I, weight_func: F) -> impl Iterator<Item = Vec<T>>
+        where
+            I: IntoIterator<Item = T>,
+            F: Fn(&T) -> u32,
+        {
             let mut bins: Vec<Bin<T>> = vec![];
             for item in items {
                 let cur_weight = weight_func(&item);
@@ -106,7 +132,7 @@ pub mod bin {
                 addable_bin.add(item, cur_weight);
             }
 
-            bins.into_iter().map(|bin| bin.into_vec()).collect_vec()
+            bins.into_iter().map(|bin| bin.into_vec())
         }
     }
 
@@ -119,7 +145,7 @@ pub mod bin {
             let packer = ListPacker::new(10);
             let items = vec![3, 4, 5, 6, 2, 1];
 
-            let packed = packer.pack(items, |&x| x);
+            let packed: Vec<Vec<u32>> = packer.pack(items, |&x| x).collect();
 
             assert_eq!(packed.len(), 3);
             assert!(packed[0].iter().sum::<u32>() == 10);
@@ -155,7 +181,7 @@ pub mod bin {
                 },
             ];
 
-            let packed = packer.pack(items, |item| item.size);
+            let packed: Vec<Vec<Item>> = packer.pack(items, |item| item.size).collect();
 
             assert_eq!(packed.len(), 2);
             assert!(packed[0].iter().map(|x| x.size).sum::<u32>() <= 15);
@@ -167,7 +193,7 @@ pub mod bin {
             let packer = ListPacker::new(10);
             let items = vec![15, 5, 3];
 
-            let packed = packer.pack(items, |&x| x);
+            let packed: Vec<Vec<u32>> = packer.pack(items, |&x| x).collect();
 
             assert_eq!(packed.len(), 2);
             assert!(packed[0].contains(&15));
@@ -179,7 +205,7 @@ pub mod bin {
             let packer = ListPacker::new(10);
             let items: Vec<u32> = vec![];
 
-            let packed = packer.pack(items, |&x| x);
+            let packed: Vec<Vec<u32>> = packer.pack(items, |&x| x).collect();
 
             assert_eq!(packed.len(), 0);
         }
