@@ -49,7 +49,8 @@ use crate::{Error, ErrorKind, ensure_data_valid};
 pub type SchemaId = i32;
 /// Reference to [`Schema`].
 pub type SchemaRef = Arc<Schema>;
-pub(crate) const DEFAULT_SCHEMA_ID: SchemaId = 0;
+/// Default schema id.
+pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
