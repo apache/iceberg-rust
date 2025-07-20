@@ -42,7 +42,7 @@ impl PyPrimitiveLiteral {
             PrimitiveLiteral::Float(v) => v.0.into_py_any(py), // unwrap OrderedFloat
             PrimitiveLiteral::Double(v) => v.0.into_py_any(py),
             PrimitiveLiteral::String(v) => v.into_py_any(py),
-            PrimitiveLiteral::Binary(v) => PyBytes::new(py, &v).into_py_any(py),
+            PrimitiveLiteral::Binary(v) => PyBytes::new(py, v).into_py_any(py),
             PrimitiveLiteral::Int128(v) => v.into_py_any(py), // Python handles big ints
             PrimitiveLiteral::UInt128(v) => v.into_py_any(py),
             PrimitiveLiteral::AboveMax => Err(PyValueError::new_err("AboveMax is not supported")),
