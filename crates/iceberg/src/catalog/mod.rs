@@ -597,7 +597,7 @@ impl TableRequirement {
             match self {
                 TableRequirement::NotExist => {
                     return Err(Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::CatalogCommitConflicts,
                         format!(
                             "Requirement failed: Table with id {} already exists",
                             metadata.uuid()
@@ -607,7 +607,7 @@ impl TableRequirement {
                 TableRequirement::UuidMatch { uuid } => {
                     if &metadata.uuid() != uuid {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Table UUID does not match",
                         )
                         .with_context("expected", *uuid)
@@ -618,7 +618,7 @@ impl TableRequirement {
                     // ToDo: Harmonize the types of current_schema_id
                     if metadata.current_schema_id != *current_schema_id {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Current schema id does not match",
                         )
                         .with_context("expected", current_schema_id.to_string())
@@ -630,7 +630,7 @@ impl TableRequirement {
                 } => {
                     if metadata.default_sort_order().order_id != *default_sort_order_id {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Default sort order id does not match",
                         )
                         .with_context("expected", default_sort_order_id.to_string())
@@ -644,12 +644,12 @@ impl TableRequirement {
                     let snapshot_ref = metadata.snapshot_for_ref(r#ref);
                     if let Some(snapshot_id) = snapshot_id {
                         let snapshot_ref = snapshot_ref.ok_or(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             format!("Requirement failed: Branch or tag `{}` not found", r#ref),
                         ))?;
                         if snapshot_ref.snapshot_id() != *snapshot_id {
                             return Err(Error::new(
-                                ErrorKind::DataInvalid,
+                                ErrorKind::CatalogCommitConflicts,
                                 format!(
                                     "Requirement failed: Branch or tag `{}`'s snapshot has changed",
                                     r#ref
@@ -661,7 +661,7 @@ impl TableRequirement {
                     } else if snapshot_ref.is_some() {
                         // a null snapshot ID means the ref should not exist already
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             format!(
                                 "Requirement failed: Branch or tag `{}` already exists",
                                 r#ref
@@ -673,7 +673,7 @@ impl TableRequirement {
                     // ToDo: Harmonize the types of default_spec_id
                     if metadata.default_partition_spec_id() != *default_spec_id {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Default partition spec id does not match",
                         )
                         .with_context("expected", default_spec_id.to_string())
@@ -685,7 +685,7 @@ impl TableRequirement {
                 } => {
                     if metadata.last_partition_id != *last_assigned_partition_id {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Last assigned partition id does not match",
                         )
                         .with_context("expected", last_assigned_partition_id.to_string())
@@ -697,7 +697,7 @@ impl TableRequirement {
                 } => {
                     if &metadata.last_column_id != last_assigned_field_id {
                         return Err(Error::new(
-                            ErrorKind::DataInvalid,
+                            ErrorKind::CatalogCommitConflicts,
                             "Requirement failed: Last assigned field id does not match",
                         )
                         .with_context("expected", last_assigned_field_id.to_string())
@@ -710,7 +710,7 @@ impl TableRequirement {
                 TableRequirement::NotExist => {}
                 _ => {
                     return Err(Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::TableNotFound,
                         "Requirement failed: Table does not exist",
                     ));
                 }
@@ -814,7 +814,7 @@ pub enum ViewUpdate {
     #[serde(rename_all = "kebab-case")]
     AssignUuid {
         /// The new UUID to assign.
-        uuid: uuid::Uuid,
+        uuid: Uuid,
     },
     /// Upgrade view's format version
     #[serde(rename_all = "kebab-case")]
@@ -1092,7 +1092,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        // Ref exists and should matches
+        // Ref exists and should match
         let requirement = TableRequirement::RefSnapshotIdMatch {
             r#ref: "main".to_string(),
             snapshot_id: Some(3051729675574597004),
