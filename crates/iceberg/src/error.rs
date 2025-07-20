@@ -62,6 +62,8 @@ pub enum ErrorKind {
     FeatureUnsupported,
 
     /// Catalog commit failed due to outdated metadata
+    ///
+    /// This error is retryable by default, unless specified otherwise
     CatalogCommitConflicts,
 }
 
@@ -232,7 +234,7 @@ impl Error {
             // internally. It's zero cost if backtrace is disabled.
             backtrace: Backtrace::capture(),
 
-            retryable: false,
+            retryable: kind == ErrorKind::CatalogCommitConflicts,
         }
     }
 
