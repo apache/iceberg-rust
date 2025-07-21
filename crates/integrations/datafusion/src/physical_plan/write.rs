@@ -152,7 +152,7 @@ impl ExecutionPlan for IcebergWriteExec {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Internal(
-                "IcebergWriteExec expects exactly one child".to_string(),
+                "IcebergWriteExec expects exactly one child, but provided {} ".to_string(),
             ));
         }
 
