@@ -148,7 +148,7 @@ impl ExecutionPlan for IcebergCommitExec {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Internal(
-                "IcebergCommitExec expects exactly one child".to_string(),
+                "IcebergCommitExec expects exactly one child, but provided {children.len()}".to_string(),
             ));
         }
 
