@@ -37,8 +37,8 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::spec::{
-    DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT,
-    PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT, serialize_data_file_to_json,
+    DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
+    serialize_data_file_to_json,
 };
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -54,6 +54,7 @@ use uuid::Uuid;
 use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
 
+#[derive(Debug)]
 pub(crate) struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
@@ -104,12 +105,6 @@ impl IcebergWriteExec {
     }
 }
 
-impl Debug for IcebergWriteExec {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IcebergWriteExec")
-    }
-}
-
 impl DisplayAs for IcebergWriteExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
@@ -153,9 +148,10 @@ impl ExecutionPlan for IcebergWriteExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
-            return Err(DataFusionError::Internal(
-                "IcebergWriteExec expects exactly one child, but provided {} ".to_string(),
-            ));
+            return Err(DataFusionError::Internal(format!(
+                "IcebergWriteExec expects exactly one child, but provided {}",
+                children.len()
+            )));
         }
 
         Ok(Arc::new(Self::new(

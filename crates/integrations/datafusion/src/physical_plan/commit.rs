@@ -29,7 +29,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream_partitioned,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use futures::StreamExt;
 use iceberg::Catalog;
@@ -42,10 +42,11 @@ use crate::to_datafusion_error;
 
 /// IcebergCommitExec is responsible for collecting results from multiple IcebergWriteExec
 /// instances and using Transaction::fast_append to commit the data files written.
+#[derive(Debug)]
 pub(crate) struct IcebergCommitExec {
     table: Table,
     catalog: Arc<dyn Catalog>,
-    write_plan: Arc<dyn ExecutionPlan>,
+    input: Arc<dyn ExecutionPlan>,
     schema: ArrowSchemaRef,
     count_schema: ArrowSchemaRef,
     plan_properties: PlanProperties,
@@ -55,7 +56,7 @@ impl IcebergCommitExec {
     pub fn new(
         table: Table,
         catalog: Arc<dyn Catalog>,
-        write_plan: Arc<dyn ExecutionPlan>,
+        input: Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
     ) -> Self {
         let plan_properties = Self::compute_properties(schema.clone());
@@ -63,7 +64,7 @@ impl IcebergCommitExec {
         Self {
             table,
             catalog,
-            write_plan,
+            input,
             schema,
             count_schema: Self::make_count_schema(),
             plan_properties,
@@ -96,12 +97,6 @@ impl IcebergCommitExec {
             DataType::UInt64,
             false,
         )]))
-    }
-}
-
-impl Debug for IcebergCommitExec {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IcebergCommitExec")
     }
 }
 
@@ -140,7 +135,7 @@ impl ExecutionPlan for IcebergCommitExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.write_plan]
+        vec![&self.input]
     }
 
     fn with_new_children(
@@ -148,10 +143,10 @@ impl ExecutionPlan for IcebergCommitExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
-            return Err(DataFusionError::Internal(
-                "IcebergCommitExec expects exactly one child, but provided {children.len()}"
-                    .to_string(),
-            ));
+            return Err(DataFusionError::Internal(format!(
+                "IcebergCommitExec expects exactly one child, but provided {}",
+                children.len()
+            )));
         }
 
         Ok(Arc::new(IcebergCommitExec::new(
@@ -176,7 +171,7 @@ impl ExecutionPlan for IcebergCommitExec {
         }
 
         let table = self.table.clone();
-        let input_plan = self.write_plan.clone();
+        let input_plan = self.input.clone();
         let count_schema = Arc::clone(&self.count_schema);
 
         // todo revisit this
@@ -191,54 +186,51 @@ impl ExecutionPlan for IcebergCommitExec {
             let mut data_files: Vec<DataFile> = Vec::new();
             let mut total_record_count: u64 = 0;
 
-            // Execute and collect results from all partitions of the input plan
-            let batches = execute_stream_partitioned(input_plan, context)?;
+            // Execute and collect results from the input coalesced plan
+            let mut batch_stream = input_plan.execute(0, context)?;
 
-            // Collect all data files from this partition's stream
-            for mut batch_stream in batches {
-                while let Some(batch_result) = batch_stream.next().await {
-                    let batch = batch_result?;
+            while let Some(batch_result) = batch_stream.next().await {
+                let batch = batch_result?;
 
-                    let files_array = batch
-                        .column_by_name(DATA_FILES_COL_NAME)
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Expected 'data_files' column in input batch".to_string(),
-                            )
-                        })?
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Expected 'data_files' column to be StringArray".to_string(),
-                            )
-                        })?;
+                let files_array = batch
+                    .column_by_name(DATA_FILES_COL_NAME)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Expected 'data_files' column in input batch".to_string(),
+                        )
+                    })?
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Expected 'data_files' column to be StringArray".to_string(),
+                        )
+                    })?;
 
-                    // todo remove log
-                    println!("files_array to deserialize: {:?}", files_array);
+                // todo remove log
+                println!("files_array to deserialize: {:?}", files_array);
 
-                    // Deserialize all data files from the StringArray
-                    let batch_files: Vec<DataFile> = files_array
-                        .into_iter()
-                        .flatten()
-                        .map(|f| -> DFResult<DataFile> {
-                            // Parse JSON to DataFileSerde and convert to DataFile
-                            deserialize_data_file_from_json(
-                                f,
-                                spec_id,
-                                &partition_type,
-                                &current_schema,
-                            )
-                            .map_err(to_datafusion_error)
-                        })
-                        .collect::<datafusion::common::Result<_>>()?;
+                // Deserialize all data files from the StringArray
+                let batch_files: Vec<DataFile> = files_array
+                    .into_iter()
+                    .flatten()
+                    .map(|f| -> DFResult<DataFile> {
+                        // Parse JSON to DataFileSerde and convert to DataFile
+                        deserialize_data_file_from_json(
+                            f,
+                            spec_id,
+                            &partition_type,
+                            &current_schema,
+                        )
+                        .map_err(to_datafusion_error)
+                    })
+                    .collect::<datafusion::common::Result<_>>()?;
 
-                    // add record_counts from the current batch to total record count
-                    total_record_count += batch_files.iter().map(|f| f.record_count()).sum::<u64>();
+                // add record_counts from the current batch to total record count
+                total_record_count += batch_files.iter().map(|f| f.record_count()).sum::<u64>();
 
-                    // Add all deserialized files to our collection
-                    data_files.extend(batch_files);
-                }
+                // Add all deserialized files to our collection
+                data_files.extend(batch_files);
             }
 
             // If no data files were collected, return an empty result

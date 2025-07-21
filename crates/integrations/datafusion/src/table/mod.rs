@@ -30,6 +30,7 @@ use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
@@ -198,10 +199,12 @@ impl TableProvider for IcebergTableProvider {
             self.schema.clone(),
         ));
 
+        let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
+
         Ok(Arc::new(IcebergCommitExec::new(
             self.table.clone(),
             catalog,
-            write_plan,
+            coalesce_partitions,
             self.schema.clone(),
         )))
     }
