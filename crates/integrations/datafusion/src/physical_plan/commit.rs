@@ -37,6 +37,7 @@ use iceberg::spec::{DataFile, deserialize_data_file_from_json};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 
+use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
 
 /// IcebergCommitExec is responsible for collecting results from multiple IcebergWriteExec
@@ -199,7 +200,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     let batch = batch_result?;
 
                     let files_array = batch
-                        .column_by_name("data_files")
+                        .column_by_name(DATA_FILES_COL_NAME)
                         .ok_or_else(|| {
                             DataFusionError::Internal(
                                 "Expected 'data_files' column in input batch".to_string(),
