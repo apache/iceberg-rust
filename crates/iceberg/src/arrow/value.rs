@@ -457,6 +457,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 )
             })?;
 
+        // todo remove unneeded log lines
         println!(
             "!!!Accessor struct array from struct partner: {:?}",
             struct_array
