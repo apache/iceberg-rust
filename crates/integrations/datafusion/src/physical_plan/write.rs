@@ -89,10 +89,9 @@ impl IcebergWriteExec {
     fn make_result_batch(data_files: Vec<String>) -> DFResult<RecordBatch> {
         let files_array = Arc::new(StringArray::from(data_files)) as ArrayRef;
 
-        RecordBatch::try_from_iter_with_nullable(vec![(DATA_FILES_COL_NAME, files_array, false)])
-            .map_err(|e| {
-                DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string()))
-            })
+        RecordBatch::try_new(Self::make_result_schema(), vec![files_array]).map_err(|e| {
+            DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string()))
+        })
     }
 
     fn make_result_schema() -> ArrowSchemaRef {
