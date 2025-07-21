@@ -29,7 +29,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use futures::StreamExt;
 use iceberg::Catalog;
@@ -40,8 +40,8 @@ use iceberg::transaction::Transaction;
 use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
 
-/// IcebergCommitExec is responsible for collecting results from multiple IcebergWriteExec
-/// instances and using Transaction::fast_append to commit the data files written.
+/// IcebergCommitExec is responsible for collecting the files written and use
+/// [`Transaction::fast_append`] to commit the data files written.
 #[derive(Debug)]
 pub(crate) struct IcebergCommitExec {
     table: Table,
