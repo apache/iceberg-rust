@@ -209,6 +209,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_append_snapshot_properties() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("key".to_string(), "val".to_string());
+
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        // Check customized properties is contained in snapshot summary properties.
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        assert_eq!(
+            new_snapshot
+                .summary()
+                .additional_properties
+                .get("key")
+                .unwrap(),
+            "val"
+        );
+    }
+
+    #[tokio::test]
     async fn test_fast_append_file_with_incompatible_partition_value() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
