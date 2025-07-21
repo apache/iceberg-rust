@@ -123,9 +123,9 @@ impl Manifest {
 pub fn serialize_data_file_to_json(
     data_file: DataFile,
     partition_type: &super::StructType,
-    is_version_1: bool,
+    format_version: FormatVersion,
 ) -> Result<String> {
-    let serde = _serde::DataFileSerde::try_from(data_file, partition_type, is_version_1)?;
+    let serde = _serde::DataFileSerde::try_from(data_file, partition_type, format_version)?;
     serde_json::to_string(&serde).map_err(|e| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -1120,9 +1120,6 @@ mod tests {
         // Get partition type from the partition spec
         let partition_type = partition_spec.partition_type(&schema).unwrap();
 
-        // Set version flag
-        let is_version_1 = false;
-
         // Create a vector of DataFile objects
         let data_files = vec![
             DataFileBuilder::default()
@@ -1157,7 +1154,8 @@ mod tests {
         let serialized_files = data_files
             .into_iter()
             .map(|f| {
-                let json = serialize_data_file_to_json(f, &partition_type, is_version_1).unwrap();
+                let json =
+                    serialize_data_file_to_json(f, &partition_type, FormatVersion::V2).unwrap();
                 println!("Test serialized data file: {}", json);
                 json
             })

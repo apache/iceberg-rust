@@ -174,7 +174,7 @@ impl ExecutionPlan for IcebergWriteExec {
         // todo non-default partition spec?
         let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
-        let is_version_1 = self.table.metadata().format_version() == FormatVersion::V1;
+        let format_version = self.table.metadata().format_version();
 
         // Check data file format
         let file_format = DataFileFormat::from_str(
@@ -245,7 +245,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 .map(|data_file| -> DFResult<String> {
                     // Serialize to JSON
                     let json =
-                        serialize_data_file_to_json(data_file, &partition_type, is_version_1)
+                        serialize_data_file_to_json(data_file, &partition_type, format_version)
                             .map_err(to_datafusion_error)?;
 
                     println!("Serialized data file: {}", json); // todo remove log
