@@ -196,7 +196,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
             // Collect all data files from this partition's stream
             for mut batch_stream in batches {
-                while let Some(batch_result) = batch_stream.as_mut().next().await {
+                while let Some(batch_result) = batch_stream.next().await {
                     let batch = batch_result?;
 
                     let files_array = batch

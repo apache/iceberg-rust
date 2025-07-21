@@ -37,7 +37,7 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::spec::{
-    DataFileFormat, FormatVersion, PROPERTY_DEFAULT_FILE_FORMAT,
+    DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT,
     PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT, serialize_data_file_to_json,
 };
 use iceberg::table::Table;
