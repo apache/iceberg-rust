@@ -251,12 +251,7 @@ impl<'a> SnapshotProducer<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
-        if added_data_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                "No added data files found when write a manifest file",
-            ));
-        }
+        assert!(!added_data_files.is_empty());
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
@@ -284,13 +279,26 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        let added_manifest = self.write_added_manifest().await?;
+        // Assert current snapshot producer contains new content to add to new snapshot.
+        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added data files or added snapshot properties found when write a manifest file",
+            ));
+        }
+
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
+        let mut manifest_files = existing_manifests;
+
+        // Process added entries.
+        if !self.added_data_files.is_empty() {
+            let added_manifest = self.write_added_manifest().await?;
+            manifest_files.push(added_manifest);
+        }
+
         // # TODO
         // Support process delete entries.
 
-        let mut manifest_files = vec![added_manifest];
-        manifest_files.extend(existing_manifests);
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
     }
