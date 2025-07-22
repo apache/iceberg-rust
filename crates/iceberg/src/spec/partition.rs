@@ -638,12 +638,14 @@ trait CorePartitionSpecValidator {
 
         if let Some(collision) = collision {
             Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
-                        source_id, transform.dedup_name(), collision.name
-                    ),
-                ))
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
+                    source_id,
+                    transform.dedup_name(),
+                    collision.name
+                ),
+            ))
         } else {
             Ok(())
         }
@@ -1198,24 +1200,20 @@ mod tests {
         });
         assert_eq!(
             spec.partition_type(&schema).unwrap(),
-            StructType::new(vec![NestedField::optional(
-                1000,
-                "id_bucket[16]",
-                Type::Primitive(PrimitiveType::Int)
-            )
-            .into()])
+            StructType::new(vec![
+                NestedField::optional(1000, "id_bucket[16]", Type::Primitive(PrimitiveType::Int))
+                    .into()
+            ])
         )
     }
 
     #[test]
     fn test_collision_with_schema_name() {
         let schema = Schema::builder()
-            .with_fields(vec![NestedField::required(
-                1,
-                "id",
-                Type::Primitive(crate::spec::PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+            ])
             .build()
             .unwrap();
 
@@ -1362,12 +1360,10 @@ mod tests {
     #[test]
     fn test_builder_incompatible_transforms_disallowed() {
         let schema = Schema::builder()
-            .with_fields(vec![NestedField::required(
-                1,
-                "id",
-                Type::Primitive(crate::spec::PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+            ])
             .build()
             .unwrap();
 
@@ -1452,12 +1448,10 @@ mod tests {
     #[test]
     fn test_not_compatible_with_transform_different() {
         let schema = Schema::builder()
-            .with_fields(vec![NestedField::required(
-                1,
-                "id",
-                Type::Primitive(crate::spec::PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+            ])
             .build()
             .unwrap();
 

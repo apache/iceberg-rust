@@ -154,11 +154,11 @@ impl Catalog for HmsCatalog {
     ///
     /// This function can return an error in the following situations:
     ///
-    /// - If `hive.metastore.database.owner-type` is specified without  
+    /// - If `hive.metastore.database.owner-type` is specified without
     /// `hive.metastore.database.owner`,
     /// - Errors from `validate_namespace` if the namespace identifier does not
     /// meet validation criteria.
-    /// - Errors from `convert_to_database` if the properties cannot be  
+    /// - Errors from `convert_to_database` if the properties cannot be
     /// successfully converted into a database configuration.
     /// - Errors from the underlying database creation process, converted using
     /// `from_thrift_error`.
@@ -238,7 +238,7 @@ impl Catalog for HmsCatalog {
     /// Asynchronously updates properties of an existing namespace.
     ///
     /// Converts the given namespace identifier and properties into a database
-    /// representation and then attempts to update the corresponding namespace  
+    /// representation and then attempts to update the corresponding namespace
     /// in the Hive Metastore.
     ///
     /// # Returns
@@ -258,7 +258,7 @@ impl Catalog for HmsCatalog {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Database name must be specified",
-                ))
+                ));
             }
         };
 
@@ -276,7 +276,7 @@ impl Catalog for HmsCatalog {
     /// # Returns
     /// A `Result<()>` indicating the outcome:
     /// - `Ok(())` signifies successful namespace deletion.
-    /// - `Err(...)` signifies failure to drop the namespace due to validation  
+    /// - `Err(...)` signifies failure to drop the namespace due to validation
     /// errors, connectivity issues, or Hive Metastore constraints.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let name = validate_namespace(namespace)?;
@@ -297,7 +297,7 @@ impl Catalog for HmsCatalog {
     /// A `Result<Vec<TableIdent>>`, which is:
     /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
     /// representing a table within the specified namespace.
-    /// - `Err(...)` if an error occurs during namespace validation or while  
+    /// - `Err(...)` if an error occurs during namespace validation or while
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = validate_namespace(namespace)?;
@@ -333,7 +333,7 @@ impl Catalog for HmsCatalog {
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
-        creation: TableCreation,
+        mut creation: TableCreation,
     ) -> Result<Table> {
         let db_name = validate_namespace(namespace)?;
         let table_name = creation.name.clone();
@@ -342,13 +342,15 @@ impl Catalog for HmsCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &table_name, &self.config.warehouse)
+                let location = get_default_table_location(&ns, &table_name, &self.config.warehouse);
+                creation.location = Some(location.clone());
+                location
             }
         };
-
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
+
         let metadata_location = create_metadata_location(&location, 0)?;
 
         self.file_io
@@ -500,6 +502,17 @@ impl Catalog for HmsCatalog {
             .map_err(from_thrift_error)?;
 
         Ok(())
+    }
+
+    async fn register_table(
+        &self,
+        _table_ident: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Registering a table is not supported yet",
+        ))
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {

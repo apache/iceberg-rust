@@ -47,13 +47,12 @@
 //! use iceberg::spec::DataFile;
 //! use iceberg::transaction::Transaction;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -61,6 +60,8 @@
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
+//!     // Add customized code to create a table first.
+//!
 //!     // Load table from catalog.
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
@@ -102,13 +103,12 @@
 //! use iceberg::io::FileIOBuilder;
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
-//! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, Result, TableIdent};
-//! use iceberg_catalog_memory::MemoryCatalog;
+//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
@@ -160,9 +160,13 @@
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Build your file IO.
+//!     use iceberg::NamespaceIdent;
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
+//!
+//!     // Add customized code to create a table first.
+//!
 //!     // Load table from catalog.
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
@@ -198,8 +202,8 @@ pub mod file_writer;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFile;
 use crate::Result;
+use crate::spec::DataFile;
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;

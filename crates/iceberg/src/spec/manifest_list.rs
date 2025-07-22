@@ -21,12 +21,14 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
-use apache_avro::{from_value, Reader, Writer};
+use apache_avro::{Reader, Writer, from_value};
 use bytes::Bytes;
+pub use serde_bytes::ByteBuf;
+use serde_derive::{Deserialize, Serialize};
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
-use super::{Datum, FormatVersion, Manifest, StructType};
+use super::{FormatVersion, Manifest};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::{Error, ErrorKind};
@@ -55,21 +57,17 @@ pub struct ManifestList {
 
 impl ManifestList {
     /// Parse manifest list from bytes.
-    pub fn parse_with_version(
-        bs: &[u8],
-        version: FormatVersion,
-        partition_type_provider: impl Fn(i32) -> Result<Option<StructType>>,
-    ) -> Result<ManifestList> {
+    pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
         match version {
             FormatVersion::V1 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type_provider)
+                from_value::<_serde::ManifestListV1>(&values)?.try_into()
             }
             FormatVersion::V2 => {
                 let reader = Reader::new(bs)?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type_provider)
+                from_value::<_serde::ManifestListV2>(&values)?.try_into()
             }
         }
     }
@@ -577,11 +575,11 @@ pub struct ManifestFile {
     /// A list of field summaries for each partition field in the spec. Each
     /// field in the list corresponds to a field in the manifest file’s
     /// partition spec.
-    pub partitions: Vec<FieldSummary>,
+    pub partitions: Option<Vec<FieldSummary>>,
     /// field: 519
     ///
     /// Implementation-specific key metadata for encryption
-    pub key_metadata: Vec<u8>,
+    pub key_metadata: Option<Vec<u8>>,
 }
 
 impl ManifestFile {
@@ -673,7 +671,7 @@ impl ManifestFile {
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-#[derive(Debug, PartialEq, Eq, Clone, Default, Hash)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Hash)]
 pub struct FieldSummary {
     /// field: 509
     ///
@@ -687,11 +685,11 @@ pub struct FieldSummary {
     /// field: 510
     /// The minimum value for the field in the manifests
     /// partitions.
-    pub lower_bound: Option<Datum>,
+    pub lower_bound: Option<ByteBuf>,
     /// field: 511
     /// The maximum value for the field in the manifests
     /// partitions.
-    pub upper_bound: Option<Datum>,
+    pub upper_bound: Option<ByteBuf>,
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
@@ -703,9 +701,9 @@ pub(super) mod _serde {
     use serde_derive::{Deserialize, Serialize};
 
     use super::ManifestFile;
-    use crate::error::Result;
-    use crate::spec::{Datum, PrimitiveType, StructType};
     use crate::Error;
+    use crate::error::Result;
+    use crate::spec::FieldSummary;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(transparent)]
@@ -721,27 +719,12 @@ pub(super) mod _serde {
 
     impl ManifestListV2 {
         /// Converts the [ManifestListV2] into a [ManifestList].
-        /// The convert of [entries] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(
-            self,
-            partition_type_provider: impl Fn(i32) -> Result<Option<StructType>>,
-        ) -> Result<super::ManifestList> {
+        pub fn try_into(self) -> Result<super::ManifestList> {
             Ok(super::ManifestList {
                 entries: self
                     .entries
                     .into_iter()
-                    .map(|v| {
-                        let partition_spec_id = v.partition_spec_id;
-                        let manifest_path = v.manifest_path.clone();
-                        v.try_into(partition_type_provider(partition_spec_id)?.as_ref())
-                            .map_err(|err| {
-                                err.with_context("manifest file path", manifest_path)
-                                    .with_context(
-                                        "partition spec id",
-                                        partition_spec_id.to_string(),
-                                    )
-                            })
-                    })
+                    .map(|v| v.try_into())
                     .collect::<Result<Vec<_>>>()?,
             })
         }
@@ -755,7 +738,7 @@ pub(super) mod _serde {
                 entries: value
                     .entries
                     .into_iter()
-                    .map(TryInto::try_into)
+                    .map(|v| v.try_into())
                     .collect::<std::result::Result<Vec<_>, _>>()?,
             })
         }
@@ -763,27 +746,12 @@ pub(super) mod _serde {
 
     impl ManifestListV1 {
         /// Converts the [ManifestListV1] into a [ManifestList].
-        /// The convert of [entries] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(
-            self,
-            partition_type_provider: impl Fn(i32) -> Result<Option<StructType>>,
-        ) -> Result<super::ManifestList> {
+        pub fn try_into(self) -> Result<super::ManifestList> {
             Ok(super::ManifestList {
                 entries: self
                     .entries
                     .into_iter()
-                    .map(|v| {
-                        let partition_spec_id = v.partition_spec_id;
-                        let manifest_path = v.manifest_path.clone();
-                        v.try_into(partition_type_provider(partition_spec_id)?.as_ref())
-                            .map_err(|err| {
-                                err.with_context("manifest file path", manifest_path)
-                                    .with_context(
-                                        "partition spec id",
-                                        partition_spec_id.to_string(),
-                                    )
-                            })
-                    })
+                    .map(|v| v.try_into())
                     .collect::<Result<Vec<_>>>()?,
             })
         }
@@ -797,7 +765,7 @@ pub(super) mod _serde {
                 entries: value
                     .entries
                     .into_iter()
-                    .map(TryInto::try_into)
+                    .map(|v| v.try_into())
                     .collect::<std::result::Result<Vec<_>, _>>()?,
             })
         }
@@ -844,83 +812,9 @@ pub(super) mod _serde {
         pub key_metadata: Option<ByteBuf>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-    pub(super) struct FieldSummary {
-        pub contains_null: bool,
-        pub contains_nan: Option<bool>,
-        pub lower_bound: Option<ByteBuf>,
-        pub upper_bound: Option<ByteBuf>,
-    }
-
-    impl FieldSummary {
-        /// Converts the [FieldSummary] into a [super::FieldSummary].
-        /// [lower_bound] and [upper_bound] are converted into [Literal]s need the type info so use
-        /// this function instead of [std::TryFrom] trait.
-        pub(crate) fn try_into(self, r#type: &PrimitiveType) -> Result<super::FieldSummary> {
-            Ok(super::FieldSummary {
-                contains_null: self.contains_null,
-                contains_nan: self.contains_nan,
-                lower_bound: self
-                    .lower_bound
-                    .as_ref()
-                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
-                    .transpose()
-                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
-                upper_bound: self
-                    .upper_bound
-                    .as_ref()
-                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
-                    .transpose()
-                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
-            })
-        }
-    }
-
-    fn try_convert_to_field_summary(
-        partitions: Option<Vec<FieldSummary>>,
-        partition_type: Option<&StructType>,
-    ) -> Result<Vec<super::FieldSummary>> {
-        if let Some(partitions) = partitions {
-            if let Some(partition_type) = partition_type {
-                let partition_types = partition_type.fields();
-                if partitions.len() != partition_types.len() {
-                    return Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        format!(
-                            "Invalid partition spec. Expected {} fields, got {}",
-                            partition_types.len(),
-                            partitions.len()
-                        ),
-                    ));
-                }
-                partitions
-                    .into_iter()
-                    .zip(partition_types)
-                    .map(|(v, field)| {
-                        v.try_into(field.field_type.as_primitive_type().ok_or_else(|| {
-                            Error::new(
-                                crate::ErrorKind::DataInvalid,
-                                "Invalid partition spec. Field type is not primitive",
-                            )
-                        })?)
-                    })
-                    .collect::<Result<Vec<_>>>()
-            } else {
-                Err(Error::new(
-                    crate::ErrorKind::DataInvalid,
-                    "Invalid partition spec. Partition type is required",
-                ))
-            }
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
     impl ManifestFileV2 {
         /// Converts the [ManifestFileV2] into a [ManifestFile].
-        /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestFile> {
-            let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
+        pub fn try_into(self) -> Result<ManifestFile> {
             Ok(ManifestFile {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
@@ -935,17 +829,15 @@ pub(super) mod _serde {
                 added_rows_count: Some(self.added_rows_count.try_into()?),
                 existing_rows_count: Some(self.existing_rows_count.try_into()?),
                 deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
-                partitions,
-                key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
+                partitions: self.partitions,
+                key_metadata: self.key_metadata.map(|b| b.into_vec()),
             })
         }
     }
 
     impl ManifestFileV1 {
-        /// Converts the [MManifestFileV1] into a [ManifestFile].
-        /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestFile> {
-            let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
+        /// Converts the [ManifestFileV1] into a [ManifestFile].
+        pub fn try_into(self) -> Result<ManifestFile> {
             Ok(ManifestFile {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
@@ -969,8 +861,8 @@ pub(super) mod _serde {
                     .map(TryInto::try_into)
                     .transpose()?,
                 deleted_rows_count: self.deleted_rows_count.map(TryInto::try_into).transpose()?,
-                partitions,
-                key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
+                partitions: self.partitions,
+                key_metadata: self.key_metadata.map(|b| b.into_vec()),
                 // as ref: https://iceberg.apache.org/spec/#partitioning
                 // use 0 when reading v1 manifest lists
                 content: super::ManifestContentType::Data,
@@ -980,32 +872,10 @@ pub(super) mod _serde {
         }
     }
 
-    fn convert_to_serde_field_summary(
-        partitions: Vec<super::FieldSummary>,
-    ) -> Result<Option<Vec<FieldSummary>>> {
-        if partitions.is_empty() {
-            Ok(None)
-        } else {
-            let mut vs = Vec::with_capacity(partitions.len());
-
-            for v in partitions {
-                let fs = FieldSummary {
-                    contains_null: v.contains_null,
-                    contains_nan: v.contains_nan,
-                    lower_bound: v.lower_bound.map(|v| v.to_bytes()).transpose()?,
-                    upper_bound: v.upper_bound.map(|v| v.to_bytes()).transpose()?,
-                };
-                vs.push(fs);
-            }
-            Ok(Some(vs))
-        }
-    }
-
-    fn convert_to_serde_key_metadata(key_metadata: Vec<u8>) -> Option<ByteBuf> {
-        if key_metadata.is_empty() {
-            None
-        } else {
-            Some(ByteBuf::from(key_metadata))
+    fn convert_to_serde_key_metadata(key_metadata: Option<Vec<u8>>) -> Option<ByteBuf> {
+        match key_metadata {
+            Some(metadata) if !metadata.is_empty() => Some(ByteBuf::from(metadata)),
+            _ => None,
         }
     }
 
@@ -1013,7 +883,6 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,
@@ -1077,7 +946,7 @@ pub(super) mod _serde {
                         )
                     })?
                     .try_into()?,
-                partitions,
+                partitions: value.partitions,
                 key_metadata,
             })
         }
@@ -1087,7 +956,6 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,
@@ -1115,7 +983,7 @@ pub(super) mod _serde {
                     .deleted_rows_count
                     .map(TryInto::try_into)
                     .transpose()?,
-                partitions,
+                partitions: value.partitions,
                 key_metadata,
             })
         }
@@ -1124,9 +992,7 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
     use std::fs;
-    use std::sync::Arc;
 
     use apache_avro::{Reader, Schema};
     use tempfile::TempDir;
@@ -1136,7 +1002,7 @@ mod test {
     use crate::spec::manifest_list::_serde::ManifestListV1;
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
-        NestedField, PrimitiveType, StructType, Type, UNASSIGNED_SEQUENCE_NUMBER,
+        UNASSIGNED_SEQUENCE_NUMBER,
     };
 
     #[tokio::test]
@@ -1157,8 +1023,8 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![],
-                    key_metadata: vec![],
+                    partitions: Some(vec![]),
+                    key_metadata: None,
                 }
             ]
         };
@@ -1183,8 +1049,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1, |_id| Ok(None))
-                .unwrap();
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -1207,8 +1072,10 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
-                    key_metadata: vec![],
+                    partitions: Some(
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                    ),
+                    key_metadata: None,
                 },
                 ManifestFile {
                     manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
@@ -1224,8 +1091,10 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1)), upper_bound: Some(Datum::float(2.1))}],
-                    key_metadata: vec![],
+                    partitions: Some(
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                    ),
+                    key_metadata: None,
                 }
             ]
         };
@@ -1251,29 +1120,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2, |id| {
-                Ok(HashMap::from([
-                    (
-                        1,
-                        StructType::new(vec![Arc::new(NestedField::required(
-                            1,
-                            "test",
-                            Type::Primitive(PrimitiveType::Long),
-                        ))]),
-                    ),
-                    (
-                        2,
-                        StructType::new(vec![Arc::new(NestedField::required(
-                            1,
-                            "test",
-                            Type::Primitive(PrimitiveType::Float),
-                        ))]),
-                    ),
-                ])
-                .get(&id)
-                .cloned())
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -1295,8 +1142,8 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![],
-                key_metadata: vec![],
+                partitions: None,
+                key_metadata: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
@@ -1323,8 +1170,10 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
-                key_metadata: vec![],
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
@@ -1351,8 +1200,10 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
-                key_metadata: vec![],
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}],
+                ),
+                key_metadata: None,
             }]
         };
 
@@ -1369,20 +1220,8 @@ mod test {
 
         let bs = fs::read(path).unwrap();
 
-        let partition_types = HashMap::from([(
-            1,
-            StructType::new(vec![Arc::new(NestedField::required(
-                1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
-        )]);
-
         let manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1, move |id| {
-                Ok(partition_types.get(&id).cloned())
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
@@ -1407,8 +1246,10 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
-                key_metadata: vec![],
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
             }]
         };
 
@@ -1424,19 +1265,8 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
-        let partition_types = HashMap::from([(
-            1,
-            StructType::new(vec![Arc::new(NestedField::required(
-                1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
-        )]);
         let manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2, move |id| {
-                Ok(partition_types.get(&id).cloned())
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
         expected_manifest_list.entries[0].min_sequence_number = seq_num;
         assert_eq!(manifest_list, expected_manifest_list);
@@ -1461,8 +1291,10 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
-                key_metadata: vec![],
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
             }]
         };
 
@@ -1479,20 +1311,8 @@ mod test {
 
         let bs = fs::read(path).unwrap();
 
-        let partition_types = HashMap::from([(
-            1,
-            StructType::new(vec![Arc::new(NestedField::required(
-                1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
-        )]);
-
         let manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2, move |id| {
-                Ok(partition_types.get(&id).cloned())
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
@@ -1518,15 +1338,9 @@ mod test {
         );
         // deserializing both files to ManifestList struct
         let _manifest_list_1 =
-            ManifestList::parse_with_version(&bs_1, crate::spec::FormatVersion::V2, move |_id| {
-                Ok(Some(StructType::new(vec![])))
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs_1, crate::spec::FormatVersion::V2).unwrap();
         let _manifest_list_2 =
-            ManifestList::parse_with_version(&bs_2, crate::spec::FormatVersion::V2, move |_id| {
-                Ok(Some(StructType::new(vec![])))
-            })
-            .unwrap();
+            ManifestList::parse_with_version(&bs_2, crate::spec::FormatVersion::V2).unwrap();
     }
 
     async fn read_avro_schema_fields_as_str(bs: Vec<u8>) -> String {

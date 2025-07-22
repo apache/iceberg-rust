@@ -310,11 +310,11 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
+    use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
-        read_data_files_from_avro, write_data_files_to_avro, DataContentType, DataFile,
-        DataFileFormat, Datum, FormatVersion, NestedField, PrimitiveType, Schema, Struct,
-        StructType, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, NestedField,
+        PrimitiveType, Schema, Struct, StructType, Type, read_data_files_from_avro,
+        write_data_files_to_avro,
     };
 
     #[test]
@@ -330,9 +330,8 @@ mod tests {
         assert_eq!(ret, expected_ret, "Negative i64 entry should be ignored!");
     }
 
-    #[tokio::test]
-    async fn test_data_file_serialize_deserialize() {
-        let schema = Arc::new(
+    fn schema() -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![
                     Arc::new(NestedField::optional(
@@ -353,8 +352,11 @@ mod tests {
                 ])
                 .build()
                 .unwrap(),
-        );
-        let data_files = vec![DataFile {
+        )
+    }
+
+    fn data_files() -> Vec<DataFile> {
+        vec![DataFile {
             content: DataContentType::Data,
             file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
             file_format: DataFileFormat::Parquet,
@@ -376,7 +378,13 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
-        }];
+        }]
+    }
+
+    #[tokio::test]
+    async fn test_data_file_serialize_deserialize() {
+        let schema = schema();
+        let data_files = data_files();
 
         let mut buffer = Vec::new();
         let _ = write_data_files_to_avro(
@@ -397,5 +405,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(data_files, actual_data_file);
+    }
+
+    #[tokio::test]
+    async fn test_data_file_serialize_deserialize_v1_data_on_v2_reader() {
+        let schema = schema();
+        let data_files = data_files();
+
+        let mut buffer = Vec::new();
+        let _ = write_data_files_to_avro(
+            &mut buffer,
+            data_files.clone().into_iter(),
+            &StructType::new(vec![]),
+            FormatVersion::V1,
+        )
+        .unwrap();
+
+        let actual_data_file = read_data_files_from_avro(
+            &mut Cursor::new(buffer),
+            &schema,
+            0,
+            &StructType::new(vec![]),
+            FormatVersion::V2,
+        )
+        .unwrap();
+
+        assert_eq!(actual_data_file[0].content, DataContentType::Data)
     }
 }

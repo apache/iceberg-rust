@@ -17,11 +17,12 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use iceberg::io::FileIO;
+use iceberg::io::{self, FileIO};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -36,7 +37,7 @@ use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
 use crate::client::{
-    deserialize_catalog_response, deserialize_unexpected_catalog_error, HttpClient,
+    HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
@@ -240,6 +241,8 @@ pub struct RestCatalog {
     /// It's could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
     ctx: OnceCell<RestContext>,
+    /// Extensions for the FileIOBuilder.
+    file_io_extensions: io::Extensions,
 }
 
 impl RestCatalog {
@@ -248,7 +251,14 @@ impl RestCatalog {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
+            file_io_extensions: io::Extensions::default(),
         }
+    }
+
+    /// Add an extension to the file IO builder.
+    pub fn with_file_io_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.file_io_extensions.add(ext);
+        self
     }
 
     /// Gets the [`RestContext`] from the catalog.
@@ -307,16 +317,35 @@ impl RestCatalog {
         };
 
         let file_io = match warehouse_path.or(metadata_location) {
-            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
+            Some(url) => FileIO::from_path(url)?
+                .with_props(props)
+                .with_extensions(self.file_io_extensions.clone())
+                .build()?,
             None => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Unable to load file io, neither warehouse nor metadata location is set!",
-                ))?
+                ))?;
             }
         };
 
         Ok(file_io)
+    }
+
+    /// Invalidate the current token without generating a new one. On the next request, the client
+    /// will attempt to generate a new token.
+    pub async fn invalidate_token(&self) -> Result<()> {
+        self.context().await?.client.invalidate_token().await
+    }
+
+    /// Invalidate the current token and set a new one. Generates a new token before invalidating
+    /// the current token, meaning the old token will be used until this function acquires the lock
+    /// and overwrites the token.
+    ///
+    /// If credential is invalid, or the request fails, this method will return an error and leave
+    /// the current token unchanged.
+    pub async fn regenerate_token(&self) -> Result<()> {
+        self.context().await?.client.regenerate_token().await
     }
 }
 
@@ -566,13 +595,13 @@ impl Catalog for RestCatalog {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to create a table under a namespace that does not exist",
-                ))
+                ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "The table already exists",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -628,7 +657,7 @@ impl Catalog for RestCatalog {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to load a table that does not exist",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -724,6 +753,17 @@ impl Catalog for RestCatalog {
         }
     }
 
+    async fn register_table(
+        &self,
+        _table_ident: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Registering a table is not supported yet",
+        ))
+    }
+
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
         let context = self.context().await?;
 
@@ -743,38 +783,37 @@ impl Catalog for RestCatalog {
         let http_response = context.client.query_catalog(request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response(http_response).await?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to update a table that does not exist",
-                ))
+                ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "CommitFailedException, one or more requirements failed. The client may retry.",
-                ))
+                    ErrorKind::CatalogCommitConflicts,
+                    "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
+                )
+                .with_retryable(true));
             }
             StatusCode::INTERNAL_SERVER_ERROR => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "An unknown server-side problem occurred; the commit state is unknown.",
-                ))
+                ));
             }
             StatusCode::BAD_GATEWAY => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
-                ))
+                ));
             }
             StatusCode::GATEWAY_TIMEOUT => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "A server-side gateway timeout occurred; the commit state is unknown.",
-                ))
+                ));
             }
             _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
@@ -804,7 +843,7 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
-    use iceberg::transaction::Transaction;
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
@@ -862,21 +901,27 @@ mod tests {
     }
 
     async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
-        create_oauth_mock_with_path(server, "/v1/oauth/tokens").await
+        create_oauth_mock_with_path(server, "/v1/oauth/tokens", "ey000000000000", 200).await
     }
 
-    async fn create_oauth_mock_with_path(server: &mut ServerGuard, path: &str) -> Mock {
-        server
-            .mock("POST", path)
-            .with_status(200)
-            .with_body(
-                r#"{
-                "access_token": "ey000000000000",
+    async fn create_oauth_mock_with_path(
+        server: &mut ServerGuard,
+        path: &str,
+        token: &str,
+        status: usize,
+    ) -> Mock {
+        let body = format!(
+            r#"{{
+                "access_token": "{token}",
                 "token_type": "Bearer",
                 "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "expires_in": 86400
-                }"#,
-            )
+            }}"#
+        );
+        server
+            .mock("POST", path)
+            .with_status(status)
+            .with_body(body)
             .expect(1)
             .create_async()
             .await
@@ -948,6 +993,129 @@ mod tests {
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_token() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
+                .await;
+        catalog.invalidate_token().await.unwrap();
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000001".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_token_failing_request() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
+                .await;
+        catalog.invalidate_token().await.unwrap();
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn test_regenerate_token() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
+                .await;
+        catalog.regenerate_token().await.unwrap();
+        oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
+        assert_eq!(token, Some("ey000000000001".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_regenerate_token_failing_request() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
+                .await;
+        let invalidate_result = catalog.regenerate_token().await;
+        assert!(invalidate_result.is_err());
+        oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
+
+        // original token is left intact
         assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
@@ -1028,7 +1196,9 @@ mod tests {
 
         let mut auth_server = Server::new_async().await;
         let auth_server_path = "/some/path";
-        let oauth_mock = create_oauth_mock_with_path(&mut auth_server, auth_server_path).await;
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut auth_server, auth_server_path, "ey000000000000", 200)
+                .await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1379,10 +1549,12 @@ mod tests {
 
         let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
-        assert!(catalog
-            .namespace_exists(&NamespaceIdent::new("ns1".to_string()))
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .namespace_exists(&NamespaceIdent::new("ns1".to_string()))
+                .await
+                .unwrap()
+        );
 
         config_mock.assert_async().await;
         get_ns_mock.assert_async().await;
@@ -1699,13 +1871,15 @@ mod tests {
 
         let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
-        assert!(catalog
-            .table_exists(&TableIdent::new(
-                NamespaceIdent::new("ns1".to_string()),
-                "table1".to_string(),
-            ))
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .table_exists(&TableIdent::new(
+                    NamespaceIdent::new("ns1".to_string()),
+                    "table1".to_string(),
+                ))
+                .await
+                .unwrap()
+        );
 
         config_mock.assert_async().await;
         check_table_exists_mock.assert_async().await;
@@ -1768,7 +1942,10 @@ mod tests {
             &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
             table.identifier()
         );
-        assert_eq!("s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json", table.metadata_location().unwrap());
+        assert_eq!(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+            table.metadata_location().unwrap()
+        );
         assert_eq!(FormatVersion::V1, table.metadata().format_version());
         assert_eq!("s3://warehouse/database/table", table.metadata().location());
         assert_eq!(
@@ -1919,11 +2096,13 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![UnboundPartitionField::builder()
-                        .source_id(1)
-                        .transform(Transform::Truncate(3))
-                        .name("id".to_string())
-                        .build()])
+                    .add_partition_fields(vec![
+                        UnboundPartitionField::builder()
+                            .source_id(1)
+                            .transform(Transform::Truncate(3))
+                            .name("id".to_string())
+                            .build(),
+                    ])
                     .unwrap()
                     .build(),
             )
@@ -2068,11 +2247,13 @@ mod tests {
             .await;
 
         assert!(table_result.is_err());
-        assert!(table_result
-            .err()
-            .unwrap()
-            .message()
-            .contains("already exists"));
+        assert!(
+            table_result
+                .err()
+                .unwrap()
+                .message()
+                .contains("already exists")
+        );
 
         config_mock.assert_async().await;
         create_table_mock.assert_async().await;
@@ -2083,6 +2264,17 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let config_mock = create_config_mock(&mut server).await;
+
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
 
         let update_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1")
@@ -2116,8 +2308,11 @@ mod tests {
                 .unwrap()
         };
 
-        let table = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await
@@ -2195,6 +2390,7 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+        load_table_mock.assert_async().await
     }
 
     #[tokio::test]
@@ -2202,6 +2398,17 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let config_mock = create_config_mock(&mut server).await;
+
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
 
         let update_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1")
@@ -2241,20 +2448,26 @@ mod tests {
                 .unwrap()
         };
 
-        let table_result = Transaction::new(&table1)
-            .upgrade_table_version(FormatVersion::V2)
+        let tx = Transaction::new(&table1);
+        let table_result = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V2)
+            .apply(tx)
             .unwrap()
             .commit(&catalog)
             .await;
 
         assert!(table_result.is_err());
-        assert!(table_result
-            .err()
-            .unwrap()
-            .message()
-            .contains("does not exist"));
+        assert!(
+            table_result
+                .err()
+                .unwrap()
+                .message()
+                .contains("does not exist")
+        );
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+        load_table_mock.assert_async().await;
     }
 }

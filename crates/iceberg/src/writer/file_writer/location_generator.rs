@@ -17,11 +17,11 @@
 
 //! This module contains the location generator and file name generator for generating path of data file.
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
+use crate::Result;
 use crate::spec::{DataFileFormat, TableMetadata};
-use crate::{Error, ErrorKind, Result};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
@@ -46,29 +46,16 @@ impl DefaultLocationGenerator {
     /// Create a new `DefaultLocationGenerator`.
     pub fn new(table_metadata: TableMetadata) -> Result<Self> {
         let table_location = table_metadata.location();
-        let rel_dir_path = {
-            let prop = table_metadata.properties();
-            let data_location = prop
-                .get(WRITE_DATA_LOCATION)
-                .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
-            if let Some(data_location) = data_location {
-                data_location.strip_prefix(table_location).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "data location {} is not a subpath of table location {}",
-                            data_location, table_location
-                        ),
-                    )
-                })?
-            } else {
-                DEFAULT_DATA_DIR
-            }
+        let prop = table_metadata.properties();
+        let data_location = prop
+            .get(WRITE_DATA_LOCATION)
+            .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
+        let dir_path = if let Some(data_location) = data_location {
+            data_location.clone()
+        } else {
+            format!("{}{}", table_location, DEFAULT_DATA_DIR)
         };
-
-        Ok(Self {
-            dir_path: format!("{}{}", table_location, rel_dir_path),
-        })
+        Ok(Self { dir_path })
     }
 }
 
@@ -179,6 +166,7 @@ pub(crate) mod test {
             refs: HashMap::new(),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
         };
 
         let file_name_genertaor = super::DefaultFileNameGenerator::new(
@@ -221,13 +209,15 @@ pub(crate) mod test {
             "s3://data.db/table/data_2/part-00002-test.parquet"
         );
 
-        // test invalid data location
         table_metadata.properties.insert(
             WRITE_DATA_LOCATION.to_string(),
             // invalid table location
             "s3://data.db/data_3".to_string(),
         );
-        let location_generator = super::DefaultLocationGenerator::new(table_metadata.clone());
-        assert!(location_generator.is_err());
+        let location_generator =
+            super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
+        let location =
+            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+        assert_eq!(location, "s3://data.db/data_3/part-00003-test.parquet");
     }
 }

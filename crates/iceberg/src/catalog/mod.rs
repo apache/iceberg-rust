@@ -17,13 +17,20 @@
 
 //! Catalog API for Apache Iceberg
 
+pub mod memory;
+
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
+pub use memory::MemoryCatalog;
+#[cfg(test)]
+use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -38,10 +45,11 @@ use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+    -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -92,8 +100,23 @@ pub trait Catalog: Debug + Sync + Send {
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
 
+    /// Register an existing table to the catalog.
+    async fn register_table(&self, table: &TableIdent, metadata_location: String) -> Result<Table>;
+
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+}
+
+/// Common interface for all catalog builders.
+pub trait CatalogBuilder: Default + Debug + Send + Sync {
+    /// The catalog type that this builder creates.
+    type C: Catalog;
+    /// Create a new catalog instance.
+    fn load(
+        self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
@@ -268,6 +291,10 @@ pub struct TableCreation {
 }
 
 /// TableCommit represents the commit of a table in the catalog.
+///
+/// The builder is marked as private since it's dangerous and error-prone to construct
+/// [`TableCommit`] directly.
+/// Users are supposed to use [`crate::transaction::Transaction`] to update table.
 #[derive(Debug, TypedBuilder)]
 #[builder(build_method(vis = "pub(crate)"))]
 pub struct TableCommit {
@@ -295,6 +322,27 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
+    }
+
+    /// Applies this [`TableCommit`] to the given [`Table`] as part of a catalog update.
+    /// Typically used by [`Catalog::update_table`] to validate requirements and apply metadata updates.
+    ///
+    /// Returns a new [`Table`] with updated metadata,
+    /// or an error if validation or application fails.
+    pub fn apply(self, table: Table) -> Result<Table> {
+        // check requirements
+        for requirement in self.requirements {
+            requirement.check(Some(table.metadata()))?;
+        }
+
+        // apply updates to metadata builder
+        let mut metadata_builder = table.metadata().clone().into_builder(None);
+
+        for update in self.updates {
+            metadata_builder = update.apply(metadata_builder)?;
+        }
+
+        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
     }
 }
 
@@ -867,20 +915,27 @@ mod _serde_set_statistics {
 mod tests {
     use std::collections::HashMap;
     use std::fmt::Debug;
+    use std::fs::File;
+    use std::io::BufReader;
 
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use uuid::uuid;
 
     use super::ViewUpdate;
+    use crate::io::FileIOBuilder;
     use crate::spec::{
-        BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
-        ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
+        BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
+        StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion,
     };
-    use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
+    use crate::table::Table;
+    use crate::{
+        NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate,
+    };
 
     #[test]
     fn test_parent_namespace() {
@@ -2092,5 +2147,67 @@ mod tests {
                 schema_ids: vec![1, 2],
             },
         );
+    }
+
+    #[test]
+    fn test_table_commit() {
+        let table = {
+            let file = File::open(format!(
+                "{}/testdata/table_metadata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "TableMetadataV2Valid.json"
+            ))
+            .unwrap();
+            let reader = BufReader::new(file);
+            let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+            Table::builder()
+                .metadata(resp)
+                .metadata_location("s3://bucket/test/location/metadata/v2.json".to_string())
+                .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+                .file_io(FileIOBuilder::new("memory").build().unwrap())
+                .build()
+                .unwrap()
+        };
+
+        let updates = vec![
+            TableUpdate::SetLocation {
+                location: "s3://bucket/test/new_location/metadata/v2.json".to_string(),
+            },
+            TableUpdate::SetProperties {
+                updates: vec![
+                    ("prop1".to_string(), "v1".to_string()),
+                    ("prop2".to_string(), "v2".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        ];
+
+        let requirements = vec![TableRequirement::UuidMatch {
+            uuid: table.metadata().table_uuid,
+        }];
+
+        let table_commit = TableCommit::builder()
+            .ident(table.identifier().to_owned())
+            .updates(updates)
+            .requirements(requirements)
+            .build();
+
+        let updated_table = table_commit.apply(table).unwrap();
+
+        assert_eq!(
+            updated_table.metadata().properties.get("prop1").unwrap(),
+            "v1"
+        );
+        assert_eq!(
+            updated_table.metadata().properties.get("prop2").unwrap(),
+            "v2"
+        );
+
+        assert_eq!(
+            updated_table.metadata().location,
+            "s3://bucket/test/new_location/metadata/v2.json".to_string()
+        )
     }
 }

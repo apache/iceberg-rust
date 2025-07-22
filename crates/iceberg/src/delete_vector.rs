@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::BitOrAssign;
+
+use roaring::RoaringTreemap;
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
-use roaring::RoaringTreemap;
 
-#[allow(unused)]
+#[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
@@ -35,6 +37,15 @@ impl DeleteVector {
     pub fn iter(&self) -> DeleteVectorIterator {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
+    }
+
+    pub fn insert(&mut self, pos: u64) -> bool {
+        self.inner.insert(pos)
+    }
+
+    #[allow(unused)]
+    pub fn len(&self) -> u64 {
+        self.inner.len()
     }
 }
 
@@ -61,7 +72,7 @@ impl Iterator for DeleteVectorIterator<'_> {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ref mut inner) = &mut self.inner {
+        if let Some(inner) = &mut self.inner {
             if let Some(inner_next) = inner.bitmap_iter.next() {
                 return Some(u64::from(inner.high_bits) << 32 | u64::from(inner_next));
             }
@@ -101,5 +112,11 @@ impl DeleteVectorIterator<'_> {
         }
 
         inner.bitmap_iter.advance_to(lo);
+    }
+}
+
+impl BitOrAssign for DeleteVector {
+    fn bitor_assign(&mut self, other: Self) {
+        self.inner.bitor_assign(&other.inner);
     }
 }

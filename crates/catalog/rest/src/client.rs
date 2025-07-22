@@ -25,8 +25,8 @@ use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
-use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
+use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -80,14 +80,18 @@ impl HttpClient {
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
-            token_endpoint: (!cfg.get_token_endpoint().is_empty())
-                .then(|| cfg.get_token_endpoint())
-                .unwrap_or(self.token_endpoint),
+            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
+                cfg.get_token_endpoint()
+            } else {
+                self.token_endpoint
+            },
             credential: cfg.credential().or(self.credential),
             extra_headers,
-            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
-                .then(|| cfg.extra_oauth_params())
-                .unwrap_or(self.extra_oauth_params),
+            extra_oauth_params: if !cfg.extra_oauth_params().is_empty() {
+                cfg.extra_oauth_params()
+            } else {
+                self.extra_oauth_params
+            },
         })
     }
 
@@ -100,6 +104,93 @@ impl HttpClient {
             .unwrap();
         self.authenticate(&mut req).await.ok();
         self.token.lock().await.clone()
+    }
+
+    async fn exchange_credential_for_token(&self) -> Result<String> {
+        // Credential must exist here.
+        let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Credential must be provided for authentication",
+            )
+        })?;
+
+        let mut params = HashMap::with_capacity(4);
+        params.insert("grant_type", "client_credentials");
+        if let Some(client_id) = client_id {
+            params.insert("client_id", client_id);
+        }
+        params.insert("client_secret", client_secret);
+        params.extend(
+            self.extra_oauth_params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        );
+
+        let mut auth_req = self
+            .request(Method::POST, &self.token_endpoint)
+            .form(&params)
+            .build()?;
+        // extra headers add content-type application/json header it's necessary to override it with proper type
+        // note that form call doesn't add content-type header if already present
+        auth_req.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let auth_url = auth_req.url().clone();
+        let auth_resp = self.client.execute(auth_req).await?;
+
+        let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
+            let text = auth_resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(auth_url.clone()))?;
+            Ok(serde_json::from_slice(&text).map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to parse response from rest catalog server!",
+                )
+                .with_context("operation", "auth")
+                .with_context("url", auth_url.to_string())
+                .with_context("json", String::from_utf8_lossy(&text))
+                .with_source(e)
+            })?)
+        } else {
+            let code = auth_resp.status();
+            let text = auth_resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(auth_url.clone()))?;
+            let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "Received unexpected response")
+                    .with_context("code", code.to_string())
+                    .with_context("operation", "auth")
+                    .with_context("url", auth_url.to_string())
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
+            })?;
+            Err(Error::from(e))
+        }?;
+        Ok(auth_res.access_token)
+    }
+
+    /// Invalidate the current token without generating a new one. On the next request, the client
+    /// will attempt to generate a new token.
+    pub(crate) async fn invalidate_token(&self) -> Result<()> {
+        *self.token.lock().await = None;
+        Ok(())
+    }
+
+    /// Invalidate the current token and set a new one. Generates a new token before invalidating
+    /// the current token, meaning the old token will be used until this function acquires the lock
+    /// and overwrites the token.
+    ///
+    /// If credential is invalid, or the request fails, this method will return an error and leave
+    /// the current token unchanged.
+    pub(crate) async fn regenerate_token(&self) -> Result<()> {
+        let new_token = self.exchange_credential_for_token().await?;
+        *self.token.lock().await = Some(new_token.clone());
+        Ok(())
     }
 
     /// Authenticate the request by filling token.
@@ -134,65 +225,7 @@ impl HttpClient {
             return Ok(());
         }
 
-        // Credential must exist here.
-        let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Credential must be provided for authentication",
-            )
-        })?;
-
-        let mut params = HashMap::with_capacity(4);
-        params.insert("grant_type", "client_credentials");
-        if let Some(client_id) = client_id {
-            params.insert("client_id", client_id);
-        }
-        params.insert("client_secret", client_secret);
-        params.extend(
-            self.extra_oauth_params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str())),
-        );
-
-        let auth_req = self
-            .request(Method::POST, &self.token_endpoint)
-            .form(&params)
-            .build()?;
-        let auth_url = auth_req.url().clone();
-        let auth_resp = self.execute(auth_req).await?;
-
-        let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            Ok(serde_json::from_slice(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("operation", "auth")
-                .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?)
-        } else {
-            let code = auth_resp.status();
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("operation", "auth")
-                    .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(Error::from(e))
-        }?;
-        let token = auth_res.access_token;
+        let token = self.exchange_credential_for_token().await?;
         // Update token.
         *self.token.lock().await = Some(token.clone());
         // Insert token in request.

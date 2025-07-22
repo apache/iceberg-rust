@@ -155,7 +155,10 @@ fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
         || !column_defaults.is_empty();
 
     if is_invalid {
-        return Err(Error::new(ErrorKind::FeatureUnsupported, "Currently we only support reading existing icebergs tables in external table command. To create new table, please use catalog provider."));
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Currently we only support reading existing icebergs tables in external table command. To create new table, please use catalog provider.",
+        ));
     }
 
     Ok(())

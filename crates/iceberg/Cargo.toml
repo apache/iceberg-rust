@@ -32,11 +32,12 @@ repository = { workspace = true }
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
+storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
-storage-s3 = ["opendal/services-s3"]
+storage-s3 = ["opendal/services-s3", "reqsign"]
 
 async-std = ["dep:async-std"]
 tokio = ["tokio/rt-multi-thread"]
@@ -53,12 +54,16 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
+as-any = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
+backon = { workspace = true }
+base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
+expect-test = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
@@ -71,6 +76,7 @@ ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
+reqsign = { version = "0.16.3", optional = true, default-features = false }
 roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -79,6 +85,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 thrift = { workspace = true }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
@@ -89,10 +96,11 @@ zstd = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 expect-test = { workspace = true }
-iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+mockall = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
 

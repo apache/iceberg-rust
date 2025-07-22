@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod metadata_table;
 mod static_catalog;
 pub mod table_provider_factory;
 
@@ -29,8 +30,10 @@ use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use metadata_table::IcebergMetadataTableProvider;
 use tokio::sync::RwLock;
 
 use crate::physical_plan::scan::IcebergTableScan;
@@ -109,6 +112,13 @@ impl IcebergTableProvider {
 
         Ok(updated_table)
     }
+
+    pub(crate) fn metadata_table(&self, r#type: MetadataTableType) -> IcebergMetadataTableProvider {
+        IcebergMetadataTableProvider {
+            table: self.table.clone(),
+            r#type,
+        }
+    }
 }
 
 #[async_trait]
@@ -164,7 +174,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use iceberg::io::FileIO;
     use iceberg::table::{StaticTable, Table};
-    use iceberg::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent};
+    use iceberg::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableIdent};
 
     use super::*;
 

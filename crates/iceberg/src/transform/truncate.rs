@@ -21,8 +21,8 @@ use arrow_array::ArrayRef;
 use arrow_schema::DataType;
 
 use super::TransformFunction;
-use crate::spec::{Datum, PrimitiveLiteral};
 use crate::Error;
+use crate::spec::{Datum, PrimitiveLiteral};
 
 #[derive(Debug)]
 pub struct Truncate {
@@ -44,11 +44,7 @@ impl Truncate {
 
     #[inline]
     fn truncate_binary(s: &[u8], width: usize) -> &[u8] {
-        if s.len() > width {
-            &s[0..width]
-        } else {
-            s
-        }
+        if s.len() > width { &s[0..width] } else { s }
     }
 
     #[inline]
@@ -192,6 +188,7 @@ mod test {
     use arrow_array::types::Decimal128Type;
     use arrow_array::{Decimal128Array, Int32Array, Int64Array};
 
+    use crate::Result;
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
@@ -199,9 +196,8 @@ mod test {
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
-    use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
     use crate::transform::TransformFunction;
-    use crate::Result;
+    use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
 
     #[test]
     fn test_truncate_transform() {
@@ -243,12 +239,9 @@ mod test {
                 (Primitive(TimestampNs), None),
                 (Primitive(TimestamptzNs), None),
                 (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                    ])),
                     None,
                 ),
             ],

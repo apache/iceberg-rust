@@ -25,7 +25,7 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
-use iceberg::spec::{visit_schema, PrimitiveType, SchemaVisitor, TableMetadata};
+use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
@@ -118,7 +118,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
             (ICEBERG_FIELD_ID.to_string(), format!("{}", field.id)),
             (
                 ICEBERG_FIELD_OPTIONAL.to_string(),
-                format!("{}", field.required).to_lowercase(),
+                format!("{}", !field.required).to_lowercase(),
             ),
             (
                 ICEBERG_FIELD_CURRENT.to_string(),
@@ -177,7 +177,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Conversion from 'Timestamptz' is not supported",
-                ))
+                ));
             }
         };
 
@@ -187,8 +187,8 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{Schema, TableMetadataBuilder};
     use iceberg::TableCreation;
+    use iceberg::spec::{Schema, TableMetadataBuilder};
 
     use super::*;
 
@@ -209,10 +209,11 @@ mod tests {
         name: impl Into<String>,
         r#type: impl Into<String>,
         id: impl Into<String>,
+        optional: bool,
     ) -> Result<Column> {
         let parameters = HashMap::from([
             (ICEBERG_FIELD_ID.to_string(), id.into()),
-            (ICEBERG_FIELD_OPTIONAL.to_string(), "true".to_string()),
+            (ICEBERG_FIELD_OPTIONAL.to_string(), optional.to_string()),
             (ICEBERG_FIELD_CURRENT.to_string(), "true".to_string()),
         ]);
 
@@ -318,19 +319,19 @@ mod tests {
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
         let expected = vec![
-            create_column("c1", "boolean", "1")?,
-            create_column("c2", "int", "2")?,
-            create_column("c3", "bigint", "3")?,
-            create_column("c4", "float", "4")?,
-            create_column("c5", "double", "5")?,
-            create_column("c6", "decimal(2,2)", "6")?,
-            create_column("c7", "date", "7")?,
-            create_column("c8", "string", "8")?,
-            create_column("c9", "timestamp", "9")?,
-            create_column("c10", "string", "10")?,
-            create_column("c11", "string", "11")?,
-            create_column("c12", "binary", "12")?,
-            create_column("c13", "binary", "13")?,
+            create_column("c1", "boolean", "1", false)?,
+            create_column("c2", "int", "2", false)?,
+            create_column("c3", "bigint", "3", false)?,
+            create_column("c4", "float", "4", false)?,
+            create_column("c5", "double", "5", false)?,
+            create_column("c6", "decimal(2,2)", "6", false)?,
+            create_column("c7", "date", "7", false)?,
+            create_column("c8", "string", "8", false)?,
+            create_column("c9", "timestamp", "9", false)?,
+            create_column("c10", "string", "10", false)?,
+            create_column("c11", "string", "11", false)?,
+            create_column("c12", "binary", "12", false)?,
+            create_column("c13", "binary", "13", false)?,
         ];
 
         assert_eq!(result, expected);
@@ -378,6 +379,7 @@ mod tests {
             "person",
             "struct<name:string, age:int>",
             "1",
+            false,
         )?];
 
         assert_eq!(result, expected);
@@ -432,6 +434,7 @@ mod tests {
             "location",
             "array<struct<latitude:float, longitude:float>>",
             "1",
+            false,
         )?];
 
         assert_eq!(result, expected);
@@ -475,10 +478,50 @@ mod tests {
 
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
-        let expected = vec![create_column("quux", "map<string,map<string,int>>", "1")?];
+        let expected = vec![create_column(
+            "quux",
+            "map<string,map<string,int>>",
+            "1",
+            false,
+        )?];
 
         assert_eq!(result, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_optional_fields() -> Result<()> {
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "required_field",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "id": 2,
+                    "name": "optional_field",
+                    "required": false,
+                    "type": "int"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+        let metadata = create_metadata(schema)?;
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![
+            create_column("required_field", "string", "1", false)?,
+            create_column("optional_field", "int", "2", true)?,
+        ];
+
+        assert_eq!(result, expected);
         Ok(())
     }
 }

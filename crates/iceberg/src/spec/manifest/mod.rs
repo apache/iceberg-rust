@@ -26,7 +26,7 @@ pub use metadata::*;
 mod writer;
 use std::sync::Arc;
 
-use apache_avro::{from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value};
 pub use writer::*;
 
 use super::{
@@ -97,6 +97,11 @@ impl Manifest {
     /// Entries slice.
     pub fn entries(&self) -> &[ManifestEntryRef] {
         &self.entries
+    }
+
+    /// Get metadata.
+    pub fn metadata(&self) -> &ManifestMetadata {
+        &self.metadata
     }
 
     /// Consume this Manifest, returning its constituent parts
@@ -227,7 +232,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -412,7 +417,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -509,7 +514,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -618,7 +623,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -627,14 +632,15 @@ mod tests {
             writer.add_entry(entry.clone()).unwrap();
         }
         let manifest_file = writer.write_manifest_file().await.unwrap();
-        assert_eq!(manifest_file.partitions.len(), 1);
+        let partitions = manifest_file.partitions.unwrap();
+        assert_eq!(partitions.len(), 1);
         assert_eq!(
-            manifest_file.partitions[0].lower_bound,
-            Some(Datum::string("x"))
+            partitions[0].clone().lower_bound.unwrap(),
+            Datum::string("x").to_bytes().unwrap()
         );
         assert_eq!(
-            manifest_file.partitions[0].upper_bound,
-            Some(Datum::string("x"))
+            partitions[0].clone().upper_bound.unwrap(),
+            Datum::string("x").to_bytes().unwrap()
         );
 
         // read back the manifest file and check the content
@@ -725,7 +731,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -1004,7 +1010,7 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            vec![],
+            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -1014,20 +1020,40 @@ mod tests {
         }
         let res = writer.write_manifest_file().await.unwrap();
 
-        assert_eq!(res.partitions.len(), 3);
-        assert_eq!(res.partitions[0].lower_bound, Some(Datum::int(1111)));
-        assert_eq!(res.partitions[0].upper_bound, Some(Datum::int(2021)));
-        assert!(!res.partitions[0].contains_null);
-        assert_eq!(res.partitions[0].contains_nan, Some(false));
+        let partitions = res.partitions.unwrap();
 
-        assert_eq!(res.partitions[1].lower_bound, Some(Datum::float(1.0)));
-        assert_eq!(res.partitions[1].upper_bound, Some(Datum::float(15.5)));
-        assert!(res.partitions[1].contains_null);
-        assert_eq!(res.partitions[1].contains_nan, Some(true));
+        assert_eq!(partitions.len(), 3);
+        assert_eq!(
+            partitions[0].clone().lower_bound.unwrap(),
+            Datum::int(1111).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[0].clone().upper_bound.unwrap(),
+            Datum::int(2021).to_bytes().unwrap()
+        );
+        assert!(!partitions[0].clone().contains_null);
+        assert_eq!(partitions[0].clone().contains_nan, Some(false));
 
-        assert_eq!(res.partitions[2].lower_bound, Some(Datum::double(1.0)));
-        assert_eq!(res.partitions[2].upper_bound, Some(Datum::double(25.5)));
-        assert!(!res.partitions[2].contains_null);
-        assert_eq!(res.partitions[2].contains_nan, Some(false));
+        assert_eq!(
+            partitions[1].clone().lower_bound.unwrap(),
+            Datum::float(1.0).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[1].clone().upper_bound.unwrap(),
+            Datum::float(15.5).to_bytes().unwrap()
+        );
+        assert!(partitions[1].clone().contains_null);
+        assert_eq!(partitions[1].clone().contains_nan, Some(true));
+
+        assert_eq!(
+            partitions[2].clone().lower_bound.unwrap(),
+            Datum::double(1.0).to_bytes().unwrap()
+        );
+        assert_eq!(
+            partitions[2].clone().upper_bound.unwrap(),
+            Datum::double(25.5).to_bytes().unwrap()
+        );
+        assert!(!partitions[2].clone().contains_null);
+        assert_eq!(partitions[2].clone().contains_nan, Some(false));
     }
 }

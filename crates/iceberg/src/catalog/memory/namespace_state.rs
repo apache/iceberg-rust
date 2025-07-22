@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{hash_map, HashMap};
+use std::collections::{HashMap, hash_map};
 
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use itertools::Itertools;
+
+use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 // Represents the state of a namespace
 #[derive(Debug, Clone, Default)]

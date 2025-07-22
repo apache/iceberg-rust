@@ -16,11 +16,49 @@
 // under the License.
 
 use fnv::FnvHashSet;
+use serde_bytes::ByteBuf;
 
-use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, FieldSummary, ManifestFile, PrimitiveLiteral, Type};
 use crate::{Error, ErrorKind, Result};
+
+/// Builder for [`ManifestEvaluator`] with optional NOT rewriting capability.
+#[derive(Debug)]
+pub(crate) struct ManifestEvaluatorBuilder {
+    partition_filter: BoundPredicate,
+    rewrite_not: bool,
+}
+
+impl ManifestEvaluatorBuilder {
+    /// Creates a new `ManifestEvaluatorBuilder` with the given partition filter.
+    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
+        Self {
+            partition_filter,
+            rewrite_not: false,
+        }
+    }
+
+    /// Enables NOT rewriting optimization for the partition filter.
+    /// When enabled, the builder will apply NOT elimination to simplify the predicate
+    /// before creating the evaluator.
+    #[allow(unused)]
+    pub(crate) fn with_rewrite_not(mut self, rewrite_not: bool) -> Self {
+        self.rewrite_not = rewrite_not;
+        self
+    }
+
+    /// Builds the `ManifestEvaluator` with the configured options.
+    pub(crate) fn build(self) -> ManifestEvaluator {
+        let partition_filter = if self.rewrite_not {
+            self.partition_filter.rewrite_not()
+        } else {
+            self.partition_filter
+        };
+
+        ManifestEvaluator { partition_filter }
+    }
+}
 
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
@@ -33,8 +71,9 @@ pub(crate) struct ManifestEvaluator {
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
-        Self { partition_filter }
+    /// Creates a new `ManifestEvaluatorBuilder` for building a `ManifestEvaluator`.
+    pub(crate) fn builder(partition_filter: BoundPredicate) -> ManifestEvaluatorBuilder {
+        ManifestEvaluatorBuilder::new(partition_filter)
     }
 
     /// Evaluate this `ManifestEvaluator`'s filter predicate against the
@@ -42,13 +81,13 @@ impl ManifestEvaluator {
     /// see if this `ManifestFile` could possibly contain data that matches
     /// the scan's filter.
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> Result<bool> {
-        if manifest_file.partitions.is_empty() {
-            return Ok(true);
+        match &manifest_file.partitions {
+            Some(p) if !p.is_empty() => {
+                let mut evaluator = ManifestFilterVisitor::new(p);
+                visit(&mut evaluator, &self.partition_filter)
+            }
+            _ => Ok(true),
         }
-
-        let mut evaluator = ManifestFilterVisitor::new(&manifest_file.partitions);
-
-        visit(&mut evaluator, &self.partition_filter)
     }
 }
 
@@ -85,8 +124,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> crate::Result<bool> {
-        Ok(!inner)
+    fn not(&mut self, _: bool) -> crate::Result<bool> {
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            "not operator is not supported in partition filter",
+        ))
     }
 
     fn is_null(
@@ -154,9 +196,19 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
+
         match &field.lower_bound {
-            Some(bound) if datum <= bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum <= &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -169,8 +221,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.lower_bound {
-            Some(bound) if datum < bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum < &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -183,8 +244,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.upper_bound {
-            Some(bound) if datum >= bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum >= &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -197,8 +267,17 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         match &field.upper_bound {
-            Some(bound) if datum > bound => ROWS_CANNOT_MATCH,
-            Some(_) => ROWS_MIGHT_MATCH,
+            Some(bound_bytes) => {
+                let bound = ManifestFilterVisitor::bytes_to_datum(
+                    bound_bytes,
+                    *reference.field().field_type.clone(),
+                );
+                if datum > &bound {
+                    ROWS_CANNOT_MATCH
+                } else {
+                    ROWS_MIGHT_MATCH
+                }
+            }
             None => ROWS_CANNOT_MATCH,
         }
     }
@@ -215,14 +294,22 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_CANNOT_MATCH;
         }
 
-        if let Some(lower_bound) = &field.lower_bound {
-            if lower_bound > datum {
+        if let Some(lower_bound_bytes) = &field.lower_bound {
+            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
+                lower_bound_bytes,
+                *reference.field().field_type.clone(),
+            );
+            if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
-        if let Some(upper_bound) = &field.upper_bound {
-            if upper_bound < datum {
+        if let Some(upper_bound_bytes) = &field.upper_bound {
+            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
+                upper_bound_bytes,
+                *reference.field().field_type.clone(),
+            );
+            if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -260,23 +347,15 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         let prefix_len = prefix.len();
 
         if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound_str = ManifestFilterVisitor::datum_as_str(
-                lower_bound,
-                "Cannot perform starts_with on non-string lower bound",
-            )?;
-            let min_len = lower_bound_str.len().min(prefix_len);
-            if prefix.as_bytes().lt(&lower_bound_str.as_bytes()[..min_len]) {
+            let min_len = lower_bound.len().min(prefix_len);
+            if prefix.as_bytes().lt(&lower_bound[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            let upper_bound_str = ManifestFilterVisitor::datum_as_str(
-                upper_bound,
-                "Cannot perform starts_with on non-string upper bound",
-            )?;
-            let min_len = upper_bound_str.len().min(prefix_len);
-            if prefix.as_bytes().gt(&upper_bound_str.as_bytes()[..min_len]) {
+            let min_len = upper_bound.len().min(prefix_len);
+            if prefix.as_bytes().gt(&upper_bound[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -305,35 +384,19 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         // not_starts_with will match unless all values must start with the prefix. This happens when
         // the lower and upper bounds both start with the prefix.
         if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound_str = ManifestFilterVisitor::datum_as_str(
-                lower_bound,
-                "Cannot perform not_starts_with on non-string lower bound",
-            )?;
-
             // if lower is shorter than the prefix then lower doesn't start with the prefix
-            if prefix_len > lower_bound_str.len() {
+            if prefix_len > lower_bound.len() {
                 return ROWS_MIGHT_MATCH;
             }
 
-            if prefix
-                .as_bytes()
-                .eq(&lower_bound_str.as_bytes()[..prefix_len])
-            {
+            if prefix.as_bytes().eq(&lower_bound[..prefix_len]) {
                 if let Some(upper_bound) = &field.upper_bound {
-                    let upper_bound_str = ManifestFilterVisitor::datum_as_str(
-                        upper_bound,
-                        "Cannot perform not_starts_with on non-string upper bound",
-                    )?;
-
                     // if upper is shorter than the prefix then upper can't start with the prefix
-                    if prefix_len > upper_bound_str.len() {
+                    if prefix_len > upper_bound.len() {
                         return ROWS_MIGHT_MATCH;
                     }
 
-                    if prefix
-                        .as_bytes()
-                        .eq(&upper_bound_str.as_bytes()[..prefix_len])
-                    {
+                    if prefix.as_bytes().eq(&upper_bound[..prefix_len]) {
                         return ROWS_CANNOT_MATCH;
                     }
                 }
@@ -359,13 +422,21 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         }
 
         if let Some(lower_bound) = &field.lower_bound {
-            if literals.iter().all(|datum| lower_bound > datum) {
+            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
+                lower_bound,
+                *reference.field().clone().field_type,
+            );
+            if literals.iter().all(|datum| &lower_bound > datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            if literals.iter().all(|datum| upper_bound < datum) {
+            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
+                upper_bound,
+                *reference.field().clone().field_type,
+            );
+            if literals.iter().all(|datum| &upper_bound < datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -414,6 +485,11 @@ impl ManifestFilterVisitor<'_> {
         };
         Ok(bound)
     }
+
+    fn bytes_to_datum(bytes: &ByteBuf, t: Type) -> Datum {
+        let p = t.as_primitive_type().unwrap();
+        Datum::try_from_bytes(bytes, p.clone()).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -423,6 +499,7 @@ mod test {
 
     use fnv::FnvHashSet;
 
+    use crate::Result;
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
     use crate::expr::{
         BinaryExpression, Bind, Predicate, PredicateOperator, Reference, SetExpression,
@@ -432,7 +509,6 @@ mod test {
         Datum, FieldSummary, ManifestContentType, ManifestFile, NestedField, PrimitiveType, Schema,
         SchemaRef, Type,
     };
-    use crate::Result;
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;
@@ -520,8 +596,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::int(INT_MIN_VALUE)),
-                upper_bound: Some(Datum::int(INT_MAX_VALUE)),
+                lower_bound: Some(Datum::int(INT_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::int(INT_MAX_VALUE).to_bytes().unwrap()),
             },
             // all_nulls_missing_nan
             FieldSummary {
@@ -534,22 +610,22 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE).to_bytes().unwrap()),
             },
             // no_nulls
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE).to_bytes().unwrap()),
             },
             // float
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::float(0.0)),
-                upper_bound: Some(Datum::float(20.0)),
+                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
             },
             // all_nulls_double
             FieldSummary {
@@ -583,8 +659,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: Some(false),
-                lower_bound: Some(Datum::float(0.0)),
-                upper_bound: Some(Datum::float(20.0)),
+                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
             },
             // all_nulls_missing_nan_float
             FieldSummary {
@@ -597,15 +673,15 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
             },
             // no_nulls_same_value_a
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE).to_bytes().unwrap()),
             },
         ]
     }
@@ -625,8 +701,8 @@ mod test {
             added_rows_count: None,
             existing_rows_count: None,
             deleted_rows_count: None,
-            partitions,
-            key_metadata: vec![],
+            partitions: Some(partitions),
+            key_metadata: None,
         }
     }
 
@@ -639,7 +715,11 @@ mod test {
 
         let filter = Predicate::AlwaysTrue.bind(schema.clone(), case_sensitive)?;
 
-        assert!(ManifestEvaluator::new(filter).eval(&manifest_file)?);
+        assert!(
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?
+        );
 
         Ok(())
     }
@@ -653,7 +733,11 @@ mod test {
 
         let filter = Predicate::AlwaysFalse.bind(schema.clone(), case_sensitive)?;
 
-        assert!(!ManifestEvaluator::new(filter).eval(&manifest_file)?);
+        assert!(
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?
+        );
 
         Ok(())
     }
@@ -672,7 +756,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nulls_missing_nan_filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(all_nulls_missing_nan_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: all nulls column with non-floating type contains all null"
         );
 
@@ -683,7 +769,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_float_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_missing_nan_float_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -694,7 +782,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(some_nulls_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(some_nulls_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: column with some nulls contains a non-null value"
         );
 
@@ -706,7 +796,9 @@ mod test {
         .bind(schema.clone(), case_sensitive)?;
 
         assert!(
-            ManifestEvaluator::new(no_nulls_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(no_nulls_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: non-null column contains a non-null value"
         );
 
@@ -727,7 +819,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_missing_nan_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: at least one null value in all null column"
         );
 
@@ -738,7 +832,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(some_nulls_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(some_nulls_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: column with some nulls contains a null value"
         );
 
@@ -750,7 +846,9 @@ mod test {
         .bind(schema.clone(), case_sensitive)?;
 
         assert!(
-            !ManifestEvaluator::new(no_nulls_filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(no_nulls_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: non-null column contains no null values"
         );
 
@@ -761,7 +859,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(both_nan_and_null_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: both_nan_and_null column contains no null values"
         );
 
@@ -782,7 +882,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(float_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(float_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -793,7 +895,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_double_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_double_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -804,7 +908,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_float_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_missing_nan_float_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -815,7 +921,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nulls_no_nans_filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(all_nulls_no_nans_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: no nan column doesn't contain nan value"
         );
 
@@ -826,7 +934,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nans_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nans_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: all_nans column contains nan value"
         );
 
@@ -837,7 +947,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(both_nan_and_null_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: both_nan_and_null column contains nan value"
         );
 
@@ -848,7 +960,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(no_nan_or_null_filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(no_nan_or_null_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: no_nan_or_null column doesn't contain nan value"
         );
 
@@ -869,7 +983,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(float_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(float_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -880,7 +996,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_double_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_double_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: all null column contains non nan value"
         );
 
@@ -891,7 +1009,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_no_nans_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(all_nulls_no_nans_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no_nans column contains non nan value"
         );
 
@@ -902,7 +1022,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nans_filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(all_nans_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: all nans column doesn't contain non nan value"
         );
 
@@ -913,7 +1035,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(both_nan_and_null_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: both_nan_and_null nans column contains non nan value"
         );
 
@@ -924,7 +1048,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(no_nan_or_null_filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(no_nan_or_null_filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no_nan_or_null column contains non nan value"
         );
 
@@ -950,7 +1076,9 @@ mod test {
         )))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -976,7 +1104,9 @@ mod test {
         )))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: or(false, false)"
         );
 
@@ -998,7 +1128,23 @@ mod test {
         .not()
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)
+                .is_err(),
+        );
+        let filter = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Reference::new("id"),
+            Datum::int(INT_MIN_VALUE - 25),
+        ))
+        .not()
+        .rewrite_not()
+        .bind(schema.clone(), case_sensitive)?;
+        assert!(
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: not(false)"
         );
 
@@ -1010,7 +1156,24 @@ mod test {
         .not()
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)
+                .is_err()
+        );
+
+        let filter = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThan,
+            Reference::new("id"),
+            Datum::int(INT_MIN_VALUE - 25),
+        ))
+        .not()
+        .rewrite_not()
+        .bind(schema.clone(), case_sensitive)?;
+        assert!(
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: not(true)"
         );
 
@@ -1031,7 +1194,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id range below lower bound (5 < 30)"
         );
 
@@ -1052,7 +1217,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id range below lower bound (5 < 30)"
         );
 
@@ -1073,7 +1240,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id range above upper bound (85 < 79)"
         );
 
@@ -1094,7 +1263,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id range above upper bound (85 < 79)"
         );
 
@@ -1105,7 +1276,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: one possible id"
         );
 
@@ -1126,7 +1299,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id below lower bound"
         );
 
@@ -1137,7 +1312,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: id equal to lower bound"
         );
 
@@ -1158,7 +1335,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: id below lower bound"
         );
 
@@ -1182,7 +1361,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: id below lower bound (5 < 30, 6 < 30)"
         );
 
@@ -1196,7 +1377,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: id equal to lower bound (30 == 30)"
         );
 
@@ -1220,7 +1403,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: id below lower bound (5 < 30, 6 < 30)"
         );
 
@@ -1241,7 +1426,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: range matches"
         );
 
@@ -1252,7 +1439,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should skip: range doesn't match"
         );
 
@@ -1273,7 +1462,9 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should read: range matches"
         );
 
@@ -1284,8 +1475,63 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
             "Should not read: all values start with the prefix"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_manifest_evaluator_builder_with_rewrite() -> Result<()> {
+        let case_sensitive = true;
+        let schema = create_schema()?;
+        let partitions = create_partitions();
+        let manifest_file = create_manifest_file(partitions);
+
+        // Create a predicate with NOT that should be rewritten
+        // NOT(id < 25) should become (id >= 25)
+        let filter = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Reference::new("id"),
+            Datum::int(25), // This is less than our range [30, 79]
+        ))
+        .not()
+        .bind(schema.clone(), case_sensitive)?;
+
+        // Test without rewrite - should fail because NOT is not supported
+        let evaluator = ManifestEvaluator::builder(filter.clone())
+            .with_rewrite_not(false)
+            .build();
+        assert!(
+            evaluator.eval(&manifest_file).is_err(),
+            "Should error: NOT is not supported without rewrite"
+        );
+
+        // Test with rewrite enabled - should succeed
+        let evaluator = ManifestEvaluator::builder(filter)
+            .with_rewrite_not(true)
+            .build();
+        let result = evaluator.eval(&manifest_file)?;
+        assert!(
+            result,
+            "Should read: NOT(id < 25) becomes (id >= 25), which matches our range [30, 79]"
+        );
+
+        // Test default behavior (no rewrite) with a simple predicate
+        let simple_filter = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThan,
+            Reference::new("id"),
+            Datum::int(20),
+        ))
+        .bind(schema, case_sensitive)?;
+
+        let evaluator = ManifestEvaluator::builder(simple_filter).build();
+        assert!(
+            evaluator.eval(&manifest_file)?,
+            "Should read: simple predicate without NOT works by default"
         );
 
         Ok(())

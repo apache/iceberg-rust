@@ -21,17 +21,17 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
-use iceberg::io::FileIO;
-use iceberg::spec::{TableMetadata, TableMetadataBuilder};
-use iceberg::table::Table;
-use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
-};
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::namespace_state::NamespaceState;
+use super::namespace_state::NamespaceState;
+use crate::io::FileIO;
+use crate::spec::{TableMetadata, TableMetadataBuilder};
+use crate::table::Table;
+use crate::{
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
+};
 
 /// namespace `location` property
 const LOCATION: &str = "location";
@@ -187,12 +187,18 @@ impl Catalog for MemoryCatalog {
                 let location_prefix = match namespace_properties.get(LOCATION) {
                     Some(namespace_location) => Ok(namespace_location.clone()),
                     None => match self.warehouse_location.clone() {
-                        Some(warehouse_location) => Ok(format!("{}/{}", warehouse_location, namespace_ident.join("/"))),
-                        None => Err(Error::new(ErrorKind::Unexpected,
+                        Some(warehouse_location) => Ok(format!(
+                            "{}/{}",
+                            warehouse_location,
+                            namespace_ident.join("/")
+                        )),
+                        None => Err(Error::new(
+                            ErrorKind::Unexpected,
                             format!(
                                 "Cannot create table {:?}. No default path is set, please specify a location when creating a table.",
                                 &table_ident
-                            )))
+                            ),
+                        )),
                     },
                 }?;
 
@@ -283,6 +289,26 @@ impl Catalog for MemoryCatalog {
         Ok(())
     }
 
+    async fn register_table(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+        root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
+
+        let input_file = self.file_io.new_input(metadata_location.clone())?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        Table::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .build()
+    }
+
     /// Update a table to the catalog.
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
@@ -298,12 +324,12 @@ mod tests {
     use std::hash::Hash;
     use std::iter::FromIterator;
 
-    use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use regex::Regex;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::io::FileIOBuilder;
+    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
@@ -335,12 +361,9 @@ mod tests {
 
     fn simple_table_schema() -> Schema {
         Schema::builder()
-            .with_fields(vec![NestedField::required(
-                1,
-                "foo",
-                Type::Primitive(PrimitiveType::Int),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
             .build()
             .unwrap()
     }
@@ -542,10 +565,12 @@ mod tests {
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
-        assert!(!catalog
-            .namespace_exists(&NamespaceIdent::new("b".into()))
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&NamespaceIdent::new("b".into()))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -689,8 +714,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_deeply_nested_namespace_throws_error_if_intermediate_namespace_doesnt_exist(
-    ) {
+    async fn test_create_deeply_nested_namespace_throws_error_if_intermediate_namespace_doesnt_exist()
+     {
         let catalog = new_memory_catalog();
 
         let namespace_ident_a = NamespaceIdent::new("a".into());
@@ -899,10 +924,12 @@ mod tests {
 
         catalog.drop_namespace(&namespace_ident_a_b).await.unwrap();
 
-        assert!(!catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
 
         assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
     }
@@ -925,15 +952,19 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!catalog
-            .namespace_exists(&namespace_ident_a_b_c)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&namespace_ident_a_b_c)
+                .await
+                .unwrap()
+        );
 
-        assert!(catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
 
         assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
     }
@@ -987,10 +1018,12 @@ mod tests {
 
         assert!(!catalog.namespace_exists(&namespace_ident_a).await.unwrap());
 
-        assert!(!catalog
-            .namespace_exists(&namespace_ident_a_b)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .namespace_exists(&namespace_ident_a_b)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1023,11 +1056,13 @@ mod tests {
 
         assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
 
-        assert!(table
-            .metadata_location()
-            .unwrap()
-            .to_string()
-            .starts_with(&location))
+        assert!(
+            table
+                .metadata_location()
+                .unwrap()
+                .to_string()
+                .starts_with(&location)
+        )
     }
 
     #[tokio::test]
@@ -1072,8 +1107,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_in_nested_namespace_falls_back_to_nested_namespace_location_if_table_location_is_missing(
-    ) {
+    async fn test_create_table_in_nested_namespace_falls_back_to_nested_namespace_location_if_table_location_is_missing()
+     {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let warehouse_location = temp_path();
         let catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
@@ -1125,8 +1160,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
-    ) {
+    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing()
+     {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let warehouse_location = temp_path();
         let catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
@@ -1166,8 +1201,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_in_nested_namespace_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
-    ) {
+    async fn test_create_table_in_nested_namespace_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing()
+     {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let warehouse_location = temp_path();
         let catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
@@ -1214,8 +1249,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_throws_error_if_table_location_and_namespace_location_and_warehouse_location_are_missing(
-    ) {
+    async fn test_create_table_throws_error_if_table_location_and_namespace_location_and_warehouse_location_are_missing()
+     {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let catalog = MemoryCatalog::new(file_io, None);
 
@@ -1467,10 +1502,12 @@ mod tests {
         create_namespace(&catalog, &namespace_ident).await;
         let non_existent_table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
 
-        assert!(!catalog
-            .table_exists(&non_existent_table_ident)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .table_exists(&non_existent_table_ident)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1486,10 +1523,12 @@ mod tests {
         assert!(catalog.table_exists(&table_ident).await.unwrap());
 
         let non_existent_table_ident = TableIdent::new(namespace_ident_a_b.clone(), "tbl2".into());
-        assert!(!catalog
-            .table_exists(&non_existent_table_ident)
-            .await
-            .unwrap());
+        assert!(
+            !catalog
+                .table_exists(&non_existent_table_ident)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1689,6 +1728,50 @@ mod tests {
                 "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_table() {
+        // Create a catalog and namespace
+        let catalog = new_memory_catalog();
+        let namespace_ident = NamespaceIdent::new("test_namespace".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // Create a table to get a valid metadata file
+        let source_table_ident = TableIdent::new(namespace_ident.clone(), "source_table".into());
+        create_table(&catalog, &source_table_ident).await;
+
+        // Get the metadata location from the source table
+        let source_table = catalog.load_table(&source_table_ident).await.unwrap();
+        let metadata_location = source_table.metadata_location().unwrap().to_string();
+
+        // Register a new table using the same metadata location
+        let register_table_ident =
+            TableIdent::new(namespace_ident.clone(), "register_table".into());
+        let registered_table = catalog
+            .register_table(&register_table_ident, metadata_location.clone())
+            .await
+            .unwrap();
+
+        // Verify the registered table has the correct identifier
+        assert_eq!(registered_table.identifier(), &register_table_ident);
+
+        // Verify the registered table has the correct metadata location
+        assert_eq!(
+            registered_table.metadata_location().unwrap().to_string(),
+            metadata_location
+        );
+
+        // Verify the table exists in the catalog
+        assert!(catalog.table_exists(&register_table_ident).await.unwrap());
+
+        // Verify we can load the registered table
+        let loaded_table = catalog.load_table(&register_table_ident).await.unwrap();
+        assert_eq!(loaded_table.identifier(), &register_table_ident);
+        assert_eq!(
+            loaded_table.metadata_location().unwrap().to_string(),
+            metadata_location
         );
     }
 }

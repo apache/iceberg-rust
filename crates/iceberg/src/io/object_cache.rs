@@ -190,13 +190,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::TableIdent;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::TableIdent;
 
     struct TableTestFixture {
         table_location: String,
@@ -266,7 +266,7 @@ mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                vec![],
+                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )

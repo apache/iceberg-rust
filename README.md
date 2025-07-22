@@ -33,7 +33,6 @@ The Apache Iceberg Rust project is composed of the following components:
 | [iceberg-datafusion]     | [![iceberg-datafusion image]][iceberg-datafusion link]          | [![docs release]][iceberg-datafusion release docs] [![docs dev]][iceberg-datafusion dev docs]         |
 | [iceberg-catalog-glue]   | [![iceberg-catalog-glue image]][iceberg-catalog-glue link]      | [![docs release]][iceberg-catalog-glue release docs] [![docs dev]][iceberg-catalog-glue dev docs]     |
 | [iceberg-catalog-hms]    | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]        | [![docs release]][iceberg-catalog-hms release docs] [![docs dev]][iceberg-catalog-hms dev docs]       |
-| [iceberg-catalog-memory] | [![iceberg-catalog-memory image]][iceberg-catalog-memory link]  | [![docs release]][iceberg-catalog-memory release docs] [![docs dev]][iceberg-catalog-memory dev docs] |
 | [iceberg-catalog-rest]   | [![iceberg-catalog-rest image]][iceberg-catalog-rest link]      | [![docs release]][iceberg-catalog-rest release docs] [![docs dev]][iceberg-catalog-rest dev docs]     |
 
 [docs release]: https://img.shields.io/badge/docs-release-blue
@@ -62,11 +61,6 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg-catalog-hms release docs]: https://docs.rs/iceberg-catalog-hms
 [iceberg-catalog-hms dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_hms/
 
-[iceberg-catalog-memory]: crates/catalog/memory/README.md
-[iceberg-catalog-memory image]: https://img.shields.io/crates/v/iceberg-catalog-memory.svg
-[iceberg-catalog-memory link]: https://crates.io/crates/iceberg-catalog-memory
-[iceberg-catalog-memory release docs]: https://docs.rs/iceberg-catalog-memory
-[iceberg-catalog-memory dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_memory/
 
 [iceberg-catalog-rest]: crates/catalog/rest/README.md
 [iceberg-catalog-rest image]: https://img.shields.io/crates/v/iceberg-catalog-rest.svg
@@ -101,6 +95,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 
 - [Databend](https://github.com/datafuselabs/databend/): An open-source cloud data warehouse that serves as a cost-effective alternative to Snowflake.
 - [Lakekeeper](https://github.com/lakekeeper/lakekeeper/): An Apache-licensed Iceberg REST Catalog with data access controls.
+- [Moonlink](https://github.com/Mooncake-Labs/moonlink): A Rust library that enables sub-second mirroring (CDC) of Postgres tables into Iceberg.
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 
 ## License

@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
 
-use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
+use apache_avro::{Reader as AvroReader, Writer as AvroWriter, from_value, to_value};
 use serde_derive::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use super::_serde::DataFileSerde;
-use super::{data_file_schema_v1, data_file_schema_v2, Datum, FormatVersion, Schema};
+use super::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
 use crate::error::Result;
 use crate::spec::{Struct, StructType};
 use crate::{Error, ErrorKind};

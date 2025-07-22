@@ -18,20 +18,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_array::builder::{MapBuilder, MapFieldNames, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMicrosecondType};
-use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::{schema_to_arrow_schema, DEFAULT_MAP_FIELD_NAME};
+use crate::Result;
+use crate::arrow::{DEFAULT_MAP_FIELD_NAME, schema_to_arrow_schema};
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{
-    MapType, NestedField, PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField, PrimitiveType, Type,
 };
 use crate::table::Table;
-use crate::Result;
 
 /// Snapshots table.
 pub struct SnapshotsTable<'a> {
@@ -137,9 +137,10 @@ impl<'a> SnapshotsTable<'a> {
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
+    use futures::TryStreamExt;
 
-    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
+    use crate::test_utils::check_record_batches;
 
     #[tokio::test]
     async fn test_snapshots_table() {
@@ -148,7 +149,7 @@ mod tests {
         let batch_stream = table.inspect().snapshots().scan().await.unwrap();
 
         check_record_batches(
-            batch_stream,
+            batch_stream.try_collect::<Vec<_>>().await.unwrap(),
             expect![[r#"
                 Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
                 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
@@ -181,7 +182,7 @@ mod tests {
                 summary: MapArray
                 [
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                 ]
                 [
@@ -195,7 +196,7 @@ mod tests {
                 ]
                 ],
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                 ]
                 [
@@ -211,6 +212,6 @@ mod tests {
                 ]"#]],
             &["manifest_list"],
             Some("committed_at"),
-        ).await;
+        );
     }
 }
