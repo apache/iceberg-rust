@@ -794,7 +794,8 @@ impl Catalog for RestCatalog {
                 return Err(Error::new(
                     ErrorKind::CatalogCommitConflicts,
                     "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
-                ).with_retryable(true));
+                )
+                .with_retryable(true));
             }
             StatusCode::INTERNAL_SERVER_ERROR => {
                 return Err(Error::new(
