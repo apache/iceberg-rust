@@ -20,9 +20,10 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use iceberg::TableIdent;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
+use iceberg::TableIdent;
+use iceberg_datafusion::table::static_catalog::StaticCatalog;
 use iceberg_datafusion::table::IcebergTableProvider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;

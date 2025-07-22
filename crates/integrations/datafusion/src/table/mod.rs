@@ -16,7 +16,7 @@
 // under the License.
 
 pub mod metadata_table;
-mod static_catalog;
+pub mod static_catalog;
 pub mod table_provider_factory;
 
 use std::any::Any;
