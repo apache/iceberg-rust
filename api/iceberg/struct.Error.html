@@ -36,7 +36,7 @@ Backtrace:
 We don’t provide it as it requires nightly rust.</p>
 <p>If you just want to print error with backtrace, use <code>Debug</code>, like <code>format!("{err:?}")</code>.</p>
 <p>If you use nightly rust, and want to access <code>iceberg::Error</code>’s backtrace in the standard way, you can
-implement a newtype like this:</p>
+implement a new type like this:</p>
 
 <div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// assume you already have `#![feature(error_generic_member_access)]` on the top of your crate
 
