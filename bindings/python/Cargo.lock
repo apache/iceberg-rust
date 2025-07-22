@@ -2221,6 +2221,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "parquet",
  "rand 0.8.5",
+ "reqsign",
  "reqwest",
  "roaring",
  "rust_decimal",
