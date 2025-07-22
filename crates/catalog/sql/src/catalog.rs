@@ -706,7 +706,9 @@ impl Catalog for SqlCatalog {
             Uuid::new_v4()
         );
 
-        TableMetadata::write_to(&self.fileio, &tbl_metadata, &tbl_metadata_location).await?;
+        tbl_metadata
+            .write_to(&self.fileio, &tbl_metadata_location)
+            .await?;
 
         self.execute(&format!(
             "INSERT INTO {CATALOG_TABLE_NAME}

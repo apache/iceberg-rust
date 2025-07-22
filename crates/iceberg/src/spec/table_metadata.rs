@@ -477,14 +477,10 @@ impl TableMetadata {
     }
 
     /// Write table metadata to the given location.
-    pub async fn write_to(
-        file_io: &FileIO,
-        metadata: &TableMetadata,
-        metadata_location: impl ToString,
-    ) -> Result<()> {
+    pub async fn write_to(&self, file_io: &FileIO, metadata_location: impl ToString) -> Result<()> {
         file_io
             .new_output(metadata_location)?
-            .write(serde_json::to_vec(metadata)?.into())
+            .write(serde_json::to_vec(self)?.into())
             .await
     }
 
@@ -3093,7 +3089,8 @@ mod tests {
         let metadata_location = format!("{}/metadata.json", temp_path);
 
         // Write the metadata
-        TableMetadata::write_to(&file_io, &original_metadata, &metadata_location)
+        original_metadata
+            .write_to(&file_io, &metadata_location)
             .await
             .unwrap();
 

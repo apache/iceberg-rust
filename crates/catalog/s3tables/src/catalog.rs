@@ -334,7 +334,7 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
+        metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
         self.s3tables_client

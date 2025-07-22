@@ -210,7 +210,7 @@ impl Catalog for MemoryCatalog {
             Uuid::new_v4()
         );
 
-        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
+        metadata.write_to(&self.file_io, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
