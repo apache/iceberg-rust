@@ -55,6 +55,8 @@ pub struct RewriteFilesAction {
     snapshot_id: Option<i64>,
 
     new_data_file_sequence_number: Option<i64>,
+
+    target_branch: Option<String>,
 }
 
 struct RewriteFilesOperation;
@@ -75,6 +77,7 @@ impl RewriteFilesAction {
             removed_delete_files: Vec::new(),
             snapshot_id: None,
             new_data_file_sequence_number: None,
+            target_branch: None,
         }
     }
 
@@ -146,10 +149,15 @@ impl RewriteFilesAction {
         self
     }
 
-    pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Result<Self> {
+    pub fn set_target_branch(mut self, target_branch: String) -> Self {
+        self.target_branch = Some(target_branch);
+        self
+    }
+
+    pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Self {
         self.new_data_file_sequence_number = Some(seq);
 
-        Ok(self)
+        self
     }
 }
 
@@ -299,6 +307,14 @@ impl TransactionAction for RewriteFilesAction {
             self.removed_delete_files.clone(),
         );
 
+        if let Some(seq) = self.new_data_file_sequence_number {
+            snapshot_producer.set_new_data_file_sequence_number(seq);
+        }
+
+        if let Some(branch) = &self.target_branch {
+            snapshot_producer.set_target_branch(branch.clone());
+        }
+
         // Checks duplicate files
         if self.check_duplicate {
             snapshot_producer
@@ -308,10 +324,6 @@ impl TransactionAction for RewriteFilesAction {
             snapshot_producer
                 .validate_duplicate_files(&self.added_delete_files)
                 .await?;
-        }
-
-        if let Some(seq) = self.new_data_file_sequence_number {
-            snapshot_producer.set_new_data_file_sequence_number(seq);
         }
 
         if self.merge_enabled {

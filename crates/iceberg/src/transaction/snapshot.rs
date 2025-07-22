@@ -93,6 +93,8 @@ pub(crate) struct SnapshotProducer<'a> {
     manifest_counter: RangeFrom<u64>,
 
     new_data_file_sequence_number: Option<i64>,
+
+    target_branch: String,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -130,6 +132,7 @@ impl<'a> SnapshotProducer<'a> {
             removed_delete_file_paths,
             manifest_counter: (0..),
             new_data_file_sequence_number: None,
+            target_branch: MAIN_BRANCH.to_string(),
         }
     }
 
@@ -161,7 +164,8 @@ impl<'a> SnapshotProducer<'a> {
             .collect();
 
         let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = self.table.metadata().current_snapshot() {
+        if let Some(current_snapshot) = self.table.metadata().snapshot_for_ref(&self.target_branch)
+        {
             let manifest_list = current_snapshot
                 .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
@@ -526,22 +530,29 @@ impl<'a> SnapshotProducer<'a> {
         process: MP,
     ) -> Result<ActionCommit> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
-        let next_seq_num = self.table.metadata().next_sequence_number();
-        let first_row_id = self.table.metadata().next_row_id();
-        let mut manifest_list_writer = match self.table.metadata().format_version() {
+        let metadata_ref = self.table.metadata_ref();
+        let next_seq_num = metadata_ref.next_sequence_number();
+        let first_row_id = metadata_ref.next_row_id();
+        let parent_snapshot = metadata_ref.snapshot_for_ref(&self.target_branch);
+
+        let parent_snapshot_id = parent_snapshot
+            .map(|s| Some(s.snapshot_id()))
+            .unwrap_or(None);
+
+        let mut manifest_list_writer = match metadata_ref.format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
                 next_seq_num,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
@@ -549,7 +560,7 @@ impl<'a> SnapshotProducer<'a> {
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
                 next_seq_num,
                 Some(first_row_id),
             ),
@@ -565,7 +576,6 @@ impl<'a> SnapshotProducer<'a> {
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
-
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
         manifest_list_writer.close().await?;
@@ -574,7 +584,7 @@ impl<'a> SnapshotProducer<'a> {
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(self.snapshot_id)
-            .with_parent_snapshot_id(self.table.metadata().current_snapshot_id())
+            .with_parent_snapshot_id(parent_snapshot_id)
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.table.metadata().current_schema_id())
@@ -594,7 +604,7 @@ impl<'a> SnapshotProducer<'a> {
                 snapshot: new_snapshot,
             },
             TableUpdate::SetSnapshotRef {
-                ref_name: MAIN_BRANCH.to_string(),
+                ref_name: self.target_branch.clone(),
                 reference: SnapshotReference::new(
                     self.snapshot_id,
                     SnapshotRetention::branch(None, None, None),
@@ -607,8 +617,8 @@ impl<'a> SnapshotProducer<'a> {
                 uuid: self.table.metadata().uuid(),
             },
             TableRequirement::RefSnapshotIdMatch {
-                r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: self.table.metadata().current_snapshot_id(),
+                r#ref: self.target_branch.clone(),
+                snapshot_id: parent_snapshot_id,
             },
         ];
 
@@ -617,6 +627,10 @@ impl<'a> SnapshotProducer<'a> {
 
     pub fn set_new_data_file_sequence_number(&mut self, new_data_file_sequence_number: i64) {
         self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
+    }
+
+    pub fn set_target_branch(&mut self, target_branch: String) {
+        self.target_branch = target_branch;
     }
 }
 
@@ -644,6 +658,7 @@ impl ManifestProcess for MergeManifestProcess {
         let (unmerge_data_manifest, unmerge_delete_manifest): (Vec<_>, Vec<_>) = manifests
             .into_iter()
             .partition(|manifest| matches!(manifest.content, ManifestContentType::Data));
+
         let mut data_manifest = {
             let manifest_merge_manager = MergeManifestManager::new(
                 self.target_size_bytes,
@@ -654,6 +669,7 @@ impl ManifestProcess for MergeManifestProcess {
                 .merge_manifest(snapshot_produce, unmerge_data_manifest)
                 .await?
         };
+
         data_manifest.extend(unmerge_delete_manifest);
         Ok(data_manifest)
     }

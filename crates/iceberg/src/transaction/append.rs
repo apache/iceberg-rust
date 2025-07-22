@@ -45,6 +45,7 @@ pub struct FastAppendAction {
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     added_delete_files: Vec<DataFile>,
+    target_branch: Option<String>,
 }
 
 impl FastAppendAction {
@@ -57,12 +58,18 @@ impl FastAppendAction {
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
             added_delete_files: vec![],
+            target_branch: None,
         }
     }
 
     /// Set whether to check duplicate files
-    pub fn with_check_duplicate(mut self, v: bool) -> Self {
+    pub fn set_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
+        self
+    }
+
+    pub fn set_target_branch(mut self, target_branch: String) -> Self {
+        self.target_branch = Some(target_branch);
         self
     }
 
@@ -125,7 +132,8 @@ impl TransactionAction for FastAppendAction {
                 ));
             }
         }
-        let snapshot_producer = SnapshotProducer::new(
+
+        let mut snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
@@ -136,6 +144,10 @@ impl TransactionAction for FastAppendAction {
             vec![],
             vec![],
         );
+
+        if let Some(target_branch) = &self.target_branch {
+            snapshot_producer.set_target_branch(target_branch.clone());
+        }
 
         // validate added files
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;
@@ -212,6 +224,7 @@ pub struct MergeAppendAction {
     added_data_files: Vec<DataFile>,
     added_delete_files: Vec<DataFile>,
     snapshot_id: Option<i64>,
+    target_branch: Option<String>,
 }
 
 impl MergeAppendAction {
@@ -227,6 +240,7 @@ impl MergeAppendAction {
             added_data_files: vec![],
             added_delete_files: vec![],
             snapshot_id: None,
+            target_branch: None,
         }
     }
 
@@ -267,6 +281,11 @@ impl MergeAppendAction {
         self
     }
 
+    pub fn set_target_branch(mut self, target_branch: String) -> Self {
+        self.target_branch = Some(target_branch);
+        self
+    }
+
     /// Add data files to the snapshot.
     pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_data_files.extend(data_files);
@@ -277,7 +296,7 @@ impl MergeAppendAction {
 #[async_trait]
 impl TransactionAction for MergeAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
+        let mut snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
@@ -288,6 +307,10 @@ impl TransactionAction for MergeAppendAction {
             vec![],
             vec![],
         );
+
+        if let Some(target_branch) = &self.target_branch {
+            snapshot_producer.set_target_branch(target_branch.clone());
+        }
 
         // validate added files
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;
@@ -506,5 +529,95 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_with_branch() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        // Test creating new branch
+        let branch_name = "test_branch";
+
+        let data_file = DataFileBuilder::default()
+            .partition_spec_id(0)
+            .content(DataContentType::Data)
+            .file_path("test/3.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+        let action = tx
+            .fast_append()
+            .set_target_branch(branch_name.to_string())
+            .add_data_files(vec![data_file.clone()]);
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        // Check branch reference was created
+        assert!(
+            matches!(&updates[1], TableUpdate::SetSnapshotRef { ref_name, .. }
+                if ref_name == branch_name)
+        );
+
+        // Test updating existing branch
+        let action2 = tx
+            .fast_append()
+            .set_target_branch(branch_name.to_string())
+            .add_data_files(vec![data_file.clone()]);
+        let mut action_commit2 = Arc::new(action2).commit(&table).await.unwrap();
+        let requirements = action_commit2.take_requirements();
+
+        // Check requirements contain branch validation
+        assert!(requirements.iter().any(
+            |r| matches!(r, TableRequirement::RefSnapshotIdMatch { r#ref, .. }
+                if r#ref == branch_name)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_branch_operations() {
+        let table = make_v2_minimal_table();
+
+        // Test creating new branch
+        let branch_name = "test_branch";
+        let tx = Transaction::new(&table);
+
+        let data_file = DataFileBuilder::default()
+            .partition_spec_id(0)
+            .content(DataContentType::Data)
+            .file_path("test/3.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx
+            .fast_append()
+            .set_target_branch(branch_name.to_string())
+            .add_data_files(vec![data_file.clone()]);
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let requirements = action_commit.take_requirements();
+
+        // Verify branch was created
+        assert!(matches!(
+            &updates[1],
+            TableUpdate::SetSnapshotRef { ref_name, .. } if ref_name == branch_name
+        ));
+
+        // Verify requirements
+        assert!(requirements.iter().any(
+            |r| matches!(r, TableRequirement::RefSnapshotIdMatch { r#ref, .. }
+                if r#ref == branch_name)
+        ));
     }
 }

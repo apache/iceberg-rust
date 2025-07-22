@@ -144,7 +144,7 @@ async fn test_rewrite_data_files() {
     let tx = Transaction::new(&table);
     let append_action = tx
         .fast_append()
-        .with_check_duplicate(false)
+        .set_check_duplicate(false)
         .add_data_files(data_file.clone());
     let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
@@ -433,9 +433,7 @@ async fn test_sequence_number_in_manifest_entry() {
         .add_data_files(data_file1.clone())
         .add_data_files(data_file2.clone());
     // Set sequence number to 12345
-    let rewrite_action = rewrite_action
-        .set_new_data_file_sequence_number(12345)
-        .unwrap();
+    let rewrite_action = rewrite_action.set_new_data_file_sequence_number(12345);
     let tx = rewrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
