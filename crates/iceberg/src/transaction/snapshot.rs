@@ -91,6 +91,8 @@ pub(crate) struct SnapshotProduceAction<'a> {
     manifest_counter: RangeFrom<u64>,
 
     new_data_file_sequence_number: Option<i64>,
+
+    target_branch: String,
 }
 
 impl<'a> SnapshotProduceAction<'a> {
@@ -115,6 +117,7 @@ impl<'a> SnapshotProduceAction<'a> {
             manifest_counter: (0..),
             key_metadata,
             new_data_file_sequence_number: None,
+            target_branch: MAIN_BRANCH.to_string(),
         })
     }
 
@@ -426,11 +429,22 @@ impl<'a> SnapshotProduceAction<'a> {
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
+
         let next_seq_num = self.tx.current_table.metadata().next_sequence_number();
 
         let summary = self.summary(&snapshot_produce_operation);
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
+
+        let parent_snapshot = self
+            .tx
+            .current_table
+            .metadata()
+            .snapshot_for_ref(&self.target_branch);
+
+        let parent_snapshot_id = parent_snapshot
+            .map(|s| Some(s.snapshot_id()))
+            .unwrap_or(None);
 
         let mut manifest_list_writer = match self.tx.current_table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
@@ -439,7 +453,7 @@ impl<'a> SnapshotProduceAction<'a> {
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.tx.current_table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.tx
@@ -447,7 +461,7 @@ impl<'a> SnapshotProduceAction<'a> {
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.tx.current_table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
                 next_seq_num,
             ),
         };
@@ -458,7 +472,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(self.snapshot_id)
-            .with_parent_snapshot_id(self.tx.current_table.metadata().current_snapshot_id())
+            .with_parent_snapshot_id(parent_snapshot_id)
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.tx.current_table.metadata().current_schema_id())
@@ -471,7 +485,7 @@ impl<'a> SnapshotProduceAction<'a> {
                     snapshot: new_snapshot,
                 },
                 TableUpdate::SetSnapshotRef {
-                    ref_name: MAIN_BRANCH.to_string(),
+                    ref_name: self.target_branch.clone(),
                     reference: SnapshotReference::new(
                         self.snapshot_id,
                         SnapshotRetention::branch(None, None, None),
@@ -483,8 +497,8 @@ impl<'a> SnapshotProduceAction<'a> {
                     uuid: self.tx.current_table.metadata().uuid(),
                 },
                 TableRequirement::RefSnapshotIdMatch {
-                    r#ref: MAIN_BRANCH.to_string(),
-                    snapshot_id: self.tx.current_table.metadata().current_snapshot_id(),
+                    r#ref: self.target_branch.clone(),
+                    snapshot_id: parent_snapshot_id,
                 },
             ],
         )?;
@@ -493,6 +507,10 @@ impl<'a> SnapshotProduceAction<'a> {
 
     pub fn set_new_data_file_sequence_number(&mut self, new_data_file_sequence_number: i64) {
         self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
+    }
+
+    pub fn set_target_branch(&mut self, target_branch: String) {
+        self.target_branch = target_branch;
     }
 }
 
@@ -519,6 +537,7 @@ impl ManifestProcess for MergeManifestProcess {
         let (unmerge_data_manifest, unmerge_delete_manifest): (Vec<_>, Vec<_>) = manifests
             .into_iter()
             .partition(|manifest| matches!(manifest.content, ManifestContentType::Data));
+
         let mut data_manifest = {
             let manifest_merge_manager = MergeManifestManager::new(
                 self.target_size_bytes,
@@ -529,6 +548,7 @@ impl ManifestProcess for MergeManifestProcess {
                 .merge_manifest(snapshot_produce, unmerge_data_manifest)
                 .await?
         };
+
         data_manifest.extend(unmerge_delete_manifest);
         Ok(data_manifest)
     }

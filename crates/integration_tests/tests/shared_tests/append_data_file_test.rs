@@ -151,3 +151,160 @@ async fn test_append_data_file() {
     assert_eq!(batches[0], batch);
     assert_eq!(batches[1], batch);
 }
+
+#[tokio::test]
+async fn test_append_data_file_to_branch() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = random_ns().await;
+    let schema = test_schema();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let table = rest_catalog
+        .create_table(ns.name(), table_creation)
+        .await
+        .unwrap();
+
+    // Create the writer and write the data
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+    let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+    let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+    let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+    let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(col1) as ArrayRef,
+        Arc::new(col2) as ArrayRef,
+        Arc::new(col3) as ArrayRef,
+    ])
+    .unwrap();
+    data_file_writer.write(batch.clone()).await.unwrap();
+    let data_file = data_file_writer.close().await.unwrap();
+
+    // Test 1: Append to main branch (default behavior)
+    let tx = Transaction::new(&table);
+    let mut append_action = tx.fast_append(None, None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx = append_action.apply().await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    // Verify main branch has the data
+    assert!(table.metadata().current_snapshot().is_some());
+    let main_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+    // Verify main branch ref points to the snapshot using snapshot_for_ref
+    let main_snapshot = table.metadata().snapshot_for_ref("main").unwrap();
+    assert_eq!(main_snapshot.snapshot_id(), main_snapshot_id);
+
+    // Test 2: Append to a custom branch
+    let branch_name = "test-branch";
+    let tx = Transaction::new(&table);
+    let mut append_action = tx
+        .fast_append(None, None, vec![])
+        .unwrap()
+        .with_to_branch(branch_name.to_string());
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx = append_action.apply().await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    // Verify the custom branch was created and points to a new snapshot
+    let branch_snapshot = table.metadata().snapshot_for_ref(branch_name).unwrap();
+    assert_ne!(branch_snapshot.snapshot_id(), main_snapshot_id);
+
+    // Verify the main branch is unchanged
+    let main_snapshot_after = table.metadata().snapshot_for_ref("main").unwrap();
+    assert_eq!(main_snapshot_after.snapshot_id(), main_snapshot_id);
+
+    // Test 3: Append to the same custom branch again
+    let tx = Transaction::new(&table);
+    let mut append_action = tx
+        .fast_append(None, None, vec![])
+        .unwrap()
+        .with_to_branch(branch_name.to_string());
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx = append_action.apply().await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    // Verify the custom branch now points to a newer snapshot
+    let branch_snapshot_final = table.metadata().snapshot_for_ref(branch_name).unwrap();
+    assert_ne!(
+        branch_snapshot_final.snapshot_id(),
+        branch_snapshot.snapshot_id()
+    );
+    assert_ne!(branch_snapshot_final.snapshot_id(), main_snapshot_id);
+
+    // Verify we have 3 snapshots total (1 main + 2 branch)
+    assert_eq!(table.metadata().snapshots().count(), 3);
+
+    // Test 4: Test merge append to branch
+    let another_branch = "merge-branch";
+    let tx = Transaction::new(&table);
+    let mut merge_append_action = tx
+        .merge_append(None, vec![])
+        .unwrap()
+        .with_to_branch(another_branch.to_string())
+        .unwrap();
+    merge_append_action
+        .add_data_files(data_file.clone())
+        .unwrap();
+    let tx = merge_append_action.apply().await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    // Verify the merge branch was created
+    let merge_branch_snapshot = table.metadata().snapshot_for_ref(another_branch).unwrap();
+    assert_ne!(merge_branch_snapshot.snapshot_id(), main_snapshot_id);
+    assert_ne!(
+        merge_branch_snapshot.snapshot_id(),
+        branch_snapshot_final.snapshot_id()
+    );
+
+    // Verify we now have 4 snapshots total
+    assert_eq!(table.metadata().snapshots().count(), 4);
+
+    // Verify all branches exist and can be accessed via snapshot_for_ref
+    assert!(table.metadata().snapshot_for_ref("main").is_some());
+    assert!(table.metadata().snapshot_for_ref(branch_name).is_some());
+    assert!(table.metadata().snapshot_for_ref(another_branch).is_some());
+
+    // Verify each branch points to different snapshots
+    let final_main_snapshot = table.metadata().snapshot_for_ref("main").unwrap();
+    let final_branch_snapshot = table.metadata().snapshot_for_ref(branch_name).unwrap();
+    let final_merge_snapshot = table.metadata().snapshot_for_ref(another_branch).unwrap();
+
+    assert_ne!(
+        final_main_snapshot.snapshot_id(),
+        final_branch_snapshot.snapshot_id()
+    );
+    assert_ne!(
+        final_main_snapshot.snapshot_id(),
+        final_merge_snapshot.snapshot_id()
+    );
+    assert_ne!(
+        final_branch_snapshot.snapshot_id(),
+        final_merge_snapshot.snapshot_id()
+    );
+}
