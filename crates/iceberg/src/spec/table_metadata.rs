@@ -468,7 +468,7 @@ impl TableMetadata {
     /// Read table metadata from the given location.
     pub async fn read_from(
         file_io: &FileIO,
-        metadata_location: impl ToString,
+        metadata_location: impl AsRef<str>,
     ) -> Result<TableMetadata> {
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
@@ -477,7 +477,7 @@ impl TableMetadata {
     }
 
     /// Write table metadata to the given location.
-    pub async fn write_to(&self, file_io: &FileIO, metadata_location: impl ToString) -> Result<()> {
+    pub async fn write_to(&self, file_io: &FileIO, metadata_location: impl AsRef<str>) -> Result<()> {
         file_io
             .new_output(metadata_location)?
             .write(serde_json::to_vec(self)?.into())
