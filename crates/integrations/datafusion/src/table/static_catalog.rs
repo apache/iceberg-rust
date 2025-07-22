@@ -27,13 +27,14 @@ use iceberg::{
     TableIdent,
 };
 
+/// Represents a static catalog that contains a single table.
 #[derive(Debug)]
-pub(crate) struct StaticCatalog {
+pub struct StaticCatalog {
     table: Table,
 }
 
 impl StaticCatalog {
-    pub(crate) fn new(table: Table) -> Self {
+    pub fn new(table: Table) -> Self {
         Self { table }
     }
 }

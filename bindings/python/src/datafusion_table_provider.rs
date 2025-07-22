@@ -20,9 +20,9 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use iceberg::TableIdent;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
+use iceberg::TableIdent;
 use iceberg_datafusion::table::IcebergTableProvider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -61,7 +61,7 @@ impl PyIcebergDataFusionTable {
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
 
             let static_table =
-                StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)
+                StaticTable::from_metadata_file(&metadata_location, table_ident.clone(), file_io)
                     .await
                     .map_err(|e| {
                         PyRuntimeError::new_err(format!("Failed to load static table: {e}"))
@@ -69,7 +69,9 @@ impl PyIcebergDataFusionTable {
 
             let table = static_table.into_table();
 
-            IcebergTableProvider::try_new_from_table(table)
+            let static_catalog = Arc::new(StaticCatalog::new(table));
+
+            IcebergTableProvider::try_new(static_catalog, table_ident)
                 .await
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to create table provider: {e}"))
