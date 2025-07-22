@@ -477,7 +477,11 @@ impl TableMetadata {
     }
 
     /// Write table metadata to the given location.
-    pub async fn write_to(&self, file_io: &FileIO, metadata_location: impl AsRef<str>) -> Result<()> {
+    pub async fn write_to(
+        &self,
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<()> {
         file_io
             .new_output(metadata_location)?
             .write(serde_json::to_vec(self)?.into())
