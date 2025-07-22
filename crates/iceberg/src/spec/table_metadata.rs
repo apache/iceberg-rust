@@ -466,7 +466,10 @@ impl TableMetadata {
     }
 
     /// Read table metadata from the given location.
-    pub async fn read(file_io: &FileIO, metadata_location: &str) -> Result<TableMetadata> {
+    pub async fn read_from(
+        file_io: &FileIO,
+        metadata_location: impl ToString,
+    ) -> Result<TableMetadata> {
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
         let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
@@ -474,10 +477,10 @@ impl TableMetadata {
     }
 
     /// Write table metadata to the given location.
-    pub async fn write(
+    pub async fn write_to(
         file_io: &FileIO,
         metadata: &TableMetadata,
-        metadata_location: &str,
+        metadata_location: impl ToString,
     ) -> Result<()> {
         file_io
             .new_output(metadata_location)?
@@ -3090,7 +3093,7 @@ mod tests {
         let metadata_location = format!("{}/metadata.json", temp_path);
 
         // Write the metadata
-        TableMetadata::write(&file_io, &original_metadata, &metadata_location)
+        TableMetadata::write_to(&file_io, &original_metadata, &metadata_location)
             .await
             .unwrap();
 
@@ -3098,7 +3101,7 @@ mod tests {
         assert!(fs::metadata(&metadata_location).is_ok());
 
         // Read the metadata back
-        let read_metadata = TableMetadata::read(&file_io, &metadata_location)
+        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location)
             .await
             .unwrap();
 
@@ -3112,7 +3115,7 @@ mod tests {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
 
         // Try to read a non-existent file
-        let result = TableMetadata::read(&file_io, "/nonexistent/path/metadata.json").await;
+        let result = TableMetadata::read_from(&file_io, "/nonexistent/path/metadata.json").await;
 
         // Verify it returns an error
         assert!(result.is_err());

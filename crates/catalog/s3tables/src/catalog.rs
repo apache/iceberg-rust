@@ -334,7 +334,7 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
 
         // update metadata location
         self.s3tables_client
@@ -386,7 +386,7 @@ impl Catalog for S3TablesCatalog {
                 ),
             )
         })?;
-        let metadata = TableMetadata::read(&self.file_io, metadata_location).await?;
+        let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
         let table = Table::builder()
             .identifier(table_ident.clone())

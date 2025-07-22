@@ -395,7 +395,7 @@ impl Catalog for GlueCatalog {
             .metadata;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
 
         let glue_table = convert_to_glue_table(
             &table_name,
@@ -460,7 +460,7 @@ impl Catalog for GlueCatalog {
             Some(table) => {
                 let metadata_location = get_metadata_location(&table.parameters)?;
 
-                let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
+                let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
                 Table::builder()
                     .file_io(self.file_io())

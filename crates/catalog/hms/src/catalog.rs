@@ -353,7 +353,7 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
@@ -403,7 +403,7 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io())

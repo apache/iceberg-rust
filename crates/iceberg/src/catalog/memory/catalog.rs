@@ -210,7 +210,7 @@ impl Catalog for MemoryCatalog {
             Uuid::new_v4()
         );
 
-        TableMetadata::write(&self.file_io, &metadata, &metadata_location).await?;
+        TableMetadata::write_to(&self.file_io, &metadata, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
@@ -227,7 +227,7 @@ impl Catalog for MemoryCatalog {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let metadata = TableMetadata::read(&self.file_io, metadata_location).await?;
+        let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io.clone())
@@ -279,7 +279,7 @@ impl Catalog for MemoryCatalog {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
         root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
 
-        let metadata = TableMetadata::read(&self.file_io, &metadata_location).await?;
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io.clone())
