@@ -602,7 +602,8 @@ impl TableRequirement {
                             "Requirement failed: Table with id {} already exists",
                             metadata.uuid()
                         ),
-                    ));
+                    )
+                    .with_retryable(true));
                 }
                 TableRequirement::UuidMatch { uuid } => {
                     if &metadata.uuid() != uuid {
@@ -611,7 +612,8 @@ impl TableRequirement {
                             "Requirement failed: Table UUID does not match",
                         )
                         .with_context("expected", *uuid)
-                        .with_context("found", metadata.uuid()));
+                        .with_context("found", metadata.uuid())
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::CurrentSchemaIdMatch { current_schema_id } => {
@@ -622,7 +624,8 @@ impl TableRequirement {
                             "Requirement failed: Current schema id does not match",
                         )
                         .with_context("expected", current_schema_id.to_string())
-                        .with_context("found", metadata.current_schema_id.to_string()));
+                        .with_context("found", metadata.current_schema_id.to_string())
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::DefaultSortOrderIdMatch {
@@ -634,19 +637,20 @@ impl TableRequirement {
                             "Requirement failed: Default sort order id does not match",
                         )
                         .with_context("expected", default_sort_order_id.to_string())
-                        .with_context(
-                            "found",
-                            metadata.default_sort_order().order_id.to_string(),
-                        ));
+                        .with_context("found", metadata.default_sort_order().order_id.to_string())
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } => {
                     let snapshot_ref = metadata.snapshot_for_ref(r#ref);
                     if let Some(snapshot_id) = snapshot_id {
-                        let snapshot_ref = snapshot_ref.ok_or(Error::new(
-                            ErrorKind::CatalogCommitConflicts,
-                            format!("Requirement failed: Branch or tag `{}` not found", r#ref),
-                        ))?;
+                        let snapshot_ref = snapshot_ref.ok_or(
+                            Error::new(
+                                ErrorKind::CatalogCommitConflicts,
+                                format!("Requirement failed: Branch or tag `{}` not found", r#ref),
+                            )
+                            .with_retryable(true),
+                        )?;
                         if snapshot_ref.snapshot_id() != *snapshot_id {
                             return Err(Error::new(
                                 ErrorKind::CatalogCommitConflicts,
@@ -656,7 +660,8 @@ impl TableRequirement {
                                 ),
                             )
                             .with_context("expected", snapshot_id.to_string())
-                            .with_context("found", snapshot_ref.snapshot_id().to_string()));
+                            .with_context("found", snapshot_ref.snapshot_id().to_string())
+                            .with_retryable(true));
                         }
                     } else if snapshot_ref.is_some() {
                         // a null snapshot ID means the ref should not exist already
@@ -666,7 +671,8 @@ impl TableRequirement {
                                 "Requirement failed: Branch or tag `{}` already exists",
                                 r#ref
                             ),
-                        ));
+                        )
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::DefaultSpecIdMatch { default_spec_id } => {
@@ -677,7 +683,8 @@ impl TableRequirement {
                             "Requirement failed: Default partition spec id does not match",
                         )
                         .with_context("expected", default_spec_id.to_string())
-                        .with_context("found", metadata.default_partition_spec_id().to_string()));
+                        .with_context("found", metadata.default_partition_spec_id().to_string())
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::LastAssignedPartitionIdMatch {
@@ -689,7 +696,8 @@ impl TableRequirement {
                             "Requirement failed: Last assigned partition id does not match",
                         )
                         .with_context("expected", last_assigned_partition_id.to_string())
-                        .with_context("found", metadata.last_partition_id.to_string()));
+                        .with_context("found", metadata.last_partition_id.to_string())
+                        .with_retryable(true));
                     }
                 }
                 TableRequirement::LastAssignedFieldIdMatch {
@@ -701,7 +709,8 @@ impl TableRequirement {
                             "Requirement failed: Last assigned field id does not match",
                         )
                         .with_context("expected", last_assigned_field_id.to_string())
-                        .with_context("found", metadata.last_column_id.to_string()));
+                        .with_context("found", metadata.last_column_id.to_string())
+                        .with_retryable(true));
                     }
                 }
             };
