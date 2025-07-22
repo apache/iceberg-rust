@@ -32,7 +32,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 use tokio::sync::RwLock;
 
@@ -113,9 +113,12 @@ impl IcebergTableProvider {
         Ok(updated_table)
     }
 
-    pub(crate) fn metadata_table(&self, r#type: MetadataTableType) -> IcebergMetadataTableProvider {
+    pub(crate) async fn metadata_table(
+        &self,
+        r#type: MetadataTableType,
+    ) -> IcebergMetadataTableProvider {
         IcebergMetadataTableProvider {
-            table: self.table.clone(),
+            table: self.table.read().await.clone(),
             r#type,
         }
     }
@@ -174,7 +177,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use iceberg::io::FileIO;
     use iceberg::table::{StaticTable, Table};
-    use iceberg::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableIdent};
+    use iceberg::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 
     use super::*;
 
@@ -255,6 +258,14 @@ mod tests {
         }
 
         async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
+            unimplemented!()
+        }
+
+        async fn register_table(
+            &self,
+            _table: &TableIdent,
+            _metadata_location: String,
+        ) -> Result<Table> {
             unimplemented!()
         }
     }

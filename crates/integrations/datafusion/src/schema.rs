@@ -116,7 +116,7 @@ impl SchemaProvider for IcebergSchemaProvider {
             let metadata_table_type =
                 MetadataTableType::try_from(metadata_table_name).map_err(DataFusionError::Plan)?;
             if let Some(table) = self.tables.get(table_name) {
-                let metadata_table = table.metadata_table(metadata_table_type);
+                let metadata_table = table.metadata_table(metadata_table_type).await;
                 return Ok(Some(Arc::new(metadata_table)));
             } else {
                 return Ok(None);

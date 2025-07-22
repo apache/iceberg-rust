@@ -30,7 +30,6 @@ use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
 use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent};
-use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_datafusion::{IcebergCatalogProvider, IcebergTableProvider};
 use tempfile::TempDir;
 
@@ -343,6 +342,7 @@ async fn test_table_scan_snapshot() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn test_metadata_table() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog();
     let namespace = NamespaceIdent::new("ns".to_string());

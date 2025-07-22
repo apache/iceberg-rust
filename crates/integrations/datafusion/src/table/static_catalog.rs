@@ -155,4 +155,15 @@ impl Catalog for StaticCatalog {
             "Updating tables is not supported in static catalog",
         ))
     }
+
+    async fn register_table(
+        &self,
+        _table: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Registering tables is not supported in static catalog",
+        ))
+    }
 }
