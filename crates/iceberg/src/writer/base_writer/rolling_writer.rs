@@ -19,25 +19,46 @@ use std::mem::take;
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
+use futures::future::try_join_all;
 
+use crate::runtime::{JoinHandle, spawn};
 use crate::spec::DataFile;
-use crate::writer::base_writer::data_file_writer::DataFileWriter;
-use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
+/// A writer that can roll over to a new file when certain conditions are met.
+///
+/// This trait extends `IcebergWriter` with the ability to determine when to start
+/// writing to a new file based on the size of incoming data.
 #[async_trait]
 pub trait RollingFileWriter: IcebergWriter {
+    /// Determines if the writer should roll over to a new file.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_size` - The size in bytes of the incoming data
+    ///
+    /// # Returns
+    ///
+    /// `true` if a new file should be started, `false` otherwise
     fn should_roll(&mut self, input_size: u64) -> bool;
 }
 
+/// Builder for creating a `RollingDataFileWriter` that rolls over to a new file
+/// when the data size exceeds a target threshold.
 #[derive(Clone)]
-pub struct RollingDataFileWriterBuilder<B: FileWriterBuilder> {
+pub struct RollingDataFileWriterBuilder<B: IcebergWriterBuilder> {
     inner_builder: B,
     target_size: u64,
 }
 
-impl<B: FileWriterBuilder> RollingDataFileWriterBuilder<B> {
+impl<B: IcebergWriterBuilder> RollingDataFileWriterBuilder<B> {
+    /// Creates a new `RollingDataFileWriterBuilder` with the specified inner builder and target size.
+    ///
+    /// # Arguments
+    ///
+    /// * `inner_builder` - The builder for the underlying file writer
+    /// * `target_size` - The target size in bytes before rolling over to a new file
     pub fn new(inner_builder: B, target_size: u64) -> Self {
         Self {
             inner_builder,
@@ -47,7 +68,7 @@ impl<B: FileWriterBuilder> RollingDataFileWriterBuilder<B> {
 }
 
 #[async_trait]
-impl<B: FileWriterBuilder> IcebergWriterBuilder for RollingDataFileWriterBuilder<B> {
+impl<B: IcebergWriterBuilder> IcebergWriterBuilder for RollingDataFileWriterBuilder<B> {
     type R = RollingDataFileWriter<B>;
 
     async fn build(self) -> Result<Self::R> {
@@ -56,27 +77,34 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for RollingDataFileWriterBuilder
             inner_builder: self.inner_builder,
             target_size: self.target_size,
             written_size: 0,
-            data_files: vec![],
+            close_handles: vec![],
         })
     }
 }
 
-pub struct RollingDataFileWriter<B: FileWriterBuilder> {
-    inner: Option<DataFileWriter<B::R>>,
+/// A writer that automatically rolls over to a new file when the data size
+/// exceeds a target threshold.
+///
+/// This writer wraps another file writer and tracks the amount of data written.
+/// When the data size exceeds the target size, it closes the current file and
+/// starts writing to a new one.
+pub struct RollingDataFileWriter<B: IcebergWriterBuilder> {
+    inner: Option<B::R>,
     inner_builder: B,
     target_size: u64,
     written_size: u64,
-    data_files: Vec<DataFile>,
+    close_handles: Vec<JoinHandle<Result<Vec<DataFile>>>>,
 }
 
 #[async_trait]
-impl<B: FileWriterBuilder> IcebergWriter for RollingDataFileWriter<B> {
+impl<B: IcebergWriterBuilder> IcebergWriter for RollingDataFileWriter<B> {
     async fn write(&mut self, input: RecordBatch) -> Result<()> {
         let input_size = input.get_array_memory_size() as u64;
         if self.should_roll(input_size) {
             if let Some(mut inner) = self.inner.take() {
                 // close the current writer, roll to a new file
-                self.data_files.extend(inner.close().await?);
+                let handle = spawn(async move { inner.close().await });
+                self.close_handles.push(handle)
             }
 
             // clear bytes written
@@ -101,11 +129,22 @@ impl<B: FileWriterBuilder> IcebergWriter for RollingDataFileWriter<B> {
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
-        Ok(take(&mut self.data_files))
+        let mut data_files = try_join_all(take(&mut self.close_handles))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<DataFile>>();
+
+        // close the current writer and merge the output
+        if let Some(mut current_writer) = take(&mut self.inner) {
+            data_files.extend(current_writer.close().await?);
+        }
+
+        Ok(data_files)
     }
 }
 
-impl<B: FileWriterBuilder> RollingFileWriter for RollingDataFileWriter<B> {
+impl<B: IcebergWriterBuilder> RollingFileWriter for RollingDataFileWriter<B> {
     fn should_roll(&mut self, input_size: u64) -> bool {
         self.written_size + input_size > self.target_size
     }

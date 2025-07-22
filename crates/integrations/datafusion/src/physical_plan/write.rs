@@ -235,10 +235,10 @@ impl ExecutionPlan for IcebergWriteExec {
                 writer.write(batch?).await.map_err(to_datafusion_error)?;
             }
 
-            let data_file_builders = writer.close().await.map_err(to_datafusion_error)?;
+            let data_files = writer.close().await.map_err(to_datafusion_error)?;
 
             // Convert builders to data files and then to JSON strings
-            let data_files: Vec<String> = data_file_builders
+            let data_files_strs: Vec<String> = data_files
                 .into_iter()
                 .map(|data_file| -> DFResult<String> {
                     // Serialize to JSON
@@ -251,7 +251,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 })
                 .collect::<DFResult<Vec<String>>>()?;
 
-            Self::make_result_batch(data_files)
+            Self::make_result_batch(data_files_strs)
         })
         .boxed();
 
