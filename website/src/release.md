@@ -231,7 +231,7 @@ https://downloads.apache.org/iceberg/KEYS
 
 Git tag for the release:
 
-https://github.com/apache/iceberg-rust/releases/tag/${release_version}
+https://github.com/apache/iceberg-rust/releases/tag/v${iceberg_version}
 
 Please download, verify, and test.
 
@@ -317,7 +317,7 @@ curl https://downloads.apache.org/iceberg/KEYS -o KEYS
 gpg --import KEYS
 ```
 * Verify the `.asc` file: ```gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc```
-* Verify the checksums: ```shasum -a 512 apache-iceberg-rust-${iceberg_version}.tar.gz.sha512```
+* Verify the checksums: ```shasum -a 512 -c apache-iceberg-rust-${iceberg_version}.tar.gz.sha512```
 * Verify build and test:
 ```bash
 tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
