@@ -97,6 +97,8 @@ jobs:
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
           toml set Cargo.toml package.version ${{ needs.validate-release-tag.outputs.cargo-version }} > Cargo.toml.tmp
+          # doing this explicitly to avoid issue in Windows where `mv` does not overwrite existing file
+          rm Cargo.toml
           mv Cargo.toml.tmp Cargo.toml
 
       - uses: PyO3/maturin-action@v1
@@ -138,6 +140,8 @@ jobs:
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
           toml set Cargo.toml package.version ${{ needs.validate-release-tag.outputs.cargo-version }} > Cargo.toml.tmp
+          # doing this explicitly to avoid issue in Windows where `mv` does not overwrite existing file
+          rm Cargo.toml
           mv Cargo.toml.tmp Cargo.toml
 
       - uses: actions/setup-python@v5
