@@ -87,16 +87,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-edit
+      - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
-        run: cargo install cargo-edit
+        run: cargo install toml-cli
       
       - name: Set cargo version for RC
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         working-directory: "bindings/python"
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
-          cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
+          toml set Cargo.toml package.version ${{ needs.validate-release-tag.outputs.cargo-version }} > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
 
       - uses: PyO3/maturin-action@v1
         with:
@@ -127,16 +128,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-edit
+      - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
-        run: cargo install cargo-edit
+        run: cargo install toml-cli
       
       - name: Set cargo version for RC
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         working-directory: "bindings/python"
         run: |
           echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
-          cargo set-version ${{ needs.validate-release-tag.outputs.cargo-version }}
+          toml set Cargo.toml package.version ${{ needs.validate-release-tag.outputs.cargo-version }} > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
 
       - uses: actions/setup-python@v5
         with:
