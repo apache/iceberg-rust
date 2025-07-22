@@ -271,14 +271,23 @@ impl StaticTable {
     }
     /// Creates a static table directly from metadata file and `FileIO`
     pub async fn from_metadata_file(
-        metadata_file_path: &str,
+        metadata_location: &str,
         table_ident: TableIdent,
         file_io: FileIO,
     ) -> Result<Self> {
-        let metadata_file = file_io.new_input(metadata_file_path)?;
+        let metadata_file = file_io.new_input(metadata_location)?;
         let metadata_file_content = metadata_file.read().await?;
-        let table_metadata = serde_json::from_slice::<TableMetadata>(&metadata_file_content)?;
-        Self::from_metadata(table_metadata, table_ident, file_io).await
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_file_content)?;
+
+        let table = Table::builder()
+            .metadata(metadata)
+            .metadata_location(metadata_location)
+            .identifier(table_ident)
+            .file_io(file_io.clone())
+            .readonly(true)
+            .build();
+
+        Ok(Self(table?))
     }
 
     /// Create a TableScanBuilder for the static table.
@@ -356,6 +365,10 @@ mod tests {
         let table = static_table.into_table();
         assert!(table.readonly());
         assert_eq!(table.identifier.name(), "static_table");
+        assert_eq!(
+            table.metadata_location(),
+            Some(metadata_file_path).as_deref()
+        );
     }
 
     #[tokio::test]
