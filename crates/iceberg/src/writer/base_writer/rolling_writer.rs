@@ -171,23 +171,40 @@ mod tests {
     use crate::writer::tests::check_parquet_data_file;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
 
+    fn make_test_schema() -> Result<Schema> {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+    }
+
+    fn make_test_arrow_schema() -> ArrowSchema {
+        ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
+        ])
+    }
+
     #[tokio::test]
     async fn test_rolling_writer_basic() -> Result<()> {
-        let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
         let location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
         // Create schema
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
+        let schema = make_test_schema()?;
 
         // Create writer builders
         let parquet_writer_builder = ParquetWriterBuilder::new(
@@ -209,16 +226,7 @@ mod tests {
         let mut writer = rolling_writer_builder.build().await?;
 
         // Create test data
-        let arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                1.to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                2.to_string(),
-            )])),
-        ]);
+        let arrow_schema = make_test_arrow_schema();
 
         let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
@@ -246,21 +254,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_rolling_writer_with_rolling() -> Result<()> {
-        let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
         let location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
         // Create schema
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
+        let schema = make_test_schema()?;
 
         // Create writer builders
         let parquet_writer_builder = ParquetWriterBuilder::new(
@@ -282,16 +284,7 @@ mod tests {
         let mut writer = rolling_writer_builder.build().await?;
 
         // Create test data
-        let arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                1.to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                2.to_string(),
-            )])),
-        ]);
+        let arrow_schema = make_test_arrow_schema();
 
         // Create multiple batches to trigger rolling
         let batch1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
