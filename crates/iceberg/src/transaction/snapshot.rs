@@ -251,7 +251,12 @@ impl<'a> SnapshotProducer<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
-        assert!(!added_data_files.is_empty());
+        if added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added data files found when write an added manifest file",
+            ));
+        }
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
@@ -280,6 +285,10 @@ impl<'a> SnapshotProducer<'a> {
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
         // Assert current snapshot producer contains new content to add to new snapshot.
+        //
+        // TODO: Allowing snapshot property setup with no added data files is a workaround.
+        // We should clean it up after all necessary actions are supported.
+        // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
         if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
