@@ -102,13 +102,13 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
                 // close the current writer, roll to a new file
                 let handle = spawn(async move { inner.close().await });
                 self.close_handles.push(handle);
-                
+
                 // start a new writer
                 self.inner = Some(self.inner_builder.clone().build().await?);
             }
         }
 
-        // write the input and count bytes written
+        // write the input
         let Some(writer) = self.inner.as_mut() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,

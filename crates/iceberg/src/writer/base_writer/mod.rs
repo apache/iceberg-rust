@@ -19,5 +19,3 @@
 
 pub mod data_file_writer;
 pub mod equality_delete_writer;
-/// Module providing writers that can automatically roll over to new files based on size thresholds.
-pub mod rolling_writer;
