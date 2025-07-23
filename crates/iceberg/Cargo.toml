@@ -37,7 +37,7 @@ storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
-storage-s3 = ["opendal/services-s3"]
+storage-s3 = ["opendal/services-s3", "reqsign"]
 
 async-std = ["dep:async-std"]
 tokio = ["tokio/rt-multi-thread"]
@@ -76,6 +76,7 @@ ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
+reqsign = { version = "0.16.3", optional = true, default-features = false }
 roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }

@@ -37,6 +37,7 @@ use super::{
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
+use crate::io::FileIO;
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -462,6 +463,29 @@ impl TableMetadata {
     #[inline]
     pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
         self.encryption_keys.get(key_id)
+    }
+
+    /// Read table metadata from the given location.
+    pub async fn read_from(
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<TableMetadata> {
+        let input_file = file_io.new_input(metadata_location)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        Ok(metadata)
+    }
+
+    /// Write table metadata to the given location.
+    pub async fn write_to(
+        &self,
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<()> {
+        file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(self)?.into())
+            .await
     }
 
     /// Normalize this partition spec.
@@ -1355,10 +1379,12 @@ mod tests {
 
     use anyhow::Result;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::TableCreation;
+    use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PartitionStatisticsFile,
@@ -3049,5 +3075,50 @@ mod tests {
                 })
             )])
         );
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_io_read_write() {
+        // Create a temporary directory for our test
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        // Use an existing test metadata from the test files
+        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+
+        // Define the metadata location
+        let metadata_location = format!("{}/metadata.json", temp_path);
+
+        // Write the metadata
+        original_metadata
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the file exists
+        assert!(fs::metadata(&metadata_location).is_ok());
+
+        // Read the metadata back
+        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the metadata matches
+        assert_eq!(read_metadata, original_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_io_read_nonexistent_file() {
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        // Try to read a non-existent file
+        let result = TableMetadata::read_from(&file_io, "/nonexistent/path/metadata.json").await;
+
+        // Verify it returns an error
+        assert!(result.is_err());
     }
 }

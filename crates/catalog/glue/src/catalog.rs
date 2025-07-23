@@ -395,10 +395,7 @@ impl Catalog for GlueCatalog {
             .metadata;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(&metadata)?.into())
-            .await?;
+        metadata.write_to(&self.file_io, &metadata_location).await?;
 
         let glue_table = convert_to_glue_table(
             &table_name,
@@ -463,9 +460,7 @@ impl Catalog for GlueCatalog {
             Some(table) => {
                 let metadata_location = get_metadata_location(&table.parameters)?;
 
-                let input_file = self.file_io.new_input(&metadata_location)?;
-                let metadata_content = input_file.read().await?;
-                let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+                let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
                 Table::builder()
                     .file_io(self.file_io())
