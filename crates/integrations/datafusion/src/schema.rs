@@ -25,7 +25,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, NamespaceIdent, Result};
+use iceberg::{Catalog, NamespaceIdent, Result, TableIdent};
 
 use crate::table::IcebergTableProvider;
 
@@ -65,7 +65,10 @@ impl IcebergSchemaProvider {
         let providers = try_join_all(
             table_names
                 .iter()
-                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+                .map(|name| {
+                    let table_ident = TableIdent::new(namespace.clone(), name.clone());
+                    IcebergTableProvider::try_new(client.clone(), table_ident)
+                })
                 .collect::<Vec<_>>(),
         )
         .await?;
@@ -113,7 +116,7 @@ impl SchemaProvider for IcebergSchemaProvider {
             let metadata_table_type =
                 MetadataTableType::try_from(metadata_table_name).map_err(DataFusionError::Plan)?;
             if let Some(table) = self.tables.get(table_name) {
-                let metadata_table = table.metadata_table(metadata_table_type);
+                let metadata_table = table.metadata_table(metadata_table_type).await;
                 return Ok(Some(Arc::new(metadata_table)));
             } else {
                 return Ok(None);

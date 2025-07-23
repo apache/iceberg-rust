@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod metadata_table;
+pub mod static_catalog;
 pub mod table_provider_factory;
 
 use std::any::Any;
@@ -31,8 +32,9 @@ use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
+use tokio::sync::RwLock;
 
 use crate::physical_plan::scan::IcebergTableScan;
 
@@ -40,8 +42,12 @@ use crate::physical_plan::scan::IcebergTableScan;
 /// managing access to a [`Table`].
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
+    /// A reference to the catalog that this table belongs to.
+    catalog: Arc<dyn Catalog>,
     /// A table in the catalog.
-    table: Table,
+    table: Arc<RwLock<Table>>,
+    /// The identifier to the table in the catalog.
+    table_identifier: TableIdent,
     /// Table snapshot id that will be queried via this provider.
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
@@ -49,47 +55,31 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
-    pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
-        IcebergTableProvider {
-            table,
-            snapshot_id: None,
-            schema,
-        }
-    }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
-    pub(crate) async fn try_new(
-        client: Arc<dyn Catalog>,
-        namespace: NamespaceIdent,
-        name: impl Into<String>,
-    ) -> Result<Self> {
-        let ident = TableIdent::new(namespace, name.into());
-        let table = client.load_table(&ident).await?;
+    pub async fn try_new(client: Arc<dyn Catalog>, table_identifier: TableIdent) -> Result<Self> {
+        let table = client.load_table(&table_identifier).await?;
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier,
             snapshot_id: None,
-            schema,
-        })
-    }
-
-    /// Asynchronously tries to construct a new [`IcebergTableProvider`]
-    /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
-    pub async fn try_new_from_table(table: Table) -> Result<Self> {
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
-        Ok(IcebergTableProvider {
-            table,
-            snapshot_id: None,
+            catalog: client,
             schema,
         })
     }
 
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
-    pub async fn try_new_from_table_snapshot(table: Table, snapshot_id: i64) -> Result<Self> {
+    pub async fn try_new_from_table_snapshot(
+        client: Arc<dyn Catalog>,
+        table_identifier: TableIdent,
+        snapshot_id: i64,
+    ) -> Result<Self> {
+        let table = client.load_table(&table_identifier).await?;
         let snapshot = table
             .metadata()
             .snapshot_by_id(snapshot_id)
@@ -105,15 +95,30 @@ impl IcebergTableProvider {
         let schema = snapshot.schema(table.metadata())?;
         let schema = Arc::new(schema_to_arrow_schema(&schema)?);
         Ok(IcebergTableProvider {
-            table,
+            table: Arc::new(RwLock::new(table)),
+            table_identifier,
             snapshot_id: Some(snapshot_id),
+            catalog: client,
             schema,
         })
     }
 
-    pub(crate) fn metadata_table(&self, r#type: MetadataTableType) -> IcebergMetadataTableProvider {
+    /// Refreshes the table metadata to the latest snapshot.
+    pub async fn refresh_table_metadata(&self) -> Result<Table> {
+        let updated_table = self.catalog.load_table(&self.table_identifier).await?;
+
+        let mut table_guard = self.table.write().await;
+        *table_guard = updated_table.clone();
+
+        Ok(updated_table)
+    }
+
+    pub(crate) async fn metadata_table(
+        &self,
+        r#type: MetadataTableType,
+    ) -> IcebergMetadataTableProvider {
         IcebergMetadataTableProvider {
-            table: self.table.clone(),
+            table: self.table.read().await.clone(),
             r#type,
         }
     }
@@ -140,8 +145,13 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        // Get the latest table metadata from the catalog if it exists
+        let table = match self.refresh_table_metadata().await.ok() {
+            Some(table) => table,
+            None => self.table.read().await.clone(),
+        };
         Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
+            table,
             self.snapshot_id,
             self.schema.clone(),
             projection,
@@ -161,13 +171,104 @@ impl TableProvider for IcebergTableProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use datafusion::common::Column;
     use datafusion::prelude::SessionContext;
-    use iceberg::TableIdent;
     use iceberg::io::FileIO;
     use iceberg::table::{StaticTable, Table};
+    use iceberg::{Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct TestCatalog {
+        table: Table,
+    }
+
+    impl TestCatalog {
+        fn new(table: Table) -> Self {
+            Self { table }
+        }
+    }
+
+    #[async_trait]
+    impl Catalog for TestCatalog {
+        async fn load_table(&self, _table_identifier: &TableIdent) -> Result<Table> {
+            Ok(self.table.clone())
+        }
+
+        async fn list_namespaces(
+            &self,
+            _parent: Option<&NamespaceIdent>,
+        ) -> Result<Vec<NamespaceIdent>> {
+            unimplemented!()
+        }
+
+        async fn create_namespace(
+            &self,
+            _namespace: &NamespaceIdent,
+            _properties: HashMap<String, String>,
+        ) -> Result<Namespace> {
+            unimplemented!()
+        }
+
+        async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
+            unimplemented!()
+        }
+
+        async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
+            unimplemented!()
+        }
+
+        async fn update_namespace(
+            &self,
+            _namespace: &NamespaceIdent,
+            _properties: HashMap<String, String>,
+        ) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+            unimplemented!()
+        }
+
+        async fn create_table(
+            &self,
+            _namespace: &NamespaceIdent,
+            _creation: TableCreation,
+        ) -> Result<Table> {
+            unimplemented!()
+        }
+
+        async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn table_exists(&self, _table: &TableIdent) -> Result<bool> {
+            unimplemented!()
+        }
+
+        async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
+            unimplemented!()
+        }
+
+        async fn register_table(
+            &self,
+            _table: &TableIdent,
+            _metadata_location: String,
+        ) -> Result<Table> {
+            unimplemented!()
+        }
+    }
 
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
@@ -191,7 +292,8 @@ mod tests {
     #[tokio::test]
     async fn test_try_new_from_table() {
         let table = get_test_table_from_metadata_file().await;
-        let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
+        let catalog = Arc::new(TestCatalog::new(table.clone()));
+        let table_provider = IcebergTableProvider::try_new(catalog, table.identifier().clone())
             .await
             .unwrap();
         let ctx = SessionContext::new();
@@ -216,10 +318,14 @@ mod tests {
     async fn test_try_new_from_table_snapshot() {
         let table = get_test_table_from_metadata_file().await;
         let snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
-        let table_provider =
-            IcebergTableProvider::try_new_from_table_snapshot(table.clone(), snapshot_id)
-                .await
-                .unwrap();
+        let catalog = Arc::new(TestCatalog::new(table.clone()));
+        let table_provider = IcebergTableProvider::try_new_from_table_snapshot(
+            catalog,
+            table.identifier().clone(),
+            snapshot_id,
+        )
+        .await
+        .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
@@ -241,7 +347,8 @@ mod tests {
     #[tokio::test]
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let table = get_test_table_from_metadata_file().await;
-        let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
+        let catalog = Arc::new(TestCatalog::new(table.clone()));
+        let table_provider = IcebergTableProvider::try_new(catalog, table.identifier().clone())
             .await
             .unwrap();
         let ctx = SessionContext::new();

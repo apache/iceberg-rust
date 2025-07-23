@@ -29,8 +29,8 @@ use expect_test::expect;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
-use iceberg_datafusion::IcebergCatalogProvider;
+use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent};
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergTableProvider};
 use tempfile::TempDir;
 
 fn temp_path() -> String {
@@ -308,6 +308,41 @@ async fn test_table_predict_pushdown() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_table_scan_snapshot() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("test".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let current_dir = std::env::current_dir().unwrap();
+    let metadata_path = current_dir.join("tests/test_data/scan_snapshot_update/test.db/test_table/metadata/00000-754ae971-c49f-4e40-9236-a50fd0884b5d.metadata.json");
+
+    let table_ident = TableIdent::new(namespace, "test_table".to_string());
+    iceberg_catalog
+        .register_existing_table(&table_ident, metadata_path.display().to_string())
+        .await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let table = Arc::new(
+        IcebergTableProvider::try_new(Arc::clone(&client) as Arc<dyn Catalog>, table_ident.clone())
+            .await?,
+    );
+
+    let ctx = SessionContext::new();
+    ctx.register_table("df_test", table)
+        .expect("failed to register table");
+    let records = ctx
+        .sql("select * from df_test")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(0, records.len());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_metadata_table() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog();
     let namespace = NamespaceIdent::new("ns".to_string());
@@ -335,6 +370,7 @@ async fn test_metadata_table() -> Result<()> {
         .collect()
         .await
         .unwrap();
+
     check_record_batches(
         snapshots,
         expect![[r#"

@@ -24,12 +24,12 @@ use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::sql::TableReference;
-use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 
 use super::IcebergTableProvider;
+use crate::table::static_catalog::StaticCatalog;
 use crate::to_datafusion_error;
 
 /// A factory that implements DataFusion's `TableProviderFactory` to create `IcebergTableProvider` instances.
@@ -126,10 +126,14 @@ impl TableProviderFactory for IcebergTableProviderFactory {
             .map_err(to_datafusion_error)?
             .into_table();
 
-        let schema = schema_to_arrow_schema(table.metadata().current_schema())
-            .map_err(to_datafusion_error)?;
+        let table_ident = table.identifier().clone();
+        let static_catalog = Arc::new(StaticCatalog::new(table));
 
-        Ok(Arc::new(IcebergTableProvider::new(table, Arc::new(schema))))
+        Ok(Arc::new(
+            IcebergTableProvider::try_new(static_catalog, table_ident)
+                .await
+                .map_err(to_datafusion_error)?,
+        ))
     }
 }
 
