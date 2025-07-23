@@ -334,10 +334,7 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(&metadata)?.into())
-            .await?;
+        metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
         self.s3tables_client
@@ -389,9 +386,7 @@ impl Catalog for S3TablesCatalog {
                 ),
             )
         })?;
-        let input_file = self.file_io.new_input(metadata_location)?;
-        let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
         let table = Table::builder()
             .identifier(table_ident.clone())

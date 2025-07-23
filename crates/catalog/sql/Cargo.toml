@@ -31,7 +31,6 @@ repository = { workspace = true }
 [dependencies]
 async-trait = { workspace = true }
 iceberg = { workspace = true }
-serde_json = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

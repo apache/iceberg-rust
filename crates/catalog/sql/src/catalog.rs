@@ -642,9 +642,7 @@ impl Catalog for SqlCatalog {
             .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
             .map_err(from_sqlx_error)?;
 
-        let file = self.fileio.new_input(&tbl_metadata_location)?;
-        let metadata_content = file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        let metadata = TableMetadata::read_from(&self.fileio, &tbl_metadata_location).await?;
 
         Ok(Table::builder()
             .file_io(self.fileio.clone())
@@ -708,8 +706,8 @@ impl Catalog for SqlCatalog {
             Uuid::new_v4()
         );
 
-        let file = self.fileio.new_output(&tbl_metadata_location)?;
-        file.write(serde_json::to_vec(&tbl_metadata)?.into())
+        tbl_metadata
+            .write_to(&self.fileio, &tbl_metadata_location)
             .await?;
 
         self.execute(&format!(
