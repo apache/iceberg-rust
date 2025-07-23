@@ -231,8 +231,8 @@ pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     async fn close(&mut self) -> Result<O>;
 }
 
-/// The current file status of iceberg writer. It implement for the writer which write a single
-/// file.
+/// The current file status of the Iceberg writer. 
+/// This is implemented for writers that write a single file at a time.
 pub trait CurrentFileStatus {
     /// Get the current file path.
     fn current_file_path(&self) -> String;
