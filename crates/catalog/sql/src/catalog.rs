@@ -22,7 +22,10 @@ use async_trait::async_trait;
 use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
+};
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
