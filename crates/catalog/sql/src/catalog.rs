@@ -22,14 +22,10 @@ use async_trait::async_trait;
 use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
-use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
-};
+use iceberg::{Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
-use uuid::Uuid;
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
@@ -700,11 +696,7 @@ impl Catalog for SqlCatalog {
         let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
             .build()?
             .metadata;
-        let tbl_metadata_location = format!(
-            "{}/metadata/0-{}.metadata.json",
-            location.clone(),
-            Uuid::new_v4()
-        );
+        let tbl_metadata_location = MetadataLocationParser::new_with_prefix(location).to_string();
 
         tbl_metadata
             .write_to(&self.fileio, &tbl_metadata_location)

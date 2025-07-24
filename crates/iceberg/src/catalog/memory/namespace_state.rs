@@ -268,7 +268,7 @@ impl NamespaceState {
     pub(crate) fn insert_new_table(
         &mut self,
         table_ident: &TableIdent,
-        location: String,
+        metadata_location: String,
     ) -> Result<()> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
@@ -278,7 +278,7 @@ impl NamespaceState {
         {
             hash_map::Entry::Occupied(_) => table_already_exists_err(table_ident),
             hash_map::Entry::Vacant(entry) => {
-                let _ = entry.insert(location);
+                let _ = entry.insert(metadata_location);
 
                 Ok(())
             }
@@ -298,7 +298,7 @@ impl NamespaceState {
         }
     }
 
-    /// Updates the metadata location of the given table or returns an error if doesn't exist
+    // Updates the metadata location of the given table or returns an error if it doesn't exist
     pub(crate) fn commit_table_update(&mut self, staged_table: Table) -> Result<Table> {
         let namespace = self.get_mut_namespace(staged_table.identifier().namespace())?;
 
