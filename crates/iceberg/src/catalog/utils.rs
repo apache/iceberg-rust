@@ -168,7 +168,7 @@ mod test {
             ),
             // Version 0
             (
-                "/abc/metadata/0-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
+                "/abc/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocationParser {
                     prefix: "/abc".to_string(),
                     version: 0,

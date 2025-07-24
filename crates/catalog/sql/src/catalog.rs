@@ -60,7 +60,7 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 /// such as the database URI, warehouse location, and file I/O settings.
 /// You are required to provide a `SqlBindStyle`, which determines how SQL statements will be bound to values in the catalog.
 /// The options available for this parameter include:
-/// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
+/// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgresSQL databases.
 /// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
 #[derive(Debug, TypedBuilder)]
 pub struct SqlCatalogConfig {
@@ -283,7 +283,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::Unexpected,
+                ErrorKind::Unexpected,
                 format!("Namespace {:?} already exists", namespace),
             ));
         }
@@ -486,7 +486,7 @@ impl Catalog for SqlCatalog {
             let tables = self.list_tables(namespace).await?;
             if !tables.is_empty() {
                 return Err(Error::new(
-                    iceberg::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!(
                         "Namespace {:?} is not empty. {} tables exist.",
                         namespace,
@@ -805,7 +805,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 
@@ -1505,7 +1505,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/00000-{}.metadata.json$",
             namespace_location, UUID_REGEX_STR,
         );
 
@@ -1562,7 +1562,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/00000-{}.metadata.json$",
             nested_namespace_location, UUID_REGEX_STR,
         );
 
@@ -1602,7 +1602,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/tbl1/metadata/00000-{}.metadata.json$",
             warehouse_loc, UUID_REGEX_STR
         );
 
@@ -1641,7 +1641,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/b/tbl1/metadata/00000-{}.metadata.json$",
             warehouse_loc, UUID_REGEX_STR
         );
 
