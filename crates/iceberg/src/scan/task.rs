@@ -58,7 +58,7 @@ pub struct FileScanTask {
     pub predicate: Option<BoundPredicate>,
 
     /// The list of delete files that may need to be applied to this data file
-    pub deletes: Vec<FileScanTask>,
+    pub deletes: Vec<Arc<FileScanTask>>,
     /// sequence number
     pub sequence_number: i64,
     /// equality ids
