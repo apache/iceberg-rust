@@ -29,7 +29,7 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Clone)]
 pub struct RollingFileWriterBuilder<B: FileWriterBuilder> {
     inner_builder: B,
-    target_size: usize,
+    target_file_size: usize,
 }
 
 impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
