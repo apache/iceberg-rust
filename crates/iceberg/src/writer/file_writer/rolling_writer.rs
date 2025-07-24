@@ -112,15 +112,13 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
 
         // write the input
         if let Some(writer) = self.inner.as_mut() {
-            writer.write(input).await?;
+            Ok(writer.write(input).await?)
         } else {
-            return Err(Error::new(
+            Err(Error::new(
                 ErrorKind::Unexpected,
                 "Writer is not initialized!",
-            ));
-        };
-
-        Ok(())
+            ))
+        }
     }
 
     async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
