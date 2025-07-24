@@ -42,11 +42,8 @@ use crate::shared_tests::{random_ns, test_schema};
 // Helper function to create a data file writer builder
 fn create_data_file_writer_builder(
     table: &Table,
-) -> DataFileWriterBuilder<
-    ParquetWriterBuilder,
-    DefaultLocationGenerator,
-    DefaultFileNameGenerator,
-> {
+) -> DataFileWriterBuilder<ParquetWriterBuilder, DefaultLocationGenerator, DefaultFileNameGenerator>
+{
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
         "test".to_string(),
@@ -67,7 +64,7 @@ fn create_data_file_writer_builder(
 }
 
 #[tokio::test]
-async fn test_rewrite_data_files() {
+async fn test_overwrite_data_files() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -132,7 +129,6 @@ async fn test_rewrite_data_files() {
 
     // commit result
     let tx = Transaction::new(&table);
-    // First append
     let append_action = tx.fast_append().add_data_files(data_file.clone());
     let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
@@ -151,7 +147,6 @@ async fn test_rewrite_data_files() {
     assert_eq!(batches[0], batch);
 
     // commit result again
-    // Second append of the SAME data file: disable duplicate check to preserve original test logic
     let tx = Transaction::new(&table);
     let append_action = tx
         .fast_append()
@@ -177,25 +172,24 @@ async fn test_rewrite_data_files() {
     let data_file_writer_builder = create_data_file_writer_builder(&table);
     let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
-    let data_file_rewrite = data_file_writer.close().await.unwrap();
+    let data_file_overwrite = data_file_writer.close().await.unwrap();
 
     // commit result again
     let tx = Transaction::new(&table);
-    // Clone tx so we can consume one for building the action (rewrite_files takes self)
-    let rewrite_action = tx
-        .clone()
-        .rewrite_files()
-        .add_data_files(data_file_rewrite.clone())
+    let overwrite_action = tx
+        .overwrite_files()
+        .add_data_files(data_file_overwrite.clone())
         .delete_files(data_file.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     {
         let snapshot = table.metadata().current_snapshot().unwrap();
         assert_eq!(
-            Operation::Replace,
+            Operation::Overwrite,
             snapshot.summary().operation,
-            "Expected operation to be Replace after rewriting files"
+            "Expected operation to be Overwrite after rewriting files"
         );
     }
 
@@ -214,7 +208,44 @@ async fn test_rewrite_data_files() {
 }
 
 #[tokio::test]
-async fn test_multiple_file_rewrite() {
+async fn test_empty_overwrite() {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
+    let ns = random_ns().await;
+    let schema = test_schema();
+
+    let table_creation = TableCreation::builder()
+        .name("t2".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let table = rest_catalog
+        .create_table(ns.name(), table_creation)
+        .await
+        .unwrap();
+
+    let tx = Transaction::new(&table);
+    let overwrite_action = tx.overwrite_files();
+    let tx = overwrite_action.apply(tx).unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    let batch_stream = table
+        .scan()
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+    assert!(batches.is_empty());
+}
+
+#[tokio::test]
+async fn test_multiple_file_overwrite() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -241,7 +272,23 @@ async fn test_multiple_file_rewrite() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
     let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -260,12 +307,11 @@ async fn test_multiple_file_rewrite() {
     let data_file2 = data_file_writer.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .clone()
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .add_data_files(data_file1.clone())
         .add_data_files(data_file2.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     let batch_stream = table
@@ -283,7 +329,7 @@ async fn test_multiple_file_rewrite() {
 }
 
 #[tokio::test]
-async fn test_rewrite_nonexistent_file() {
+async fn test_overwrite_nonexistent_file() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -310,7 +356,23 @@ async fn test_rewrite_nonexistent_file() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
     // Create a valid data file
     let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
@@ -329,11 +391,13 @@ async fn test_rewrite_nonexistent_file() {
     // Create a nonexistent data file (simulated by not writing it)
     let nonexistent_data_file = valid_data_file.clone();
 
-    // Build rewrite action deleting a nonexistent file; we only ensure builder compiles and does not panic
-    let _unused_action = Transaction::new(&table)
-        .rewrite_files()
-        .delete_files(nonexistent_data_file);
-    // No commit since removing a nonexistent file would not create a valid snapshot under new semantics
+    let tx = Transaction::new(&table);
+    let overwrite_action = tx.overwrite_files();
+
+    // Attempt to delete the nonexistent file
+    let _overwrite_action = overwrite_action.delete_files(nonexistent_data_file);
+
+    // No assertion needed - just verify builder compiles
 }
 
 #[tokio::test]
@@ -364,7 +428,23 @@ async fn test_sequence_number_in_manifest_entry() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
     let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -385,14 +465,13 @@ async fn test_sequence_number_in_manifest_entry() {
     // Commit with sequence number
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .clone()
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
+        .set_new_data_file_sequence_number(12345)
         .add_data_files(data_file1.clone())
         .add_data_files(data_file2.clone());
-    // Set sequence number to 12345
-    let rewrite_action = rewrite_action.set_new_data_file_sequence_number(12345);
-    let tx = rewrite_action.apply(tx).unwrap();
+
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify manifest entry has correct sequence number
@@ -441,6 +520,12 @@ async fn test_partition_spec_id_in_manifest() {
             .try_into()
             .unwrap(),
     );
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
 
     // commit result
     let mut data_files_vec = Vec::default();
@@ -448,8 +533,20 @@ async fn test_partition_spec_id_in_manifest() {
     async fn build_data_file_f(
         schema: Arc<arrow_schema::Schema>,
         table: &Table,
+        location_generator: DefaultLocationGenerator,
+        file_name_generator: DefaultFileNameGenerator,
     ) -> DataFile {
-        let data_file_writer_builder = create_data_file_writer_builder(table);
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            table.metadata().current_schema().clone(),
+        );
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
+            table.file_io().clone(),
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
         let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
         let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
         let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -468,6 +565,8 @@ async fn test_partition_spec_id_in_manifest() {
         let data_file = build_data_file_f(
             schema.clone(),
             &table,
+            location_generator.clone(),
+            file_name_generator.clone(),
         )
         .await;
         data_files_vec.push(data_file.clone());
@@ -480,11 +579,11 @@ async fn test_partition_spec_id_in_manifest() {
     let last_data_files = data_files_vec.last().unwrap();
     let partition_spec_id = last_data_files.partition_spec_id();
 
-    // remove the data files by RewriteAction
+    // remove the data files by overwriteAction
     for data_file in &data_files_vec {
         let tx = Transaction::new(&table);
-        let rewrite_action = tx.rewrite_files().delete_files(vec![data_file.clone()]);
-        let tx = rewrite_action.apply(tx).unwrap();
+        let overwrite_action = tx.overwrite_files().delete_files(vec![data_file.clone()]);
+        let tx = overwrite_action.apply(tx).unwrap();
         table = tx.commit(&rest_catalog).await.unwrap();
     }
 
@@ -503,7 +602,7 @@ async fn test_partition_spec_id_in_manifest() {
 }
 
 #[tokio::test]
-async fn test_rewrite_files_to_branch() {
+async fn test_overwrite_files_to_branch() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -531,7 +630,23 @@ async fn test_rewrite_files_to_branch() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
     let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -557,19 +672,19 @@ async fn test_rewrite_files_to_branch() {
 
     let branch_name = "test_branch";
 
-    // Prepare rewrite files
+    // Prepare overwrite files
     let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
-    let rewrite_files = data_file_writer.close().await.unwrap();
+    let overwrite_files = data_file_writer.close().await.unwrap();
 
-    // Rewrite files to the new branch
+    // overwrite files to the new branch
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch_name.to_string())
-        .add_data_files(rewrite_files.clone())
+        .add_data_files(overwrite_files.clone())
         .delete_files(original_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch snapshot
@@ -650,8 +765,24 @@ async fn test_branch_snapshot_isolation() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
-    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
@@ -673,11 +804,11 @@ async fn test_branch_snapshot_isolation() {
     // Create branch1 from main
     let branch1 = "branch1";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch1.to_string())
         .add_data_files(data_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch1 snapshot
@@ -690,11 +821,11 @@ async fn test_branch_snapshot_isolation() {
 
     // Create branch2 from branch1
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch1.to_string())
         .add_data_files(data_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch1 snapshot
@@ -707,7 +838,7 @@ async fn test_branch_snapshot_isolation() {
 }
 
 #[tokio::test]
-async fn test_rewrite_files_with_sequence_number_from_branch() {
+async fn test_overwrite_files_with_sequence_number_from_branch() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -735,7 +866,23 @@ async fn test_rewrite_files_with_sequence_number_from_branch() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
     let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -757,18 +904,17 @@ async fn test_rewrite_files_with_sequence_number_from_branch() {
 
     let branch_name = "seq_branch";
     let tx = Transaction::new(&table);
-    let sequence_from_branch = table
+    let sequence_from_main = table
         .metadata()
         .snapshot_for_ref("main")
         .unwrap()
         .sequence_number();
-
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch_name.to_string())
-        .set_new_data_file_sequence_number(sequence_from_branch)
+        .set_new_data_file_sequence_number(sequence_from_main)
         .add_data_files(original_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check manifest entry for sequence number
@@ -815,7 +961,23 @@ async fn test_multiple_branches_isolation() {
             .try_into()
             .unwrap(),
     );
-    let data_file_writer_builder = create_data_file_writer_builder(&table);
+    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
     let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -832,11 +994,11 @@ async fn test_multiple_branches_isolation() {
     // Create branch1 with original files
     let branch1 = "branch1";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch1.to_string())
         .add_data_files(original_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Create branch2 with modified data
@@ -856,11 +1018,11 @@ async fn test_multiple_branches_isolation() {
 
     let branch2 = "branch2";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files()
+    let overwrite_action = tx
+        .overwrite_files()
         .set_target_branch(branch2.to_string())
         .add_data_files(modified_files.clone());
-    let tx = rewrite_action.apply(tx).unwrap();
+    let tx = overwrite_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branches are isolated
