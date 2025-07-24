@@ -39,6 +39,9 @@ impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
     ///
     /// * `inner_builder` - The builder for the underlying file writer
     /// * `target_file_size` - The target size in bytes before rolling over to a new file
+    ///
+    /// NOTE: The `target_file_size` does not exactly reflect the final size on physical storage.
+    /// This is because the input size is based on the Arrow in-memory format, which differs from the on-disk file format.
     pub fn new(inner_builder: B, target_file_size: usize) -> Self {
         Self {
             inner_builder,
@@ -90,6 +93,8 @@ impl<B: FileWriterBuilder> RollingFileWriter<B> {
 
 impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
     async fn write(&mut self, input: &RecordBatch) -> Result<()> {
+        // The input size is estimated using the Arrow in-memory format
+        // and will differ from the final on-disk file size.
         let input_size = input.get_array_memory_size();
 
         if self.inner.is_none() {
