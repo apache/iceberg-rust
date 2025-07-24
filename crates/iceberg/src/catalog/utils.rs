@@ -24,7 +24,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// Helper for parsing a location of the format: `<prefix>/metadata/<version>-<uuid>.metadata.json`
 #[derive(Clone, Debug, PartialEq)]
-pub struct MetadataLocationParser {
+pub struct MetadataLocation {
     prefix: String,
     version: i32,
     id: Uuid,
