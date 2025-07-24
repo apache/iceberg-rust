@@ -548,26 +548,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_lz4_compressed_footer_returns_error() {
+    async fn test_lz4_compressed_footer_can_be_read() {
         let temp_dir = TempDir::new().unwrap();
 
+        // Create a valid LZ4 compressed footer
+        let footer_payload = empty_footer_payload_bytes();
+        let compressed_footer = lz4_flex::compress_prepend_size(&footer_payload);
+        
         let mut bytes = vec![];
         bytes.extend(FileMetadata::MAGIC.to_vec());
         bytes.extend(FileMetadata::MAGIC.to_vec());
-        bytes.extend(empty_footer_payload_bytes());
-        bytes.extend(empty_footer_payload_bytes_length_bytes());
-        bytes.extend(vec![0b00000001, 0, 0, 0]);
+        bytes.extend(compressed_footer);
+        bytes.extend((compressed_footer.len() as u32).to_le_bytes());
+        bytes.extend(vec![0b00000001, 0, 0, 0]); // LZ4 compression flag
         bytes.extend(FileMetadata::MAGIC.to_vec());
 
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
-        assert_eq!(
-            FileMetadata::read(&input_file)
-                .await
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 decompression is not supported currently",
-        )
+        // LZ4 decompression should now work successfully
+        let file_metadata = FileMetadata::read(&input_file).await.unwrap();
+        assert_eq!(file_metadata.blobs.len(), 0); // Empty footer should have no blobs
     }
 
     #[tokio::test]

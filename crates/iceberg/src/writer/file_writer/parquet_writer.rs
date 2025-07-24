@@ -22,8 +22,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use base64;
 use bytes::Bytes;
 use futures::future::BoxFuture;
+use futures::TryStreamExt;
 use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -333,8 +335,9 @@ impl ParquetWriter {
         file_paths: Vec<String>,
         table_metadata: &TableMetadata,
     ) -> Result<Vec<DataFile>> {
-        // TODO: support adding to partitioned table
         let mut data_files: Vec<DataFile> = Vec::new();
+        let partition_spec = table_metadata.default_partition_spec();
+        let schema = table_metadata.current_schema();
 
         for file_path in file_paths {
             let input_file = file_io.new_input(&file_path)?;
@@ -349,20 +352,295 @@ impl ParquetWriter {
                     format!("Error reading Parquet metadata: {}", err),
                 )
             })?;
+            
+            // Extract partition values from file path if the table is partitioned
+            let partition_value = if partition_spec.is_unpartitioned() {
+                crate::spec::Struct::empty()
+            } else {
+                Self::extract_partition_values_from_path(&file_path, partition_spec, schema)?
+            };
+
+            // Extract NaN value counts from the parquet file
+            let nan_value_counts = Self::extract_nan_value_counts(
+                file_io,
+                &file_path,
+                schema.clone(),
+            ).await?;
+
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
-                table_metadata.current_schema().clone(),
+                schema.clone(),
                 parquet_metadata,
                 file_size_in_bytes,
                 file_path,
-                // TODO: Implement nan_value_counts here
-                HashMap::new(),
+                nan_value_counts,
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
+            builder.partition(partition_value);
             let data_file = builder.build().unwrap();
             data_files.push(data_file);
         }
 
         Ok(data_files)
+    }
+
+    /// Extract NaN value counts from parquet file
+    async fn extract_nan_value_counts(
+        file_io: &FileIO,
+        file_path: &str,
+        schema: SchemaRef,
+    ) -> Result<HashMap<i32, u64>> {
+        let input_file = file_io.new_input(file_path)?;
+        let file_metadata = input_file.metadata().await?;
+        let reader = input_file.reader().await?;
+
+        let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+        let arrow_schema = parquet_reader.get_schema().await.map_err(|err| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to get Arrow schema from parquet file",
+            )
+            .with_source(err)
+        })?;
+
+        let mut nan_visitor = crate::arrow::NanValueCountVisitor::new();
+
+        // Read all row groups and compute NaN counts
+        let num_row_groups = parquet_reader.get_metadata(None).await?.num_row_groups();
+        for row_group_idx in 0..num_row_groups {
+            let record_batch_stream = parquet_reader
+                .get_row_group(row_group_idx)
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Failed to read row group {}", row_group_idx),
+                    )
+                    .with_source(err)
+                })?;
+
+            let record_batch = record_batch_stream.try_collect::<Vec<_>>().await.map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to collect record batches from parquet file",
+                )
+                .with_source(err)
+            })?;
+
+            for batch in record_batch {
+                crate::spec::visit_schema_with_partner(&schema, &batch, &mut nan_visitor)?;
+            }
+        }
+
+        Ok(nan_visitor.nan_value_counts)
+    }
+
+    /// Extract partition values from file path using Hive-style partitioning
+    /// 
+    /// Supports paths like: `/table_location/year=2023/month=01/day=15/file.parquet`
+    /// where `year`, `month`, and `day` are partition columns
+    fn extract_partition_values_from_path(
+        file_path: &str,
+        partition_spec: &crate::spec::PartitionSpec,
+        schema: &crate::spec::Schema,
+    ) -> Result<crate::spec::Struct> {
+        use std::collections::HashMap;
+        use crate::spec::{Literal, PrimitiveType};
+        
+        let mut partition_values: HashMap<String, Option<Literal>> = HashMap::new();
+        
+        // Parse Hive-style partition path segments like "year=2023"
+        let path_segments: Vec<&str> = file_path.split('/').collect();
+        let mut found_partition_values: HashMap<String, String> = HashMap::new();
+        
+        for segment in path_segments {
+            if let Some((key, value)) = segment.split_once('=') {
+                found_partition_values.insert(key.to_string(), value.to_string());
+            }
+        }
+        
+        // Process each partition field
+        for partition_field in partition_spec.fields() {
+            let source_field_id = partition_field.source_id;
+            let source_field = schema.field_by_id(source_field_id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Partition source field with id {} not found in schema", source_field_id),
+                )
+            })?;
+            
+            let field_name = source_field.name.clone();
+            
+            if let Some(value_str) = found_partition_values.get(&field_name) {
+                // Parse the value based on the field type
+                let literal = Self::parse_partition_value(value_str, source_field.field_type.as_primitive_type())?;
+                partition_values.insert(field_name, Some(literal));
+            } else {
+                // If partition value is not found in path, default to null
+                partition_values.insert(field_name, None);
+            }
+        }
+        
+        // Convert to ordered values according to partition spec
+        let mut ordered_values = Vec::new();
+        for partition_field in partition_spec.fields() {
+            let source_field_id = partition_field.source_id;
+            let source_field = schema.field_by_id(source_field_id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Partition source field with id {} not found in schema", source_field_id),
+                )
+            })?;
+            
+            let field_name = &source_field.name;
+            ordered_values.push(partition_values.get(field_name).cloned().unwrap_or(None));
+        }
+        
+        Ok(crate::spec::Struct::from_iter(ordered_values))
+    }
+
+    /// Parse a partition value string based on the field type
+    fn parse_partition_value(value_str: &str, primitive_type: Option<&PrimitiveType>) -> Result<Literal> {
+        use crate::spec::{Literal, PrimitiveType};
+        
+        let Some(primitive_type) = primitive_type else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Partition field must be of primitive type",
+            ));
+        };
+        
+        match primitive_type {
+            PrimitiveType::Boolean => {
+                let val = value_str.parse::<bool>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid boolean value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::bool(val))
+            },
+            PrimitiveType::Int => {
+                let val = value_str.parse::<i32>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid int value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::int(val))
+            },
+            PrimitiveType::Long => {
+                let val = value_str.parse::<i64>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid long value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::long(val))
+            },
+            PrimitiveType::Float => {
+                let val = value_str.parse::<f32>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid float value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::float(val))
+            },
+            PrimitiveType::Double => {
+                let val = value_str.parse::<f64>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid double value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::double(val))
+            },
+            PrimitiveType::String => {
+                Ok(Literal::string(value_str))
+            },
+            PrimitiveType::Date => {
+                // Parse date in YYYY-MM-DD format
+                let parsed_date = chrono::NaiveDate::parse_from_str(value_str, "%Y-%m-%d")
+                    .map_err(|_| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Invalid date value: {} (expected YYYY-MM-DD)", value_str),
+                        )
+                    })?;
+                let days_since_epoch = parsed_date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+                Ok(Literal::date(days_since_epoch as i32))
+            },
+            PrimitiveType::Timestamp => {
+                // Parse timestamp - support common formats
+                let timestamp_micros = if let Ok(timestamp_secs) = value_str.parse::<i64>() {
+                    // Unix timestamp in seconds
+                    timestamp_secs * 1_000_000
+                } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value_str) {
+                    // RFC3339 format
+                    dt.timestamp_micros()
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid timestamp value: {}", value_str),
+                    ));
+                };
+                Ok(Literal::timestamp_micros(timestamp_micros))
+            },
+            PrimitiveType::Timestamptz => {
+                // Parse timestamptz - support common formats
+                let timestamp_micros = if let Ok(timestamp_secs) = value_str.parse::<i64>() {
+                    // Unix timestamp in seconds
+                    timestamp_secs * 1_000_000
+                } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value_str) {
+                    // RFC3339 format
+                    dt.timestamp_micros()
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid timestamptz value: {}", value_str),
+                    ));
+                };
+                Ok(Literal::timestamptz_micros(timestamp_micros))
+            },
+            PrimitiveType::Decimal { precision, scale } => {
+                let decimal = value_str.parse::<rust_decimal::Decimal>().map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid decimal value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::decimal(decimal.mantissa(), *precision as u32, *scale as u32)?)
+            },
+            PrimitiveType::Uuid => {
+                let uuid = uuid::Uuid::parse_str(value_str).map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid UUID value: {}", value_str),
+                    )
+                })?;
+                Ok(Literal::uuid(uuid))
+            },
+            PrimitiveType::Fixed(_) | PrimitiveType::Binary => {
+                // For binary types, try base64 decoding, fall back to UTF-8 bytes
+                match base64::decode(value_str) {
+                    Ok(bytes) => Ok(Literal::binary(bytes)),
+                    Err(_) => Ok(Literal::binary(value_str.as_bytes().to_vec())),
+                }
+            },
+            PrimitiveType::Time => {
+                // Parse time as microseconds since midnight
+                let time = chrono::NaiveTime::parse_from_str(value_str, "%H:%M:%S")
+                    .or_else(|_| chrono::NaiveTime::parse_from_str(value_str, "%H:%M:%S%.f"))
+                    .map_err(|_| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Invalid time value: {} (expected HH:MM:SS or HH:MM:SS.fff)", value_str),
+                        )
+                    })?;
+                let micros_since_midnight = time.num_seconds_from_midnight() as i64 * 1_000_000 
+                    + time.nanosecond() as i64 / 1_000;
+                Ok(Literal::time_micros(micros_since_midnight))
+            },
+        }
     }
 
     fn thrift_to_parquet_metadata(&self, file_metadata: FileMetaData) -> Result<ParquetMetaData> {
@@ -377,12 +655,20 @@ impl ParquetWriter {
                 })?;
 
             protocol.flush().map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to flush protocol").with_source(err)
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to flush protocol",
+                )
+                .with_source(err)
             })?;
         }
 
         let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to decode parquet metadata",
+            )
+            .with_source(err)
         })?;
 
         Ok(parquet_metadata)
@@ -541,8 +827,11 @@ impl FileWriter for ParquetWriter {
                 Some(self.writer_properties.clone()),
             )
             .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
-                    .with_source(err)
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to build parquet writer.",
+                )
+                .with_source(err)
             })?;
             self.inner_writer = Some(writer);
             self.inner_writer.as_mut().unwrap()
@@ -566,7 +855,11 @@ impl FileWriter for ParquetWriter {
         };
 
         let metadata = writer.close().await.map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to close parquet writer.",
+            )
+            .with_source(err)
         })?;
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
@@ -581,14 +874,13 @@ impl FileWriter for ParquetWriter {
             })?;
             Ok(vec![])
         } else {
-            let parquet_metadata =
-                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to convert metadata from thrift to parquet.",
-                    )
-                    .with_source(err)
-                })?);
+            let parquet_metadata = Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to convert metadata from thrift to parquet.",
+                )
+                .with_source(err)
+            })?);
 
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,

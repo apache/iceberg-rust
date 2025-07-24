@@ -52,6 +52,9 @@ pub struct FileScanTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate: Option<BoundPredicate>,
 
+    /// Whether column name matching should be case-sensitive
+    pub case_sensitive: bool,
+
     /// The list of delete files that may need to be applied to this data file
     pub deletes: Vec<FileScanTaskDeleteFile>,
 }

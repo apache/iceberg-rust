@@ -270,13 +270,19 @@ mod tests {
         let blobs = vec![blob_0(), blob_1()];
         let blobs_with_compression = blobs_with_compression(blobs.clone(), CompressionCodec::Lz4);
 
-        assert_eq!(
-            write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
-                .await
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently"
-        );
+        // LZ4 compression should now work successfully
+        let file_path = write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
+            .await
+            .unwrap();
+        
+        // Verify the file was created and has content
+        let file_io = FileIO::from_path(temp_dir.path().as_os_str().to_str().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        let input_file = file_io.new_input(&file_path).unwrap();
+        let file_bytes = get_file_as_byte_vec(input_file).await;
+        assert!(!file_bytes.is_empty(), "LZ4 compressed file should not be empty");
     }
 
     async fn get_file_as_byte_vec(input_file: InputFile) -> Vec<u8> {
