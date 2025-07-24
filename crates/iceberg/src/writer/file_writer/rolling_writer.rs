@@ -16,9 +16,7 @@
 // under the License.
 
 use arrow_array::RecordBatch;
-use futures::future::try_join_all;
 
-use crate::runtime::{JoinHandle, spawn};
 use crate::spec::DataFileBuilder;
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
@@ -58,7 +56,7 @@ impl<B: FileWriterBuilder> FileWriterBuilder for RollingFileWriterBuilder<B> {
             inner: None,
             inner_builder: self.inner_builder,
             target_file_size: self.target_file_size,
-            close_handles: vec![],
+            data_file_builders: vec![],
         })
     }
 }
@@ -73,7 +71,7 @@ pub struct RollingFileWriter<B: FileWriterBuilder> {
     inner: Option<B::R>,
     inner_builder: B,
     target_file_size: usize,
-    close_handles: Vec<JoinHandle<Result<Vec<DataFileBuilder>>>>,
+    data_file_builders: Vec<DataFileBuilder>,
 }
 
 impl<B: FileWriterBuilder> RollingFileWriter<B> {
@@ -105,8 +103,7 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
         if self.should_roll(input_size) {
             if let Some(inner) = self.inner.take() {
                 // close the current writer, roll to a new file
-                let handle = spawn(async move { inner.close().await });
-                self.close_handles.push(handle);
+                self.data_file_builders.extend(inner.close().await?);
 
                 // start a new writer
                 self.inner = Some(self.inner_builder.clone().build().await?);
@@ -125,19 +122,14 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
         Ok(())
     }
 
-    async fn close(self) -> Result<Vec<DataFileBuilder>> {
-        let mut data_file_builders = try_join_all(self.close_handles)
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<DataFileBuilder>>();
-
+    async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
         // close the current writer and merge the output
         if let Some(current_writer) = self.inner {
-            data_file_builders.extend(current_writer.close().await?);
+            self.data_file_builders
+                .extend(current_writer.close().await?);
         }
 
-        Ok(data_file_builders)
+        Ok(self.data_file_builders)
     }
 }
 
