@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 
 use uuid::Uuid;
 
@@ -29,25 +28,25 @@ use super::{
     MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
 };
 use crate::error::Result;
-use crate::spec::{
-    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
-    Operation,
-};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::transaction::rewrite_files::RewriteFilesOperation;
 
 pub const USE_STARTING_SEQUENCE_NUMBER: &str = "use-starting-sequence-number";
 pub const USE_STARTING_SEQUENCE_NUMBER_DEFAULT: bool = true;
 
 /// Transaction action for rewriting files.
-pub struct RewriteFilesAction<'a> {
+pub struct OverwriteFilesAction<'a> {
     snapshot_produce_action: SnapshotProduceAction<'a>,
     target_size_bytes: u32,
     min_count_to_merge: u32,
     merge_enabled: bool,
 }
 
-pub struct RewriteFilesOperation;
+struct OverwriteFilesOperation {
+    inner: RewriteFilesOperation,
+}
 
-impl<'a> RewriteFilesAction<'a> {
+impl<'a> OverwriteFilesAction<'a> {
     pub fn new(
         tx: Transaction<'a>,
         snapshot_id: i64,
@@ -62,6 +61,7 @@ impl<'a> RewriteFilesAction<'a> {
             .get(MANIFEST_TARGET_SIZE_BYTES)
             .and_then(|s| s.parse().ok())
             .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
+
         let min_count_to_merge: u32 = tx
             .current_table
             .metadata()
@@ -69,6 +69,7 @@ impl<'a> RewriteFilesAction<'a> {
             .get(MANIFEST_MIN_MERGE_COUNT)
             .and_then(|s| s.parse().ok())
             .unwrap_or(MANIFEST_MIN_MERGE_COUNT_DEFAULT);
+
         let merge_enabled = tx
             .current_table
             .metadata()
@@ -95,6 +96,7 @@ impl<'a> RewriteFilesAction<'a> {
     }
 
     /// Add data files to the snapshot.
+
     pub fn add_data_files(
         mut self,
         data_files: impl IntoIterator<Item = DataFile>,
@@ -113,22 +115,19 @@ impl<'a> RewriteFilesAction<'a> {
         Ok(self)
     }
 
-    pub fn with_to_branch(mut self, to_branch: String) -> Self {
-        self.snapshot_produce_action.set_target_branch(to_branch);
-        self
-    }
-
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(self) -> Result<Transaction<'a>> {
+        let inner = RewriteFilesOperation;
+
         if self.merge_enabled {
             let process =
                 MergeManifestProcess::new(self.target_size_bytes, self.min_count_to_merge);
             self.snapshot_produce_action
-                .apply(RewriteFilesOperation, process)
+                .apply(OverwriteFilesOperation { inner }, process)
                 .await
         } else {
             self.snapshot_produce_action
-                .apply(RewriteFilesOperation, DefaultManifestProcess)
+                .apply(OverwriteFilesOperation { inner }, DefaultManifestProcess)
                 .await
         }
     }
@@ -196,149 +195,29 @@ impl<'a> RewriteFilesAction<'a> {
 
         Ok(self)
     }
+
+    pub fn with_to_branch(mut self, to_branch: String) -> Self {
+        self.snapshot_produce_action.set_target_branch(to_branch);
+        self
+    }
 }
 
-impl SnapshotProduceOperation for RewriteFilesOperation {
+impl SnapshotProduceOperation for OverwriteFilesOperation {
     fn operation(&self) -> Operation {
-        Operation::Replace
+        Operation::Overwrite
     }
 
     async fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProduceAction<'_>,
     ) -> Result<Vec<ManifestEntry>> {
-        // generate delete manifest entries from removed files
-        let snapshot = snapshot_produce
-            .tx
-            .current_table
-            .metadata()
-            .snapshot_for_ref(snapshot_produce.target_branch());
-
-        if let Some(snapshot) = snapshot {
-            let gen_manifest_entry = |old_entry: &Arc<ManifestEntry>| {
-                let builder = ManifestEntry::builder()
-                    .status(ManifestStatus::Deleted)
-                    .snapshot_id(old_entry.snapshot_id().unwrap())
-                    .sequence_number(old_entry.sequence_number().unwrap())
-                    .file_sequence_number(old_entry.file_sequence_number().unwrap())
-                    .data_file(old_entry.data_file().clone());
-
-                builder.build()
-            };
-
-            let manifest_list = snapshot
-                .load_manifest_list(
-                    snapshot_produce.tx.current_table.file_io(),
-                    snapshot_produce.tx.current_table.metadata(),
-                )
-                .await?;
-
-            let mut deleted_entries = Vec::new();
-
-            for manifest_file in manifest_list.entries() {
-                let manifest = manifest_file
-                    .load_manifest(snapshot_produce.tx.current_table.file_io())
-                    .await?;
-
-                for entry in manifest.entries() {
-                    if entry.content_type() == DataContentType::Data
-                        && snapshot_produce
-                            .removed_data_file_paths
-                            .contains(entry.data_file().file_path())
-                    {
-                        deleted_entries.push(gen_manifest_entry(entry));
-                    }
-
-                    if entry.content_type() == DataContentType::PositionDeletes
-                        || entry.content_type() == DataContentType::EqualityDeletes
-                            && snapshot_produce
-                                .removed_delete_file_paths
-                                .contains(entry.data_file().file_path())
-                    {
-                        deleted_entries.push(gen_manifest_entry(entry));
-                    }
-                }
-            }
-
-            Ok(deleted_entries)
-        } else {
-            Ok(vec![])
-        }
+        self.inner.delete_entries(snapshot_produce).await
     }
 
     async fn existing_manifest(
         &self,
         snapshot_produce: &mut SnapshotProduceAction<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce
-            .tx
-            .current_table
-            .metadata()
-            .snapshot_for_ref(snapshot_produce.target_branch())
-        else {
-            return Ok(vec![]);
-        };
-
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.tx.current_table.file_io(),
-                snapshot_produce.tx.current_table.metadata(),
-            )
-            .await?;
-
-        let mut existing_files = Vec::new();
-
-        for manifest_file in manifest_list.entries() {
-            let manifest = manifest_file
-                .load_manifest(snapshot_produce.tx.current_table.file_io())
-                .await?;
-
-            let found_deleted_files: HashSet<_> = manifest
-                .entries()
-                .iter()
-                .filter_map(|entry| {
-                    if snapshot_produce
-                        .removed_data_file_paths
-                        .contains(entry.data_file().file_path())
-                        || snapshot_produce
-                            .removed_delete_file_paths
-                            .contains(entry.data_file().file_path())
-                    {
-                        Some(entry.data_file().file_path().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if found_deleted_files.is_empty()
-                && (manifest_file.has_added_files() || manifest_file.has_existing_files())
-            {
-                existing_files.push(manifest_file.clone());
-            } else {
-                // Rewrite the manifest file without the deleted data files
-                if manifest
-                    .entries()
-                    .iter()
-                    .filter(|entry| entry.status() != ManifestStatus::Deleted)
-                    .any(|entry| !found_deleted_files.contains(entry.data_file().file_path()))
-                {
-                    let mut manifest_writer = snapshot_produce.new_manifest_writer(
-                        &ManifestContentType::Data,
-                        manifest_file.partition_spec_id,
-                    )?;
-
-                    for entry in manifest.entries() {
-                        if !found_deleted_files.contains(entry.data_file().file_path()) {
-                            manifest_writer.add_entry((**entry).clone())?;
-                        }
-                    }
-
-                    existing_files.push(manifest_writer.write_manifest_file().await?);
-                }
-            }
-        }
-
-        Ok(existing_files)
+        self.inner.existing_manifest(snapshot_produce).await
     }
 }

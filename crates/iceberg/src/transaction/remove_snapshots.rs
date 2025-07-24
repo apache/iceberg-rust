@@ -252,15 +252,9 @@ impl<'a> RemoveSnapshotAction<'a> {
             )?;
         }
 
-        self.tx.apply(vec![], vec![
-            TableRequirement::UuidMatch {
-                uuid: self.tx.current_table.metadata().uuid(),
-            },
-            TableRequirement::RefSnapshotIdMatch {
-                r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: self.tx.current_table.metadata().current_snapshot_id(),
-            },
-        ])?;
+        self.tx.apply(vec![], vec![TableRequirement::UuidMatch {
+            uuid: self.tx.current_table.metadata().uuid(),
+        }])?;
 
         Ok(RemoveSnapshotApplyResult {
             tx: self.tx,
@@ -460,7 +454,7 @@ mod tests {
     use std::io::BufReader;
 
     use crate::io::FileIOBuilder;
-    use crate::spec::{TableMetadata, MAIN_BRANCH};
+    use crate::spec::TableMetadata;
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableRequirement};
@@ -495,15 +489,9 @@ mod tests {
             assert_eq!(4, tx.updates.len());
 
             assert_eq!(
-                vec![
-                    TableRequirement::UuidMatch {
-                        uuid: tx.current_table.metadata().uuid()
-                    },
-                    TableRequirement::RefSnapshotIdMatch {
-                        r#ref: MAIN_BRANCH.to_string(),
-                        snapshot_id: tx.current_table.metadata().current_snapshot_id
-                    }
-                ],
+                vec![TableRequirement::UuidMatch {
+                    uuid: tx.current_table.metadata().uuid()
+                },],
                 tx.requirements
             );
         }
@@ -514,15 +502,9 @@ mod tests {
             assert_eq!(3, tx.updates.len());
 
             assert_eq!(
-                vec![
-                    TableRequirement::UuidMatch {
-                        uuid: tx.current_table.metadata().uuid()
-                    },
-                    TableRequirement::RefSnapshotIdMatch {
-                        r#ref: MAIN_BRANCH.to_string(),
-                        snapshot_id: tx.current_table.metadata().current_snapshot_id
-                    }
-                ],
+                vec![TableRequirement::UuidMatch {
+                    uuid: tx.current_table.metadata().uuid()
+                },],
                 tx.requirements
             );
         }
@@ -538,15 +520,9 @@ mod tests {
                 .unwrap();
             assert_eq!(0, tx.updates.len());
             assert_eq!(
-                vec![
-                    TableRequirement::UuidMatch {
-                        uuid: tx.current_table.metadata().uuid()
-                    },
-                    TableRequirement::RefSnapshotIdMatch {
-                        r#ref: MAIN_BRANCH.to_string(),
-                        snapshot_id: tx.current_table.metadata().current_snapshot_id
-                    }
-                ],
+                vec![TableRequirement::UuidMatch {
+                    uuid: tx.current_table.metadata().uuid()
+                },],
                 tx.requirements
             );
         }

@@ -193,7 +193,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
             .tx
             .current_table
             .metadata()
-            .current_snapshot()
+            .snapshot_for_ref(snapshot_produce.target_branch())
         else {
             return Ok(vec![]);
         };

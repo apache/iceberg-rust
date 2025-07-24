@@ -218,7 +218,29 @@ async fn test_append_data_file_to_branch() {
 
     // Verify main branch ref points to the snapshot using snapshot_for_ref
     let main_snapshot = table.metadata().snapshot_for_ref("main").unwrap();
-    assert_eq!(main_snapshot.snapshot_id(), main_snapshot_id);
+    // First commit should have no parent snapshot
+    assert_eq!(main_snapshot.parent_snapshot_id(), None);
+
+    let main_snapshot = table.metadata().snapshot_for_ref("main").unwrap();
+
+    // Verify main branch data
+    let main_batch_stream = table
+        .scan()
+        .snapshot_id(main_snapshot.snapshot_id())
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let main_batches: Vec<_> = main_batch_stream.try_collect().await.unwrap();
+    assert_eq!(main_batches.len(), 1);
+    assert_eq!(main_batches[0], batch);
+    assert_eq!(
+        main_batches[0].schema(),
+        batch.schema(),
+        "Main branch schema mismatch"
+    );
 
     // Test 2: Append to a custom branch
     let branch_name = "test-branch";
@@ -234,6 +256,34 @@ async fn test_append_data_file_to_branch() {
     // Verify the custom branch was created and points to a new snapshot
     let branch_snapshot = table.metadata().snapshot_for_ref(branch_name).unwrap();
     assert_ne!(branch_snapshot.snapshot_id(), main_snapshot_id);
+    // New branch should have no parent snapshot
+    assert_eq!(
+        table
+            .metadata()
+            .snapshot_for_ref(branch_name)
+            .unwrap()
+            .parent_snapshot_id(),
+        None
+    );
+
+    // Verify test-branch data
+    let branch_batch_stream = table
+        .scan()
+        .snapshot_id(branch_snapshot.snapshot_id())
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let branch_batches: Vec<_> = branch_batch_stream.try_collect().await.unwrap();
+    assert_eq!(branch_batches.len(), 1);
+    assert_eq!(branch_batches[0], batch);
+    assert_eq!(
+        branch_batches[0].schema(),
+        batch.schema(),
+        "Test branch schema mismatch"
+    );
 
     // Verify the main branch is unchanged
     let main_snapshot_after = table.metadata().snapshot_for_ref("main").unwrap();
@@ -256,6 +306,35 @@ async fn test_append_data_file_to_branch() {
         branch_snapshot.snapshot_id()
     );
     assert_ne!(branch_snapshot_final.snapshot_id(), main_snapshot_id);
+    // Second append should have previous branch snapshot as parent
+    assert_eq!(
+        table
+            .metadata()
+            .snapshot_for_ref(branch_name)
+            .unwrap()
+            .parent_snapshot_id(),
+        Some(branch_snapshot.snapshot_id())
+    );
+
+    // Verify test-branch data after second append
+    let branch_batch_stream = table
+        .scan()
+        .snapshot_id(branch_snapshot_final.snapshot_id())
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let branch_batches: Vec<_> = branch_batch_stream.try_collect().await.unwrap();
+    assert_eq!(branch_batches.len(), 2);
+    assert_eq!(branch_batches[0], batch);
+    assert_eq!(branch_batches[1], batch);
+    assert_eq!(
+        branch_batches[0].schema(),
+        batch.schema(),
+        "Test branch schema mismatch after second append"
+    );
 
     // Verify we have 3 snapshots total (1 main + 2 branch)
     assert_eq!(table.metadata().snapshots().count(), 3);
@@ -281,9 +360,37 @@ async fn test_append_data_file_to_branch() {
         merge_branch_snapshot.snapshot_id(),
         branch_snapshot_final.snapshot_id()
     );
+    // Merge branch should have no parent snapshot
+    assert_eq!(
+        table
+            .metadata()
+            .snapshot_for_ref(another_branch)
+            .unwrap()
+            .parent_snapshot_id(),
+        None
+    );
 
     // Verify we now have 4 snapshots total
     assert_eq!(table.metadata().snapshots().count(), 4);
+
+    // Verify merge-branch data
+    let merge_batch_stream = table
+        .scan()
+        .snapshot_id(merge_branch_snapshot.snapshot_id())
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let merge_batches: Vec<_> = merge_batch_stream.try_collect().await.unwrap();
+    assert_eq!(merge_batches.len(), 1);
+    assert_eq!(merge_batches[0], batch);
+    assert_eq!(
+        merge_batches[0].schema(),
+        batch.schema(),
+        "Merge branch schema mismatch"
+    );
 
     // Verify all branches exist and can be accessed via snapshot_for_ref
     assert!(table.metadata().snapshot_for_ref("main").is_some());

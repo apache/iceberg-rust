@@ -39,7 +39,7 @@ use crate::get_shared_containers;
 use crate::shared_tests::{random_ns, test_schema};
 
 #[tokio::test]
-async fn test_rewrite_data_files() {
+async fn test_overwrite_data_files() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -163,27 +163,27 @@ async fn test_rewrite_data_files() {
     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
-    let data_file_rewrite = data_file_writer.close().await.unwrap();
+    let data_file_overwrite = data_file_writer.close().await.unwrap();
 
     // commit result again
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
-        .add_data_files(data_file_rewrite.clone())
+        .add_data_files(data_file_overwrite.clone())
         .unwrap()
         .delete_files(data_file.clone())
         .unwrap();
 
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     {
         let snapshot = table.metadata().current_snapshot().unwrap();
         assert_eq!(
-            Operation::Replace,
+            Operation::Overwrite,
             snapshot.summary().operation,
-            "Expected operation to be Replace after rewriting files"
+            "Expected operation to be Overwrite after rewriting files"
         );
     }
 
@@ -202,7 +202,7 @@ async fn test_rewrite_data_files() {
 }
 
 #[tokio::test]
-async fn test_empty_rewrite() {
+async fn test_empty_overwrite() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -219,8 +219,8 @@ async fn test_empty_rewrite() {
         .unwrap();
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let overwrite_action = tx.overwrite_files(None, vec![]).unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     let batch_stream = table
@@ -236,7 +236,7 @@ async fn test_empty_rewrite() {
 }
 
 #[tokio::test]
-async fn test_multiple_file_rewrite() {
+async fn test_multiple_file_overwrite() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -292,14 +292,14 @@ async fn test_multiple_file_rewrite() {
     let data_file2 = data_file_writer.close().await.unwrap();
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .add_data_files(data_file1.clone())
         .unwrap()
         .add_data_files(data_file2.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     let batch_stream = table
@@ -317,7 +317,7 @@ async fn test_multiple_file_rewrite() {
 }
 
 #[tokio::test]
-async fn test_rewrite_nonexistent_file() {
+async fn test_overwrite_nonexistent_file() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -374,10 +374,10 @@ async fn test_rewrite_nonexistent_file() {
     let nonexistent_data_file = valid_data_file.clone();
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
+    let overwrite_action = tx.overwrite_files(None, vec![]).unwrap();
 
     // Attempt to delete the nonexistent file
-    let result = rewrite_action.delete_files(nonexistent_data_file);
+    let result = overwrite_action.delete_files(nonexistent_data_file);
 
     assert!(result.is_ok());
 }
@@ -441,16 +441,18 @@ async fn test_sequence_number_in_manifest_entry() {
     // Commit with sequence number
 
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .add_data_files(data_file1.clone())
         .unwrap()
         .add_data_files(data_file2.clone())
         .unwrap();
     // Set sequence number to 12345
-    let rewrite_action = rewrite_action.with_starting_sequence_number(12345).unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let overwrite_action = overwrite_action
+        .with_starting_sequence_number(12345)
+        .unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify manifest entry has correct sequence number
@@ -553,14 +555,14 @@ async fn test_partition_spec_id_in_manifest() {
     let last_data_files = data_files_vec.last().unwrap();
     let partition_spec_id = last_data_files.partition_spec_id();
 
-    // remove the data files by RewriteAction
+    // remove the data files by overwriteAction
     for data_file in &data_files_vec {
         let tx = Transaction::new(&table);
-        let mut rewrite_action = tx.rewrite_files(None, vec![]).unwrap();
-        rewrite_action = rewrite_action
+        let mut overwrite_action = tx.overwrite_files(None, vec![]).unwrap();
+        overwrite_action = overwrite_action
             .delete_files(vec![data_file.clone()])
             .unwrap();
-        let tx = rewrite_action.apply().await.unwrap();
+        let tx = overwrite_action.apply().await.unwrap();
         table = tx.commit(&rest_catalog).await.unwrap();
     }
 
@@ -579,7 +581,7 @@ async fn test_partition_spec_id_in_manifest() {
 }
 
 #[tokio::test]
-async fn test_rewrite_files_to_branch() {
+async fn test_overwrite_files_to_branch() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -646,22 +648,22 @@ async fn test_rewrite_files_to_branch() {
 
     let branch_name = "test_branch";
 
-    // Prepare rewrite files
+    // Prepare overwrite files
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
-    let rewrite_files = data_file_writer.close().await.unwrap();
+    let overwrite_files = data_file_writer.close().await.unwrap();
 
-    // Rewrite files to the new branch
+    // overwrite files to the new branch
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch_name.to_string())
-        .add_data_files(rewrite_files.clone())
+        .add_data_files(overwrite_files.clone())
         .unwrap()
         .delete_files(original_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch snapshot
@@ -776,13 +778,13 @@ async fn test_branch_snapshot_isolation() {
     // Create branch1 from main
     let branch1 = "branch1";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch1.to_string())
         .add_data_files(data_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch1 snapshot
@@ -795,13 +797,13 @@ async fn test_branch_snapshot_isolation() {
 
     // Create branch2 from branch1
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch1.to_string())
         .add_data_files(data_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branch1 snapshot
@@ -814,7 +816,7 @@ async fn test_branch_snapshot_isolation() {
 }
 
 #[tokio::test]
-async fn test_rewrite_files_with_sequence_number_from_branch() {
+async fn test_overwrite_files_with_sequence_number_from_branch() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
     let ns = random_ns().await;
@@ -877,15 +879,15 @@ async fn test_rewrite_files_with_sequence_number_from_branch() {
 
     let branch_name = "seq_branch";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch_name.to_string())
         .with_starting_sequence_number_from_branch("main")
         .unwrap()
         .add_data_files(original_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check manifest entry for sequence number
@@ -959,13 +961,13 @@ async fn test_multiple_branches_isolation() {
     // Create branch1 with original files
     let branch1 = "branch1";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch1.to_string())
         .add_data_files(original_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Create branch2 with modified data
@@ -985,13 +987,13 @@ async fn test_multiple_branches_isolation() {
 
     let branch2 = "branch2";
     let tx = Transaction::new(&table);
-    let rewrite_action = tx
-        .rewrite_files(None, vec![])
+    let overwrite_action = tx
+        .overwrite_files(None, vec![])
         .unwrap()
         .with_to_branch(branch2.to_string())
         .add_data_files(modified_files.clone())
         .unwrap();
-    let tx = rewrite_action.apply().await.unwrap();
+    let tx = overwrite_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // Verify branches are isolated

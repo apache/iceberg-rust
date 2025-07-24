@@ -18,6 +18,7 @@
 //! This module contains transaction api.
 
 mod append;
+mod overwrite_files;
 mod remove_snapshots;
 mod rewrite_files;
 mod snapshot;
@@ -37,6 +38,7 @@ use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::append::{FastAppendAction, MergeAppendAction};
+use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -253,6 +255,22 @@ impl<'a> Transaction<'a> {
             vec![],
         )?;
         Ok(self)
+    }
+
+    /// Creates an overwrite files action.
+    pub fn overwrite_files(
+        self,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> Result<OverwriteFilesAction<'a>> {
+        let snapshot_id = self.generate_unique_snapshot_id();
+        OverwriteFilesAction::new(
+            self,
+            snapshot_id,
+            commit_uuid.unwrap_or_else(Uuid::now_v7),
+            key_metadata,
+            HashMap::new(),
+        )
     }
 
     /// Commit transaction.

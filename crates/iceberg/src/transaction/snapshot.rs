@@ -512,6 +512,10 @@ impl<'a> SnapshotProduceAction<'a> {
     pub fn set_target_branch(&mut self, target_branch: String) {
         self.target_branch = target_branch;
     }
+
+    pub fn target_branch(&self) -> &str {
+        &self.target_branch
+    }
 }
 
 pub(crate) struct MergeManifestProcess {
