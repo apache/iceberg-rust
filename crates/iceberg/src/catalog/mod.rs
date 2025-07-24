@@ -31,11 +31,11 @@ use std::sync::Arc;
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
 pub use memory::MemoryCatalog;
+pub use metadata_location::*;
 #[cfg(test)]
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
-pub use metadata_location::*;
 use uuid::Uuid;
 
 use crate::spec::{
