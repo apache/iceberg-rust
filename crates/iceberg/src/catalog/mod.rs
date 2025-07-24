@@ -2193,7 +2193,7 @@ mod tests {
 
             Table::builder()
                 .metadata(resp)
-                .metadata_location("s3://bucket/test/location/metadata/v2.json".to_string())
+                .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIOBuilder::new("memory").build().unwrap())
                 .build()
@@ -2202,7 +2202,7 @@ mod tests {
 
         let updates = vec![
             TableUpdate::SetLocation {
-                location: "s3://bucket/test/new_location/metadata/v2.json".to_string(),
+                location: "s3://bucket/test/new_location/data".to_string(),
             },
             TableUpdate::SetProperties {
                 updates: vec![
@@ -2235,9 +2235,17 @@ mod tests {
             "v2"
         );
 
+        // metadata version should be bumped
+        assert!(
+            updated_table
+                .metadata_location()
+                .unwrap()
+                .starts_with("s3://bucket/test/location/metadata/00001-")
+        );
+
         assert_eq!(
             updated_table.metadata().location,
-            "s3://bucket/test/new_location/metadata/v2.json".to_string()
-        )
+            "s3://bucket/test/new_location/data",
+        );
     }
 }

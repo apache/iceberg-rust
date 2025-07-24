@@ -29,8 +29,8 @@ use crate::io::FileIO;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
 
 /// namespace `location` property
@@ -220,12 +220,7 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            &location,
-            0,
-            Uuid::new_v4()
-        );
+        let metadata_location = MetadataLocationParser::new_with_prefix(location).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
@@ -339,10 +334,7 @@ mod tests {
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::{
-        NestedField, NullOrder, PROPERTY_COMMIT_NUM_RETRIES, PartitionSpec, PrimitiveType, Schema,
-        SortOrder, Type,
-    };
+    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
     fn temp_path() -> String {
@@ -453,7 +445,12 @@ mod tests {
     fn assert_table_metadata_location_matches(table: &Table, regex_str: &str) {
         let actual = table.metadata_location().unwrap().to_string();
         let regex = Regex::new(regex_str).unwrap();
-        assert!(regex.is_match(&actual))
+        assert!(
+            regex.is_match(&actual),
+            "Expected metadata location to match regex, but got location: {} and regex: {}",
+            actual,
+            regex
+        )
     }
 
     #[tokio::test]
@@ -1105,7 +1102,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/00000-{}.metadata.json$",
             namespace_location, UUID_REGEX_STR,
         );
 
@@ -1158,7 +1155,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/tbl1/metadata/00000-{}.metadata.json$",
             nested_namespace_location, UUID_REGEX_STR,
         );
 
@@ -1199,7 +1196,7 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/tbl1/metadata/00000-{}.metadata.json$",
             warehouse_location, UUID_REGEX_STR
         );
 
@@ -1247,7 +1244,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/0-{}.metadata.json$",
+            "^{}/a/b/tbl1/metadata/00000-{}.metadata.json$",
             warehouse_location, UUID_REGEX_STR
         );
 
