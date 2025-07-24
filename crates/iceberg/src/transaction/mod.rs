@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod overwrite_files;
 mod remove_snapshots;
 mod rewrite_files;
 mod snapshot;
@@ -74,6 +75,7 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::append::{FastAppendAction, MergeAppendAction};
+use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -185,6 +187,11 @@ impl Transaction {
     /// Creates rewrite files action.
     pub fn rewrite_files(&self) -> RewriteFilesAction {
         RewriteFilesAction::new()
+    }
+
+    /// Creates an overwrite files action.
+    pub fn overwrite_files(&self) -> OverwriteFilesAction {
+        OverwriteFilesAction::new()
     }
 
     /// Commit transaction.

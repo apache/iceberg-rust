@@ -36,7 +36,7 @@ use crate::transaction::snapshot::SnapshotProduceOperation;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// Transaction action for rewriting files.
-pub struct RewriteFilesAction {
+pub struct OverwriteFilesAction {
     // snapshot_produce_action: SnapshotProduceAction<'a>,
     target_size_bytes: u32,
     min_count_to_merge: u32,
@@ -58,9 +58,9 @@ pub struct RewriteFilesAction {
     target_branch: Option<String>,
 }
 
-pub struct RewriteFilesOperation;
+pub struct OverwriteFilesOperation;
 
-impl RewriteFilesAction {
+impl OverwriteFilesAction {
     pub fn new() -> Self {
         Self {
             target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
@@ -163,9 +163,9 @@ impl RewriteFilesAction {
     }
 }
 
-impl SnapshotProduceOperation for RewriteFilesOperation {
+impl SnapshotProduceOperation for OverwriteFilesOperation {
     fn operation(&self) -> Operation {
-        Operation::Replace
+        Operation::Overwrite
     }
 
     async fn delete_entries(
@@ -302,7 +302,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
 }
 
 #[async_trait::async_trait]
-impl TransactionAction for RewriteFilesAction {
+impl TransactionAction for OverwriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let mut snapshot_producer = SnapshotProducer::new(
             table,
@@ -339,17 +339,17 @@ impl TransactionAction for RewriteFilesAction {
             let process =
                 MergeManifestProcess::new(self.target_size_bytes, self.min_count_to_merge);
             snapshot_producer
-                .commit(RewriteFilesOperation, process)
+                .commit(OverwriteFilesOperation, process)
                 .await
         } else {
             snapshot_producer
-                .commit(RewriteFilesOperation, DefaultManifestProcess)
+                .commit(OverwriteFilesOperation, DefaultManifestProcess)
                 .await
         }
     }
 }
 
-impl Default for RewriteFilesAction {
+impl Default for OverwriteFilesAction {
     fn default() -> Self {
         Self::new()
     }
