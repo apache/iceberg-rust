@@ -198,6 +198,17 @@ impl Table {
         self.metadata_location.as_deref()
     }
 
+    /// Returns current metadata location in a result.
+    pub fn metadata_location_result(&self) -> Result<&str> {
+        self.metadata_location.as_deref().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Metadata location does not exist for table: {}",
+                self.identifier
+            ),
+        ))
+    }
+
     /// Returns file io used in this table.
     pub fn file_io(&self) -> &FileIO {
         &self.file_io

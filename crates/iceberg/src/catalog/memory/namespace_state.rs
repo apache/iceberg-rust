@@ -306,7 +306,7 @@ impl NamespaceState {
             .table_metadata_locations
             .insert(
                 staged_table.identifier().name().to_string(),
-                staged_table.metadata_location().unwrap().to_string(),
+                staged_table.metadata_location_result()?.to_string(),
             )
             .ok_or(Error::new(
                 ErrorKind::TableNotFound,

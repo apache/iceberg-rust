@@ -310,7 +310,7 @@ impl Catalog for MemoryCatalog {
             .metadata()
             .write_to(
                 staged_table.file_io(),
-                staged_table.metadata_location().unwrap(),
+                staged_table.metadata_location_result()?,
             )
             .await?;
 
