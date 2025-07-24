@@ -38,11 +38,11 @@ impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
     /// # Arguments
     ///
     /// * `inner_builder` - The builder for the underlying file writer
-    /// * `target_size` - The target size in bytes before rolling over to a new file
-    pub fn new(inner_builder: B, target_size: usize) -> Self {
+    /// * `target_file_size` - The target size in bytes before rolling over to a new file
+    pub fn new(inner_builder: B, target_file_size: usize) -> Self {
         Self {
             inner_builder,
-            target_size,
+            target_file_size,
         }
     }
 }
@@ -54,7 +54,7 @@ impl<B: FileWriterBuilder> FileWriterBuilder for RollingFileWriterBuilder<B> {
         Ok(RollingFileWriter {
             inner: None,
             inner_builder: self.inner_builder,
-            target_size: self.target_size,
+            target_file_size: self.target_file_size,
             close_handles: vec![],
         })
     }
@@ -69,7 +69,7 @@ impl<B: FileWriterBuilder> FileWriterBuilder for RollingFileWriterBuilder<B> {
 pub struct RollingFileWriter<B: FileWriterBuilder> {
     inner: Option<B::R>,
     inner_builder: B,
-    target_size: usize,
+    target_file_size: usize,
     close_handles: Vec<JoinHandle<Result<Vec<DataFileBuilder>>>>,
 }
 
@@ -84,7 +84,7 @@ impl<B: FileWriterBuilder> RollingFileWriter<B> {
     ///
     /// `true` if a new file should be started, `false` otherwise
     pub fn should_roll(&self, input_size: usize) -> bool {
-        self.current_written_size() + input_size > self.target_size
+        self.current_written_size() + input_size > self.target_file_size
     }
 }
 
