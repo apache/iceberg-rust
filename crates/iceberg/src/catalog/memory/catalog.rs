@@ -312,11 +312,13 @@ impl Catalog for MemoryCatalog {
         let staged_table = commit.apply(current_table)?;
 
         // Write table metadata to the new location
-        TableMetadata::write(
-            staged_table.file_io(),
-            staged_table.metadata(),
-            &MetadataLocation::from_str(staged_table.metadata_location().unwrap())?,
-        ).await?;
+        staged_table
+            .metadata()
+            .write_to(
+                staged_table.file_io(),
+                staged_table.metadata_location().unwrap(),
+            )
+            .await?;
 
         // Flip the pointer to reference the new metadata file.
         let updated_table = root_namespace_state.commit_table_update(staged_table)?;
@@ -367,7 +369,7 @@ mod tests {
         }
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 

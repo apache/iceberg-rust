@@ -16,11 +16,9 @@
 // under the License.
 
 use std::collections::{HashMap, hash_map};
-use std::str::FromStr;
 
 use itertools::Itertools;
 
-use crate::spec::MetadataLocation;
 use crate::table::Table;
 use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
@@ -32,7 +30,7 @@ pub(crate) struct NamespaceState {
     // Namespaces nested inside this namespace
     namespaces: HashMap<String, NamespaceState>,
     // Mapping of tables to metadata locations in this namespace
-    table_metadata_locations: HashMap<String, MetadataLocation>,
+    table_metadata_locations: HashMap<String, String>,
 }
 
 fn no_such_namespace_err<T>(namespace_ident: &NamespaceIdent) -> Result<T> {
@@ -257,15 +255,12 @@ impl NamespaceState {
     }
 
     // Returns the metadata location of the given table or an error if doesn't exist
-    pub(crate) fn get_existing_table_location(
-        &self,
-        table_ident: &TableIdent,
-    ) -> Result<&MetadataLocation> {
+    pub(crate) fn get_existing_table_location(&self, table_ident: &TableIdent) -> Result<&String> {
         let namespace = self.get_namespace(table_ident.namespace())?;
 
         match namespace.table_metadata_locations.get(table_ident.name()) {
             None => no_such_table_err(table_ident),
-            Some(table_metadadata_location) => Ok(table_metadadata_location),
+            Some(table_metadata_location) => Ok(table_metadata_location),
         }
     }
 
@@ -273,7 +268,7 @@ impl NamespaceState {
     pub(crate) fn insert_new_table(
         &mut self,
         table_ident: &TableIdent,
-        location: MetadataLocation,
+        location: String,
     ) -> Result<()> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
@@ -291,10 +286,7 @@ impl NamespaceState {
     }
 
     // Removes the given table or returns an error if doesn't exist
-    pub(crate) fn remove_existing_table(
-        &mut self,
-        table_ident: &TableIdent,
-    ) -> Result<MetadataLocation> {
+    pub(crate) fn remove_existing_table(&mut self, table_ident: &TableIdent) -> Result<String> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
         match namespace
@@ -314,7 +306,7 @@ impl NamespaceState {
             .table_metadata_locations
             .insert(
                 staged_table.identifier().name().to_string(),
-                MetadataLocation::from_str(staged_table.metadata_location().unwrap())?,
+                staged_table.metadata_location().unwrap().to_string(),
             )
             .ok_or(Error::new(
                 ErrorKind::TableNotFound,

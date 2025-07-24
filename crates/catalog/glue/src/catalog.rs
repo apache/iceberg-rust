@@ -26,15 +26,15 @@ use iceberg::io::{
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
 use typed_builder::TypedBuilder;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
-    convert_to_database, convert_to_glue_table, convert_to_namespace, create_metadata_location,
-    create_sdk_config, get_default_table_location, get_metadata_location, validate_namespace,
+    convert_to_database, convert_to_glue_table, convert_to_namespace, create_sdk_config,
+    get_default_table_location, get_metadata_location, validate_namespace,
 };
 use crate::{
     AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
@@ -393,7 +393,8 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location = create_metadata_location(&location, 0)?;
+        let metadata_location =
+            MetadataLocationParser::new_location_with_prefix(location).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

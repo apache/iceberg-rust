@@ -18,12 +18,14 @@
 //! Catalog API for Apache Iceberg
 
 pub mod memory;
+mod util;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
@@ -33,6 +35,7 @@ pub use memory::MemoryCatalog;
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+pub use util::*;
 use uuid::Uuid;
 
 use crate::spec::{
@@ -336,30 +339,31 @@ impl TableCommit {
         }
 
         // get current metadata location
-        let current_metadata_location =
-            table.metadata_location().ok_or(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Failed to apply commit, table metadata location is not set for table: {}",
-                    table.identifier()
-                ),
-            ))?;
+        let current_metadata_location = table.metadata_location().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Failed to apply commit, table metadata location is not set for table: {}",
+                table.identifier()
+            ),
+        ))?;
 
         // apply updates to metadata builder
         let mut metadata_builder = table
             .metadata()
             .clone()
-            .into_builder(Some(current_metadata_location));
+            .into_builder(Some(current_metadata_location.to_string()));
         for update in self.updates {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
         // Bump the version of metadata
-        let new_metadata_location = current_metadata_location.with_next_version();
+        let new_metadata_location = MetadataLocationParser::from_str(current_metadata_location)?
+            .with_next_version()
+            .to_string();
 
         Ok(table
             .with_metadata(Arc::new(metadata_builder.build()?.metadata))
-            .with_metadata_location(new_metadata_location.to_string()))
+            .with_metadata_location(new_metadata_location))
     }
 }
 
