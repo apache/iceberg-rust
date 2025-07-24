@@ -314,7 +314,7 @@ fn get_current_time() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use iceberg::spec::{NestedField, PrimitiveType, Type};
-    use iceberg::{MetadataLocationParser, Namespace, NamespaceIdent};
+    use iceberg::{MetadataLocation, Namespace, NamespaceIdent};
 
     use super::*;
 
@@ -345,7 +345,7 @@ mod tests {
         let db_name = "my_db".to_string();
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hms".to_string();
-        let metadata_location = MetadataLocationParser::new_with_prefix(location.clone());
+        let metadata_location = MetadataLocation::new_with_location(location.clone());
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)

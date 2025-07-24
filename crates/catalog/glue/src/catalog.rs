@@ -26,8 +26,8 @@ use iceberg::io::{
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 use typed_builder::TypedBuilder;
 
@@ -393,7 +393,7 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocationParser::new_with_prefix(location).to_string();
+        let metadata_location = MetadataLocation::new_with_location(location).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

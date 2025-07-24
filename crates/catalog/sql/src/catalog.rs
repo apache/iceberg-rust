@@ -23,8 +23,8 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
@@ -699,7 +699,7 @@ impl Catalog for SqlCatalog {
         let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
             .build()?
             .metadata;
-        let tbl_metadata_location = MetadataLocationParser::new_with_prefix(location).to_string();
+        let tbl_metadata_location = MetadataLocation::new_with_location(location).to_string();
 
         tbl_metadata
             .write_to(&self.fileio, &tbl_metadata_location)

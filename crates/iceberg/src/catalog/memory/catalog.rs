@@ -28,8 +28,8 @@ use crate::io::FileIO;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
-    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 
 /// namespace `location` property
@@ -219,7 +219,7 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocationParser::new_with_prefix(location).to_string();
+        let metadata_location = MetadataLocation::new_with_location(location).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

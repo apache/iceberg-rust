@@ -28,8 +28,8 @@ use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 use typed_builder::TypedBuilder;
 
@@ -325,7 +325,7 @@ impl Catalog for S3TablesCatalog {
                     .await
                     .map_err(from_aws_sdk_error)?;
                 let warehouse_location = get_resp.warehouse_location().to_string();
-                MetadataLocationParser::new_with_prefix(warehouse_location).to_string()
+                MetadataLocation::new_with_location(warehouse_location).to_string()
             }
         };
 

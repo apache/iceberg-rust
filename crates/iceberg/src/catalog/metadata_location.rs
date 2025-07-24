@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::{Error, ErrorKind, Result};
 
-/// Helper for parsing a location of the format: `<prefix>/metadata/<version>-<uuid>.metadata.json`
+/// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
 #[derive(Clone, Debug, PartialEq)]
 pub struct MetadataLocation {
     table_location: String,
@@ -30,12 +30,12 @@ pub struct MetadataLocation {
     id: Uuid,
 }
 
-impl MetadataLocationParser {
+impl MetadataLocation {
     /// Creates a completely new metadata location starting at version 0.
     /// Only used for creating a new table. For updates, see `with_next_version`.
-    pub fn new_with_prefix(prefix: impl ToString) -> Self {
+    pub fn new_with_location(table_location: impl ToString) -> Self {
         Self {
-            prefix: prefix.to_string(),
+            table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
         }
@@ -44,7 +44,7 @@ impl MetadataLocationParser {
     /// Creates a new metadata location for an updated metadata file.
     pub fn with_next_version(&self) -> Self {
         Self {
-            prefix: self.prefix.clone(),
+            table_location: self.table_location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
         }
@@ -80,17 +80,17 @@ impl MetadataLocationParser {
     }
 }
 
-impl Display for MetadataLocationParser {
+impl Display for MetadataLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}/metadata/{:0>5}-{}.metadata.json",
-            self.prefix, self.version, self.id
+            self.table_location, self.version, self.id
         )
     }
 }
 
-impl FromStr for MetadataLocationParser {
+impl FromStr for MetadataLocation {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
@@ -102,8 +102,8 @@ impl FromStr for MetadataLocationParser {
         let prefix = Self::parse_metadata_path_prefix(path)?;
         let (version, id) = Self::parse_file_name(file_name)?;
 
-        Ok(MetadataLocationParser {
-            prefix,
+        Ok(MetadataLocation {
+            table_location: prefix,
             version,
             id,
         })
@@ -116,7 +116,7 @@ mod test {
 
     use uuid::Uuid;
 
-    use crate::MetadataLocationParser;
+    use crate::MetadataLocation;
 
     #[test]
     fn test_metadata_location_from_string() {
@@ -124,8 +124,8 @@ mod test {
             // No prefix
             (
                 "/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                 }),
@@ -133,8 +133,8 @@ mod test {
             // Some prefix
             (
                 "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "/abc".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                 }),
@@ -142,8 +142,8 @@ mod test {
             // Longer prefix
             (
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "/abc/def".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "/abc/def".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                 }),
@@ -151,8 +151,8 @@ mod test {
             // Prefix with special characters
             (
                 "https://127.0.0.1/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "https://127.0.0.1".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "https://127.0.0.1".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                 }),
@@ -160,8 +160,8 @@ mod test {
             // Another id
             (
                 "/abc/metadata/1234567-81056704-ce5b-41c4-bb83-eb6408081af6.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "/abc".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap(),
                 }),
@@ -169,8 +169,8 @@ mod test {
             // Version 0
             (
                 "/abc/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-                Ok(MetadataLocationParser {
-                    prefix: "/abc".to_string(),
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
                     version: 0,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                 }),
@@ -207,7 +207,7 @@ mod test {
         ];
 
         for (input, expected) in test_cases {
-            match MetadataLocationParser::from_str(input) {
+            match MetadataLocation::from_str(input) {
                 Ok(metadata_location) => {
                     assert!(expected.is_ok());
                     assert_eq!(metadata_location, expected.unwrap());
@@ -220,18 +220,18 @@ mod test {
     #[test]
     fn test_metadata_location_with_next_version() {
         let test_cases = vec![
-            MetadataLocationParser::new_with_prefix("/abc"),
-            MetadataLocationParser::from_str(
+            MetadataLocation::new_with_location("/abc"),
+            MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )
             .unwrap(),
         ];
 
         for input in test_cases {
-            let next = MetadataLocationParser::from_str(&input.to_string())
+            let next = MetadataLocation::from_str(&input.to_string())
                 .unwrap()
                 .with_next_version();
-            assert_eq!(next.prefix, input.prefix);
+            assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
         }

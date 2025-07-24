@@ -263,7 +263,7 @@ mod tests {
     use aws_sdk_glue::config::ProvideCredentials;
     use aws_sdk_glue::types::Column;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type};
-    use iceberg::{MetadataLocationParser, Namespace, Result, TableCreation};
+    use iceberg::{MetadataLocation, Namespace, Result, TableCreation};
 
     use super::*;
     use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
@@ -307,7 +307,7 @@ mod tests {
     fn test_convert_to_glue_table() -> Result<()> {
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hive".to_string();
-        let metadata_location = MetadataLocationParser::new_with_prefix(&location).to_string();
+        let metadata_location = MetadataLocation::new_with_location(&location).to_string();
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)

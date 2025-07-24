@@ -18,7 +18,7 @@
 //! Catalog API for Apache Iceberg
 
 pub mod memory;
-mod utils;
+mod metadata_location;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -35,7 +35,7 @@ pub use memory::MemoryCatalog;
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
-pub use utils::*;
+pub use metadata_location::*;
 use uuid::Uuid;
 
 use crate::spec::{
@@ -357,7 +357,7 @@ impl TableCommit {
         }
 
         // Bump the version of metadata
-        let new_metadata_location = MetadataLocationParser::from_str(current_metadata_location)?
+        let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
             .with_next_version()
             .to_string();
 
