@@ -339,13 +339,7 @@ impl TableCommit {
         }
 
         // get current metadata location
-        let current_metadata_location = table.metadata_location().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Failed to apply commit, table metadata location is not set for table: {}",
-                table.identifier()
-            ),
-        ))?;
+        let current_metadata_location = table.metadata_location_result()?;
 
         // apply updates to metadata builder
         let mut metadata_builder = table
