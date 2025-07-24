@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
-use uuid::Uuid;
 
 use super::namespace_state::NamespaceState;
 use crate::io::FileIO;
