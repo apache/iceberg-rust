@@ -138,7 +138,7 @@ impl CachingDeleteFileLoader {
     /// ```
     pub(crate) fn load_deletes(
         &self,
-        delete_file_entries: &[FileScanTask],
+        delete_file_entries: &[Arc<FileScanTask>],
         schema: SchemaRef,
     ) -> Receiver<Result<DeleteFilter>> {
         let (tx, rx) = channel();
@@ -911,7 +911,7 @@ mod tests {
             schema: data_file_schema.clone(),
             project_field_ids: vec![2, 3],
             predicate: None,
-            deletes: vec![pos_del_scan_task, eq_del_scan_task],
+            deletes: vec![pos_del_scan_task.into(), eq_del_scan_task.into()],
             sequence_number: 0,
             data_file_content: DataContentType::Data,
             equality_ids: None,
