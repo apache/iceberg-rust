@@ -325,7 +325,7 @@ impl Catalog for S3TablesCatalog {
                     .await
                     .map_err(from_aws_sdk_error)?;
                 let warehouse_location = get_resp.warehouse_location().to_string();
-                MetadataLocationParser::new_location_with_prefix(warehouse_location).to_string()
+                MetadataLocationParser::new_with_prefix(warehouse_location).to_string()
             }
         };
 

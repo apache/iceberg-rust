@@ -33,7 +33,7 @@ pub struct MetadataLocationParser {
 impl MetadataLocationParser {
     /// Creates a completely new metadata location starting at version 0.
     /// Only used for creating a new table. For updates, see `with_next_version`.
-    pub fn new_location_with_prefix(prefix: impl ToString) -> Self {
+    pub fn new_with_prefix(prefix: impl ToString) -> Self {
         Self {
             prefix: prefix.to_string(),
             version: 0,
@@ -220,7 +220,7 @@ mod test {
     #[test]
     fn test_metadata_location_with_next_version() {
         let test_cases = vec![
-            MetadataLocationParser::new_location_with_prefix("/abc"),
+            MetadataLocationParser::new_with_prefix("/abc"),
             MetadataLocationParser::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )

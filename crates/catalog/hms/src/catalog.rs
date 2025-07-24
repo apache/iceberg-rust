@@ -29,8 +29,8 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, Error, ErrorKind, MetadataLocationParser, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
 use typed_builder::TypedBuilder;
 use volo_thrift::MaybeException;
@@ -351,16 +351,18 @@ impl Catalog for HmsCatalog {
             .build()?
             .metadata;
 
-        let metadata_location = create_metadata_location(&location, 0)?;
+        let metadata_location = MetadataLocationParser::new_with_prefix(&location);
 
-        metadata.write_to(&self.file_io, &metadata_location).await?;
+        metadata
+            .write_to(&self.file_io, &metadata_location.to_string())
+            .await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
             metadata.current_schema(),
             table_name.clone(),
             location,
-            metadata_location.clone(),
+            metadata_location.to_string(),
             metadata.properties(),
         )?;
 
@@ -372,7 +374,7 @@ impl Catalog for HmsCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .build()
