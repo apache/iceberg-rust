@@ -19,6 +19,8 @@ use std::collections::HashMap;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_s3tables::config::Credentials;
+use iceberg::{Error, ErrorKind, Result};
+use uuid::Uuid;
 
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";
@@ -68,4 +70,31 @@ pub(crate) async fn create_sdk_config(
     }
 
     config.load().await
+}
+
+/// Create metadata location from `location` and `version`
+pub(crate) fn create_metadata_location(
+    warehouse_location: impl AsRef<str>,
+    version: i32,
+) -> Result<String> {
+    if version < 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata version: '{}' must be a non-negative integer",
+                version
+            ),
+        ));
+    };
+
+    let version = format!("{:0>5}", version);
+    let id = Uuid::new_v4();
+    let metadata_location = format!(
+        "{}/metadata/{}-{}.metadata.json",
+        warehouse_location.as_ref(),
+        version,
+        id
+    );
+
+    Ok(metadata_location)
 }

@@ -22,6 +22,7 @@ use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
 use iceberg::spec::Schema;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
+use uuid::Uuid;
 
 use crate::schema::HiveSchemaBuilder;
 
@@ -248,6 +249,30 @@ pub(crate) fn get_default_table_location(
     format!("{}/{}", location, table_name.as_ref())
 }
 
+/// Create metadata location from `location` and `version`
+pub(crate) fn create_metadata_location(location: impl AsRef<str>, version: i32) -> Result<String> {
+    if version < 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata version: '{}' must be a non-negative integer",
+                version
+            ),
+        ));
+    };
+
+    let version = format!("{:0>5}", version);
+    let id = Uuid::new_v4();
+    let metadata_location = format!(
+        "{}/metadata/{}-{}.metadata.json",
+        location.as_ref(),
+        version,
+        id
+    );
+
+    Ok(metadata_location)
+}
+
 /// Get metadata location from `HiveTable` parameters
 pub(crate) fn get_metadata_location(
     parameters: &Option<AHashMap<FastStr, FastStr>>,
@@ -314,7 +339,7 @@ fn get_current_time() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use iceberg::spec::{NestedField, PrimitiveType, Type};
-    use iceberg::{MetadataLocation, Namespace, NamespaceIdent};
+    use iceberg::{Namespace, NamespaceIdent};
 
     use super::*;
 
@@ -345,7 +370,7 @@ mod tests {
         let db_name = "my_db".to_string();
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hms".to_string();
-        let metadata_location = MetadataLocation::new_with_location(location.clone());
+        let metadata_location = create_metadata_location(location.clone(), 0)?;
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
@@ -360,7 +385,7 @@ mod tests {
             &schema,
             table_name.clone(),
             location.clone(),
-            metadata_location.to_string(),
+            metadata_location,
             &properties,
         )?;
 
@@ -385,6 +410,22 @@ mod tests {
         assert_eq!(result.table_type, Some(EXTERNAL_TABLE.into()));
         assert_eq!(result.owner, Some(HMS_DEFAULT_DB_OWNER.into()));
         assert_eq!(result.sd, Some(sd));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_metadata_location() -> Result<()> {
+        let location = "my_base_location";
+        let valid_version = 0;
+        let invalid_version = -1;
+
+        let valid_result = create_metadata_location(location, valid_version)?;
+        let invalid_result = create_metadata_location(location, invalid_version);
+
+        assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
+        assert!(valid_result.ends_with(".metadata.json"));
+        assert!(invalid_result.is_err());
 
         Ok(())
     }

@@ -3580,6 +3580,7 @@ dependencies = [
  "tokio",
  "tracing",
  "typed-builder 0.20.1",
+ "uuid",
 ]
 
 [[package]]
@@ -3603,6 +3604,7 @@ dependencies = [
  "tokio",
  "tracing",
  "typed-builder 0.20.1",
+ "uuid",
  "volo",
  "volo-thrift",
 ]
@@ -3643,6 +3645,7 @@ dependencies = [
  "itertools 0.13.0",
  "tokio",
  "typed-builder 0.20.1",
+ "uuid",
 ]
 
 [[package]]
@@ -3658,6 +3661,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "typed-builder 0.20.1",
+ "uuid",
 ]
 
 [[package]]
