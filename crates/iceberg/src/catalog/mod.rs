@@ -18,7 +18,7 @@
 //! Catalog API for Apache Iceberg
 
 pub mod memory;
-mod util;
+mod utils;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -35,7 +35,7 @@ pub use memory::MemoryCatalog;
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
-pub use util::*;
+pub use utils::*;
 use uuid::Uuid;
 
 use crate::spec::{

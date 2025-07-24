@@ -234,7 +234,7 @@ async fn test_create_table() -> Result<()> {
     assert!(
         result
             .metadata_location()
-            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
+            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/0-"))
     );
     assert!(
         catalog

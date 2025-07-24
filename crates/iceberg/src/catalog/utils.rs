@@ -84,7 +84,7 @@ impl Display for MetadataLocationParser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}/metadata/{}-{}.metadata.json",
+            "{}/metadata/{:0>5}-{}.metadata.json",
             self.prefix, self.version, self.id
         )
     }
