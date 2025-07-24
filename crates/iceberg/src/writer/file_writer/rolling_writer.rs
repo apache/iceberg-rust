@@ -111,13 +111,14 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
         }
 
         // write the input
-        let Some(writer) = self.inner.as_mut() else {
+        if let Some(writer) = self.inner.as_mut() {
+            writer.write(input).await?;
+        } else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 "Writer is not initialized!",
             ));
         };
-        writer.write(input).await?;
 
         Ok(())
     }
