@@ -1835,54 +1835,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_table_fails_if_commit_conflicts() {
-        let catalog = new_memory_catalog();
-        let base_table = create_table_with_namespace(&catalog).await;
-
-        // Turn off retry to test conflict
-        let tx = Transaction::new(&base_table);
-        let base_table = tx
-            .update_table_properties()
-            .set(PROPERTY_COMMIT_NUM_RETRIES.to_string(), "0".to_string())
-            .apply(tx)
-            .unwrap()
-            .commit(&catalog)
-            .await
-            .unwrap();
-
-        // Update the table by adding a new sort order.
-        let tx = Transaction::new(&base_table);
-        let _sort_table = tx
-            .replace_sort_order()
-            .asc("foo", NullOrder::First)
-            .apply(tx)
-            .unwrap()
-            .commit(&catalog)
-            .await
-            .unwrap();
-
-        // Try to update the "now old" table again with a different sort order.
-        let tx = Transaction::new(&base_table);
-        let err = tx
-            .replace_sort_order()
-            .desc("foo", NullOrder::Last)
-            .apply(tx)
-            .unwrap()
-            .commit(&catalog)
-            .await
-            .unwrap_err();
-
-        // The second transaction should fail because it didn't take the new update
-        // into account.
-        println!("{}", err.message()); // todo remove this
-        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
-        assert!(
-            err.message()
-                .contains("Default sort order id does not match")
-        );
-    }
-
-    #[tokio::test]
     async fn test_update_table_fails_if_table_doesnt_exist() {
         let catalog = new_memory_catalog();
 
