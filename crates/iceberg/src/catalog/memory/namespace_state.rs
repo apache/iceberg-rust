@@ -298,7 +298,7 @@ impl NamespaceState {
         }
     }
 
-    // Updates the metadata location of the given table or returns an error if it doesn't exist
+    /// Updates the metadata location of the given table or returns an error if it doesn't exist
     pub(crate) fn commit_table_update(&mut self, staged_table: Table) -> Result<Table> {
         let namespace = self.get_mut_namespace(staged_table.identifier().namespace())?;
 
