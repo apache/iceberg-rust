@@ -220,7 +220,7 @@ mod test {
     #[test]
     fn test_metadata_location_with_next_version() {
         let test_cases = vec![
-            MetadataLocation::new_with_location("/abc"),
+            MetadataLocation::new_with_table_location("/abc"),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )

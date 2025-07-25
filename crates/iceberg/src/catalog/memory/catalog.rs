@@ -219,7 +219,7 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_location(location).to_string();
+        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
@@ -1822,8 +1822,6 @@ mod tests {
         assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
         assert_ne!(table.metadata_location(), updated_table.metadata_location());
 
-        println!("left: {:?}", table.metadata().metadata_log());
-        println!("right: {:?}", updated_table.metadata().metadata_log());
         assert!(
             table.metadata().metadata_log().len() < updated_table.metadata().metadata_log().len()
         );
