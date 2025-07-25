@@ -30,6 +30,7 @@ mod datafusion;
 mod read_evolved_schema;
 mod read_positional_deletes;
 mod scan_all_type;
+mod spark;
 
 pub async fn random_ns() -> Namespace {
     let fixture = get_shared_containers();

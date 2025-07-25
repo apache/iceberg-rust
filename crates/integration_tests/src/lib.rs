@@ -25,7 +25,7 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 const REST_CATALOG_PORT: u16 = 8181;
 
 pub struct TestFixture {
-    pub _docker_compose: DockerCompose,
+    pub docker_compose: DockerCompose,
     pub catalog_config: RestCatalogConfig,
 }
 
@@ -57,7 +57,7 @@ pub fn set_test_fixture(func: &str) -> TestFixture {
         .build();
 
     TestFixture {
-        _docker_compose: docker_compose,
+        docker_compose: docker_compose,
         catalog_config,
     }
 }

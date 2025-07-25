@@ -134,6 +134,34 @@ impl DockerCompose {
             }
         }
     }
+
+    pub fn exec_in_container(
+        &self,
+        service_name: impl AsRef<str>,
+        args: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> String {
+        let container_name = format!("{}-{}-1", self.project_name, service_name.as_ref());
+
+        let mut cmd = Command::new("docker");
+        cmd.arg("exec").arg(&container_name);
+
+        for arg in args {
+            cmd.arg(arg.as_ref());
+        }
+
+        let output = cmd.output().expect("failed to run docker exec");
+
+        if !output.status.success() {
+            panic!(
+                "Command failed in container `{}`:\nstdout:\n{}\nstderr:\n{}",
+                container_name,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
 }
 
 impl Drop for DockerCompose {

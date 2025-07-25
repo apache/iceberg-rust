@@ -31,6 +31,6 @@ pub fn get_shared_containers() -> &'static Arc<TestFixture> {
 #[dtor]
 fn shutdown() {
     if let Some(fixture) = DOCKER_CONTAINERS.get() {
-        fixture._docker_compose.down()
+        fixture.docker_compose.down()
     }
 }

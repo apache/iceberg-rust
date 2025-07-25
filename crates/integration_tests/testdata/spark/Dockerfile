@@ -52,6 +52,7 @@ WORKDIR '/home/'
 
 COPY entrypoint.sh .
 COPY provision.py .
+COPY validation.py .
 
 HEALTHCHECK --retries=120 --interval=1s \
   CMD ls /tmp/ready || exit 1
