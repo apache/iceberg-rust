@@ -33,7 +33,7 @@ pub struct MetadataLocation {
 impl MetadataLocation {
     /// Creates a completely new metadata location starting at version 0.
     /// Only used for creating a new table. For updates, see `with_next_version`.
-    pub fn new_with_location(table_location: impl ToString) -> Self {
+    pub fn new_with_table_location(table_location: impl ToString) -> Self {
         Self {
             table_location: table_location.to_string(),
             version: 0,
