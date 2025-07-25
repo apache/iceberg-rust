@@ -297,7 +297,6 @@ impl Catalog for MemoryCatalog {
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        // Updates the current table version and writes a new metadata file.
         let current_table = self
             .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
             .await?;
