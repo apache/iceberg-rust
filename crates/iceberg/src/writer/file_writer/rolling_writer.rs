@@ -39,7 +39,8 @@ impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
     /// * `target_file_size` - The target size in bytes before rolling over to a new file
     ///
     /// NOTE: The `target_file_size` does not exactly reflect the final size on physical storage.
-    /// This is because the input size is based on the Arrow in-memory format, which differs from the on-disk file format.
+    /// This is because the input size is based on the Arrow in-memory format and cannot precisely control rollover behavior.
+    /// The actual file size on disk is expected to be slightly larger than `target_file_size`.
     pub fn new(inner_builder: B, target_file_size: usize) -> Self {
         Self {
             inner_builder,
@@ -77,30 +78,22 @@ pub struct RollingFileWriter<B: FileWriterBuilder> {
 impl<B: FileWriterBuilder> RollingFileWriter<B> {
     /// Determines if the writer should roll over to a new file.
     ///
-    /// # Arguments
-    ///
-    /// * `input_size` - The size in bytes of the incoming data
-    ///
     /// # Returns
     ///
     /// `true` if a new file should be started, `false` otherwise
-    pub fn should_roll(&self, input_size: usize) -> bool {
-        self.current_written_size() + input_size > self.target_file_size
+    pub fn should_roll(&self) -> bool {
+        self.current_written_size() > self.target_file_size
     }
 }
 
 impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
     async fn write(&mut self, input: &RecordBatch) -> Result<()> {
-        // The input size is estimated using the Arrow in-memory format
-        // and will differ from the final on-disk file size.
-        let input_size = input.get_array_memory_size();
-
         if self.inner.is_none() {
             // initialize inner writer
             self.inner = Some(self.inner_builder.clone().build().await?);
         }
 
-        if self.should_roll(input_size) {
+        if self.should_roll() {
             if let Some(inner) = self.inner.take() {
                 // close the current writer, roll to a new file
                 self.data_file_builders.extend(inner.close().await?);
