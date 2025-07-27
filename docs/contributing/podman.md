@@ -19,7 +19,7 @@
 
 # Using Podman instead of Docker
 
-Iceberg-rust does not require containerization, except for integration tests, where "docker" and "docker-compose" are used to start containers for minio and various catalogs. Below instructions setup "rootful podman" and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack. It is recommended to setup Podman if you are developing in a Linux or WSL environment. 
+Iceberg-rust does not require containerization, except for integration tests, where "docker" and "docker-compose" are used to start containers for minio and various catalogs. Below instructions setup "rootful podman" and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack.
 
 1. Have podman v4 or newer.
     ```shell
