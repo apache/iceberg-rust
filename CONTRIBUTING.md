@@ -105,7 +105,7 @@ Currently, iceberg-rust uses Docker to set up environment for integration tests.
 
 For MacOS users, you can install [OrbStack as a docker alternative](docs/contributing/orbstack.md).
 
-For podman, refer to [Using Podman instead of Docker](docs/contributing/podman.md)
+For Linux users Podman is recommended, refer to [Using Podman instead of Docker](docs/contributing/podman.md)
 
 ## Build
 

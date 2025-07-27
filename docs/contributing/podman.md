@@ -19,15 +19,16 @@
 
 # Using Podman instead of Docker
 
-Iceberg-rust does not require containerization, except for integration tests, where "docker" and "docker-compose" are used to start containers for minio and various catalogs. Below instructions setup "rootful podman" and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack. 
+Iceberg-rust does not require containerization, except for integration tests, where "docker" and "docker-compose" are used to start containers for minio and various catalogs. Below instructions setup "rootful podman" and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack. It is recommended to setup Podman if you are developing in a Linux or WSL environment. 
 
 1. Have podman v4 or newer.
-    ```console
+    ```shell
     $ podman --version
     podman version 4.9.4-rhel
     ```
-
-2. Open file `/usr/bin/docker` and add the below contents:
+2. Create a docker wrapper script:
+   
+  * Create a fresh `/usr/bin/docker` file and add the below contents:
     ```bash
     #!/bin/sh
     [ -e /etc/containers/nodocker ] || \
@@ -35,8 +36,13 @@ Iceberg-rust does not require containerization, except for integration tests, wh
     exec sudo /usr/bin/podman "$@"
     ```
 
+  * Set new `/usr/bin/docker` file to executable.
+    ```shell
+    sudo chmod +x /usr/bin/docker
+    ```
+
 3. Install the [docker compose plugin](https://docs.docker.com/compose/install/linux). Check for successful installation.
-    ```console
+    ```shell
     $ docker compose version
     Docker Compose version v2.28.1
     ```
@@ -53,7 +59,7 @@ Iceberg-rust does not require containerization, except for integration tests, wh
     ```
 
 6. Check that the following symlink exists.
-    ```console
+    ```shell
     $ ls -al /var/run/docker.sock
     lrwxrwxrwx 1 root root 27 Jul 24 12:18 /var/run/docker.sock -> /var/run/podman/podman.sock
     ```
@@ -83,3 +89,12 @@ As of podman v4, ["To be succinct and simple, when running rootless containers, 
 
 * <https://www.redhat.com/sysadmin/container-ip-address-podman>
 * <https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md>
+
+# Debugging Note:
+ - Fix for error: `Error: short-name "apache/iceberg-rest-fixture" did not resolve to an alias and no unqualified-search registries are defined in "/etc/containers/registries.conf"`
+    - Add or modify the `/etc/containers/registries.conf` file:
+    ```toml
+    [[registry]]
+    prefix = "docker.io"
+    location = "docker.io"
+    ```
