@@ -177,7 +177,7 @@
 <a href=#177 id=177 data-nosnippet>177</a>    /// that encodes changes to the previous metadata files for the table.
 <a href=#178 id=178 data-nosnippet>178</a>    /// Each time a new metadata file is created, a new entry of the
 <a href=#179 id=179 data-nosnippet>179</a>    /// previous metadata file location should be added to the list.
-<a href=#180 id=180 data-nosnippet>180</a>    /// Tables can be configured to remove oldest metadata log entries and
+<a href=#180 id=180 data-nosnippet>180</a>    /// Tables can be configured to remove the oldest metadata log entries and
 <a href=#181 id=181 data-nosnippet>181</a>    /// keep a fixed-size log of the most recent entries after a commit.
 <a href=#182 id=182 data-nosnippet>182</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) metadata_log: Vec&lt;MetadataLog&gt;,
 <a href=#183 id=183 data-nosnippet>183</a>
@@ -3078,7 +3078,7 @@
 <a href=#3078 id=3078 data-nosnippet>3078</a>    }
 <a href=#3079 id=3079 data-nosnippet>3079</a>
 <a href=#3080 id=3080 data-nosnippet>3080</a>    <span class="attr">#[tokio::test]
-<a href=#3081 id=3081 data-nosnippet>3081</a>    </span><span class="kw">async fn </span>test_table_metadata_io_read_write() {
+<a href=#3081 id=3081 data-nosnippet>3081</a>    </span><span class="kw">async fn </span>test_table_metadata_read_write() {
 <a href=#3082 id=3082 data-nosnippet>3082</a>        <span class="comment">// Create a temporary directory for our test
 <a href=#3083 id=3083 data-nosnippet>3083</a>        </span><span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#3084 id=3084 data-nosnippet>3084</a>        <span class="kw">let </span>temp_path = temp_dir.path().to_str().unwrap();
@@ -3111,7 +3111,7 @@
 <a href=#3111 id=3111 data-nosnippet>3111</a>    }
 <a href=#3112 id=3112 data-nosnippet>3112</a>
 <a href=#3113 id=3113 data-nosnippet>3113</a>    <span class="attr">#[tokio::test]
-<a href=#3114 id=3114 data-nosnippet>3114</a>    </span><span class="kw">async fn </span>test_table_metadata_io_read_nonexistent_file() {
+<a href=#3114 id=3114 data-nosnippet>3114</a>    </span><span class="kw">async fn </span>test_table_metadata_read_nonexistent_file() {
 <a href=#3115 id=3115 data-nosnippet>3115</a>        <span class="comment">// Create a FileIO instance
 <a href=#3116 id=3116 data-nosnippet>3116</a>        </span><span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
 <a href=#3117 id=3117 data-nosnippet>3117</a>
