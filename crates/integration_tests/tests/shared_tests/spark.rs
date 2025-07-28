@@ -459,7 +459,7 @@ async fn test_spark_read_partitioned() {
         "./validation.py",
         "--sql",
         &format!(
-            "DESCRIBE TABLE EXTENDED `{}`.rust_partitioned_table",
+            "SELECT partition, spec_id, record_count FROM `{}`.rust_partitioned_table.partitions ORDER BY partition",
             ns.name()
         ),
     ]);
