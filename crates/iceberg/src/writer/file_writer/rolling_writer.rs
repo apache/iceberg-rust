@@ -144,10 +144,11 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, StringArray};
+    use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
+    use rand::prelude::IteratorRandom;
     use tempfile::TempDir;
 
     use super::*;
@@ -264,10 +265,7 @@ mod tests {
         );
 
         // Set a very small target size to trigger rolling
-        let rolling_writer_builder = RollingFileWriterBuilder::new(
-            parquet_writer_builder,
-            100, // Very small target size to ensure rolling
-        );
+        let rolling_writer_builder = RollingFileWriterBuilder::new(parquet_writer_builder, 1024);
 
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder, None, 0);
 
@@ -276,43 +274,50 @@ mod tests {
 
         // Create test data
         let arrow_schema = make_test_arrow_schema();
+        let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
-        // Create multiple batches to trigger rolling
-        let batch1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-        ])?;
+        let names = vec![
+            "Alice", "Bob", "Charlie", "Dave", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy",
+            "Kelly", "Larry", "Mallory", "Shawn",
+        ];
 
-        let batch2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![4, 5, 6])),
-            Arc::new(StringArray::from(vec!["Dave", "Eve", "Frank"])),
-        ])?;
+        let mut rng = rand::thread_rng();
+        let batch_num = 10;
+        let batch_rows = 100;
+        let expected_rows = batch_num * batch_rows;
 
-        let batch3 = RecordBatch::try_new(Arc::new(arrow_schema), vec![
-            Arc::new(Int32Array::from(vec![7, 8, 9])),
-            Arc::new(StringArray::from(vec!["Grace", "Heidi", "Ivan"])),
-        ])?;
+        for i in 0..batch_num {
+            let int_values: Vec<i32> = (0..batch_rows).map(|row| i * batch_rows + row).collect();
+            let str_values: Vec<&str> = (0..batch_rows)
+                .map(|_| *names.iter().choose(&mut rng).unwrap())
+                .collect();
 
-        // Write data
-        writer.write(batch1.clone()).await?;
-        writer.write(batch2.clone()).await?;
-        writer.write(batch3.clone()).await?;
+            let int_array = Arc::new(Int32Array::from(int_values)) as ArrayRef;
+            let str_array = Arc::new(StringArray::from(str_values)) as ArrayRef;
+
+            let batch =
+                RecordBatch::try_new(Arc::clone(&arrow_schema_ref), vec![int_array, str_array])
+                    .expect("Failed to create RecordBatch");
+
+            writer.write(batch).await?;
+        }
 
         // Close writer and get data files
         let data_files = writer.close().await?;
 
-        // Verify multiple files were created (at least 2)
+        // Verify multiple files were created (at least 4)
         assert!(
-            data_files.len() > 1,
-            "Expected multiple data files to be created, got {}",
+            data_files.len() > 4,
+            "Expected at least 4 data files to be created, but got {}",
             data_files.len()
         );
 
         // Verify total record count across all files
         let total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
         assert_eq!(
-            total_records, 9,
-            "Expected 9 total records across all files"
+            total_records, expected_rows as u64,
+            "Expected {} total records across all files",
+            expected_rows
         );
 
         Ok(())
