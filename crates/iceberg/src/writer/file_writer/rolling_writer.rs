@@ -81,7 +81,7 @@ impl<B: FileWriterBuilder> RollingFileWriter<B> {
     /// # Returns
     ///
     /// `true` if a new file should be started, `false` otherwise
-    pub fn should_roll(&self) -> bool {
+    fn should_roll(&self) -> bool {
         self.current_written_size() > self.target_file_size
     }
 }
