@@ -611,7 +611,14 @@ impl CurrentFileStatus for ParquetWriter {
     }
 
     fn current_written_size(&self) -> usize {
-        self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
+        if let Some(inner) = self.inner_writer.as_ref() {
+            // inner/AsyncArrowWriter contains sync and async writers
+            // written size = bytes flushed to inner's async writer + bytes buffered in the inner's sync writer
+            inner.bytes_written() + inner.in_progress_size()
+        } else {
+            // inner writer is not initialized yet
+            0
+        }
     }
 }
 
