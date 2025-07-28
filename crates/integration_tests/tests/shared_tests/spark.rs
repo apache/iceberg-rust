@@ -22,14 +22,18 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
 use arrow_array::{
-    ArrayRef, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
-    Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray, MapArray, RecordBatch,
-    StringArray, StructArray, TimestampMicrosecondArray,
+    ArrayRef, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray, Float32Array,
+    Float64Array, Int32Array, Int64Array, LargeBinaryArray, MapArray, RecordBatch, StringArray,
+    StructArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::assert_contains;
 use iceberg::arrow::{DEFAULT_MAP_FIELD_NAME, UTC_TIME_ZONE};
-use iceberg::spec::{LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField, PrimitiveType, Schema, StructType, Type, UnboundPartitionSpec, Transform, Struct, Literal, PrimitiveLiteral, UnboundPartitionField};
+use iceberg::spec::{
+    LIST_FIELD_NAME, ListType, Literal, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType,
+    NestedField, PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType, Transform, Type,
+    UnboundPartitionField, UnboundPartitionSpec,
+};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -42,6 +46,7 @@ use iceberg_catalog_rest::RestCatalog;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
+
 use crate::get_shared_containers;
 use crate::shared_tests::random_ns;
 
@@ -68,7 +73,7 @@ async fn test_spark_read_all_type() {
                     scale: 5,
                 }),
             )
-                .into(),
+            .into(),
             NestedField::required(6, "string", Type::Primitive(PrimitiveType::String)).into(),
             NestedField::required(7, "boolean", Type::Primitive(PrimitiveType::Boolean)).into(),
             NestedField::required(8, "binary", Type::Primitive(PrimitiveType::Binary)).into(),
@@ -82,7 +87,7 @@ async fn test_spark_read_all_type() {
                 "timestamptz",
                 Type::Primitive(PrimitiveType::Timestamptz),
             )
-                .into(),
+            .into(),
             NestedField::required(
                 14,
                 "struct",
@@ -92,7 +97,7 @@ async fn test_spark_read_all_type() {
                         .into(),
                 ])),
             )
-                .into(),
+            .into(),
             NestedField::required(
                 15,
                 "list",
@@ -100,7 +105,7 @@ async fn test_spark_read_all_type() {
                     NestedField::list_element(19, Type::Primitive(PrimitiveType::Int), true).into(),
                 )),
             )
-                .into(),
+            .into(),
             NestedField::required(
                 16,
                 "map",
@@ -111,14 +116,13 @@ async fn test_spark_read_all_type() {
                         Type::Primitive(PrimitiveType::String),
                         true,
                     )
-                        .into(),
+                    .into(),
                 )),
             )
-                .into(),
+            .into(),
         ])
         .build()
         .unwrap();
-
 
     let table_creation = TableCreation::builder()
         .name("rust_test_all_data_types".to_string())
@@ -168,7 +172,7 @@ async fn test_spark_read_all_type() {
         Some(4.into()),
         Some(5.into()),
     ])
-        .with_data_type(DataType::Decimal128(20, 5));
+    .with_data_type(DataType::Decimal128(20, 5));
     let col6 = StringArray::from(vec!["a", "b", "c", "d", "e"]);
     let col7 = BooleanArray::from(vec![true, false, true, false, true]);
     let col8 = LargeBinaryArray::from_opt_vec(vec![
@@ -188,10 +192,10 @@ async fn test_spark_read_all_type() {
             vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         ]
-            .into_iter(),
+        .into_iter(),
     )
-        .unwrap();
-    let uuids = vec![
+    .unwrap();
+    let uuids = [
         Uuid::parse_str("0aed1a6e-1f03-473b-b2f8-808df2365106").unwrap(),
         Uuid::parse_str("8657c713-a9dd-41a6-829b-0774e3088808").unwrap(),
         Uuid::parse_str("ad50c31a-5ab5-4d2d-b574-4f60475fe59f").unwrap(),
@@ -199,9 +203,8 @@ async fn test_spark_read_all_type() {
         Uuid::parse_str("1d0b5ee7-9da8-4fa1-b7a1-174c416c5781").unwrap(),
     ];
 
-    let col12 = FixedSizeBinaryArray::try_from_iter(
-        uuids.iter().map(|u| u.as_bytes().to_vec()),
-    ).unwrap();
+    let col12 =
+        FixedSizeBinaryArray::try_from_iter(uuids.iter().map(|u| u.as_bytes().to_vec())).unwrap();
     let col13 = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]).with_timezone(UTC_TIME_ZONE);
     let col14 = StructArray::from(vec![
         (
@@ -296,7 +299,7 @@ async fn test_spark_read_all_type() {
         Arc::new(col15) as ArrayRef,
         Arc::new(col16) as ArrayRef,
     ])
-        .unwrap();
+    .unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
 
@@ -305,7 +308,12 @@ async fn test_spark_read_all_type() {
     let tx = append_action.apply(tx).unwrap();
     tx.commit(&rest_catalog).await.unwrap();
 
-    let output = fixture.docker_compose.exec_in_container("spark-iceberg",["python", "./validation.py", "--sql", &format!("SELECT * FROM `{}`.rust_test_all_data_types", ns.name())]);
+    let output = fixture.docker_compose.exec_in_container("spark-iceberg", [
+        "python",
+        "./validation.py",
+        "--sql",
+        &format!("SELECT * FROM `{}`.rust_test_all_data_types", ns.name()),
+    ]);
     let expected = r#"
 +---+----+-----+------+-------+------+-------+------+----------+--------------------------+-------------------------------+------------------------------------+--------------------------+------+---------------+--------+
 |int|long|float|double|decimal|string|boolean|binary|date      |timestamp                 |fixed                          |uuid                                |timestamptz               |struct|list           |map     |
@@ -395,25 +403,25 @@ async fn test_spark_read_partitioned() {
         let col2 = Int32Array::from(vec![Some(bar)]);
         let col3 = BooleanArray::from(vec![Some(baz)]);
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(col1), Arc::new(col2), Arc::new(col3)],
-        )
-            .unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(col1),
+            Arc::new(col2),
+            Arc::new(col3),
+        ])
+        .unwrap();
 
         let partition_struct = Struct::from_iter([
-            Some(Literal::Primitive(PrimitiveLiteral::String(foo.to_string()))),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                foo.to_string(),
+            ))),
             Some(Literal::Primitive(PrimitiveLiteral::Int(bar))),
         ]);
 
-        let mut writer = DataFileWriterBuilder::new(
-            parquet_writer_builder.clone(),
-            Some(partition_struct),
-            0,
-        )
-            .build()
-            .await
-            .unwrap();
+        let mut writer =
+            DataFileWriterBuilder::new(parquet_writer_builder.clone(), Some(partition_struct), 0)
+                .build()
+                .await
+                .unwrap();
 
         writer.write(batch).await.unwrap();
         let data_file = writer.close().await.unwrap();
@@ -425,7 +433,16 @@ async fn test_spark_read_partitioned() {
         tx.commit(&rest_catalog).await.unwrap();
     }
 
-    let output = fixture.docker_compose.exec_in_container("spark-iceberg",["python", "./validation.py", "--sql", &format!("SELECT * FROM `{}`.rust_partitioned_table ORDER BY foo", ns.name())]);
+    let output = fixture.docker_compose.exec_in_container("spark-iceberg", [
+        "python",
+        "./validation.py",
+        "--sql",
+        &format!(
+            "SELECT * FROM `{}`.rust_partitioned_table ORDER BY foo",
+            ns.name()
+        ),
+    ]);
+
     let data_expected = r#"
 +----+---+-----+
 |foo |bar|baz  |
@@ -437,11 +454,15 @@ async fn test_spark_read_partitioned() {
     "#;
     assert_eq!(output.trim(), data_expected.trim());
 
-    let output = fixture.docker_compose.exec_in_container(
-        "spark-iceberg",
-        ["python", "./validation.py", "--sql",
-            &format!("SELECT partition, spec_id, record_count FROM `{}`.rust_partitioned_table.partitions ORDER BY partition", ns.name())
-        ]);
+    let output = fixture.docker_compose.exec_in_container("spark-iceberg", [
+        "python",
+        "./validation.py",
+        "--sql",
+        &format!(
+            "DESCRIBE TABLE EXTENDED `{}`.rust_partitioned_table",
+            ns.name()
+        ),
+    ]);
     let partition_expected = r#"
 +-----------+-------+------------+
 |partition  |spec_id|record_count|
@@ -453,12 +474,25 @@ async fn test_spark_read_partitioned() {
     "#;
     assert_eq!(output.trim(), partition_expected.trim());
 
-    let output = fixture.docker_compose.exec_in_container(
-        "spark-iceberg",
-        ["python", "./validation.py", "--sql",
-            &format!("DESCRIBE TABLE EXTENDED `{}`.rust_partitioned_table", ns.name())
-        ]);
-    assert_contains!(output.trim(), "|Part 0                      |truncate(5, foo)");
-    assert_contains!(output.trim(), "|Part 1                      |bucket(3, bar)");
-    assert_contains!(output.trim(), "|_partition                  |struct<foo_truncate_5:string,bar_bucket_3:int>");
+    let output = fixture.docker_compose.exec_in_container("spark-iceberg", [
+        "python",
+        "./validation.py",
+        "--sql",
+        &format!(
+            "DESCRIBE TABLE EXTENDED `{}`.rust_partitioned_table",
+            ns.name()
+        ),
+    ]);
+    assert_contains!(
+        output.trim(),
+        "|Part 0                      |truncate(5, foo)"
+    );
+    assert_contains!(
+        output.trim(),
+        "|Part 1                      |bucket(3, bar)"
+    );
+    assert_contains!(
+        output.trim(),
+        "|_partition                  |struct<foo_truncate_5:string,bar_bucket_3:int>"
+    );
 }

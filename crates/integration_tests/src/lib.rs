@@ -57,7 +57,7 @@ pub fn set_test_fixture(func: &str) -> TestFixture {
         .build();
 
     TestFixture {
-        docker_compose: docker_compose,
+        docker_compose,
         catalog_config,
     }
 }
