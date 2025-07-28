@@ -177,7 +177,7 @@ pub struct TableMetadata {
     /// that encodes changes to the previous metadata files for the table.
     /// Each time a new metadata file is created, a new entry of the
     /// previous metadata file location should be added to the list.
-    /// Tables can be configured to remove oldest metadata log entries and
+    /// Tables can be configured to remove the oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
     pub(crate) metadata_log: Vec<MetadataLog>,
 
@@ -3078,7 +3078,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_metadata_io_read_write() {
+    async fn test_table_metadata_read_write() {
         // Create a temporary directory for our test
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_str().unwrap();
@@ -3111,7 +3111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_metadata_io_read_nonexistent_file() {
+    async fn test_table_metadata_read_nonexistent_file() {
         // Create a FileIO instance
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
 

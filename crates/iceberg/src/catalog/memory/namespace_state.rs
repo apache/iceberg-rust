@@ -19,6 +19,7 @@ use std::collections::{HashMap, hash_map};
 
 use itertools::Itertools;
 
+use crate::table::Table;
 use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 // Represents the state of a namespace
@@ -259,7 +260,7 @@ impl NamespaceState {
 
         match namespace.table_metadata_locations.get(table_ident.name()) {
             None => no_such_table_err(table_ident),
-            Some(table_metadadata_location) => Ok(table_metadadata_location),
+            Some(table_metadata_location) => Ok(table_metadata_location),
         }
     }
 
@@ -295,5 +296,23 @@ impl NamespaceState {
             None => no_such_table_err(table_ident),
             Some(metadata_location) => Ok(metadata_location),
         }
+    }
+
+    /// Updates the metadata location of the given table or returns an error if it doesn't exist
+    pub(crate) fn commit_table_update(&mut self, staged_table: Table) -> Result<Table> {
+        let namespace = self.get_mut_namespace(staged_table.identifier().namespace())?;
+
+        let _ = namespace
+            .table_metadata_locations
+            .insert(
+                staged_table.identifier().name().to_string(),
+                staged_table.metadata_location_result()?.to_string(),
+            )
+            .ok_or(Error::new(
+                ErrorKind::TableNotFound,
+                format!("No such table: {:?}", staged_table.identifier()),
+            ))?;
+
+        Ok(staged_table)
     }
 }
