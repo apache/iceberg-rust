@@ -104,7 +104,12 @@ pub trait Catalog: Debug + Sync + Send {
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
 
     /// Register an existing table to the catalog.
-    async fn register_table(&self, table: &TableIdent, metadata_location: String) -> Result<Table>;
+    async fn register_table(
+        &self,
+        table: &TableIdent,
+        metadata_location: String,
+        overwrite: Option<bool>,
+    ) -> Result<Table>;
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;

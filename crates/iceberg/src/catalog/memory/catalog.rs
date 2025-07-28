@@ -279,7 +279,11 @@ impl Catalog for MemoryCatalog {
         &self,
         table_ident: &TableIdent,
         metadata_location: String,
+        overwrite: Option<bool>,
     ) -> Result<Table> {
+        // TODO: Use overwrite in `insert_new_table` to overwrite metadata for an already existing table
+        let _overwrite = overwrite.unwrap_or(false);
+
         let mut root_namespace_state = self.root_namespace_state.lock().await;
         root_namespace_state.insert_new_table(&table_ident.clone(), metadata_location.clone())?;
 
@@ -1767,7 +1771,7 @@ mod tests {
         let register_table_ident =
             TableIdent::new(namespace_ident.clone(), "register_table".into());
         let registered_table = catalog
-            .register_table(&register_table_ident, metadata_location.clone())
+            .register_table(&register_table_ident, metadata_location.clone(), None)
             .await
             .unwrap();
 
