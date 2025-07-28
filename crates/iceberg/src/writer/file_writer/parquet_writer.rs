@@ -229,6 +229,8 @@ pub struct ParquetWriter {
     out_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
     writer_properties: WriterProperties,
+    // written_size is only accurate after closing the inner writer,
+    // because the inner writer flushes data asynchronously.
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
