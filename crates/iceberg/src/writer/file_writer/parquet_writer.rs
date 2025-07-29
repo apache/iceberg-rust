@@ -229,6 +229,8 @@ pub struct ParquetWriter {
     out_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
     writer_properties: WriterProperties,
+    // written_size is only accurate after closing the inner writer,
+    // because the inner writer flushes data asynchronously.
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
@@ -611,7 +613,14 @@ impl CurrentFileStatus for ParquetWriter {
     }
 
     fn current_written_size(&self) -> usize {
-        self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
+        if let Some(inner) = self.inner_writer.as_ref() {
+            // inner/AsyncArrowWriter contains sync and async writers
+            // written size = bytes flushed to inner's async writer + bytes buffered in the inner's sync writer
+            inner.bytes_written() + inner.in_progress_size()
+        } else {
+            // inner writer is not initialized yet
+            0
+        }
     }
 }
 
