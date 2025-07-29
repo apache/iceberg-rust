@@ -33,7 +33,7 @@ use futures::StreamExt;
 use iceberg::Catalog;
 use iceberg::spec::{DataFile, deserialize_data_file_from_json};
 use iceberg::table::Table;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
@@ -177,7 +177,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let partition_type = self.table.metadata().default_partition_type().clone();
         let current_schema = self.table.metadata().current_schema().clone();
 
-        let _catalog = Arc::clone(&self.catalog);
+        let catalog = Arc::clone(&self.catalog);
 
         // Process the input streams from all partitions and commit the data files
         let stream = futures::stream::once(async move {
@@ -238,16 +238,15 @@ impl ExecutionPlan for IcebergCommitExec {
 
             // Create a transaction and commit the data files
             let tx = Transaction::new(&table);
-            let _action = tx.fast_append().add_data_files(data_files);
+            let action = tx.fast_append().add_data_files(data_files);
 
-            // todo uncomment this
-            // // Apply the action and commit the transaction
-            // let updated_table = action
-            //     .apply(tx)
-            //     .map_err(to_datafusion_error)?
-            //     .commit(catalog.as_ref())
-            //     .await
-            //     .map_err(to_datafusion_error)?;
+            // Apply the action and commit the transaction
+            let _updated_table = action
+                .apply(tx)
+                .map_err(to_datafusion_error)?
+                .commit(catalog.as_ref())
+                .await
+                .map_err(to_datafusion_error)?;
 
             Self::make_count_batch(total_record_count)
         })
