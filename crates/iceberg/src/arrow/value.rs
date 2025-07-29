@@ -440,12 +440,10 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         Ok(schema_partner)
     }
 
-    // todo generate field_pos in datafusion instead of passing to here
     fn field_partner<'a>(
         &self,
         struct_partner: &'a ArrayRef,
         field: &NestedField,
-        field_pos: Option<usize>,
     ) -> Result<&'a ArrayRef> {
         let struct_array = struct_partner
             .as_any()
@@ -457,14 +455,6 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 )
             })?;
 
-        // todo remove unneeded log lines
-        println!(
-            "!!!Accessor struct array from struct partner: {:?}",
-            struct_array
-        );
-
-        println!("!!!field: {:?}", field);
-
         let field_pos = struct_array
             .fields()
             .iter()
@@ -473,12 +463,21 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     .map(|id| id == field.id)
                     .unwrap_or(false)
             })
-            .unwrap_or(field_pos.ok_or_else(|| {
+            .or_else(|| {
+                struct_array
+                    .fields()
+                    .iter()
+                    .position(|arrow_field| arrow_field.name().clone() == field.name)
+            })
+            .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!(
+                        "Field with id={} or name={} not found in struct array",
+                        field.id, field.name
+                    ),
                 )
-            })?);
+            })?;
 
         Ok(struct_array.column(field_pos))
     }
