@@ -86,7 +86,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
 impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
     type R = ParquetWriter;
 
-    async fn build(self) -> crate::Result<Self::R> {
+    async fn build(self) -> Result<Self::R> {
         let written_size = Arc::new(AtomicI64::new(0));
         let out_file = self.file_io.new_output(
             self.location_generator
@@ -229,6 +229,8 @@ pub struct ParquetWriter {
     out_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
     writer_properties: WriterProperties,
+    // written_size is only accurate after closing the inner writer,
+    // because the inner writer flushes data asynchronously.
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
@@ -266,7 +268,7 @@ impl MinMaxColAggregator {
         self.upper_bounds
             .entry(field_id)
             .and_modify(|e| {
-                if *e > datum {
+                if *e < datum {
                     *e = datum.clone()
                 }
             })
@@ -515,7 +517,7 @@ impl ParquetWriter {
 }
 
 impl FileWriter for ParquetWriter {
-    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> crate::Result<()> {
+    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
@@ -611,7 +613,14 @@ impl CurrentFileStatus for ParquetWriter {
     }
 
     fn current_written_size(&self) -> usize {
-        self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
+        if let Some(inner) = self.inner_writer.as_ref() {
+            // inner/AsyncArrowWriter contains sync and async writers
+            // written size = bytes flushed to inner's async writer + bytes buffered in the inner's sync writer
+            inner.bytes_written() + inner.in_progress_size()
+        } else {
+            // inner writer is not initialized yet
+            0
+        }
     }
 }
 
@@ -664,6 +673,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::file::statistics::ValueStatistics;
     use rust_decimal::Decimal;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -853,7 +863,9 @@ mod tests {
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
+            WriterProperties::builder()
+                .set_max_row_group_size(128)
+                .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
             file_io.clone(),
             location_gen,
@@ -2283,5 +2295,40 @@ mod tests {
 
         // Check that file should have been deleted.
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_min_max_aggregator() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "col", Type::Primitive(PrimitiveType::Int))
+                        .with_id(0)
+                        .into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let create_statistics =
+            |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
+        min_max_agg
+            .update(0, create_statistics(None, Some(42)))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(Some(i32::MIN), None))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(None, None))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
     }
 }
