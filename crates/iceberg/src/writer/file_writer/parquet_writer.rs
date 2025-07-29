@@ -86,7 +86,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
 impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
     type R = ParquetWriter;
 
-    async fn build(self) -> crate::Result<Self::R> {
+    async fn build(self) -> Result<Self::R> {
         let written_size = Arc::new(AtomicI64::new(0));
         let out_file = self.file_io.new_output(
             self.location_generator
@@ -517,7 +517,7 @@ impl ParquetWriter {
 }
 
 impl FileWriter for ParquetWriter {
-    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> crate::Result<()> {
+    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
