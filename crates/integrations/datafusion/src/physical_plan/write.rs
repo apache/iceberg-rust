@@ -42,11 +42,11 @@ use iceberg::spec::{
 };
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
-use iceberg::writer::base_writer::rolling_writer::RollingDataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
@@ -205,12 +205,11 @@ impl ExecutionPlan for IcebergWriteExec {
                 file_format,
             ),
         );
+        let rolling_writer_builder =
+            RollingFileWriterBuilder::new(parquet_file_writer_builder, 100 * 1024 * 1024);
+
         let data_file_writer_builder =
-            DataFileWriterBuilder::new(parquet_file_writer_builder, None, spec_id);
-        let rolling_writer_builder = RollingDataFileWriterBuilder::new(
-            data_file_writer_builder,
-            100 * 1024 * 1024, // todo use a config
-        );
+            DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
 
         // Get input data
         let data = execute_input_stream(
@@ -225,7 +224,7 @@ impl ExecutionPlan for IcebergWriteExec {
 
         // Create write stream
         let stream = futures::stream::once(async move {
-            let mut writer = rolling_writer_builder
+            let mut writer = data_file_writer_builder
                 .build()
                 .await
                 .map_err(to_datafusion_error)?;
