@@ -86,7 +86,7 @@
 <a href=#86 id=86 data-nosnippet>86</a><span class="kw">impl</span>&lt;T: LocationGenerator, F: FileNameGenerator&gt; FileWriterBuilder <span class="kw">for </span>ParquetWriterBuilder&lt;T, F&gt; {
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">type </span>R = ParquetWriter;
 <a href=#88 id=88 data-nosnippet>88</a>
-<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;<span class="self">Self</span>::R&gt; {
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
 <a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>written_size = Arc::new(AtomicI64::new(<span class="number">0</span>));
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>out_file = <span class="self">self</span>.file_io.new_output(
 <a href=#92 id=92 data-nosnippet>92</a>            <span class="self">self</span>.location_generator
@@ -517,7 +517,7 @@
 <a href=#517 id=517 data-nosnippet>517</a>}
 <a href=#518 id=518 data-nosnippet>518</a>
 <a href=#519 id=519 data-nosnippet>519</a><span class="kw">impl </span>FileWriter <span class="kw">for </span>ParquetWriter {
-<a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: <span class="kw-2">&amp;</span>arrow_array::RecordBatch) -&gt; <span class="kw">crate</span>::Result&lt;()&gt; {
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: <span class="kw-2">&amp;</span>arrow_array::RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#521 id=521 data-nosnippet>521</a>        <span class="comment">// Skip empty batch
 <a href=#522 id=522 data-nosnippet>522</a>        </span><span class="kw">if </span>batch.num_rows() == <span class="number">0 </span>{
 <a href=#523 id=523 data-nosnippet>523</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
