@@ -84,13 +84,30 @@ impl DockerCompose {
             "1200000",
         ]);
 
-        run_command(
+        let ret = run_command(
             cmd,
             format!(
                 "Starting docker compose in {}, project name: {}",
                 self.docker_compose_dir, self.project_name
             ),
-        )
+        );
+
+        if !ret {
+            let mut cmd = Command::new("docker");
+            cmd.current_dir(&self.docker_compose_dir);
+
+            cmd.env("DOCKER_DEFAULT_PLATFORM", Self::get_os_arch());
+
+            cmd.args(vec![
+                "compose",
+                "-p",
+                self.project_name.as_str(),
+                "logs",
+                "spark-iceberg",
+            ]);
+            run_command(cmd, "Docker compose logs");
+            panic!("Docker compose up failed!")
+        }
     }
 
     pub fn down(&self) {
@@ -106,13 +123,17 @@ impl DockerCompose {
             "--remove-orphans",
         ]);
 
-        run_command(
+        let ret = run_command(
             cmd,
             format!(
                 "Stopping docker compose in {}, project name: {}",
                 self.docker_compose_dir, self.project_name
             ),
-        )
+        );
+
+        if !ret {
+            panic!("Failed to stop docker compose")
+        }
     }
 
     pub fn get_container_ip(&self, service_name: impl AsRef<str>) -> IpAddr {
