@@ -159,6 +159,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
+
     use arrow_array::StringArray;
     use tempfile::TempDir;
 
@@ -1099,14 +1100,8 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![1])
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
-                    .into(),
-                NestedField::required(
-                    2,
-                    "name",
-                    Type::Primitive(PrimitiveType::String),
-                )
-                    .into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()
             .unwrap();
@@ -1189,7 +1184,7 @@ mod tests {
                     &partition_type,
                     &schema,
                 )
-                    .unwrap();
+                .unwrap();
 
                 println!("Deserialized DataFile: {:?}", data_file);
                 data_file
