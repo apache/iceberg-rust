@@ -459,15 +459,9 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| {
+                // match by ID if available, otherwise try matching by name
                 get_field_id(arrow_field)
-                    .map(|id| id == field.id)
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                struct_array
-                    .fields()
-                    .iter()
-                    .position(|arrow_field| arrow_field.name().clone() == field.name)
+                    .map_or(arrow_field.name() == &field.name, |id| id == field.id)
             })
             .ok_or_else(|| {
                 Error::new(
@@ -922,9 +916,9 @@ mod test {
                     Arc::new(int32_array) as ArrayRef,
                 ),
                 (
-                    // Field with wrong field ID metadata - should fallback to name matching
+                    // Field with the correct field ID metadata
                     Arc::new(Field::new("field_b", DataType::Utf8, true).with_metadata(
-                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "999".to_string())]),
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
                     )),
                     Arc::new(string_array) as ArrayRef,
                 ),
@@ -938,7 +932,7 @@ mod test {
                 Type::Primitive(PrimitiveType::Int),
             )),
             Arc::new(NestedField::optional(
-                2,         // Different ID than what's in Arrow metadata (999)
+                2,         // Same ID
                 "field_b", // Same name as Arrow field
                 Type::Primitive(PrimitiveType::String),
             )),
