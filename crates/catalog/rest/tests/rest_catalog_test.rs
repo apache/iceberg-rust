@@ -430,11 +430,7 @@ async fn test_register_table() {
 
     let new_table_identifier = TableIdent::from_strs(["ns", "t2"]).unwrap();
     let table_registered = catalog
-        .register_table(
-            &new_table_identifier,
-            metadata_location.to_string(),
-            Some(false),
-        )
+        .register_table(&new_table_identifier, metadata_location.to_string())
         .await
         .unwrap();
 

@@ -627,7 +627,6 @@ impl Catalog for GlueCatalog {
         &self,
         _table_ident: &TableIdent,
         _metadata_location: String,
-        _overwrite: Option<bool>,
     ) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,

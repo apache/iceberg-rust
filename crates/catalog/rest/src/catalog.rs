@@ -761,7 +761,6 @@ impl Catalog for RestCatalog {
         &self,
         table_ident: &TableIdent,
         metadata_location: String,
-        overwrite: Option<bool>,
     ) -> Result<Table> {
         let context = self.context().await?;
 
@@ -776,7 +775,7 @@ impl Catalog for RestCatalog {
             .json(&RegisterTableRequest {
                 name: table_ident.name.clone(),
                 metadata_location: metadata_location.clone(),
-                overwrite,
+                overwrite: Some(false),
             })
             .build()?;
 
@@ -2548,7 +2547,7 @@ mod tests {
         );
 
         let table = catalog
-            .register_table(&table_ident, metadata_location, Some(false))
+            .register_table(&table_ident, metadata_location)
             .await
             .unwrap();
 
@@ -2596,7 +2595,7 @@ mod tests {
             "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
         );
         let table = catalog
-            .register_table(&table_ident, metadata_location, None)
+            .register_table(&table_ident, metadata_location)
             .await;
 
         assert!(table.is_err());
