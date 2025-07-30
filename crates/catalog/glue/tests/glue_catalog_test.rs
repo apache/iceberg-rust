@@ -469,3 +469,32 @@ async fn test_update_table() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_register_table() -> Result<()> {
+    let catalog = get_catalog().await;
+    let namespace = NamespaceIdent::new("test_register_table".into());
+    set_test_namespace(&catalog, &namespace).await?;
+
+    let creation = set_table_creation(Some("s3a://warehouse/hive/test_register_table".into()), "my_table")?;
+    let table = catalog.create_table(&namespace, creation).await?;
+    let metadata_location = table
+        .metadata_location()
+        .expect("Expected metadata location to be set")
+        .to_string();
+
+    catalog.drop_table(table.identifier()).await?;
+    let ident = TableIdent::new(namespace.clone(), "my_table".to_string());
+
+    let registered = catalog
+        .register_table(&ident, metadata_location.clone())
+        .await?;
+
+    assert_eq!(registered.identifier(), &ident);
+    assert_eq!(
+        registered.metadata_location().as_deref(),
+        Some(metadata_location.as_str())
+    );
+
+    Ok(())
+}
