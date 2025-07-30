@@ -1156,8 +1156,8 @@ mod tests {
 
         // Verify we have the expected serialized files
         assert_eq!(serialized_files.len(), 2);
-        let pretty_json1: Value = serde_json::from_str(&serialized_files.get(0).unwrap()).unwrap();
-        let pretty_json2: Value = serde_json::from_str(&serialized_files.get(1).unwrap()).unwrap();
+        let pretty_json1: Value = serde_json::from_str(serialized_files.first().unwrap()).unwrap();
+        let pretty_json2: Value = serde_json::from_str(serialized_files.get(1).unwrap()).unwrap();
         let expected_serialized_file1 = serde_json::json!({
             "content": 0,
             "file_path": "path/to/file1.parquet",
@@ -1233,7 +1233,7 @@ mod tests {
 
         // Verify we have the expected number of deserialized files
         assert_eq!(deserialized_files.len(), 2);
-        let deserialized_data_file1 = deserialized_files.get(0).unwrap();
+        let deserialized_data_file1 = deserialized_files.first().unwrap();
         let deserialized_data_file2 = deserialized_files.get(1).unwrap();
         let expected_deserialized_file1 = expect![[
             r#"DataFile { content: Data, file_path: "path/to/file1.parquet", file_format: Parquet, partition: Struct { fields: [] }, record_count: 100, file_size_in_bytes: 1024, column_sizes: {1: 512}, value_counts: {1: 100}, null_value_counts: {1: 0}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: None, split_offsets: [], equality_ids: [], sort_order_id: None, first_row_id: None, partition_spec_id: 1, referenced_data_file: None, content_offset: None, content_size_in_bytes: None }"#
