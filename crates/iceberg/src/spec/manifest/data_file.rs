@@ -297,8 +297,12 @@ pub fn write_data_files_to_avro<W: Write>(
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
     for data_file in data_files {
-        let value = to_value(DataFileSerde::try_from(data_file, partition_type, true)?)?
-            .resolve(&avro_schema)?;
+        let value = to_value(DataFileSerde::try_from(
+            data_file,
+            partition_type,
+            FormatVersion::V1,
+        )?)?
+        .resolve(&avro_schema)?;
         writer.append(value)?;
     }
 

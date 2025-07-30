@@ -34,6 +34,7 @@ use super::{
     UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
+use crate::{Error, ErrorKind};
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -119,12 +120,46 @@ impl Manifest {
     }
 }
 
+/// Serialize a DataFile to a JSON string.
+pub fn serialize_data_file_to_json(
+    data_file: DataFile,
+    partition_type: &super::StructType,
+    format_version: FormatVersion,
+) -> Result<String> {
+    let serde = _serde::DataFileSerde::try_from(data_file, partition_type, format_version)?;
+    serde_json::to_string(&serde).map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Failed to serialize DataFile to JSON!".to_string(),
+        )
+        .with_source(e)
+    })
+}
+
+/// Deserialize a DataFile from a JSON string.
+pub fn deserialize_data_file_from_json(
+    json: &str,
+    partition_spec_id: i32,
+    partition_type: &super::StructType,
+    schema: &Schema,
+) -> Result<DataFile> {
+    let serde = serde_json::from_str::<_serde::DataFileSerde>(json).map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Failed to deserialize JSON to DataFile!".to_string(),
+        )
+        .with_source(e)
+    })?;
+
+    serde.try_into(partition_spec_id, partition_type, schema)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
-
+    use arrow_array::StringArray;
     use tempfile::TempDir;
 
     use super::*;
@@ -1055,5 +1090,121 @@ mod tests {
         );
         assert!(!partitions[2].clone().contains_null);
         assert_eq!(partitions[2].clone().contains_nan, Some(false));
+    }
+
+    #[test]
+    fn test_data_file_serialization() {
+        // Create a simple schema
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![1])
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "name",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Create a partition spec
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_partition_field("id", "id_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Get partition type from the partition spec
+        let partition_type = partition_spec.partition_type(&schema).unwrap();
+
+        // Create a vector of DataFile objects
+        let data_files = vec![
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_format(DataFileFormat::Parquet)
+                .file_path("path/to/file1.parquet".to_string())
+                .file_size_in_bytes(1024)
+                .record_count(100)
+                .partition_spec_id(1)
+                .partition(Struct::empty())
+                .column_sizes(HashMap::from([(1, 512), (2, 512)]))
+                .value_counts(HashMap::from([(1, 100), (2, 100)]))
+                .null_value_counts(HashMap::from([(1, 0), (2, 0)]))
+                .build()
+                .unwrap(),
+            DataFileBuilder::default()
+                .content(crate::spec::DataContentType::Data)
+                .file_format(DataFileFormat::Parquet)
+                .file_path("path/to/file2.parquet".to_string())
+                .file_size_in_bytes(2048)
+                .record_count(200)
+                .partition_spec_id(1)
+                .partition(Struct::empty())
+                .column_sizes(HashMap::from([(1, 1024), (2, 1024)]))
+                .value_counts(HashMap::from([(1, 200), (2, 200)]))
+                .null_value_counts(HashMap::from([(1, 10), (2, 5)]))
+                .build()
+                .unwrap(),
+        ];
+
+        // Serialize the DataFile objects
+        let serialized_files = data_files
+            .into_iter()
+            .map(|f| {
+                let json =
+                    serialize_data_file_to_json(f, &partition_type, FormatVersion::V2).unwrap();
+                println!("Test serialized data file: {}", json);
+                json
+            })
+            .collect::<Vec<String>>();
+
+        // Verify we have the expected number of serialized files
+        assert_eq!(serialized_files.len(), 2);
+
+        // Verify each serialized file contains expected data
+        for json in &serialized_files {
+            assert!(json.contains("path/to/file"));
+            assert!(json.contains("parquet"));
+            assert!(json.contains("record_count"));
+            assert!(json.contains("file_size_in_bytes"));
+        }
+
+        // Convert Vec<String> to StringArray and print it
+        let string_array = StringArray::from(serialized_files.clone());
+        println!("StringArray: {:?}", string_array);
+
+        // Now deserialize the JSON strings back into DataFile objects
+        println!("\nDeserializing back to DataFile objects:");
+        let deserialized_files: Vec<DataFile> = serialized_files
+            .into_iter()
+            .map(|json| {
+                let data_file = deserialize_data_file_from_json(
+                    &json,
+                    partition_spec.spec_id(),
+                    &partition_type,
+                    &schema,
+                )
+                    .unwrap();
+
+                println!("Deserialized DataFile: {:?}", data_file);
+                data_file
+            })
+            .collect();
+
+        // Verify we have the expected number of deserialized files
+        assert_eq!(deserialized_files.len(), 2);
+
+        // Verify the deserialized files have the expected properties
+        for file in &deserialized_files {
+            assert_eq!(file.content_type(), DataContentType::Data);
+            assert_eq!(file.file_format(), DataFileFormat::Parquet);
+            assert!(file.file_path().contains("path/to/file"));
+            assert!(file.record_count() == 100 || file.record_count() == 200);
+        }
     }
 }
