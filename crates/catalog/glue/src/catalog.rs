@@ -624,15 +624,75 @@ impl Catalog for GlueCatalog {
         }
     }
 
+    /// Asynchronously registers an existing table into the Glue Catalog.
+    ///
+    /// Converts the provided table identifier and metadata location into a
+    /// Glue-compatible table representation, and attempts to create the
+    /// corresponding table in the Glue Catalog.
+    ///
+    /// # Returns
+    /// Returns `Ok(Table)` if the table is successfully registered and loaded.
+    /// If the registration fails due to validation issues, existing table conflicts,
+    /// metadata problems, or errors during the registration or loading process,
+    /// an `Err(...)` is returned.
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name();
+
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+
+        let table_input = convert_to_glue_table(
+            table_name,
+            metadata_location.clone(),
+            &metadata,
+            metadata.properties(),
+            None,
+        )?;
+
+        let builder = self
+            .client
+            .0
+            .create_table()
+            .database_name(&db_name)
+            .table_input(table_input);
+        let builder = with_catalog_id!(builder, self.config);
+
+        let result = builder.send().await;
+
+        match result {
+            Ok(_) => {
+                self.load_table(table).await.map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Table {}.{} created but failed to load: {e}",
+                            db_name, table_name
+                        ),
+                    )
+                })
+            }
+            Err(err) => {
+                let service_err = err.as_service_error();
+
+                if service_err.map(|e| e.is_entity_not_found_exception()) == Some(true) {
+                    Err(Error::new(
+                        ErrorKind::NamespaceNotFound,
+                        format!("Database {} does not exist", db_name),
+                    ))
+                } else if service_err.map(|e| e.is_already_exists_exception()) == Some(true) {
+                    Err(Error::new(
+                        ErrorKind::TableAlreadyExists,
+                        format!("Table {}.{} already exists", db_name, table_name),
+                    ))
+                } else {
+                    Err(from_aws_sdk_error(err))
+                }
+            }
+        }
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
