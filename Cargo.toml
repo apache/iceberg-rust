@@ -52,6 +52,7 @@ arrow-select = { version = "55" }
 arrow-string = { version = "55" }
 as-any = "0.3.2"
 async-std = "1.12"
+async-stream = "0.3"
 async-trait = "0.1.88"
 aws-config = "1.6.1"
 aws-sdk-glue = "1.39"
