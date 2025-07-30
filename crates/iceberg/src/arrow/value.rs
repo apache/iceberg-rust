@@ -460,13 +460,22 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .iter()
             .position(|arrow_field| {
                 get_field_id(arrow_field)
-                    .map(|id| id == field.id)
-                    .unwrap_or(false)
+                    .map_or(arrow_field.name() == &field.name, |id| id == field.id)
             })
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!(
+                        "Field with name '{}' (id: {}) not found in struct array. Available fields: [{}]",
+                        field.name,
+                        field.id,
+                        struct_array
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 )
             })?;
 
@@ -1225,5 +1234,70 @@ mod test {
                 ])),
             ]))),
         ]);
+    }
+
+    #[test]
+    fn test_field_partner_with_datafusion_schema() {
+        use arrow_schema::{DataType, Field as ArrowField, Schema as ArrowSchema};
+
+        use crate::spec::{NestedField, PrimitiveType, Type};
+
+        let id_field = "id";
+        let score_field = "score";
+
+        // Create an Arrow schema with id and PARQUET:field_id metadata
+        // And score without PARQUET:field_id metadata (like DataFusion)
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new(id_field, DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            ArrowField::new(score_field, DataType::Float64, true),
+        ]);
+
+        // Create test data
+        let id_array = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
+        let score_array =
+            Arc::new(Float64Array::from(vec![Some(95.5), Some(87.2), None])) as ArrayRef;
+
+        let struct_array = Arc::new(StructArray::new(
+            arrow_schema.fields().clone(),
+            vec![id_array, score_array],
+            None,
+        )) as ArrayRef;
+
+        // Create corresponding Iceberg nested fields
+        let id_field = NestedField {
+            id: 1,
+            name: id_field.to_string(),
+            required: true,
+            field_type: Box::new(Type::Primitive(PrimitiveType::Long)),
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        };
+
+        let score_field = NestedField {
+            id: 2,
+            name: score_field.to_string(),
+            required: false,
+            field_type: Box::new(Type::Primitive(PrimitiveType::Double)),
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        };
+
+        let accessor = ArrowArrayAccessor;
+
+        // Test field matching by name, it should be ok because id has PARQUET:field_id metadata
+        let id_partner = accessor.field_partner(&struct_array, &id_field).unwrap();
+        assert_eq!(id_partner.len(), 3);
+        assert_eq!(id_partner.data_type(), &DataType::Int64);
+
+        // Test field matching by name, it should be ok because score doesn't have PARQUET:field_id metadata
+        // But it should fall back to name
+        let score_partner = accessor.field_partner(&struct_array, &score_field).unwrap();
+        assert_eq!(score_partner.len(), 3);
+        assert_eq!(score_partner.data_type(), &DataType::Float64);
     }
 }
