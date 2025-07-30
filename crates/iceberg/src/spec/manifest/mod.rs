@@ -160,7 +160,8 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use arrow_array::StringArray;
+    use expect_test::expect;
+    use serde_json::Value;
     use tempfile::TempDir;
 
     use super::*;
@@ -1127,22 +1128,22 @@ mod tests {
                 .record_count(100)
                 .partition_spec_id(1)
                 .partition(Struct::empty())
-                .column_sizes(HashMap::from([(1, 512), (2, 512)]))
-                .value_counts(HashMap::from([(1, 100), (2, 100)]))
-                .null_value_counts(HashMap::from([(1, 0), (2, 0)]))
+                .column_sizes(HashMap::from([(1, 512)]))
+                .value_counts(HashMap::from([(1, 100)]))
+                .null_value_counts(HashMap::from([(1, 0)]))
                 .build()
                 .unwrap(),
             DataFileBuilder::default()
-                .content(crate::spec::DataContentType::Data)
+                .content(DataContentType::Data)
                 .file_format(DataFileFormat::Parquet)
                 .file_path("path/to/file2.parquet".to_string())
                 .file_size_in_bytes(2048)
                 .record_count(200)
                 .partition_spec_id(1)
                 .partition(Struct::empty())
-                .column_sizes(HashMap::from([(1, 1024), (2, 1024)]))
-                .value_counts(HashMap::from([(1, 200), (2, 200)]))
-                .null_value_counts(HashMap::from([(1, 10), (2, 5)]))
+                .column_sizes(HashMap::from([(1, 1024)]))
+                .value_counts(HashMap::from([(1, 200)]))
+                .null_value_counts(HashMap::from([(1, 10)]))
                 .build()
                 .unwrap(),
         ];
@@ -1150,56 +1151,97 @@ mod tests {
         // Serialize the DataFile objects
         let serialized_files = data_files
             .into_iter()
-            .map(|f| {
-                let json =
-                    serialize_data_file_to_json(f, &partition_type, FormatVersion::V2).unwrap();
-                println!("Test serialized data file: {}", json);
-                json
-            })
+            .map(|f| serialize_data_file_to_json(f, &partition_type, FormatVersion::V2).unwrap())
             .collect::<Vec<String>>();
 
-        // Verify we have the expected number of serialized files
+        // Verify we have the expected serialized files
         assert_eq!(serialized_files.len(), 2);
-
-        // Verify each serialized file contains expected data
-        for json in &serialized_files {
-            assert!(json.contains("path/to/file"));
-            assert!(json.contains("parquet"));
-            assert!(json.contains("record_count"));
-            assert!(json.contains("file_size_in_bytes"));
-        }
-
-        // Convert Vec<String> to StringArray and print it
-        let string_array = StringArray::from(serialized_files.clone());
-        println!("StringArray: {:?}", string_array);
+        let pretty_json1: Value = serde_json::from_str(&serialized_files.get(0).unwrap()).unwrap();
+        let pretty_json2: Value = serde_json::from_str(&serialized_files.get(1).unwrap()).unwrap();
+        let expected_serialized_file1 = serde_json::json!({
+            "content": 0,
+            "file_path": "path/to/file1.parquet",
+            "file_format": "PARQUET",
+            "partition": {},
+            "record_count": 100,
+            "file_size_in_bytes": 1024,
+            "column_sizes": [
+                { "key": 1, "value": 512 }
+            ],
+            "value_counts": [
+                { "key": 1, "value": 100 }
+            ],
+            "null_value_counts": [
+                { "key": 1, "value": 0 }
+            ],
+            "nan_value_counts": [],
+            "lower_bounds": [],
+            "upper_bounds": [],
+            "key_metadata": null,
+            "split_offsets": [],
+            "equality_ids": [],
+            "sort_order_id": null,
+            "first_row_id": null,
+            "referenced_data_file": null,
+            "content_offset": null,
+            "content_size_in_bytes": null
+        });
+        let expected_serialized_file2 = serde_json::json!({
+            "content": 0,
+            "file_path": "path/to/file2.parquet",
+            "file_format": "PARQUET",
+            "partition": {},
+            "record_count": 200,
+            "file_size_in_bytes": 2048,
+            "column_sizes": [
+                { "key": 1, "value": 1024 }
+            ],
+            "value_counts": [
+                { "key": 1, "value": 200 }
+            ],
+            "null_value_counts": [
+                { "key": 1, "value": 10 }
+            ],
+            "nan_value_counts": [],
+            "lower_bounds": [],
+            "upper_bounds": [],
+            "key_metadata": null,
+            "split_offsets": [],
+            "equality_ids": [],
+            "sort_order_id": null,
+            "first_row_id": null,
+            "referenced_data_file": null,
+            "content_offset": null,
+            "content_size_in_bytes": null
+        });
+        assert_eq!(pretty_json1, expected_serialized_file1);
+        assert_eq!(pretty_json2, expected_serialized_file2);
 
         // Now deserialize the JSON strings back into DataFile objects
-        println!("\nDeserializing back to DataFile objects:");
         let deserialized_files: Vec<DataFile> = serialized_files
             .into_iter()
             .map(|json| {
-                let data_file = deserialize_data_file_from_json(
+                deserialize_data_file_from_json(
                     &json,
                     partition_spec.spec_id(),
                     &partition_type,
                     &schema,
                 )
-                .unwrap();
-
-                println!("Deserialized DataFile: {:?}", data_file);
-                data_file
+                .unwrap()
             })
             .collect();
 
         // Verify we have the expected number of deserialized files
         assert_eq!(deserialized_files.len(), 2);
-
-        // Verify the deserialized files have the expected properties
-        for file in &deserialized_files {
-            assert_eq!(file.content_type(), DataContentType::Data);
-            assert_eq!(file.file_format(), DataFileFormat::Parquet);
-            assert!(file.file_path().contains("path/to/file"));
-            assert!(file.record_count() == 100 || file.record_count() == 200);
-        }
+        let deserialized_data_file1 = deserialized_files.get(0).unwrap();
+        let deserialized_data_file2 = deserialized_files.get(1).unwrap();
+        let expected_deserialized_file1 = expect![[
+            r#"DataFile { content: Data, file_path: "path/to/file1.parquet", file_format: Parquet, partition: Struct { fields: [] }, record_count: 100, file_size_in_bytes: 1024, column_sizes: {1: 512}, value_counts: {1: 100}, null_value_counts: {1: 0}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: None, split_offsets: [], equality_ids: [], sort_order_id: None, first_row_id: None, partition_spec_id: 1, referenced_data_file: None, content_offset: None, content_size_in_bytes: None }"#
+        ]];
+        let expected_deserialized_file2 = expect![[
+            r#"DataFile { content: Data, file_path: "path/to/file2.parquet", file_format: Parquet, partition: Struct { fields: [] }, record_count: 200, file_size_in_bytes: 2048, column_sizes: {1: 1024}, value_counts: {1: 200}, null_value_counts: {1: 10}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: None, split_offsets: [], equality_ids: [], sort_order_id: None, first_row_id: None, partition_spec_id: 1, referenced_data_file: None, content_offset: None, content_size_in_bytes: None }"#
+        ]];
+        expected_deserialized_file1.assert_eq(&format!("{:?}", deserialized_data_file1));
+        expected_deserialized_file2.assert_eq(&format!("{:?}", deserialized_data_file2));
     }
 }
