@@ -22,10 +22,12 @@ set -e
 
 start-master.sh -p 7077
 start-worker.sh spark://spark-iceberg:7077
-start-history-server.sh
 
+echo "Starting provision"
 python3 ./provision.py
 
+echo "Finished provisioning"
 touch /tmp/ready
 
-tail -f /dev/null
+echo "Print logs"
+tail -f $SPARK_HOME/logs/*

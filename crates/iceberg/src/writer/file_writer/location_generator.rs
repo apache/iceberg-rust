@@ -26,7 +26,7 @@ use crate::spec::{DataFileFormat, TableMetadata};
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
     /// Generate an absolute path for the given file name.
-    /// e.g
+    /// e.g.
     /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
     fn generate_location(&self, file_name: &str) -> String;
 }

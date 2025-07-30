@@ -17,16 +17,18 @@
 
 use std::process::Command;
 
-use tracing::info;
+use tracing::{error, info};
 
-pub fn run_command(mut cmd: Command, desc: impl ToString) {
+pub fn run_command(mut cmd: Command, desc: impl ToString) -> bool {
     let desc = desc.to_string();
     info!("Starting to {}, command: {:?}", &desc, cmd);
     let exit = cmd.status().unwrap();
     if exit.success() {
-        info!("{} succeed!", desc)
+        info!("{} succeed!", desc);
+        true
     } else {
-        panic!("{} failed: {:?}", desc, exit);
+        error!("{} failed: {:?}", desc, exit);
+        false
     }
 }
 
