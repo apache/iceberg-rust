@@ -65,7 +65,8 @@ impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
         max_concurrent_close_tasks: Option<usize>,
     ) -> Self {
         let default_concurrency: usize = num_cpus::get().clamp(1, 4);
-        let max_concurrent_close_tasks: usize = max_concurrent_close_tasks.unwrap_or(default_concurrency);
+        let max_concurrent_close_tasks: usize =
+            max_concurrent_close_tasks.unwrap_or(default_concurrency);
         Self {
             inner_builder,
             target_file_size,
@@ -213,7 +214,6 @@ impl<B: FileWriterBuilder> CurrentFileStatus for RollingFileWriter<B> {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::time::Instant;
 
     use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};

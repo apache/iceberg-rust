@@ -3701,7 +3701,6 @@ dependencies = [
  "iceberg_test_utils",
  "ordered-float 2.10.1",
  "parquet",
- "rand 0.8.5",
  "tokio",
  "uuid",
 ]
