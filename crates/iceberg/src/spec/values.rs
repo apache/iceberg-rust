@@ -1199,11 +1199,57 @@ impl Datum {
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
                         Ok(Datum::i64_to_i32(*val))
                     }
-                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
-                        Ok(Datum::timestamp_micros(*val))
-                    }
-                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamptz) => {
-                        Ok(Datum::timestamptz_micros(*val))
+                    (PrimitiveLiteral::Long(val), source_type, target_type) => {
+                        match (source_type, target_type) {
+                            (_, PrimitiveType::Long) => Ok(Datum::long(*val)),
+                            (
+                                PrimitiveType::Long
+                                | PrimitiveType::Timestamp
+                                | PrimitiveType::Timestamptz,
+                                PrimitiveType::Timestamp,
+                            ) => Ok(Datum::timestamp_micros(*val)),
+                            (
+                                PrimitiveType::Long
+                                | PrimitiveType::Timestamp
+                                | PrimitiveType::Timestamptz,
+                                PrimitiveType::Timestamptz,
+                            ) => Ok(Datum::timestamptz_micros(*val)),
+                            (
+                                PrimitiveType::Long
+                                | PrimitiveType::TimestampNs
+                                | PrimitiveType::TimestamptzNs,
+                                PrimitiveType::TimestampNs,
+                            ) => Ok(Datum::timestamp_nanos(*val)),
+                            (
+                                PrimitiveType::Long
+                                | PrimitiveType::TimestampNs
+                                | PrimitiveType::TimestamptzNs,
+                                PrimitiveType::TimestamptzNs,
+                            ) => Ok(Datum::timestamptz_nanos(*val)),
+                            (
+                                PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                                PrimitiveType::Timestamp,
+                            ) => Ok(Datum::timestamp_micros(val / 1000)),
+                            (
+                                PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                                PrimitiveType::Timestamptz,
+                            ) => Ok(Datum::timestamptz_micros(val / 1000)),
+                            (
+                                PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+                                PrimitiveType::TimestampNs,
+                            ) => Ok(Datum::timestamp_nanos(val * 1000)),
+                            (
+                                PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+                                PrimitiveType::TimestamptzNs,
+                            ) => Ok(Datum::timestamptz_nanos(val * 1000)),
+                            _ => Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Can't convert datum from {} type to {} type.",
+                                    self.r#type, target_primitive_type
+                                ),
+                            )),
+                        }
                     }
                     // Let's wait with nano's until this clears up: https://github.com/apache/iceberg/pull/11775
                     (PrimitiveLiteral::Int128(val), _, PrimitiveType::Long) => {
@@ -3942,5 +3988,182 @@ mod tests {
         ];
 
         assert_eq!(double_sorted, double_expected);
+    }
+
+    // Tests for timestamp nanosecond conversions
+    #[test]
+    fn test_datum_timestamp_nanos_convert_to_timestamp_micros() {
+        let datum = Datum::timestamp_nanos(12345000);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_nanos_convert_to_timestamptz_micros() {
+        let datum = Datum::timestamp_nanos(12345000);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
+
+        let expected = Datum::timestamptz_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_nanos_convert_to_timestamp_micros() {
+        let datum = Datum::timestamptz_nanos(12345000);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_nanos_convert_to_timestamptz_micros() {
+        let datum = Datum::timestamptz_nanos(12345000);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
+
+        let expected = Datum::timestamptz_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_micros_convert_to_timestamp_nanos() {
+        let datum = Datum::timestamp_micros(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_micros_convert_to_timestamptz_nanos() {
+        let datum = Datum::timestamp_micros(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_nanos(12345000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_micros_convert_to_timestamp_nanos() {
+        let datum = Datum::timestamptz_micros(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_micros_convert_to_timestamptz_nanos() {
+        let datum = Datum::timestamptz_micros(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_nanos(12345000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_nanos_convert_to_timestamp_nanos() {
+        let datum = Datum::timestamp_nanos(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_nanos_convert_to_timestamptz_nanos() {
+        let datum = Datum::timestamp_nanos(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_nanos_convert_to_timestamp_nanos() {
+        let datum = Datum::timestamptz_nanos(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamptz_nanos_convert_to_timestamptz_nanos() {
+        let datum = Datum::timestamptz_nanos(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_timestamp_nanos() {
+        let datum = Datum::long(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_timestamptz_nanos() {
+        let datum = Datum::long(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_nanos(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_nanos_to_micros() {
+        let datum = Datum::timestamp_nanos(12345678);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_timestamp_micros_to_nanos() {
+        let datum = Datum::timestamp_micros(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_nanos(12345000);
+
+        assert_eq!(result, expected);
     }
 }

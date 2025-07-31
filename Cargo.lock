@@ -3666,6 +3666,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "datafusion",
  "expect-test",
  "futures",

@@ -669,7 +669,7 @@ impl Not for Predicate {
     /// just adds a `NOT` operator.
     ///
     /// # Example
-    ///     
+    ///
     ///```rust
     /// use std::ops::Bound::Unbounded;
     ///
