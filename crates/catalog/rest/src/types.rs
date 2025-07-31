@@ -191,3 +191,11 @@ pub(super) struct CommitTableResponse {
     pub(super) metadata_location: String,
     pub(super) metadata: TableMetadata,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) struct RegisterTableRequest {
+    pub(super) name: String,
+    pub(super) metadata_location: String,
+    pub(super) overwrite: Option<bool>,
+}
