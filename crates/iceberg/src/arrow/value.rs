@@ -463,10 +463,19 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     .map(|id| id == field.id)
                     .unwrap_or(false)
             })
+            .or_else(|| {
+                struct_array
+                    .fields()
+                    .iter()
+                    .position(|arrow_field| arrow_field.name().clone() == field.name)
+            })
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!(
+                        "Field with id={} or name={} not found in struct array",
+                        field.id, field.name
+                    ),
                 )
             })?;
 
