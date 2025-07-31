@@ -60,6 +60,9 @@ const INT_MIN: i32 = -2147483648;
 const LONG_MAX: i64 = 9223372036854775807;
 const LONG_MIN: i64 = -9223372036854775808;
 
+const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+const NANOS_PER_MICRO: i64 = 1000;
+
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
@@ -1196,6 +1199,28 @@ impl Datum {
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
+                    (PrimitiveLiteral::Int(val), PrimitiveType::Date, PrimitiveType::Timestamp) => {
+                        Ok(Datum::timestamp_micros(*val as i64 * MICROS_PER_DAY))
+                    }
+                    (
+                        PrimitiveLiteral::Int(val),
+                        PrimitiveType::Date,
+                        PrimitiveType::Timestamptz,
+                    ) => Ok(Datum::timestamptz_micros(*val as i64 * MICROS_PER_DAY)),
+                    (
+                        PrimitiveLiteral::Int(val),
+                        PrimitiveType::Date,
+                        PrimitiveType::TimestampNs,
+                    ) => Ok(Datum::timestamp_nanos(
+                        *val as i64 * MICROS_PER_DAY * NANOS_PER_MICRO,
+                    )),
+                    (
+                        PrimitiveLiteral::Int(val),
+                        PrimitiveType::Date,
+                        PrimitiveType::TimestamptzNs,
+                    ) => Ok(Datum::timestamptz_nanos(
+                        *val as i64 * MICROS_PER_DAY * NANOS_PER_MICRO,
+                    )),
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
                         Ok(Datum::i64_to_i32(*val))
                     }
@@ -1229,19 +1254,19 @@ impl Datum {
                             (
                                 PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
                                 PrimitiveType::Timestamp,
-                            ) => Ok(Datum::timestamp_micros(val / 1000)),
+                            ) => Ok(Datum::timestamp_micros(val / NANOS_PER_MICRO)),
                             (
                                 PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
                                 PrimitiveType::Timestamptz,
-                            ) => Ok(Datum::timestamptz_micros(val / 1000)),
+                            ) => Ok(Datum::timestamptz_micros(val / NANOS_PER_MICRO)),
                             (
                                 PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
                                 PrimitiveType::TimestampNs,
-                            ) => Ok(Datum::timestamp_nanos(val * 1000)),
+                            ) => Ok(Datum::timestamp_nanos(val * NANOS_PER_MICRO)),
                             (
                                 PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
                                 PrimitiveType::TimestamptzNs,
-                            ) => Ok(Datum::timestamptz_nanos(val * 1000)),
+                            ) => Ok(Datum::timestamptz_nanos(val * NANOS_PER_MICRO)),
                             _ => Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
@@ -3990,7 +4015,6 @@ mod tests {
         assert_eq!(double_sorted, double_expected);
     }
 
-    // Tests for timestamp nanosecond conversions
     #[test]
     fn test_datum_timestamp_nanos_convert_to_timestamp_micros() {
         let datum = Datum::timestamp_nanos(12345000);
@@ -4163,6 +4187,79 @@ mod tests {
         let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
 
         let expected = Datum::timestamp_nanos(12345000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_timestamp() {
+        let datum = Datum::date(1); // 1970-01-02
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                .unwrap()
+                .naive_utc(),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_timestamptz() {
+        let datum = Datum::date(1);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
+
+        let expected = Datum::timestamptz_from_str("1970-01-02T00:00:00Z").unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_timestamp_nanos() {
+        let datum = Datum::date(1);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestampNs)).unwrap();
+
+        let expected = Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                .unwrap()
+                .naive_utc(),
+        )
+        .to(&Primitive(PrimitiveType::TimestampNs))
+        .unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_timestamptz_nanos() {
+        let datum = Datum::date(1);
+
+        let result = datum.to(&Primitive(PrimitiveType::TimestamptzNs)).unwrap();
+
+        let expected = Datum::timestamptz_from_datetime(
+            DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z").unwrap(),
+        )
+        .to(&Primitive(PrimitiveType::TimestamptzNs))
+        .unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_date_negative_convert_to_timestamp() {
+        let datum = Datum::date(-1);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1969-12-31T00:00:00Z")
+                .unwrap()
+                .naive_utc(),
+        );
 
         assert_eq!(result, expected);
     }
