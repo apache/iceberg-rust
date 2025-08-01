@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
@@ -36,7 +35,6 @@ use parquet::thrift::{TCompactOutputProtocol, TSerializable};
 use thrift::protocol::TOutputProtocol;
 
 use super::location_generator::{FileNameGenerator, LocationGenerator};
-use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, NanValueCountVisitor, get_parquet_stat_max_as_datum,
@@ -87,7 +85,6 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     type R = ParquetWriter;
 
     async fn build(self) -> Result<Self::R> {
-        let written_size = Arc::new(AtomicI64::new(0));
         let out_file = self.file_io.new_output(
             self.location_generator
                 .generate_location(&self.file_name_generator.generate_file_name()),
@@ -97,7 +94,6 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props,
-            written_size,
             current_row_num: 0,
             out_file,
             nan_value_count_visitor: NanValueCountVisitor::new(),
@@ -227,11 +223,8 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
     writer_properties: WriterProperties,
-    // written_size is only accurate after closing the inner writer,
-    // because the inner writer flushes data asynchronously.
-    written_size: Arc<AtomicI64>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
 }
@@ -534,8 +527,7 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer =
-                TrackWriter::new(self.out_file.writer().await?, self.written_size.clone());
+            let inner_writer = self.out_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
@@ -562,16 +554,16 @@ impl FileWriter for ParquetWriter {
     }
 
     async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
-        let writer = match self.inner_writer.take() {
+        let mut writer = match self.inner_writer.take() {
             Some(writer) => writer,
             None => return Ok(vec![]),
         };
 
-        let metadata = writer.close().await.map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
+        let metadata = writer.finish().await.map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to finish parquet writer.").with_source(err)
         })?;
 
-        let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
+        let written_size = writer.bytes_written();
 
         if self.current_row_num == 0 {
             self.out_file.delete().await.map_err(|err| {
