@@ -467,8 +467,15 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Field with id={} or name={} not found in struct array",
-                        field.id, field.name
+                        "Field with id={} or name={} not found in struct array. Available fields: [{}]",
+                        field.id,
+                        field.name,
+                        struct_array
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 )
             })?;
