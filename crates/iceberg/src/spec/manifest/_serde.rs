@@ -307,9 +307,9 @@ fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    if cfg!(test) {
-        i64_entries.sort_by_key(|e| e.key);
-    }
+    // Ensure that the order is deterministic during testing
+    #[cfg(test)]
+    i64_entries.sort_by_key(|e| e.key);
 
     Ok(i64_entries)
 }
