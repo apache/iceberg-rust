@@ -36,10 +36,14 @@ impl CompressionCodec {
     pub(crate) fn decompress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 decompression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                let decompressed = lz4_flex::decompress_size_prepended(&bytes)
+                    .map_err(|e| Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("LZ4 decompression failed: {}", e),
+                    ))?;
+                Ok(decompressed)
+            },
             CompressionCodec::Zstd => {
                 let decompressed = zstd::stream::decode_all(&bytes[..])?;
                 Ok(decompressed)
@@ -50,10 +54,10 @@ impl CompressionCodec {
     pub(crate) fn compress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 compression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                let compressed = lz4_flex::compress_prepend_size(&bytes);
+                Ok(compressed)
+            },
             CompressionCodec::Zstd => {
                 let writer = Vec::<u8>::new();
                 let mut encoder = zstd::stream::Encoder::new(writer, 3)?;
@@ -92,21 +96,11 @@ mod tests {
         let compression_codec = CompressionCodec::Lz4;
         let bytes_vec = [0_u8; 100].to_vec();
 
-        assert_eq!(
-            compression_codec
-                .compress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently",
-        );
+        let compressed = compression_codec.compress(bytes_vec.clone()).unwrap();
+        assert!(compressed.len() < bytes_vec.len()); // LZ4 should compress repeated bytes
 
-        assert_eq!(
-            compression_codec
-                .decompress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 decompression is not supported currently",
-        )
+        let decompressed = compression_codec.decompress(compressed.clone()).unwrap();
+        assert_eq!(decompressed, bytes_vec);
     }
 
     #[tokio::test]

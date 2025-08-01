@@ -45,10 +45,9 @@ struct PopulatedDeleteFileIndex {
     global_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
+    deletion_vectors_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     // TODO: do we need this?
     // pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
-
-    // TODO: Deletion Vector support
 }
 
 impl DeleteFileIndex {
@@ -121,6 +120,8 @@ impl PopulatedDeleteFileIndex {
             HashMap::default();
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
+        let mut deletion_vectors_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
+            HashMap::default();
 
         let mut global_deletes: Vec<Arc<DeleteFileContext>> = vec![];
 
@@ -141,7 +142,10 @@ impl PopulatedDeleteFileIndex {
             let destination_map = match arc_ctx.manifest_entry.content_type() {
                 DataContentType::PositionDeletes => &mut pos_deletes_by_partition,
                 DataContentType::EqualityDeletes => &mut eq_deletes_by_partition,
-                _ => unreachable!(),
+                // For Deletion Vectors, we would need a new DataContentType variant or
+                // detect them based on file format/metadata
+                // For now, we'll assume they go in the deletion_vectors_by_partition
+                _ => &mut deletion_vectors_by_partition,
             };
 
             destination_map
@@ -156,6 +160,7 @@ impl PopulatedDeleteFileIndex {
             global_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
+            deletion_vectors_by_partition,
         }
     }
 
@@ -189,10 +194,8 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        // TODO: the spec states that:
-        //     "The data file's file_path is equal to the delete file's referenced_data_file if it is non-null".
-        //     we're not yet doing that here. The referenced data file's name will also be present in the positional
-        //     delete file's file path column.
+        // Process positional delete files
+        // The spec states that "The data file's file_path is equal to the delete file's referenced_data_file if it is non-null".
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
@@ -201,6 +204,17 @@ impl PopulatedDeleteFileIndex {
                     seq_num
                         .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
                         .unwrap_or_else(|| true)
+                })
+                // filter by referenced_data_file if present
+                .filter(|&delete| {
+                    // If the delete file has a referenced_data_file set, only apply it to matching data files
+                    if let Some(ref_data_file) = delete.manifest_entry.data_file().referenced_data_file() {
+                        data_file.file_path().to_string() == ref_data_file
+                    } else {
+                        // If no referenced_data_file is set, apply to all data files (as the referenced data file
+                        // paths will be present in the delete file's content)
+                        true
+                    }
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }

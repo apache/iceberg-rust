@@ -139,8 +139,8 @@ impl DeleteFilter {
             return Ok(None);
         }
 
-        // TODO: handle case-insensitive case
-        let bound_predicate = combined_predicate.bind(file_scan_task.schema.clone(), false)?;
+        // Use the case sensitivity setting from the file scan task
+        let bound_predicate = combined_predicate.bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
         Ok(Some(bound_predicate))
     }
 

@@ -44,6 +44,7 @@ pub(crate) struct ManifestFileContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
+    case_sensitive: bool,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
 }
@@ -58,6 +59,7 @@ pub(crate) struct ManifestEntryContext {
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
+    pub case_sensitive: bool,
     pub delete_file_index: DeleteFileIndex,
 }
 
@@ -80,16 +82,17 @@ impl ManifestFileContext {
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
-            let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
-                expression_evaluator_cache: expression_evaluator_cache.clone(),
-                field_ids: field_ids.clone(),
-                partition_spec_id: manifest_file.partition_spec_id,
-                bound_predicates: bound_predicates.clone(),
-                snapshot_schema: snapshot_schema.clone(),
-                delete_file_index: delete_file_index.clone(),
-            };
+                    let manifest_entry_context = ManifestEntryContext {
+            // TODO: refactor to avoid the expensive ManifestEntry clone
+            manifest_entry: manifest_entry.clone(),
+            expression_evaluator_cache: expression_evaluator_cache.clone(),
+            field_ids: field_ids.clone(),
+            partition_spec_id: manifest_file.partition_spec_id,
+            bound_predicates: bound_predicates.clone(),
+            snapshot_schema: snapshot_schema.clone(),
+            case_sensitive: self.case_sensitive,
+            delete_file_index: delete_file_index.clone(),
+        };
 
             sender
                 .send(manifest_entry_context)
@@ -113,6 +116,9 @@ impl ManifestEntryContext {
             )
             .await;
 
+        // Use case sensitivity from the context
+        let case_sensitive = self.case_sensitive;
+
         Ok(FileScanTask {
             start: 0,
             length: self.manifest_entry.file_size_in_bytes(),
@@ -127,6 +133,7 @@ impl ManifestEntryContext {
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
 
+            case_sensitive,
             deletes,
         })
     }
