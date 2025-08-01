@@ -262,7 +262,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "The precision or scale ({},{}) of arrow decimal128 array is not compatitable with iceberg decimal type ({},{})",
+                                "The precision or scale ({},{}) of arrow decimal128 array is not compatible with iceberg decimal type ({},{})",
                                 arrow_precision, arrow_scale, precision, scale
                             ),
                         ));
@@ -429,7 +429,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 pub struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
-    fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -459,14 +459,24 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| {
+                // match by ID if available, otherwise try matching by name
                 get_field_id(arrow_field)
-                    .map(|id| id == field.id)
-                    .unwrap_or(false)
+                    .map_or(arrow_field.name() == &field.name, |id| id == field.id)
             })
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!(
+                        "Field with id={} or name={} not found in struct array. Available fields: [{}]",
+                        field.id,
+                        field.name,
+                        struct_array
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 )
             })?;
 
@@ -897,6 +907,89 @@ mod test {
         let iceberg_struct_type = StructType::new(vec![]);
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
         assert_eq!(result, vec![None; 0]);
+    }
+
+    #[test]
+    fn test_field_name_fallback_when_id_unavailable() {
+        // Create an Arrow struct array with fields that don't have field IDs in metadata
+        let int32_array = Int32Array::from(vec![Some(1), Some(2), None]);
+        let string_array = StringArray::from(vec![Some("hello"), Some("world"), None]);
+
+        let struct_array =
+            Arc::new(StructArray::from(vec![
+                (
+                    // Field without field ID metadata - should fallback to name matching
+                    Arc::new(Field::new("field_a", DataType::Int32, true)),
+                    Arc::new(int32_array) as ArrayRef,
+                ),
+                (
+                    // Field with the correct field ID metadata
+                    Arc::new(Field::new("field_b", DataType::Utf8, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                    )),
+                    Arc::new(string_array) as ArrayRef,
+                ),
+            ])) as ArrayRef;
+
+        // Create Iceberg struct type with field IDs that don't match the Arrow metadata
+        let iceberg_struct_type = StructType::new(vec![
+            Arc::new(NestedField::optional(
+                1,         // Different ID than what's in Arrow metadata (or no metadata)
+                "field_a", // Same name as Arrow field
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(NestedField::optional(
+                2,         // Same ID
+                "field_b", // Same name as Arrow field
+                Type::Primitive(PrimitiveType::String),
+            )),
+        ]);
+
+        // This should succeed by falling back to field name matching
+        let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
+
+        assert_eq!(result, vec![
+            Some(Literal::Struct(Struct::from_iter(vec![
+                Some(Literal::int(1)),
+                Some(Literal::string("hello".to_string())),
+            ]))),
+            Some(Literal::Struct(Struct::from_iter(vec![
+                Some(Literal::int(2)),
+                Some(Literal::string("world".to_string())),
+            ]))),
+            Some(Literal::Struct(Struct::from_iter(vec![None, None,]))),
+        ]);
+    }
+
+    #[test]
+    fn test_field_not_found_error() {
+        // Test that we get an appropriate error when neither field ID nor name matches
+
+        let int32_array = Int32Array::from(vec![Some(1), Some(2)]);
+
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("arrow_field_name", DataType::Int32, true)),
+            Arc::new(int32_array) as ArrayRef,
+        )])) as ArrayRef;
+
+        // Create Iceberg struct type with field that doesn't match by ID or name
+        let iceberg_struct_type = StructType::new(vec![Arc::new(NestedField::optional(
+            10,
+            "different_field_name", // Different name than Arrow field
+            Type::Primitive(PrimitiveType::Int),
+        ))]);
+
+        // This should fail with an appropriate error message
+        let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains(
+                "Field with id=10 or name=different_field_name not found in struct array"
+            )
+        );
     }
 
     #[test]
