@@ -407,3 +407,39 @@ async fn test_list_empty_multi_level_namespace() {
         .unwrap();
     assert!(nss.is_empty());
 }
+
+#[tokio::test]
+async fn test_register_table() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    // Create the table, store the metadata location, drop the table
+    let empty_schema = Schema::builder().build().unwrap();
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(empty_schema)
+        .build();
+
+    let table = catalog.create_table(&ns, table_creation).await.unwrap();
+
+    let metadata_location = table.metadata_location().unwrap();
+    catalog.drop_table(table.identifier()).await.unwrap();
+
+    let new_table_identifier = TableIdent::from_strs(["ns", "t2"]).unwrap();
+    let table_registered = catalog
+        .register_table(&new_table_identifier, metadata_location.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        table.metadata_location(),
+        table_registered.metadata_location()
+    );
+    assert_ne!(
+        table.identifier().to_string(),
+        table_registered.identifier().to_string()
+    );
+}

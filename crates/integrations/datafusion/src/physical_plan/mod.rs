@@ -18,3 +18,4 @@
 pub(crate) mod expr_to_predicate;
 pub(crate) mod metadata_scan;
 pub(crate) mod scan;
+pub use scan::IcebergTableScan;
