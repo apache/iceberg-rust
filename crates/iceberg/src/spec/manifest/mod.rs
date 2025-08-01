@@ -160,7 +160,6 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use expect_test::expect;
     use serde_json::Value;
     use tempfile::TempDir;
 
@@ -1128,9 +1127,9 @@ mod tests {
                 .record_count(100)
                 .partition_spec_id(1)
                 .partition(Struct::empty())
-                .column_sizes(HashMap::from([(1, 512)]))
-                .value_counts(HashMap::from([(1, 100)]))
-                .null_value_counts(HashMap::from([(1, 0)]))
+                .column_sizes(HashMap::from([(1, 512), (2, 1024)]))
+                .value_counts(HashMap::from([(1, 100), (2, 500)]))
+                .null_value_counts(HashMap::from([(1, 0), (2, 1)]))
                 .build()
                 .unwrap(),
             DataFileBuilder::default()
@@ -1141,15 +1140,16 @@ mod tests {
                 .record_count(200)
                 .partition_spec_id(1)
                 .partition(Struct::empty())
-                .column_sizes(HashMap::from([(1, 1024)]))
-                .value_counts(HashMap::from([(1, 200)]))
-                .null_value_counts(HashMap::from([(1, 10)]))
+                .column_sizes(HashMap::from([(1, 1024), (2, 2048)]))
+                .value_counts(HashMap::from([(1, 200), (2, 600)]))
+                .null_value_counts(HashMap::from([(1, 10), (2, 999)]))
                 .build()
                 .unwrap(),
         ];
 
         // Serialize the DataFile objects
         let serialized_files = data_files
+            .clone()
             .into_iter()
             .map(|f| serialize_data_file_to_json(f, &partition_type, FormatVersion::V2).unwrap())
             .collect::<Vec<String>>();
@@ -1166,13 +1166,16 @@ mod tests {
             "record_count": 100,
             "file_size_in_bytes": 1024,
             "column_sizes": [
-                { "key": 1, "value": 512 }
+                { "key": 1, "value": 512 },
+                { "key": 2, "value": 1024 }
             ],
             "value_counts": [
-                { "key": 1, "value": 100 }
+                { "key": 1, "value": 100 },
+                { "key": 2, "value": 500 }
             ],
             "null_value_counts": [
-                { "key": 1, "value": 0 }
+                { "key": 1, "value": 0 },
+                { "key": 2, "value": 1 }
             ],
             "nan_value_counts": [],
             "lower_bounds": [],
@@ -1194,13 +1197,16 @@ mod tests {
             "record_count": 200,
             "file_size_in_bytes": 2048,
             "column_sizes": [
-                { "key": 1, "value": 1024 }
+                { "key": 1, "value": 1024 },
+                { "key": 2, "value": 2048 }
             ],
             "value_counts": [
-                { "key": 1, "value": 200 }
+                { "key": 1, "value": 200 },
+                { "key": 2, "value": 600 }
             ],
             "null_value_counts": [
-                { "key": 1, "value": 10 }
+                { "key": 1, "value": 10 },
+                { "key": 2, "value": 999 }
             ],
             "nan_value_counts": [],
             "lower_bounds": [],
@@ -1235,13 +1241,10 @@ mod tests {
         assert_eq!(deserialized_files.len(), 2);
         let deserialized_data_file1 = deserialized_files.first().unwrap();
         let deserialized_data_file2 = deserialized_files.get(1).unwrap();
-        let expected_deserialized_file1 = expect![[
-            r#"DataFile { content: Data, file_path: "path/to/file1.parquet", file_format: Parquet, partition: Struct { fields: [] }, record_count: 100, file_size_in_bytes: 1024, column_sizes: {1: 512}, value_counts: {1: 100}, null_value_counts: {1: 0}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: None, split_offsets: [], equality_ids: [], sort_order_id: None, first_row_id: None, partition_spec_id: 1, referenced_data_file: None, content_offset: None, content_size_in_bytes: None }"#
-        ]];
-        let expected_deserialized_file2 = expect![[
-            r#"DataFile { content: Data, file_path: "path/to/file2.parquet", file_format: Parquet, partition: Struct { fields: [] }, record_count: 200, file_size_in_bytes: 2048, column_sizes: {1: 1024}, value_counts: {1: 200}, null_value_counts: {1: 10}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: None, split_offsets: [], equality_ids: [], sort_order_id: None, first_row_id: None, partition_spec_id: 1, referenced_data_file: None, content_offset: None, content_size_in_bytes: None }"#
-        ]];
-        expected_deserialized_file1.assert_eq(&format!("{:?}", deserialized_data_file1));
-        expected_deserialized_file2.assert_eq(&format!("{:?}", deserialized_data_file2));
+        let original_data_file1 = data_files.first().unwrap();
+        let original_data_file2 = data_files.get(1).unwrap();
+
+        assert_eq!(deserialized_data_file1, original_data_file1);
+        assert_eq!(deserialized_data_file2, original_data_file2);
     }
 }

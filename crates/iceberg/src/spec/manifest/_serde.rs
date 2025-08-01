@@ -297,7 +297,7 @@ fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
 }
 
 fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
-    entries
+    let mut i64_entries = entries
         .iter()
         .map(|e| {
             Ok(I64Entry {
@@ -305,7 +305,13 @@ fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
                 value: (*e.1).try_into()?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    if cfg!(test) {
+        i64_entries.sort_by_key(|e| e.key);
+    }
+
+    Ok(i64_entries)
 }
 
 #[cfg(test)]
