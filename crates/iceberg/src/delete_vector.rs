@@ -136,9 +136,9 @@ mod tests {
     #[test]
     fn test_insertion_and_iteration() {
         let mut dv = DeleteVector::default();
-        assert_eq!(dv.insert(42), true);
-        assert_eq!(dv.insert(100), true);
-        assert_eq!(dv.insert(42), false);
+        assert!(dv.insert(42));
+        assert!(dv.insert(100));
+        assert!(!dv.insert(42));
 
         let mut items: Vec<u64> = dv.iter().collect();
         items.sort();
