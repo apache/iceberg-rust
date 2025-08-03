@@ -650,6 +650,12 @@ impl TryFrom<i32> for ManifestContentType {
     }
 }
 
+impl Default for ManifestContentType {
+    fn default() -> Self {
+        ManifestContentType::Data // Default 0 for V1 compatibility
+    }
+}
+
 impl ManifestFile {
     /// Load [`Manifest`].
     ///
@@ -1356,5 +1362,58 @@ mod test {
             _ => "".to_string(),
         };
         fields
+    }
+
+    #[test]
+    fn test_manifest_content_type_default() {
+        assert_eq!(ManifestContentType::default(), ManifestContentType::Data);
+    }
+
+    #[test]
+    fn test_manifest_content_type_default_value() {
+        assert_eq!(ManifestContentType::default() as i32, 0);
+    }
+
+    #[test]
+    fn test_manifest_file_v1_to_v2_projection() {
+        use crate::spec::manifest_list::_serde::ManifestFileV1;
+        
+        // Create a V1 manifest file object (without V2 fields)
+        let v1_manifest = ManifestFileV1 {
+            manifest_path: "/test/manifest.avro".to_string(),
+            manifest_length: 5806,
+            partition_spec_id: 0,
+            added_snapshot_id: 1646658105718557341,
+            added_data_files_count: Some(3),
+            existing_data_files_count: Some(0),
+            deleted_data_files_count: Some(0),
+            added_rows_count: Some(3),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: None,
+            key_metadata: None,
+        };
+
+        // Convert V1 to V2 - this should apply defaults for missing V2 fields
+        let v2_manifest: ManifestFile = v1_manifest.try_into().unwrap();
+
+        // Verify V1→V2 projection defaults are applied correctly
+        assert_eq!(v2_manifest.content, ManifestContentType::Data, "V1 manifest content should default to Data (0)");
+        assert_eq!(v2_manifest.sequence_number, 0, "V1 manifest sequence_number should default to 0");
+        assert_eq!(v2_manifest.min_sequence_number, 0, "V1 manifest min_sequence_number should default to 0");
+        
+        // Verify other fields are preserved correctly
+        assert_eq!(v2_manifest.manifest_path, "/test/manifest.avro");
+        assert_eq!(v2_manifest.manifest_length, 5806);
+        assert_eq!(v2_manifest.partition_spec_id, 0);
+        assert_eq!(v2_manifest.added_snapshot_id, 1646658105718557341);
+        assert_eq!(v2_manifest.added_files_count, Some(3));
+        assert_eq!(v2_manifest.existing_files_count, Some(0));
+        assert_eq!(v2_manifest.deleted_files_count, Some(0));
+        assert_eq!(v2_manifest.added_rows_count, Some(3));
+        assert_eq!(v2_manifest.existing_rows_count, Some(0));
+        assert_eq!(v2_manifest.deleted_rows_count, Some(0));
+        assert_eq!(v2_manifest.partitions, None);
+        assert_eq!(v2_manifest.key_metadata, None);
     }
 }

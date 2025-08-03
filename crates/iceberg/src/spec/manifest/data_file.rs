@@ -359,6 +359,12 @@ impl TryFrom<i32> for DataContentType {
     }
 }
 
+impl Default for DataContentType {
+    fn default() -> Self {
+        DataContentType::Data // Default 0 for V1 compatibility
+    }
+}
+
 /// Format of this data.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
 pub enum DataFileFormat {
@@ -397,5 +403,19 @@ impl std::fmt::Display for DataFileFormat {
             DataFileFormat::Parquet => write!(f, "parquet"),
             DataFileFormat::Puffin => write!(f, "puffin"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::spec::DataContentType;
+    #[test]
+    fn test_data_content_type_default() {
+        assert_eq!(DataContentType::default(), DataContentType::Data);
+    }
+
+    #[test]
+    fn test_data_content_type_default_value() {
+        assert_eq!(DataContentType::default() as i32, 0);
     }
 }
