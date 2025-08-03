@@ -452,7 +452,7 @@ mod tests {
                 content: 0, // DataFileSerde is shared between V1/V2
                 file_path: "test/path.parquet".to_string(),
                 file_format: "PARQUET".to_string(),
-                partition: partition,
+                partition,
                 record_count: 100,
                 file_size_in_bytes: 1024,
                 block_size_in_bytes: Some(0), // V1 includes this field
@@ -534,7 +534,7 @@ mod tests {
             content: 0, // V1 doesn't have this field, defaults to 0 via #[serde(default)]
             file_path: "test/data.parquet".to_string(),
             file_format: "PARQUET".to_string(),
-            partition: partition,
+            partition,
             record_count: 500,
             file_size_in_bytes: 2048,
             block_size_in_bytes: Some(1024), // V1 includes this field, V2 skips it
