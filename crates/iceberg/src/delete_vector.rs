@@ -27,8 +27,8 @@ pub struct DeleteVector {
 }
 
 impl DeleteVector {
-    #[allow(unused)]
-    pub(crate) fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
+    #[allow(dead_code)]
+    pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
@@ -41,6 +41,14 @@ impl DeleteVector {
 
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
+    }
+
+    /// Return whether append positions into delete vectors succeeds.
+    #[allow(dead_code)]
+    pub fn append_positions(&mut self, positions: &[u64]) -> bool {
+        let expected_num = positions.len();
+        let appended_num = self.inner.append(positions.iter().copied()).unwrap();
+        appended_num as usize == expected_num
     }
 
     #[allow(unused)]
@@ -118,5 +126,34 @@ impl DeleteVectorIterator<'_> {
 impl BitOrAssign for DeleteVector {
     fn bitor_assign(&mut self, other: Self) {
         self.inner.bitor_assign(&other.inner);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insertion_and_iteration() {
+        let mut dv = DeleteVector::default();
+        assert_eq!(dv.insert(42), true);
+        assert_eq!(dv.insert(100), true);
+        assert_eq!(dv.insert(42), false);
+
+        let mut items: Vec<u64> = dv.iter().collect();
+        items.sort();
+        assert_eq!(items, vec![42, 100]);
+        assert_eq!(dv.len(), 2);
+    }
+
+    #[test]
+    fn test_append_positions() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 2, 3, 1000, 1 << 33];
+        assert!(dv.append_positions(&positions));
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        assert_eq!(collected, positions);
     }
 }
