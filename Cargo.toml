@@ -98,7 +98,7 @@ pretty_assertions = "1.4"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
-roaring = { version = "0.10.12" }
+roaring = { version = "0.11" }
 rust_decimal = "1.37.1"
 serde = { version = "1.0.210", features = ["rc"] }
 serde_bytes = "0.11.15"
