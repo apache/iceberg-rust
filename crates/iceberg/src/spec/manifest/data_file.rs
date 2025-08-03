@@ -333,9 +333,10 @@ pub fn read_data_files_from_avro<R: Read>(
 
 /// Type of content stored by the data file: data, equality deletes, or
 /// position deletes (all v1 files are data files)
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum DataContentType {
     /// value: 0
+    #[default]
     Data = 0,
     /// value: 1
     PositionDeletes = 1,
@@ -356,12 +357,6 @@ impl TryFrom<i32> for DataContentType {
                 format!("data content type {} is invalid", v),
             )),
         }
-    }
-}
-
-impl Default for DataContentType {
-    fn default() -> Self {
-        DataContentType::Data // Default 0 for V1 compatibility
     }
 }
 

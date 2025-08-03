@@ -600,9 +600,10 @@ impl ManifestFile {
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash, Default)]
 pub enum ManifestContentType {
     /// The manifest content is data.
+    #[default]
     Data = 0,
     /// The manifest content is deletes.
     Deletes = 1,
@@ -647,12 +648,6 @@ impl TryFrom<i32> for ManifestContentType {
                 ),
             )),
         }
-    }
-}
-
-impl Default for ManifestContentType {
-    fn default() -> Self {
-        ManifestContentType::Data // Default 0 for V1 compatibility
     }
 }
 
@@ -1377,7 +1372,7 @@ mod test {
     #[test]
     fn test_manifest_file_v1_to_v2_projection() {
         use crate::spec::manifest_list::_serde::ManifestFileV1;
-        
+
         // Create a V1 manifest file object (without V2 fields)
         let v1_manifest = ManifestFileV1 {
             manifest_path: "/test/manifest.avro".to_string(),
@@ -1398,10 +1393,20 @@ mod test {
         let v2_manifest: ManifestFile = v1_manifest.try_into().unwrap();
 
         // Verify V1→V2 projection defaults are applied correctly
-        assert_eq!(v2_manifest.content, ManifestContentType::Data, "V1 manifest content should default to Data (0)");
-        assert_eq!(v2_manifest.sequence_number, 0, "V1 manifest sequence_number should default to 0");
-        assert_eq!(v2_manifest.min_sequence_number, 0, "V1 manifest min_sequence_number should default to 0");
-        
+        assert_eq!(
+            v2_manifest.content,
+            ManifestContentType::Data,
+            "V1 manifest content should default to Data (0)"
+        );
+        assert_eq!(
+            v2_manifest.sequence_number, 0,
+            "V1 manifest sequence_number should default to 0"
+        );
+        assert_eq!(
+            v2_manifest.min_sequence_number, 0,
+            "V1 manifest min_sequence_number should default to 0"
+        );
+
         // Verify other fields are preserved correctly
         assert_eq!(v2_manifest.manifest_path, "/test/manifest.avro");
         assert_eq!(v2_manifest.manifest_length, 5806);
