@@ -296,6 +296,7 @@ fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
     Ok(m)
 }
 
+#[cfg_attr(test, allow(unused_mut))]
 fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
     let mut i64_entries = entries
         .iter()
