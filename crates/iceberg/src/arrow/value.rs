@@ -21,12 +21,12 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema as ArrowSchema};
 use uuid::Uuid;
 
-use super::get_field_id;
+use super::{get_field_id, schema_to_arrow_schema};
 use crate::spec::{
-    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
+    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType, Schema,
     SchemaWithPartnerVisitor, Struct, StructType, visit_struct_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -426,7 +426,24 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 }
 
 /// Partner type representing accessing and walking arrow arrays alongside iceberg schema
-pub struct ArrowArrayAccessor;
+pub struct ArrowArrayAccessor {
+    arrow_schema: Option<ArrowSchema>,
+}
+
+impl ArrowArrayAccessor {
+    /// Creates a new instance of ArrowArrayAccessor without arrow schema fallback
+    pub fn new() -> Result<Self> {
+        Ok(Self { arrow_schema: None })
+    }
+
+    /// Creates a new instance of ArrowArrayAccessor with arrow schema converted from table schema
+    /// for field ID resolution fallback
+    pub fn new_with_table_schema(table_schema: &Schema) -> Result<Self> {
+        Ok(Self {
+            arrow_schema: Some(schema_to_arrow_schema(table_schema)?),
+        })
+    }
+}
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
@@ -459,9 +476,13 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| {
-                // match by ID if available, otherwise try matching by name
-                get_field_id(arrow_field)
-                    .map_or(arrow_field.name() == &field.name, |id| id == field.id)
+                get_field_id(arrow_field).map_or(false, |id| id == field.id)
+                    || self
+                        .arrow_schema
+                        .as_ref()
+                        .and_then(|schema| schema.field_with_name(&field.name).ok())
+                        .and_then(|field_from_schema| get_field_id(field_from_schema).ok())
+                        .map_or(false, |id| id == field.id)
             })
             .ok_or_else(|| {
                 Error::new(
@@ -559,7 +580,7 @@ pub fn arrow_struct_to_literal(
         ty,
         struct_array,
         &mut ArrowArrayToIcebergStructConverter,
-        &ArrowArrayAccessor,
+        &ArrowArrayAccessor::new()?,
     )
 }
 
@@ -910,86 +931,50 @@ mod test {
     }
 
     #[test]
-    fn test_field_name_fallback_when_id_unavailable() {
-        // Create an Arrow struct array with fields that don't have field IDs in metadata
-        let int32_array = Int32Array::from(vec![Some(1), Some(2), None]);
-        let string_array = StringArray::from(vec![Some("hello"), Some("world"), None]);
+    fn test_field_id_fallback_with_arrow_schema() {
+        // Create an Arrow struct array with a field that doesn't have field ID in metadata
+        let int32_array = Int32Array::from(vec![Some(42), Some(43), None]);
 
-        let struct_array =
-            Arc::new(StructArray::from(vec![
-                (
-                    // Field without field ID metadata - should fallback to name matching
-                    Arc::new(Field::new("field_a", DataType::Int32, true)),
-                    Arc::new(int32_array) as ArrayRef,
-                ),
-                (
-                    // Field with the correct field ID metadata
-                    Arc::new(Field::new("field_b", DataType::Utf8, true).with_metadata(
-                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
-                    )),
-                    Arc::new(string_array) as ArrayRef,
-                ),
-            ])) as ArrayRef;
-
-        // Create Iceberg struct type with field IDs that don't match the Arrow metadata
-        let iceberg_struct_type = StructType::new(vec![
-            Arc::new(NestedField::optional(
-                1,         // Different ID than what's in Arrow metadata (or no metadata)
-                "field_a", // Same name as Arrow field
-                Type::Primitive(PrimitiveType::Int),
-            )),
-            Arc::new(NestedField::optional(
-                2,         // Same ID
-                "field_b", // Same name as Arrow field
-                Type::Primitive(PrimitiveType::String),
-            )),
-        ]);
-
-        // This should succeed by falling back to field name matching
-        let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
-
-        assert_eq!(result, vec![
-            Some(Literal::Struct(Struct::from_iter(vec![
-                Some(Literal::int(1)),
-                Some(Literal::string("hello".to_string())),
-            ]))),
-            Some(Literal::Struct(Struct::from_iter(vec![
-                Some(Literal::int(2)),
-                Some(Literal::string("world".to_string())),
-            ]))),
-            Some(Literal::Struct(Struct::from_iter(vec![None, None,]))),
-        ]);
-    }
-
-    #[test]
-    fn test_field_not_found_error() {
-        // Test that we get an appropriate error when neither field ID nor name matches
-
-        let int32_array = Int32Array::from(vec![Some(1), Some(2)]);
-
+        // Create the struct array with a field that has no field ID metadata
         let struct_array = Arc::new(StructArray::from(vec![(
-            Arc::new(Field::new("arrow_field_name", DataType::Int32, true)),
+            Arc::new(Field::new("field_a", DataType::Int32, true)), // No field ID metadata
             Arc::new(int32_array) as ArrayRef,
         )])) as ArrayRef;
 
-        // Create Iceberg struct type with field that doesn't match by ID or name
-        let iceberg_struct_type = StructType::new(vec![Arc::new(NestedField::optional(
-            10,
-            "different_field_name", // Different name than Arrow field
-            Type::Primitive(PrimitiveType::Int),
-        ))]);
+        // Create an Iceberg schema with field ID
+        let iceberg_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::optional(
+                100, // Field ID that we'll look for
+                "field_a",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .unwrap();
 
-        // This should fail with an appropriate error message
-        let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type);
+        // Create an ArrowArrayAccessor with the table schema for fallback
+        let accessor = ArrowArrayAccessor::new_with_table_schema(&iceberg_schema).unwrap();
 
+        // Create a nested field to look up
+        let field = NestedField::optional(100, "field_a", Type::Primitive(PrimitiveType::Int));
+
+        // This should succeed by using the arrow_schema fallback
+        let result = accessor.field_partner(&struct_array, &field);
+
+        // Verify that the field was found
+        assert!(result.is_ok());
+
+        // Verify that the field has the expected value
+        let array_ref = result.unwrap();
+        let int_array = array_ref.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_array.value(0), 42);
+        assert_eq!(int_array.value(1), 43);
+        assert!(int_array.is_null(2));
+
+        // Now try with an accessor without arrow_schema - this should fail
+        let accessor_without_schema = ArrowArrayAccessor::new().unwrap();
+        let result = accessor_without_schema.field_partner(&struct_array, &field);
         assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(
-            error.message().contains(
-                "Field with id=10 or name=different_field_name not found in struct array"
-            )
-        );
     }
 
     #[test]

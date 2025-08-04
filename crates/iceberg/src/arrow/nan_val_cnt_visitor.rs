@@ -156,7 +156,8 @@ impl NanValueCountVisitor {
 
     /// Compute nan value counts in given schema and record batch
     pub fn compute(&mut self, schema: SchemaRef, batch: RecordBatch) -> Result<()> {
-        let arrow_arr_partner_accessor = ArrowArrayAccessor {};
+        let arrow_arr_partner_accessor =
+            ArrowArrayAccessor::new_with_table_schema(schema.as_ref())?;
 
         let struct_arr = Arc::new(StructArray::from(batch)) as ArrayRef;
         visit_struct_with_partner(
