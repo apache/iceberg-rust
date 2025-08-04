@@ -253,7 +253,11 @@ impl Default for RestCatalogBuilder {
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
-    fn load(mut self, name: impl Into<String>, props: HashMap<String, String>) -> impl Future<Output=Result<Self::C>> + Send {
+    fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send {
         self.0.name = Some(name.into());
 
         if props.contains_key(REST_CATALOG_PROP_URI) {
@@ -264,18 +268,13 @@ impl CatalogBuilder for RestCatalogBuilder {
         }
 
         if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
-                .get(REST_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .map(|s| s.into());
+            self.0.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
         }
 
         // Collect other remaining properties
         self.0.props = props
             .into_iter()
-            .filter(|(k, _)| {
-                k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE
-            })
+            .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
             .collect();
 
         let result = {
@@ -2687,10 +2686,15 @@ mod tests {
     async fn test_create_rest_catalog() {
         let builder = RestCatalogBuilder::default().with_client(Client::new());
 
-        let catalog = builder.load("test", HashMap::from([
-            ("uri".to_string(), "http://localhost:8080".to_string()),
-            ("a".to_string(), "b".to_string()),
-        ])).await;
+        let catalog = builder
+            .load(
+                "test",
+                HashMap::from([
+                    ("uri".to_string(), "http://localhost:8080".to_string()),
+                    ("a".to_string(), "b".to_string()),
+                ]),
+            )
+            .await;
 
         assert!(catalog.is_ok());
 
@@ -2708,9 +2712,12 @@ mod tests {
     async fn test_create_rest_catalog_no_uri() {
         let builder = RestCatalogBuilder::default();
 
-        let catalog = builder.load("test", HashMap::from([
-            ("warehouse".to_string(), "s3://warehouse".to_string())
-        ])).await;
+        let catalog = builder
+            .load(
+                "test",
+                HashMap::from([("warehouse".to_string(), "s3://warehouse".to_string())]),
+            )
+            .await;
 
         assert!(catalog.is_err());
         if let Err(err) = catalog {
