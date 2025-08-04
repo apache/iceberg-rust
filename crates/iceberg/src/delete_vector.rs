@@ -43,12 +43,10 @@ impl DeleteVector {
         self.inner.insert(pos)
     }
 
-    /// Return whether append positions into delete vectors succeeds.
+    /// Return the number of positions inserted.
     #[allow(dead_code)]
-    pub fn append_positions(&mut self, positions: &[u64]) -> bool {
-        let expected_num = positions.len();
-        let appended_num = self.inner.append(positions.iter().copied()).unwrap();
-        appended_num as usize == expected_num
+    pub fn insert_positions(&mut self, positions: &[u64]) -> u64 {
+        self.inner.append(positions.iter().copied()).unwrap()
     }
 
     #[allow(unused)]
@@ -147,10 +145,10 @@ mod tests {
     }
 
     #[test]
-    fn test_append_positions() {
+    fn test_insert_positions() {
         let mut dv = DeleteVector::default();
         let positions = vec![1, 2, 3, 1000, 1 << 33];
-        assert!(dv.append_positions(&positions));
+        assert_eq!(dv.insert_positions(&positions), 5);
 
         let mut collected: Vec<u64> = dv.iter().collect();
         collected.sort();
