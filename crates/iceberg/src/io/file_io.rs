@@ -390,6 +390,17 @@ impl FileWrite for opendal::Writer {
     }
 }
 
+#[async_trait::async_trait]
+impl FileWrite for Box<dyn FileWrite> {
+    async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
+        self.as_mut().write(bs).await
+    }
+
+    async fn close(&mut self) -> crate::Result<()> {
+        self.as_mut().close().await
+    }
+}
+
 /// Output file is used for writing to files..
 #[derive(Debug)]
 pub struct OutputFile {
