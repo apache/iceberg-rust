@@ -476,13 +476,12 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| {
-                get_field_id(arrow_field).map_or(false, |id| id == field.id)
+                get_field_id(arrow_field).is_ok_and(|id| id == field.id)
                     || self
-                        .arrow_schema
-                        .as_ref()
-                        .and_then(|schema| schema.field_with_name(&field.name).ok())
-                        .and_then(|field_from_schema| get_field_id(field_from_schema).ok())
-                        .map_or(false, |id| id == field.id)
+                    .arrow_schema
+                    .as_ref()
+                    .and_then(|schema| schema.field_with_name(&field.name).ok())
+                    .and_then(|field_from_schema| get_field_id(field_from_schema).ok()) == Some(field.id)
             })
             .ok_or_else(|| {
                 Error::new(
