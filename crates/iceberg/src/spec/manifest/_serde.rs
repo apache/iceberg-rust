@@ -21,7 +21,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
-use crate::spec::{Literal, RawLiteral, StructType, Type};
+use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
 use crate::{Error, ErrorKind};
 
 #[derive(Serialize, Deserialize)]
@@ -40,7 +40,7 @@ impl ManifestEntryV2 {
             snapshot_id: value.snapshot_id,
             sequence_number: value.sequence_number,
             file_sequence_number: value.file_sequence_number,
-            data_file: DataFileSerde::try_from(value.data_file, partition_type, false)?,
+            data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V2)?,
         })
     }
 
@@ -74,7 +74,7 @@ impl ManifestEntryV1 {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id.unwrap_or_default(),
-            data_file: DataFileSerde::try_from(value.data_file, partition_type, true)?,
+            data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V1)?,
         })
     }
 
@@ -129,9 +129,13 @@ impl DataFileSerde {
     pub fn try_from(
         value: super::DataFile,
         partition_type: &StructType,
-        is_version_1: bool,
+        format_version: FormatVersion,
     ) -> Result<Self, Error> {
-        let block_size_in_bytes = if is_version_1 { Some(0) } else { None };
+        let block_size_in_bytes = if format_version == FormatVersion::V1 {
+            Some(0)
+        } else {
+            None
+        };
         Ok(Self {
             content: value.content as i32,
             file_path: value.file_path,
@@ -292,8 +296,9 @@ fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
     Ok(m)
 }
 
+#[allow(unused_mut)]
 fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
-    entries
+    let mut i64_entries = entries
         .iter()
         .map(|e| {
             Ok(I64Entry {
@@ -301,7 +306,13 @@ fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
                 value: (*e.1).try_into()?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    // Ensure that the order is deterministic during testing
+    #[cfg(test)]
+    i64_entries.sort_by_key(|e| e.key);
+
+    Ok(i64_entries)
 }
 
 #[cfg(test)]
