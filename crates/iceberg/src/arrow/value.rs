@@ -443,6 +443,21 @@ impl ArrowArrayAccessor {
             arrow_schema: Some(schema_to_arrow_schema(table_schema)?),
         })
     }
+
+    /// Check if an arrow field matches the target field ID, either directly or through schema lookup
+    fn arrow_field_matches_id(&self, arrow_field: &arrow_schema::Field, target_id: i32) -> bool {
+        // First try direct match via field metadata
+        if let Ok(id) = get_field_id(arrow_field) {
+            id == target_id
+        } else {
+            // Only if direct match fails, try fallback via schema lookup
+            self.arrow_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(arrow_field.name()).ok())
+                .and_then(|field_from_schema| get_field_id(field_from_schema).ok())
+                .is_some_and(|id| id == target_id)
+        }
+    }
 }
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
@@ -468,21 +483,17 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    "The struct partner is not a struct array",
+                    format!(
+                        "The struct partner is not a struct array, partner: {:?}",
+                        struct_partner
+                    ),
                 )
             })?;
 
         let field_pos = struct_array
             .fields()
             .iter()
-            .position(|arrow_field| {
-                get_field_id(arrow_field).is_ok_and(|id| id == field.id)
-                    || self
-                    .arrow_schema
-                    .as_ref()
-                    .and_then(|schema| schema.field_with_name(&field.name).ok())
-                    .and_then(|field_from_schema| get_field_id(field_from_schema).ok()) == Some(field.id)
-            })
+            .position(|arrow_field| self.arrow_field_matches_id(arrow_field, field.id))
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
