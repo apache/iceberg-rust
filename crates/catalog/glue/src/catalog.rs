@@ -47,7 +47,10 @@ pub struct GlueCatalogConfig {
     uri: Option<String>,
     #[builder(default, setter(strip_option(fallback = catalog_id_opt)))]
     catalog_id: Option<String>,
-    warehouse: String,
+    #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
+    warehouse: Option<String>,
+    #[builder(default, setter(strip_option(fallback = io_impl_opt)))]
+    io_impl: Option<String>,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -58,7 +61,7 @@ struct GlueClient(aws_sdk_glue::Client);
 pub struct GlueCatalog {
     config: GlueCatalogConfig,
     client: GlueClient,
-    file_io: FileIO,
+    catalog_props: HashMap<String, String>,
 }
 
 impl Debug for GlueCatalog {
@@ -73,51 +76,65 @@ impl GlueCatalog {
     /// Create a new glue catalog
     pub async fn new(config: GlueCatalogConfig) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
-        let mut file_io_props = config.props.clone();
-        if !file_io_props.contains_key(S3_ACCESS_KEY_ID) {
-            if let Some(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID) {
-                file_io_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
+        let mut catalog_props = config.props.clone();
+        if !catalog_props.contains_key(S3_ACCESS_KEY_ID) {
+            if let Some(access_key_id) = catalog_props.get(AWS_ACCESS_KEY_ID) {
+                catalog_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
             }
         }
-        if !file_io_props.contains_key(S3_SECRET_ACCESS_KEY) {
-            if let Some(secret_access_key) = file_io_props.get(AWS_SECRET_ACCESS_KEY) {
-                file_io_props.insert(
+        if !catalog_props.contains_key(S3_SECRET_ACCESS_KEY) {
+            if let Some(secret_access_key) = catalog_props.get(AWS_SECRET_ACCESS_KEY) {
+                catalog_props.insert(
                     S3_SECRET_ACCESS_KEY.to_string(),
                     secret_access_key.to_string(),
                 );
             }
         }
-        if !file_io_props.contains_key(S3_REGION) {
-            if let Some(region) = file_io_props.get(AWS_REGION_NAME) {
-                file_io_props.insert(S3_REGION.to_string(), region.to_string());
+        if !catalog_props.contains_key(S3_REGION) {
+            if let Some(region) = catalog_props.get(AWS_REGION_NAME) {
+                catalog_props.insert(S3_REGION.to_string(), region.to_string());
             }
         }
-        if !file_io_props.contains_key(S3_SESSION_TOKEN) {
-            if let Some(session_token) = file_io_props.get(AWS_SESSION_TOKEN) {
-                file_io_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
+        if !catalog_props.contains_key(S3_SESSION_TOKEN) {
+            if let Some(session_token) = catalog_props.get(AWS_SESSION_TOKEN) {
+                catalog_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
             }
         }
-        if !file_io_props.contains_key(S3_ENDPOINT) {
+        if !catalog_props.contains_key(S3_ENDPOINT) {
             if let Some(aws_endpoint) = config.uri.as_ref() {
-                file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
+                catalog_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
             }
         }
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
-        let file_io = FileIO::from_path(&config.warehouse)?
-            .with_props(file_io_props)
-            .build()?;
-
         Ok(GlueCatalog {
             config,
             client: GlueClient(client),
-            file_io,
+            catalog_props,
         })
     }
-    /// Get the catalogs `FileIO`
-    pub fn file_io(&self) -> FileIO {
-        self.file_io.clone()
+
+    /// Load the `FileIO` based on io type, metadata location, and warehouse precedence
+    async fn load_file_io(&self, metadata_location: Option<&str>) -> Result<FileIO> {
+        if let Some(io_impl) = self.config.io_impl.as_ref() {
+            Ok(FileIO::from_path(io_impl)?
+                .with_props(&self.catalog_props)
+                .build()?)
+        } else if let Some(metadata_path) = metadata_location.as_ref() {
+            Ok(FileIO::from_path(metadata_path)?
+                .with_props(&self.catalog_props)
+                .build()?)
+        } else if let Some(warehouse_path) = self.config.warehouse.as_ref() {
+            Ok(FileIO::from_path(warehouse_path)?
+                .with_props(&self.catalog_props)
+                .build()?)
+        } else {
+            Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Unable to infer file io from io impl type, metadata location, or warehouse"
+            ))
+        }
     }
 }
 
@@ -385,7 +402,7 @@ impl Catalog for GlueCatalog {
             None => {
                 let ns = self.get_namespace(namespace).await?;
                 let location =
-                    get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse);
+                    get_default_table_location(&ns, &db_name, &table_name, self.config.warehouse.as_ref())?;
                 creation.location = Some(location.clone());
                 location
             }
@@ -396,7 +413,8 @@ impl Catalog for GlueCatalog {
         let metadata_location =
             MetadataLocation::new_with_table_location(location.clone()).to_string();
 
-        metadata.write_to(&self.file_io, &metadata_location).await?;
+        let file_io = self.load_file_io(Some(&metadata_location)).await?;
+        metadata.write_to(&file_io, &metadata_location).await?;
 
         let glue_table = convert_to_glue_table(
             &table_name,
@@ -417,7 +435,7 @@ impl Catalog for GlueCatalog {
         builder.send().await.map_err(from_aws_sdk_error)?;
 
         Table::builder()
-            .file_io(self.file_io())
+            .file_io(file_io)
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
@@ -461,10 +479,11 @@ impl Catalog for GlueCatalog {
             Some(table) => {
                 let metadata_location = get_metadata_location(&table.parameters)?;
 
-                let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+                let file_io = self.load_file_io(Some(metadata_location.as_str())).await?;
+                let metadata = TableMetadata::read_from(&file_io, &metadata_location).await?;
 
                 Table::builder()
-                    .file_io(self.file_io())
+                    .file_io(file_io)
                     .metadata_location(metadata_location)
                     .metadata(metadata)
                     .identifier(TableIdent::new(
