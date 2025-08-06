@@ -29,7 +29,7 @@ pub struct DeleteVector {
 }
 
 impl DeleteVector {
-    #[allow(dead_code)]
+    #[allow(unused)]
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
@@ -50,13 +50,14 @@ impl DeleteVector {
     /// The input slice must be strictly ordered in ascending order, and every value must be greater than all existing values already in the set.
     ///
     /// # Errors
+    ///
     /// Returns an error if the precondition is not met.
     #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                format!("failed to bulk marks rows as deleted because {:?}", err),
+                format!("failed to marks rows as deleted because {:?}", err),
             ));
         }
         Ok(positions.len())
