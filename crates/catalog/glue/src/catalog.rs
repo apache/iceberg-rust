@@ -709,10 +709,39 @@ impl Catalog for GlueCatalog {
         ))
     }
 
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
-        ))
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let table_ident = commit.identifier().clone();
+        let table_namespace = validate_namespace(table_ident.namespace())?;
+        let current_table = self.load_table(&table_ident).await?;
+        let current_metadata_location = current_table.metadata_location_result()?.to_string();
+
+        let staged_table = commit.apply(current_table)?;
+        let staged_metadata_location = staged_table.metadata_location_result()?;
+
+        // Write new metadata
+        staged_table
+            .metadata()
+            .write_to(
+                staged_table.file_io(),
+                staged_metadata_location,
+            )
+            .await?;
+        
+        // Persisting Glue table changes
+        let builder = self.client.0.update_table()
+            .database_name(table_namespace)
+            .set_skip_archive(Some(true)) // todo &self.config.props.get("glue.skip-archive")
+            .table_input(convert_to_glue_table(
+                table_ident.name(),
+                staged_metadata_location.to_string(),
+                staged_table.metadata(),
+                staged_table.metadata().properties(),
+                Some(current_metadata_location)
+            )?);
+        let builder = with_catalog_id!(builder, self.config);
+        // todo handle error correctly
+        let _update_table_output = builder.send().await.map_err(from_aws_sdk_error)?;
+
+        Ok(staged_table)
     }
 }
