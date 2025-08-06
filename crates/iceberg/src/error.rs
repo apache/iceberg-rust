@@ -50,7 +50,7 @@ pub enum ErrorKind {
     /// Iceberg table already exists at creation.
     TableAlreadyExists,
 
-    /// Iceberg namespace already exists at creation.
+    /// Iceberg namespace does not exist.
     NamespaceNotFound,
 
     /// Iceberg table does not exist.

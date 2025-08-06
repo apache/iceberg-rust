@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
     FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
@@ -721,26 +723,43 @@ impl Catalog for GlueCatalog {
         // Write new metadata
         staged_table
             .metadata()
-            .write_to(
-                staged_table.file_io(),
-                staged_metadata_location,
-            )
+            .write_to(staged_table.file_io(), staged_metadata_location)
             .await?;
-        
-        // Persisting Glue table changes
-        let builder = self.client.0.update_table()
+
+        // Persist staged table to Glue
+        let builder = self
+            .client
+            .0
+            .update_table()
             .database_name(table_namespace)
-            .set_skip_archive(Some(true)) // todo &self.config.props.get("glue.skip-archive")
+            .set_skip_archive(Some(true)) // todo make this configurable
             .table_input(convert_to_glue_table(
                 table_ident.name(),
                 staged_metadata_location.to_string(),
                 staged_table.metadata(),
                 staged_table.metadata().properties(),
-                Some(current_metadata_location)
+                Some(current_metadata_location),
             )?);
         let builder = with_catalog_id!(builder, self.config);
-        // todo handle error correctly
-        let _update_table_output = builder.send().await.map_err(from_aws_sdk_error)?;
+        let _update_table_output = builder.send().await.map_err(|e| {
+            let error = e.into_service_error();
+            match error {
+                UpdateTableError::EntityNotFoundException(_) => Error::new(
+                    ErrorKind::TableNotFound,
+                    format!("Table {} is not found", table_ident),
+                ),
+                UpdateTableError::ConcurrentModificationException(_) => Error::new(
+                    ErrorKind::CatalogCommitConflicts,
+                    format!("Commit failed for table: {}", table_ident),
+                )
+                .with_retryable(true),
+                _ => Error::new(
+                    ErrorKind::Unexpected,
+                    "Operation failed for hitting aws sdk error".to_string(),
+                ),
+            }
+            .with_source(anyhow!("aws sdk error: {:?}", error))
+        })?;
 
         Ok(staged_table)
     }
