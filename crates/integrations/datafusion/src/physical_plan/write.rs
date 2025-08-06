@@ -257,3 +257,306 @@ impl ExecutionPlan for IcebergWriteExec {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use datafusion::arrow::datatypes::{
+        DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    };
+    use datafusion::common::Result as DFResult;
+    use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+    use futures::{StreamExt, stream};
+    use iceberg::io::FileIOBuilder;
+    use iceberg::spec::{
+        DataFileFormat, NestedField, PrimitiveType, Schema, Type, deserialize_data_file_from_json,
+    };
+    use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// A simple execution plan that returns a predefined set of record batches
+    struct MockExecutionPlan {
+        schema: ArrowSchemaRef,
+        batches: Vec<RecordBatch>,
+        properties: PlanProperties,
+    }
+
+    impl MockExecutionPlan {
+        fn new(schema: ArrowSchemaRef, batches: Vec<RecordBatch>) -> Self {
+            let properties = PlanProperties::new(
+                EquivalenceProperties::new(schema.clone()),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            );
+
+            Self {
+                schema,
+                batches,
+                properties,
+            }
+        }
+    }
+
+    impl Debug for MockExecutionPlan {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "MockExecutionPlan")
+        }
+    }
+
+    impl DisplayAs for MockExecutionPlan {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => {
+                    write!(f, "MockExecutionPlan")
+                }
+            }
+        }
+    }
+
+    impl ExecutionPlan for MockExecutionPlan {
+        fn name(&self) -> &str {
+            "MockExecutionPlan"
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.properties
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> DFResult<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> DFResult<SendableRecordBatchStream> {
+            let batches = self.batches.clone();
+            let stream = stream::iter(batches.into_iter().map(Ok));
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema.clone(),
+                stream.boxed(),
+            )))
+        }
+    }
+
+    /// Helper function to create a temporary directory and return its path
+    fn temp_path() -> String {
+        let temp_dir = TempDir::new().unwrap();
+        temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    /// Helper function to create a memory catalog
+    fn get_iceberg_catalog() -> MemoryCatalog {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        MemoryCatalog::new(file_io, Some(temp_path()))
+    }
+
+    /// Helper function to create a test table schema
+    fn get_test_schema() -> Result<Schema> {
+        Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+    }
+
+    /// Helper function to create a table creation
+    fn get_table_creation(
+        location: impl ToString,
+        name: impl ToString,
+        schema: Schema,
+    ) -> TableCreation {
+        TableCreation::builder()
+            .location(location.to_string())
+            .name(name.to_string())
+            .properties(HashMap::new())
+            .schema(schema)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_iceberg_write_exec() -> Result<()> {
+        // 1. Set up test environment
+        let iceberg_catalog = get_iceberg_catalog();
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+
+        // Create namespace
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        // Create schema
+        let schema = get_test_schema()?;
+
+        // Create table
+        let table_name = "test_table";
+        let table_location = temp_path();
+        let creation = get_table_creation(table_location, table_name, schema);
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        // 2. Create test data
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let name_array = Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef;
+
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_array, name_array])
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Failed to create record batch: {}", e),
+                )
+            })?;
+
+        // 3. Create mock input execution plan
+        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![
+            batch.clone(),
+        ]));
+
+        // 4. Create IcebergWriteExec
+        let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);
+
+        // 5. Execute the plan
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = write_exec.execute(0, task_ctx).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to execute plan: {}", e),
+            )
+        })?;
+
+        // Collect the results
+        let mut results = vec![];
+        let mut stream = stream;
+        while let Some(batch) = stream.next().await {
+            results.push(batch.map_err(|e| {
+                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {}", e))
+            })?);
+        }
+
+        // 6. Verify the results
+        assert_eq!(results.len(), 1, "Expected one result batch");
+        let result_batch = &results[0];
+
+        // Check schema
+        assert_eq!(
+            result_batch.schema().as_ref(),
+            &ArrowSchema::new(vec![Field::new(DATA_FILES_COL_NAME, DataType::Utf8, false)])
+        );
+
+        // Check data
+        assert_eq!(result_batch.num_rows(), 1, "Expected one data file");
+
+        // Get the data file JSON
+        let data_file_json = result_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected StringArray")
+            .value(0);
+
+        // Deserialize the data file JSON
+        let partition_type = table.metadata().default_partition_type();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let schema = table.metadata().current_schema();
+
+        let data_file =
+            deserialize_data_file_from_json(data_file_json, spec_id, partition_type, schema)
+                .expect("Failed to deserialize data file JSON");
+
+        // Verify data file properties
+        assert_eq!(
+            data_file.record_count(),
+            3,
+            "Expected 3 records in the data file"
+        );
+        assert!(
+            data_file.file_size_in_bytes() > 0,
+            "File size should be greater than 0"
+        );
+        assert_eq!(
+            data_file.file_format(),
+            DataFileFormat::Parquet,
+            "Expected Parquet file format"
+        );
+
+        // Verify column statistics
+        assert!(
+            data_file.column_sizes().get(&1).unwrap() > &0,
+            "Column 1 size should be greater than 0"
+        );
+        assert!(
+            data_file.column_sizes().get(&2).unwrap() > &0,
+            "Column 2 size should be greater than 0"
+        );
+
+        assert_eq!(
+            *data_file.value_counts().get(&1).unwrap(),
+            3,
+            "Expected 3 values for column 1"
+        );
+        assert_eq!(
+            *data_file.value_counts().get(&2).unwrap(),
+            3,
+            "Expected 3 values for column 2"
+        );
+
+        // Verify lower and upper bounds
+        assert!(
+            data_file.lower_bounds().contains_key(&1) || data_file.lower_bounds().contains_key(&2),
+            "Expected lower bounds to contain at least one column"
+        );
+        assert!(
+            data_file.upper_bounds().contains_key(&1) || data_file.upper_bounds().contains_key(&2),
+            "Expected upper bounds to contain at least one column"
+        );
+
+        // Check that the file path exists
+        let file_path = data_file.file_path();
+        assert!(!file_path.is_empty(), "File path should not be empty");
+
+        // 7. Verify the file exists
+        let file_io = table.file_io();
+        assert!(file_io.exists(file_path).await?, "Data file should exist");
+
+        Ok(())
+    }
+}
