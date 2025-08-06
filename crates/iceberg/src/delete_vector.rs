@@ -43,10 +43,16 @@ impl DeleteVector {
         self.inner.insert(pos)
     }
 
-    /// Return the number of positions inserted.
+    /// Mark the given [`positions`] as deleted, and return the number of elements appended to the set.
+    ///
+    /// Precondition: The values of the iterator must be ordered and strictly greater than the greatest value in the set.
+    /// If a value in the iterator doesn’t satisfy this requirement, it is not added and the append operation is stopped.
     #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> u64 {
-        self.inner.append(positions.iter().copied()).unwrap()
+        if let Err(err) = self.inner.append(positions.iter().copied()) {
+            return err.valid_until();
+        }
+        positions.len() as u64
     }
 
     #[allow(unused)]
@@ -145,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_positions() {
+    fn test_successful_insert_positions() {
         let mut dv = DeleteVector::default();
         let positions = vec![1, 2, 3, 1000, 1 << 33];
         assert_eq!(dv.insert_positions(&positions), 5);
@@ -153,5 +159,46 @@ mod tests {
         let mut collected: Vec<u64> = dv.iter().collect();
         collected.sort();
         assert_eq!(collected, positions);
+    }
+
+    /// Testing scenario: bulk insertion fails because input arguments are not strictly increasing.
+    #[test]
+    fn test_failed_insertion_unsorted_elements() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 3, 5, 4];
+        assert_eq!(dv.insert_positions(&positions), 3);
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        let expected_positions = vec![1, 3, 5];
+        assert_eq!(collected, expected_positions);
+
+        // Perform another bulk insertion after an incomplete one.
+        assert_eq!(dv.insert_positions(&[2, 4]), 0);
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        assert_eq!(collected, expected_positions);
+    }
+
+    /// Testing scenario: bulk insertion fails because input arguments are not unique.
+    #[test]
+    fn test_failed_insertion_duplicate_elements() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 3, 5, 5];
+        assert_eq!(dv.insert_positions(&positions), 3);
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        let expected_positions = vec![1, 3, 5];
+        assert_eq!(collected, expected_positions);
+
+        // Perform another bulk insertion after an incomplete one.
+        // Even the given elements are strictly sorted, but initial insertion fails due to duplicate value.
+        assert_eq!(dv.insert_positions(&[5, 6]), 0);
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        assert_eq!(collected, expected_positions);
     }
 }
