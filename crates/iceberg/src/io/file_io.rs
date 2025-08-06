@@ -60,6 +60,11 @@ impl FileIO {
         self.builder
     }
 
+    /// Create file io scheme from scheme type. See [`FileIO`] for supported schemes.
+    pub fn from_scheme(scheme: impl AsRef<str>) -> Result<FileIOBuilder> {
+        Ok(FileIOBuilder::new(scheme.as_ref()))
+    }
+
     /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
     /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.

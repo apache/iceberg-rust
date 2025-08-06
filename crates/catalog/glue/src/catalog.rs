@@ -118,7 +118,7 @@ impl GlueCatalog {
     /// Load the `FileIO` based on io type, metadata location, and warehouse precedence
     async fn load_file_io(&self, metadata_location: Option<&str>) -> Result<FileIO> {
         if let Some(io_impl) = self.config.io_impl.as_ref() {
-            Ok(FileIO::from_path(io_impl)?
+            Ok(FileIO::from_scheme(io_impl)?
                 .with_props(&self.catalog_props)
                 .build()?)
         } else if let Some(metadata_path) = metadata_location.as_ref() {
