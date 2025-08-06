@@ -435,4 +435,94 @@ mod tests {
         );
         assert_eq!("s3://b/wh/.../s1.avro".to_string(), *result.manifest_list());
     }
+
+    #[test]
+    fn test_snapshot_v1_to_v2_projection() {
+        use crate::spec::snapshot::_serde::SnapshotV1;
+
+        // Create a V1 snapshot (without sequence-number field)
+        let v1_snapshot = SnapshotV1 {
+            snapshot_id: 1234567890,
+            parent_snapshot_id: Some(987654321),
+            timestamp_ms: 1515100955770,
+            manifest_list: Some("s3://bucket/manifest-list.avro".to_string()),
+            manifests: None, // V1 can have either manifest_list or manifests, but not both
+            summary: Some(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::from([
+                    ("added-files".to_string(), "5".to_string()),
+                    ("added-records".to_string(), "100".to_string()),
+                ]),
+            }),
+            schema_id: Some(1),
+        };
+
+        // Convert V1 to V2 - this should apply defaults for missing V2 fields
+        let v2_snapshot: Snapshot = v1_snapshot.try_into().unwrap();
+
+        // Verify V1→V2 projection defaults are applied correctly
+        assert_eq!(
+            v2_snapshot.sequence_number(),
+            0,
+            "V1 snapshot sequence_number should default to 0"
+        );
+
+        // Verify other fields are preserved correctly during conversion
+        assert_eq!(v2_snapshot.snapshot_id(), 1234567890);
+        assert_eq!(v2_snapshot.parent_snapshot_id(), Some(987654321));
+        assert_eq!(v2_snapshot.timestamp_ms(), 1515100955770);
+        assert_eq!(
+            v2_snapshot.manifest_list(),
+            "s3://bucket/manifest-list.avro"
+        );
+        assert_eq!(v2_snapshot.schema_id(), Some(1));
+        assert_eq!(v2_snapshot.summary().operation, Operation::Append);
+        assert_eq!(
+            v2_snapshot
+                .summary()
+                .additional_properties
+                .get("added-files"),
+            Some(&"5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_snapshot_v1_to_v2_with_missing_summary() {
+        use crate::spec::snapshot::_serde::SnapshotV1;
+
+        // Create a V1 snapshot without summary (should get default)
+        let v1_snapshot = SnapshotV1 {
+            snapshot_id: 1111111111,
+            parent_snapshot_id: None,
+            timestamp_ms: 1515100955770,
+            manifest_list: Some("s3://bucket/manifest-list.avro".to_string()),
+            manifests: None,
+            summary: None, // V1 summary is optional
+            schema_id: None,
+        };
+
+        // Convert V1 to V2 - this should apply default summary
+        let v2_snapshot: Snapshot = v1_snapshot.try_into().unwrap();
+
+        // Verify defaults are applied correctly
+        assert_eq!(
+            v2_snapshot.sequence_number(),
+            0,
+            "V1 snapshot sequence_number should default to 0"
+        );
+        assert_eq!(
+            v2_snapshot.summary().operation,
+            Operation::Append,
+            "Missing V1 summary should default to Append operation"
+        );
+        assert!(
+            v2_snapshot.summary().additional_properties.is_empty(),
+            "Default summary should have empty additional_properties"
+        );
+
+        // Verify other fields
+        assert_eq!(v2_snapshot.snapshot_id(), 1111111111);
+        assert_eq!(v2_snapshot.parent_snapshot_id(), None);
+        assert_eq!(v2_snapshot.schema_id(), None);
+    }
 }
