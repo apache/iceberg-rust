@@ -238,12 +238,9 @@ impl ExecutionPlan for IcebergWriteExec {
             // Convert builders to data files and then to JSON strings
             let data_files_strs: Vec<String> = data_files
                 .into_iter()
-                .map(|data_file| -> DFResult<String> {
-                    // Serialize to JSON
-                    Ok(
-                        serialize_data_file_to_json(data_file, &partition_type, format_version)
-                            .map_err(to_datafusion_error)?,
-                    )
+                .map(|data_file| {
+                    serialize_data_file_to_json(data_file, &partition_type, format_version)
+                        .map_err(to_datafusion_error)
                 })
                 .collect::<DFResult<Vec<String>>>()?;
 
