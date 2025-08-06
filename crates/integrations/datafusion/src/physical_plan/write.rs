@@ -240,12 +240,10 @@ impl ExecutionPlan for IcebergWriteExec {
                 .into_iter()
                 .map(|data_file| -> DFResult<String> {
                     // Serialize to JSON
-                    let json =
+                    Ok(
                         serialize_data_file_to_json(data_file, &partition_type, format_version)
-                            .map_err(to_datafusion_error)?;
-
-                    println!("Serialized data file: {}", json); // todo remove log
-                    Ok(json)
+                            .map_err(to_datafusion_error)?,
+                    )
                 })
                 .collect::<DFResult<Vec<String>>>()?;
 
