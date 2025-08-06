@@ -45,10 +45,12 @@ impl DeleteVector {
         self.inner.insert(pos)
     }
 
-    /// Mark the given [`positions`] as deleted, and return the number of elements appended to the set.
+    /// Marks the given `positions` as deleted and returns the number of elements appended.
     ///
-    /// Precondition: The values of the iterator must be ordered and strictly greater than the greatest value in the set.
-    /// If a value in the iterator doesn’t satisfy this requirement, it is not added and the append operation is stopped.
+    /// The input slice must be strictly ordered in ascending order, and every value must be greater than all existing values already in the set.
+    ///
+    /// # Errors
+    /// Returns an error if the precondition is not met.
     #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
@@ -166,7 +168,7 @@ mod tests {
         assert_eq!(collected, positions);
     }
 
-    /// Testing scenario: bulk insertion fails because input arguments are not strictly increasing.
+    /// Testing scenario: bulk insertion fails because input positions are not strictly increasing.
     #[test]
     fn test_failed_insertion_unsorted_elements() {
         let mut dv = DeleteVector::default();
@@ -175,7 +177,7 @@ mod tests {
         assert!(res.is_err());
     }
 
-    /// Testing scenario: bulk insertion fails because input arguments have intersection with existing rows.
+    /// Testing scenario: bulk insertion fails because input positions have intersection with existing ones.
     #[test]
     fn test_failed_insertion_with_intersection() {
         let mut dv = DeleteVector::default();
@@ -186,7 +188,7 @@ mod tests {
         assert!(res.is_err());
     }
 
-    /// Testing scenario: bulk insertion fails because input arguments are not unique.
+    /// Testing scenario: bulk insertion fails because input positions have duplicates.
     #[test]
     fn test_failed_insertion_duplicate_elements() {
         let mut dv = DeleteVector::default();
