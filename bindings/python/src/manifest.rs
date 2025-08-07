@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use iceberg::spec::{
     DataFile, DataFileFormat, FieldSummary, FormatVersion, Manifest, ManifestEntry, ManifestFile,
-    ManifestList, ManifestStatus, PrimitiveLiteral,
+    ManifestList, PrimitiveLiteral,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
@@ -308,7 +308,7 @@ pub struct PyManifestEntry {
 impl PyManifestEntry {
     #[getter]
     fn status(&self) -> i32 {
-        ManifestStatus::Existing as i32
+        self.inner.status as i32
     }
 
     #[getter]
