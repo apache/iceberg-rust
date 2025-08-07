@@ -126,6 +126,11 @@ pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.defau
 /// Default value for data file format
 pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
 
+/// Target file size for newly written files.
+pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
+/// Default target file size
+pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
+
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 

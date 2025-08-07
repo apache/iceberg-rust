@@ -38,6 +38,7 @@ use futures::StreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::spec::{
     DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
+    PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
     serialize_data_file_to_json,
 };
 use iceberg::table::Table;
@@ -204,9 +205,26 @@ impl ExecutionPlan for IcebergWriteExec {
                 file_format,
             ),
         );
+        let target_file_size = match self
+            .table
+            .metadata()
+            .properties()
+            .get(PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
+        {
+            Some(value_str) => value_str
+                .parse::<usize>()
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid value for commit.retry.min-wait-ms",
+                    )
+                    .with_source(e)
+                })
+                .map_err(to_datafusion_error)?,
+            None => PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+        };
         let rolling_writer_builder =
-            RollingFileWriterBuilder::new(parquet_file_writer_builder, 100 * 1024 * 1024);
-
+            RollingFileWriterBuilder::new(parquet_file_writer_builder, target_file_size);
         let data_file_writer_builder =
             DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
 
