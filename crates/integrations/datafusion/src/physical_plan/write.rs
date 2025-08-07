@@ -56,6 +56,13 @@ use uuid::Uuid;
 use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
 
+/// An execution plan node that writes data to an Iceberg table.
+///
+/// This execution plan takes input data from a child execution plan and writes it to an Iceberg table.
+/// It handles the creation of data files in the appropriate format and returns information about the written files as its output.
+///
+/// The output of this execution plan is a record batch containing a single column with serialized
+/// data file information that can be used for committing the write operation to the table.
 #[derive(Debug)]
 pub(crate) struct IcebergWriteExec {
     table: Table,
@@ -163,6 +170,27 @@ impl ExecutionPlan for IcebergWriteExec {
         )))
     }
 
+    /// Executes the write operation for the given partition.
+    ///
+    /// This function:
+    /// 1. Sets up a data file writer based on the table's configuration
+    /// 2. Processes input data from the child execution plan
+    /// 3. Writes the data to files using the configured writer
+    /// 4. Returns a stream containing information about the written data files
+    ///
+    /// The output of this function is a stream of record batches with the following structure:
+    ///
+    /// ```text
+    /// +------------------+
+    /// | data_files       |
+    /// +------------------+
+    /// | "{"file_path":.. |  <- JSON string representing a data file
+    /// +------------------+
+    /// ```
+    ///
+    /// Each row in the output contains a JSON string representing a data file that was written.
+    ///
+    /// This output can be used by a subsequent operation to commit the added files to the table.
     fn execute(
         &self,
         partition: usize,
