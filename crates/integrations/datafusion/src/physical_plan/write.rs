@@ -199,11 +199,7 @@ impl ExecutionPlan for IcebergWriteExec {
             DefaultLocationGenerator::new(self.table.metadata().clone())
                 .map_err(to_datafusion_error)?,
             // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(
-                "datafusion".to_string(),
-                Some(Uuid::now_v7().to_string()),
-                file_format,
-            ),
+            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format),
         );
         let target_file_size = match self
             .table
