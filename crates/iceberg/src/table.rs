@@ -168,6 +168,12 @@ impl Table {
         self
     }
 
+    /// Sets the [`Table`] metadata location and returns an updated instance.
+    pub(crate) fn with_metadata_location(mut self, metadata_location: String) -> Self {
+        self.metadata_location = Some(metadata_location);
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()
@@ -190,6 +196,17 @@ impl Table {
     /// Returns current metadata location.
     pub fn metadata_location(&self) -> Option<&str> {
         self.metadata_location.as_deref()
+    }
+
+    /// Returns current metadata location in a result.
+    pub fn metadata_location_result(&self) -> Result<&str> {
+        self.metadata_location.as_deref().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Metadata location does not exist for table: {}",
+                self.identifier
+            ),
+        ))
     }
 
     /// Returns file io used in this table.

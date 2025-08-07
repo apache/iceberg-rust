@@ -18,17 +18,20 @@
 //! Catalog API for Apache Iceberg
 
 pub mod memory;
+mod metadata_location;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use _serde::deserialize_snapshot;
 use async_trait::async_trait;
 pub use memory::MemoryCatalog;
+pub use metadata_location::*;
 #[cfg(test)]
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
@@ -335,14 +338,26 @@ impl TableCommit {
             requirement.check(Some(table.metadata()))?;
         }
 
-        // apply updates to metadata builder
-        let mut metadata_builder = table.metadata().clone().into_builder(None);
+        // get current metadata location
+        let current_metadata_location = table.metadata_location_result()?;
 
+        // apply updates to metadata builder
+        let mut metadata_builder = table
+            .metadata()
+            .clone()
+            .into_builder(Some(current_metadata_location.to_string()));
         for update in self.updates {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        Ok(table.with_metadata(Arc::new(metadata_builder.build()?.metadata)))
+        // Bump the version of metadata
+        let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
+            .with_next_version()
+            .to_string();
+
+        Ok(table
+            .with_metadata(Arc::new(metadata_builder.build()?.metadata))
+            .with_metadata_location(new_metadata_location))
     }
 }
 
@@ -2172,7 +2187,7 @@ mod tests {
 
             Table::builder()
                 .metadata(resp)
-                .metadata_location("s3://bucket/test/location/metadata/v2.json".to_string())
+                .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIOBuilder::new("memory").build().unwrap())
                 .build()
@@ -2181,7 +2196,7 @@ mod tests {
 
         let updates = vec![
             TableUpdate::SetLocation {
-                location: "s3://bucket/test/new_location/metadata/v2.json".to_string(),
+                location: "s3://bucket/test/new_location/data".to_string(),
             },
             TableUpdate::SetProperties {
                 updates: vec![
@@ -2214,9 +2229,17 @@ mod tests {
             "v2"
         );
 
+        // metadata version should be bumped
+        assert!(
+            updated_table
+                .metadata_location()
+                .unwrap()
+                .starts_with("s3://bucket/test/location/metadata/00001-")
+        );
+
         assert_eq!(
             updated_table.metadata().location,
-            "s3://bucket/test/new_location/metadata/v2.json".to_string()
-        )
+            "s3://bucket/test/new_location/data",
+        );
     }
 }

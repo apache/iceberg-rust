@@ -21,7 +21,7 @@ pub use catalog::*;
 mod error;
 pub use error::*;
 
-mod physical_plan;
+pub mod physical_plan;
 mod schema;
 pub mod table;
 pub use table::table_provider_factory::IcebergTableProviderFactory;

@@ -26,9 +26,10 @@ use crate::spec::DataFileBuilder;
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
-mod track_writer;
 
 pub mod location_generator;
+/// Module providing writers that can automatically roll over to new files based on size thresholds.
+pub mod rolling_writer;
 
 type DefaultOutput = Vec<DataFileBuilder>;
 

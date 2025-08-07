@@ -349,6 +349,12 @@ define_from_err!(
 );
 
 define_from_err!(
+    core::num::ParseIntError,
+    ErrorKind::Unexpected,
+    "parsing integer from string"
+);
+
+define_from_err!(
     std::array::TryFromSliceError,
     ErrorKind::DataInvalid,
     "failed to convert byte slice to array"

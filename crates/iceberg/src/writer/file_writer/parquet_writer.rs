@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
@@ -36,7 +35,6 @@ use parquet::thrift::{TCompactOutputProtocol, TSerializable};
 use thrift::protocol::TOutputProtocol;
 
 use super::location_generator::{FileNameGenerator, LocationGenerator};
-use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, NanValueCountVisitor, get_parquet_stat_max_as_datum,
@@ -86,8 +84,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
 impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
     type R = ParquetWriter;
 
-    async fn build(self) -> crate::Result<Self::R> {
-        let written_size = Arc::new(AtomicI64::new(0));
+    async fn build(self) -> Result<Self::R> {
         let out_file = self.file_io.new_output(
             self.location_generator
                 .generate_location(&self.file_name_generator.generate_file_name()),
@@ -97,7 +94,6 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props,
-            written_size,
             current_row_num: 0,
             out_file,
             nan_value_count_visitor: NanValueCountVisitor::new(),
@@ -227,9 +223,8 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
     writer_properties: WriterProperties,
-    written_size: Arc<AtomicI64>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
 }
@@ -266,7 +261,7 @@ impl MinMaxColAggregator {
         self.upper_bounds
             .entry(field_id)
             .and_modify(|e| {
-                if *e > datum {
+                if *e < datum {
                     *e = datum.clone()
                 }
             })
@@ -515,7 +510,7 @@ impl ParquetWriter {
 }
 
 impl FileWriter for ParquetWriter {
-    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> crate::Result<()> {
+    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
@@ -532,8 +527,7 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer =
-                TrackWriter::new(self.out_file.writer().await?, self.written_size.clone());
+            let inner_writer = self.out_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
@@ -560,16 +554,16 @@ impl FileWriter for ParquetWriter {
     }
 
     async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
-        let writer = match self.inner_writer.take() {
+        let mut writer = match self.inner_writer.take() {
             Some(writer) => writer,
             None => return Ok(vec![]),
         };
 
-        let metadata = writer.close().await.map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
+        let metadata = writer.finish().await.map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to finish parquet writer.").with_source(err)
         })?;
 
-        let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
+        let written_size = writer.bytes_written();
 
         if self.current_row_num == 0 {
             self.out_file.delete().await.map_err(|err| {
@@ -593,7 +587,7 @@ impl FileWriter for ParquetWriter {
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,
                 parquet_metadata,
-                written_size as usize,
+                written_size,
                 self.out_file.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
             )?])
@@ -611,7 +605,14 @@ impl CurrentFileStatus for ParquetWriter {
     }
 
     fn current_written_size(&self) -> usize {
-        self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
+        if let Some(inner) = self.inner_writer.as_ref() {
+            // inner/AsyncArrowWriter contains sync and async writers
+            // written size = bytes flushed to inner's async writer + bytes buffered in the inner's sync writer
+            inner.bytes_written() + inner.in_progress_size()
+        } else {
+            // inner writer is not initialized yet
+            0
+        }
     }
 }
 
@@ -664,6 +665,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::file::statistics::ValueStatistics;
     use rust_decimal::Decimal;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -853,7 +855,9 @@ mod tests {
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
+            WriterProperties::builder()
+                .set_max_row_group_size(128)
+                .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
             file_io.clone(),
             location_gen,
@@ -2283,5 +2287,40 @@ mod tests {
 
         // Check that file should have been deleted.
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_min_max_aggregator() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "col", Type::Primitive(PrimitiveType::Int))
+                        .with_id(0)
+                        .into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let create_statistics =
+            |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
+        min_max_agg
+            .update(0, create_statistics(None, Some(42)))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(Some(i32::MIN), None))
+            .unwrap();
+        min_max_agg
+            .update(0, create_statistics(None, None))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
     }
 }

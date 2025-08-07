@@ -20,7 +20,7 @@ networks:
 
 services:
   rest:
-    image: apache/iceberg-rest-fixture
+    image: apache/iceberg-rest-fixture:1.9.2
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
