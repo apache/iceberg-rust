@@ -57,8 +57,9 @@ impl DeleteVector {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                format!("failed to marks rows as deleted because {:?}", err),
-            ));
+                format!("failed to marks rows as deleted"),
+            )
+            .with_source(err));
         }
         Ok(positions.len())
     }
