@@ -3673,6 +3673,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
