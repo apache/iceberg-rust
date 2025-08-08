@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 
@@ -44,7 +45,7 @@ pub fn set_test_fixture(func: &str) -> TestFixture {
 
     let catalog_config = HashMap::from([
         (
-            "uri".to_string(),
+            REST_CATALOG_PROP_URI.to_string(),
             format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT),
         ),
         (

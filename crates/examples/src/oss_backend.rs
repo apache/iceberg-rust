@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use futures::stream::StreamExt;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
-use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 
 // Configure these values according to your environment
 
@@ -46,7 +46,7 @@ async fn main() {
         .load(
             "rest",
             HashMap::from([
-                ("uri".to_string(), REST_URI.to_string()),
+                (REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string()),
                 (
                     iceberg::io::OSS_ENDPOINT.to_string(),
                     OSS_ENDPOINT.to_string(),

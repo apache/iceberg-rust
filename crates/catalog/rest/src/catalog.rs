@@ -46,37 +46,16 @@ use crate::types::{
     RegisterTableRequest, RenameTableRequest,
 };
 
-const REST_CATALOG_PROP_URI: &str = "uri";
-const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// REST catalog URI
+pub const REST_CATALOG_PROP_URI: &str = "uri";
+/// REST catalog warehouse location
+pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Builder for [`RestCatalog`].
-/// To build a rest catalog with configurations
-///
-/// # Example
-///
-/// ```rust, no_run
-/// use std::collections::HashMap;
-///
-/// use iceberg::CatalogBuilder;
-/// use iceberg_catalog_rest::RestCatalogBuilder;
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let catalog = RestCatalogBuilder::default()
-///         .load(
-///             "rest",
-///             HashMap::from([
-///                 ("uri".to_string(), "http://localhost:8181".to_string()),
-///                 ("warehouse".to_string(), "s3://warehouse".to_string()),
-///             ]),
-///         )
-///         .await
-///         .unwrap();
-/// }
-/// ```
 #[derive(Debug)]
 pub struct RestCatalogBuilder(RestCatalogConfig);
 
@@ -2714,7 +2693,10 @@ mod tests {
             .load(
                 "test",
                 HashMap::from([
-                    ("uri".to_string(), "http://localhost:8080".to_string()),
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
                     ("a".to_string(), "b".to_string()),
                 ]),
             )
@@ -2729,7 +2711,7 @@ mod tests {
         assert!(catalog_config.client.is_some());
 
         assert_eq!(catalog_config.props.get("a"), Some(&"b".to_string()));
-        assert!(!catalog_config.props.contains_key("uri"));
+        assert!(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
     }
 
     #[tokio::test]
@@ -2739,7 +2721,10 @@ mod tests {
         let catalog = builder
             .load(
                 "test",
-                HashMap::from([("warehouse".to_string(), "s3://warehouse".to_string())]),
+                HashMap::from([(
+                    REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                    "s3://warehouse".to_string(),
+                )]),
             )
             .await;
 

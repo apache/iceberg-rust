@@ -57,6 +57,8 @@ pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
 mod tests {
     use std::collections::HashMap;
 
+    use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
     use crate::load;
 
     #[tokio::test]
@@ -66,7 +68,10 @@ mod tests {
             .load(
                 "rest".to_string(),
                 HashMap::from([
-                    ("uri".to_string(), "http://localhost:8080".to_string()),
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
                     ("key".to_string(), "value".to_string()),
                 ]),
             )

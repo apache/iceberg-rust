@@ -25,7 +25,7 @@ use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogBuilder};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -70,7 +70,10 @@ async fn get_catalog() -> RestCatalog {
     RestCatalogBuilder::default()
         .load(
             "rest",
-            HashMap::from([("uri".to_string(), format!("http://{}", rest_socket_addr))]),
+            HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                format!("http://{}", rest_socket_addr),
+            )]),
         )
         .await
         .unwrap()

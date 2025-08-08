@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
-use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 
 static REST_URI: &str = "http://localhost:8181";
 
@@ -36,7 +36,7 @@ async fn main() {
     let catalog = RestCatalogBuilder::default()
         .load(
             "rest",
-            HashMap::from([("uri".to_string(), REST_URI.to_string())]),
+            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
         )
         .await
         .unwrap();
