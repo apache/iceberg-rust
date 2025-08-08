@@ -311,7 +311,9 @@ impl<'a> SnapshotProducer<'a> {
         // # TODO
         // Support process delete entries.
 
-        manifest_process.process_manifests(self, manifest_files).await
+        manifest_process
+            .process_manifests(self, manifest_files)
+            .await
     }
 
     // Returns a `Summary` of the current snapshot
