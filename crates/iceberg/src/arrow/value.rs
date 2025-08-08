@@ -21,12 +21,12 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema as ArrowSchema};
 use uuid::Uuid;
 
-use super::get_field_id;
+use super::{get_field_id, schema_to_arrow_schema};
 use crate::spec::{
-    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
+    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType, Schema,
     SchemaWithPartnerVisitor, Struct, StructType, visit_struct_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -262,7 +262,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "The precision or scale ({},{}) of arrow decimal128 array is not compatitable with iceberg decimal type ({},{})",
+                                "The precision or scale ({},{}) of arrow decimal128 array is not compatible with iceberg decimal type ({},{})",
                                 arrow_precision, arrow_scale, precision, scale
                             ),
                         ));
@@ -426,10 +426,42 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 }
 
 /// Partner type representing accessing and walking arrow arrays alongside iceberg schema
-pub struct ArrowArrayAccessor;
+pub struct ArrowArrayAccessor {
+    arrow_schema: Option<ArrowSchema>,
+}
+
+impl ArrowArrayAccessor {
+    /// Creates a new instance of ArrowArrayAccessor without arrow schema fallback
+    pub fn new() -> Result<Self> {
+        Ok(Self { arrow_schema: None })
+    }
+
+    /// Creates a new instance of ArrowArrayAccessor with arrow schema converted from table schema
+    /// for field ID resolution fallback
+    pub fn new_with_table_schema(table_schema: &Schema) -> Result<Self> {
+        Ok(Self {
+            arrow_schema: Some(schema_to_arrow_schema(table_schema)?),
+        })
+    }
+
+    /// Check if an arrow field matches the target field ID, either directly or through schema lookup
+    fn arrow_field_matches_id(&self, arrow_field: &arrow_schema::Field, target_id: i32) -> bool {
+        // First try direct match via field metadata
+        if let Ok(id) = get_field_id(arrow_field) {
+            id == target_id
+        } else {
+            // Only if direct match fails, try fallback via schema lookup
+            self.arrow_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(arrow_field.name()).ok())
+                .and_then(|field_from_schema| get_field_id(field_from_schema).ok())
+                .is_some_and(|id| id == target_id)
+        }
+    }
+}
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
-    fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -451,22 +483,31 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    "The struct partner is not a struct array",
+                    format!(
+                        "The struct partner is not a struct array, partner: {:?}",
+                        struct_partner
+                    ),
                 )
             })?;
 
         let field_pos = struct_array
             .fields()
             .iter()
-            .position(|arrow_field| {
-                get_field_id(arrow_field)
-                    .map(|id| id == field.id)
-                    .unwrap_or(false)
-            })
+            .position(|arrow_field| self.arrow_field_matches_id(arrow_field, field.id))
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!(
+                        "Field with id={} or name={} not found in struct array. Available fields: [{}]",
+                        field.id,
+                        field.name,
+                        struct_array
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 )
             })?;
 
@@ -549,7 +590,7 @@ pub fn arrow_struct_to_literal(
         ty,
         struct_array,
         &mut ArrowArrayToIcebergStructConverter,
-        &ArrowArrayAccessor,
+        &ArrowArrayAccessor::new()?,
     )
 }
 
@@ -897,6 +938,53 @@ mod test {
         let iceberg_struct_type = StructType::new(vec![]);
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
         assert_eq!(result, vec![None; 0]);
+    }
+
+    #[test]
+    fn test_field_id_fallback_with_arrow_schema() {
+        // Create an Arrow struct array with a field that doesn't have field ID in metadata
+        let int32_array = Int32Array::from(vec![Some(42), Some(43), None]);
+
+        // Create the struct array with a field that has no field ID metadata
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("field_a", DataType::Int32, true)), // No field ID metadata
+            Arc::new(int32_array) as ArrayRef,
+        )])) as ArrayRef;
+
+        // Create an Iceberg schema with field ID
+        let iceberg_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::optional(
+                100, // Field ID that we'll look for
+                "field_a",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .unwrap();
+
+        // Create an ArrowArrayAccessor with the table schema for fallback
+        let accessor = ArrowArrayAccessor::new_with_table_schema(&iceberg_schema).unwrap();
+
+        // Create a nested field to look up
+        let field = NestedField::optional(100, "field_a", Type::Primitive(PrimitiveType::Int));
+
+        // This should succeed by using the arrow_schema fallback
+        let result = accessor.field_partner(&struct_array, &field);
+
+        // Verify that the field was found
+        assert!(result.is_ok());
+
+        // Verify that the field has the expected value
+        let array_ref = result.unwrap();
+        let int_array = array_ref.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_array.value(0), 42);
+        assert_eq!(int_array.value(1), 43);
+        assert!(int_array.is_null(2));
+
+        // Now try with an accessor without arrow_schema - this should fail
+        let accessor_without_schema = ArrowArrayAccessor::new().unwrap();
+        let result = accessor_without_schema.field_partner(&struct_array, &field);
+        assert!(result.is_err());
     }
 
     #[test]
