@@ -208,21 +208,26 @@ pub(crate) fn get_default_table_location(
     namespace: &Namespace,
     db_name: impl AsRef<str>,
     table_name: impl AsRef<str>,
-    warehouse: impl AsRef<str>,
-) -> String {
+    warehouse: Option<impl AsRef<str>>,
+) -> Result<String> {
     let properties = namespace.properties();
 
     match properties.get(LOCATION) {
-        Some(location) => format!("{}/{}", location, table_name.as_ref()),
+        Some(location) => Ok(format!("{}/{}", location, table_name.as_ref())),
         None => {
-            let warehouse_location = warehouse.as_ref().trim_end_matches('/');
-
-            format!(
-                "{}/{}.db/{}",
-                warehouse_location,
-                db_name.as_ref(),
-                table_name.as_ref()
-            )
+            if let Some(warehouse) = warehouse {
+                let warehouse_location = warehouse.as_ref().trim_end_matches('/');
+                Ok(format!(
+                    "{}/{}.db/{}",
+                    warehouse_location,
+                    db_name.as_ref(),
+                    table_name.as_ref()))
+            } else {
+                Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    "Cannot derive default warehouse location, warehouse path must not be null or empty"
+                ))
+            }
         }
     }
 }
@@ -358,7 +363,7 @@ mod tests {
 
         let expected = "db_location/my_table";
         let result =
-            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+            get_default_table_location(&namespace, db_name, table_name, Some("warehouse_location"))?;
 
         assert_eq!(expected, result);
 
@@ -373,7 +378,7 @@ mod tests {
 
         let expected = "warehouse_location/default.db/my_table";
         let result =
-            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+            get_default_table_location(&namespace, db_name, table_name, Some("warehouse_location"))?;
 
         assert_eq!(expected, result);
 
