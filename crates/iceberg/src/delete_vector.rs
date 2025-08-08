@@ -21,6 +21,8 @@ use roaring::RoaringTreemap;
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 
+use crate::{Error, ErrorKind, Result};
+
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
@@ -28,7 +30,7 @@ pub struct DeleteVector {
 
 impl DeleteVector {
     #[allow(unused)]
-    pub(crate) fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
+    pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
@@ -41,6 +43,25 @@ impl DeleteVector {
 
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
+    }
+
+    /// Marks the given `positions` as deleted and returns the number of elements appended.
+    ///
+    /// The input slice must be strictly ordered in ascending order, and every value must be greater than all existing values already in the set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the precondition is not met.
+    #[allow(dead_code)]
+    pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
+        if let Err(err) = self.inner.append(positions.iter().copied()) {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "failed to marks rows as deleted".to_string(),
+            )
+            .with_source(err));
+        }
+        Ok(positions.len())
     }
 
     #[allow(unused)]
@@ -118,5 +139,63 @@ impl DeleteVectorIterator<'_> {
 impl BitOrAssign for DeleteVector {
     fn bitor_assign(&mut self, other: Self) {
         self.inner.bitor_assign(&other.inner);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insertion_and_iteration() {
+        let mut dv = DeleteVector::default();
+        assert!(dv.insert(42));
+        assert!(dv.insert(100));
+        assert!(!dv.insert(42));
+
+        let mut items: Vec<u64> = dv.iter().collect();
+        items.sort();
+        assert_eq!(items, vec![42, 100]);
+        assert_eq!(dv.len(), 2);
+    }
+
+    #[test]
+    fn test_successful_insert_positions() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 2, 3, 1000, 1 << 33];
+        assert_eq!(dv.insert_positions(&positions).unwrap(), 5);
+
+        let mut collected: Vec<u64> = dv.iter().collect();
+        collected.sort();
+        assert_eq!(collected, positions);
+    }
+
+    /// Testing scenario: bulk insertion fails because input positions are not strictly increasing.
+    #[test]
+    fn test_failed_insertion_unsorted_elements() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 3, 5, 4];
+        let res = dv.insert_positions(&positions);
+        assert!(res.is_err());
+    }
+
+    /// Testing scenario: bulk insertion fails because input positions have intersection with existing ones.
+    #[test]
+    fn test_failed_insertion_with_intersection() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 3, 5];
+        assert_eq!(dv.insert_positions(&positions).unwrap(), 3);
+
+        let res = dv.insert_positions(&[2, 4]);
+        assert!(res.is_err());
+    }
+
+    /// Testing scenario: bulk insertion fails because input positions have duplicates.
+    #[test]
+    fn test_failed_insertion_duplicate_elements() {
+        let mut dv = DeleteVector::default();
+        let positions = vec![1, 3, 5, 5];
+        let res = dv.insert_positions(&positions);
+        assert!(res.is_err());
     }
 }

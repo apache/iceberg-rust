@@ -320,7 +320,7 @@ impl RestCatalog {
             None => None,
         };
 
-        let file_io = match warehouse_path.or(metadata_location) {
+        let file_io = match metadata_location.or(warehouse_path) {
             Some(url) => FileIO::from_path(url)?
                 .with_props(props)
                 .with_extensions(self.file_io_extensions.clone())
