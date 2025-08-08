@@ -40,8 +40,8 @@ use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, TableCreation};
-use iceberg_catalog_rest::RestCatalog;
+use iceberg::{Catalog, CatalogBuilder, TableCreation};
+use iceberg_catalog_rest::RestCatalogBuilder;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
@@ -52,7 +52,10 @@ use crate::shared_tests::random_ns;
 #[tokio::test]
 async fn test_scan_all_type() {
     let fixture = get_shared_containers();
-    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
     let ns = random_ns().await;
 
     let schema = Schema::builder()

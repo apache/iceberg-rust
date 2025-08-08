@@ -21,8 +21,8 @@ use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
 use iceberg::spec::Datum;
-use iceberg::{Catalog, TableIdent};
-use iceberg_catalog_rest::RestCatalog;
+use iceberg::{Catalog, CatalogBuilder, TableIdent};
+use iceberg_catalog_rest::RestCatalogBuilder;
 use ordered_float::OrderedFloat;
 
 use crate::get_shared_containers;
@@ -30,7 +30,10 @@ use crate::get_shared_containers;
 #[tokio::test]
 async fn test_evolved_schema() {
     let fixture = get_shared_containers();
-    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
 
     let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "test_rename_column"]).unwrap())

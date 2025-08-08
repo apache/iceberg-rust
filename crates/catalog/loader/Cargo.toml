@@ -16,33 +16,20 @@
 # under the License.
 
 [package]
-description = "Apache iceberg client"
-edition.workspace = true
-homepage.workspace = true
-license.workspace = true
-name = "iceberg-playground"
-readme = "README.md"
-repository.workspace = true
-rust-version.workspace = true
-version.workspace = true
+edition = { workspace = true }
+homepage = { workspace = true }
+name = "iceberg-catalog-loader"
+rust-version = { workspace = true }
+version = { workspace = true }
+
+categories = ["database"]
+description = "Apache Iceberg Catalog Loader API"
+keywords = ["iceberg", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
-datafusion = { workspace = true }
-datafusion-cli = { workspace = true }
-dirs = { workspace = true }
-fs-err = { workspace = true }
 iceberg = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
-iceberg-datafusion = { workspace = true }
-mimalloc = { workspace = true }
-stacker = { workspace = true }
+iceberg-catalog-rest = {workspace = true}
 tokio = { workspace = true }
-toml = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-[package.metadata.cargo-machete]
-# These dependencies are added to ensure minimal dependency version
-ignored = ["stacker", "mimalloc"]
+async-trait = {workspace = true}

@@ -23,7 +23,8 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg::CatalogBuilder;
+use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
 
@@ -87,44 +88,19 @@ impl IcebergCatalogList {
             .as_table()
             .ok_or_else(|| anyhow::anyhow!("config is not table for catalog {name}"))?;
 
-        let uri = catalog_config
-            .get("uri")
-            .ok_or_else(|| anyhow::anyhow!("uri not found for catalog {name}"))?
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("uri is not string"))?;
-
-        let warehouse = catalog_config
-            .get("warehouse")
-            .ok_or_else(|| anyhow::anyhow!("warehouse not found for catalog {name}"))?
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("warehouse is not string for catalog {name}"))?;
-
-        let props_table = catalog_config
-            .get("props")
-            .ok_or_else(|| anyhow::anyhow!("props not found for catalog {name}"))?
-            .as_table()
-            .ok_or_else(|| anyhow::anyhow!("props is not table for catalog {name}"))?;
-
-        let mut props = HashMap::with_capacity(props_table.len());
-        for (key, value) in props_table {
+        // parse all config into props
+        let mut props = HashMap::with_capacity(catalog_config.len());
+        for (key, value) in catalog_config {
             let value_str = value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
             props.insert(key.to_string(), value_str.to_string());
         }
-
-        let rest_catalog_config = RestCatalogConfig::builder()
-            .uri(uri.to_string())
-            .warehouse(warehouse.to_string())
-            .props(props)
-            .build();
+        let catalog = RestCatalogBuilder::default().load(name, props).await?;
 
         Ok((
             name.to_string(),
-            Arc::new(
-                IcebergCatalogProvider::try_new(Arc::new(RestCatalog::new(rest_catalog_config)))
-                    .await?,
-            ),
+            Arc::new(IcebergCatalogProvider::try_new(Arc::new(catalog)).await?),
         ))
     }
 }

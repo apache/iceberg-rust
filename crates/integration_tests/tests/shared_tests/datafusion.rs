@@ -24,8 +24,8 @@ use datafusion::assert_batches_eq;
 use datafusion::catalog::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::prelude::SessionContext;
-use iceberg::{Catalog, TableIdent};
-use iceberg_catalog_rest::RestCatalog;
+use iceberg::{Catalog, CatalogBuilder, TableIdent};
+use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergTableProvider;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
@@ -34,7 +34,10 @@ use crate::get_shared_containers;
 #[tokio::test]
 async fn test_basic_queries() -> Result<(), DataFusionError> {
     let fixture = get_shared_containers();
-    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
 
     let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "types_test"]).unwrap())
