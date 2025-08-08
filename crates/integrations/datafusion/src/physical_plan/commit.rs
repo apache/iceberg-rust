@@ -269,9 +269,7 @@ mod tests {
     use datafusion::physical_plan::common::collect;
     use datafusion::physical_plan::execution_plan::Boundedness;
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-    use datafusion::physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execution_plan,
-    };
+    use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
     use futures::StreamExt;
     use iceberg::io::FileIOBuilder;
     use iceberg::spec::{
@@ -280,6 +278,7 @@ mod tests {
     };
     use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent};
 
+    use super::*;
     use crate::physical_plan::DATA_FILES_COL_NAME;
 
     // A mock execution plan that returns record batches with serialized data files
@@ -301,7 +300,7 @@ mod tests {
             let plan_properties = PlanProperties::new(
                 EquivalenceProperties::new(schema.clone()),
                 Partitioning::UnknownPartitioning(1),
-                execution_plan::EmissionType::Final,
+                EmissionType::Final,
                 Boundedness::Bounded,
             );
 
@@ -318,7 +317,7 @@ mod tests {
             "MockWriteExec"
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
@@ -345,7 +344,7 @@ mod tests {
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
-        ) -> datafusion::common::Result<datafusion::execution::SendableRecordBatchStream> {
+        ) -> datafusion::common::Result<SendableRecordBatchStream> {
             // Create a record batch with the serialized data files
             let array = Arc::new(StringArray::from(self.data_files_json.clone())) as ArrayRef;
             let batch = RecordBatch::try_new(self.schema.clone(), vec![array])?;
@@ -361,7 +360,7 @@ mod tests {
 
     // Implement DisplayAs for MockDataFilesExec
     impl DisplayAs for MockWriteExec {
-        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
             match t {
                 DisplayFormatType::Default
                 | DisplayFormatType::Verbose
@@ -450,7 +449,7 @@ mod tests {
         )]));
 
         let commit_exec =
-            super::IcebergCommitExec::new(table.clone(), catalog.clone(), input_exec, arrow_schema);
+            IcebergCommitExec::new(table.clone(), catalog.clone(), input_exec, arrow_schema);
 
         // Execute the commit exec
         let task_ctx = Arc::new(TaskContext::default());
@@ -470,10 +469,7 @@ mod tests {
         assert_eq!(count_array.data_type(), &DataType::UInt64);
 
         // Verify that the count is correct
-        let count = count_array
-            .as_any()
-            .downcast_ref::<datafusion::arrow::array::UInt64Array>()
-            .unwrap();
+        let count = count_array.as_any().downcast_ref::<UInt64Array>().unwrap();
         assert_eq!(count.value(0), 300);
 
         // Verify that the table has been updated with the new files
