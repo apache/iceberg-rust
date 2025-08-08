@@ -196,6 +196,18 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
+        if self
+            .table
+            .metadata()
+            .default_partition_spec()
+            .is_unpartitioned()
+        {
+            // TODO add support for partitioned tables
+            return Err(DataFusionError::NotImplemented(
+                "IcebergWriteExec does not support partitioned tables yet".to_string(),
+            ));
+        }
+
         let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
@@ -240,7 +252,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 .map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        "Invalid value for commit.retry.min-wait-ms",
+                        "Invalid value for write.target-file-size-bytes",
                     )
                     .with_source(e)
                 })
