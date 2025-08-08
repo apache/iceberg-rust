@@ -255,3 +255,256 @@ impl ExecutionPlan for IcebergCommitExec {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::fmt;
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::execution::context::TaskContext;
+    use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+    use datafusion::physical_plan::common::collect;
+    use datafusion::physical_plan::execution_plan::Boundedness;
+    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use datafusion::physical_plan::{
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execution_plan,
+    };
+    use futures::StreamExt;
+    use iceberg::io::FileIOBuilder;
+    use iceberg::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
+        Struct, Type,
+    };
+    use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent};
+
+    use crate::physical_plan::DATA_FILES_COL_NAME;
+
+    // A mock execution plan that returns record batches with serialized data files
+    #[derive(Debug)]
+    struct MockWriteExec {
+        schema: Arc<ArrowSchema>,
+        data_files_json: Vec<String>,
+        plan_properties: PlanProperties,
+    }
+
+    impl MockWriteExec {
+        fn new(data_files_json: Vec<String>) -> Self {
+            let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                DATA_FILES_COL_NAME,
+                DataType::Utf8,
+                false,
+            )]));
+
+            let plan_properties = PlanProperties::new(
+                EquivalenceProperties::new(schema.clone()),
+                Partitioning::UnknownPartitioning(1),
+                execution_plan::EmissionType::Final,
+                Boundedness::Bounded,
+            );
+
+            Self {
+                schema,
+                data_files_json,
+                plan_properties,
+            }
+        }
+    }
+
+    impl ExecutionPlan for MockWriteExec {
+        fn name(&self) -> &str {
+            "MockWriteExec"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn schema(&self) -> Arc<ArrowSchema> {
+            self.schema.clone()
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.plan_properties
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> datafusion::common::Result<datafusion::execution::SendableRecordBatchStream> {
+            // Create a record batch with the serialized data files
+            let array = Arc::new(StringArray::from(self.data_files_json.clone())) as ArrayRef;
+            let batch = RecordBatch::try_new(self.schema.clone(), vec![array])?;
+
+            // Create a stream that returns this batch
+            let stream = futures::stream::once(async move { Ok(batch) }).boxed();
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema(),
+                stream,
+            )))
+        }
+    }
+
+    // Implement DisplayAs for MockDataFilesExec
+    impl DisplayAs for MockWriteExec {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            match t {
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => {
+                    write!(f, "MockDataFilesExec: files={}", self.data_files_json.len())
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_iceberg_commit_exec() -> Result<(), Box<dyn std::error::Error>> {
+        // Create a memory catalog with in-memory file IO
+        let file_io = FileIOBuilder::new("memory").build()?;
+        let catalog = Arc::new(MemoryCatalog::new(
+            file_io,
+            Some("memory://root".to_string()),
+        ));
+
+        // Create a namespace
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+        // Create a schema for the table
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        // Create a table
+        let table_creation = TableCreation::builder()
+            .name("test_table".to_string())
+            .schema(schema)
+            .location("memory://root/test_table".to_string())
+            .properties(HashMap::new())
+            .build();
+
+        let table = catalog.create_table(&namespace, table_creation).await?;
+
+        // Create data files
+        let data_file1 = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("path/to/file1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(1024)
+            .record_count(100)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::empty())
+            .build()?;
+
+        let data_file2 = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("path/to/file2.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(2048)
+            .record_count(200)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::empty())
+            .build()?;
+
+        // Serialize data files to JSON
+        let partition_type = table.metadata().default_partition_type().clone();
+        let data_file1_json = iceberg::spec::serialize_data_file_to_json(
+            data_file1.clone(),
+            &partition_type,
+            table.metadata().format_version(),
+        )?;
+
+        let data_file2_json = iceberg::spec::serialize_data_file_to_json(
+            data_file2.clone(),
+            &partition_type,
+            table.metadata().format_version(),
+        )?;
+
+        // Create a mock execution plan that returns the serialized data files
+        let input_exec = Arc::new(MockWriteExec::new(vec![data_file1_json, data_file2_json]));
+
+        // Create the IcebergCommitExec
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            DATA_FILES_COL_NAME,
+            DataType::Utf8,
+            false,
+        )]));
+
+        let commit_exec =
+            super::IcebergCommitExec::new(table.clone(), catalog.clone(), input_exec, arrow_schema);
+
+        // Execute the commit exec
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = commit_exec.execute(0, task_ctx)?;
+        let batches = collect(stream).await?;
+
+        // Verify the results
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 1);
+
+        // The output should be a record batch with a single column "count" and a single row
+        // with the total record count (100 + 200 = 300)
+        let count_array = batch.column(0);
+        assert_eq!(count_array.len(), 1);
+        assert_eq!(count_array.data_type(), &DataType::UInt64);
+
+        // Verify that the count is correct
+        let count = count_array
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::UInt64Array>()
+            .unwrap();
+        assert_eq!(count.value(0), 300);
+
+        // Verify that the table has been updated with the new files
+        let updated_table = catalog
+            .load_table(&TableIdent::from_strs(["test_namespace", "test_table"]).unwrap())
+            .await?;
+        let current_snapshot = updated_table.metadata().current_snapshot().unwrap();
+
+        // Load the manifest list to verify the data files were added
+        let manifest_list = current_snapshot
+            .load_manifest_list(updated_table.file_io(), updated_table.metadata())
+            .await?;
+
+        // There should be at least one manifest
+        assert!(!manifest_list.entries().is_empty());
+
+        // Load the first manifest and verify it contains our data files
+        let manifest = manifest_list.entries()[0]
+            .load_manifest(updated_table.file_io())
+            .await?;
+
+        // Verify that the manifest contains our data files
+        let manifest_files: Vec<String> = manifest
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().file_path().to_string())
+            .collect();
+
+        assert!(manifest_files.contains(&"path/to/file1.parquet".to_string()));
+        assert!(manifest_files.contains(&"path/to/file2.parquet".to_string()));
+
+        Ok(())
+    }
+}
