@@ -196,7 +196,7 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        if self
+        if !self
             .table
             .metadata()
             .default_partition_spec()
