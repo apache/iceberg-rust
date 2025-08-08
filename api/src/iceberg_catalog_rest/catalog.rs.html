@@ -320,7 +320,7 @@
 <a href=#320 id=320 data-nosnippet>320</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
 <a href=#321 id=321 data-nosnippet>321</a>        };
 <a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>file_io = <span class="kw">match </span>warehouse_path.or(metadata_location) {
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>file_io = <span class="kw">match </span>metadata_location.or(warehouse_path) {
 <a href=#324 id=324 data-nosnippet>324</a>            <span class="prelude-val">Some</span>(url) =&gt; FileIO::from_path(url)<span class="question-mark">?
 <a href=#325 id=325 data-nosnippet>325</a>                </span>.with_props(props)
 <a href=#326 id=326 data-nosnippet>326</a>                .with_extensions(<span class="self">self</span>.file_io_extensions.clone())
