@@ -24,11 +24,12 @@
 //! use std::collections::HashMap;
 //!
 //! use iceberg::CatalogBuilder;
-//! use iceberg_catalog_rest::RestCatalogBuilder;
+//! use iceberg_catalog_rest::{
+//!     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+//! };
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE};
 //!     let catalog = RestCatalogBuilder::default()
 //!         .load(
 //!             "rest",

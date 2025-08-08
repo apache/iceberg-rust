@@ -96,7 +96,7 @@ impl IcebergCatalogList {
                 .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
             props.insert(key.to_string(), value_str.to_string());
         }
-        let catalog = RestCatalogBuilder::default().load("rest", props).await?;
+        let catalog = RestCatalogBuilder::default().load(name, props).await?;
 
         Ok((
             name.to_string(),
