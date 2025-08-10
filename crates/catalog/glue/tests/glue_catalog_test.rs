@@ -24,6 +24,7 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{
     Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, TableCreation, TableIdent,
 };
@@ -36,7 +37,6 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 use tracing::info;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
 const GLUE_CATALOG_PORT: u16 = 5000;
 const MINIO_PORT: u16 = 9000;
@@ -432,7 +432,8 @@ async fn test_update_table() -> Result<()> {
 
     // Update table properties using the transaction
     let tx = Transaction::new(&table);
-    let tx = tx.update_table_properties()
+    let tx = tx
+        .update_table_properties()
         .set("test_property".to_string(), "test_value".to_string())
         .apply(tx)?;
 
@@ -451,10 +452,10 @@ async fn test_update_table() -> Result<()> {
         original_metadata_location,
         "Metadata location should be updated after commit"
     );
-    
+
     // Load the table again from the catalog to verify changes were persisted
     let reloaded_table = catalog.load_table(table.identifier()).await?;
-    
+
     // Verify the reloaded table matches the updated table
     assert_eq!(
         reloaded_table.metadata().properties().get("test_property"),
@@ -465,6 +466,6 @@ async fn test_update_table() -> Result<()> {
         updated_table.metadata_location(),
         "Reloaded table should have the same metadata location as the updated table"
     );
-    
+
     Ok(())
 }
