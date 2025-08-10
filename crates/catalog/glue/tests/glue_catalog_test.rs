@@ -428,7 +428,7 @@ async fn test_update_table() -> Result<()> {
     assert_eq!(table.metadata(), expected.metadata());
 
     // Store the original metadata location for comparison
-    let original_metadata_location = table.metadata_location().clone();
+    let original_metadata_location = table.metadata_location();
 
     // Update table properties using the transaction
     let tx = Transaction::new(&table);
