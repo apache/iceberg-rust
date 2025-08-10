@@ -297,8 +297,12 @@ pub fn write_data_files_to_avro<W: Write>(
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
     for data_file in data_files {
-        let value = to_value(DataFileSerde::try_from(data_file, partition_type, true)?)?
-            .resolve(&avro_schema)?;
+        let value = to_value(DataFileSerde::try_from(
+            data_file,
+            partition_type,
+            FormatVersion::V1,
+        )?)?
+        .resolve(&avro_schema)?;
         writer.append(value)?;
     }
 
@@ -333,9 +337,10 @@ pub fn read_data_files_from_avro<R: Read>(
 
 /// Type of content stored by the data file: data, equality deletes, or
 /// position deletes (all v1 files are data files)
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum DataContentType {
     /// value: 0
+    #[default]
     Data = 0,
     /// value: 1
     PositionDeletes = 1,
@@ -397,5 +402,19 @@ impl std::fmt::Display for DataFileFormat {
             DataFileFormat::Parquet => write!(f, "parquet"),
             DataFileFormat::Puffin => write!(f, "puffin"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::spec::DataContentType;
+    #[test]
+    fn test_data_content_type_default() {
+        assert_eq!(DataContentType::default(), DataContentType::Data);
+    }
+
+    #[test]
+    fn test_data_content_type_default_value() {
+        assert_eq!(DataContentType::default() as i32, 0);
     }
 }
