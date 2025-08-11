@@ -34,20 +34,16 @@ pub struct UpdateSchemaAction {
     case_sensitive: bool,
     /// Current schema before update.
     schema: SchemaRef,
-    /// Current field ids.
-    identifier_field_ids: HashSet<i32>,
-    /// Columns to drop on the table.
-    deletes: HashSet<i32>,
+    /// Columns names to drop from the table.
+    drops: HashSet<String>,
 }
 
 impl UpdateSchemaAction {
     pub(crate) fn new(schema: SchemaRef) -> Self {
-        let identifier_field_ids = schema.identifier_field_ids().collect::<HashSet<i32>>();
         Self {
             case_sensitive: false,
             schema,
-            identifier_field_ids,
-            deletes: HashSet::new(),
+            drops: HashSet::new(),
         }
     }
 
@@ -57,65 +53,76 @@ impl UpdateSchemaAction {
         self
     }
 
-    /// Deletes a column from a table.
+    /// drops a column from a table.
     ///
     /// # Arguments
     ///
-    /// * `column_name` - The path to the column.
+    /// * `column_name` - column to drop.
     ///
     /// # Returns
     ///
-    /// Returns the `UpdateSchema` with the delete operation staged.
-    pub fn delete_column(&mut self, column_name: Vec<String>) -> Result<&mut Self> {
-        let full_name = column_name.join(".");
+    /// Returns the `UpdateSchema` with the drop operation staged.
+    pub fn drop_column(mut self, column_name: String) -> Self {
+        self.drops.insert(column_name);
+        self
+    }
+
+    /// Validate columns to drop, and get their field ids.
+    fn get_field_ids_to_drop(&self) -> Result<HashSet<i32>> {
+        // Validate not all columns are dropped.
+        if self.schema.field_id_to_fields().len() == self.drops.len() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                format!("Cannot drop all columns in the table."),
+            ));
+        }
+
+        let identifier_field_ids = self.schema.identifier_field_ids().collect::<HashSet<i32>>();
+        let mut field_ids_to_drop = HashSet::new();
 
         // Get field id to drop.
-        let field = if self.case_sensitive {
-            self.schema.field_by_name(&full_name)
-        } else {
-            self.schema.field_by_name_case_insensitive(&full_name)
-        }
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Delete column name,'{}' , doesn't exist in the schema",
-                    full_name
-                ),
-            )
-        })?;
+        for cur_column_name in self.drops.iter() {
+            let field = if self.case_sensitive {
+                self.schema.field_by_name(&cur_column_name)
+            } else {
+                self.schema.field_by_name_case_insensitive(&cur_column_name)
+            }
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "drop column name,'{}' , doesn't exist in the schema",
+                        cur_column_name
+                    ),
+                )
+            })?;
 
-        // Validate columns to drop cannot be the table identifier.
-        if self.identifier_field_ids.contains(&field.id) {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                format!(
-                    "Column '{}' is the table identifier, which cannot be dropped.",
-                    full_name
-                ),
-            ));
-        }
+            // Validate columns to drop cannot be the table identifier.
+            if identifier_field_ids.contains(&field.id) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!(
+                        "Column '{}' is the table identifier, which cannot be dropped.",
+                        cur_column_name
+                    ),
+                ));
+            }
 
-        // Validate not all columns are dropped.
-        self.deletes.insert(field.id);
-        if self.schema.field_id_to_fields().len() == self.deletes.len() {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                format!("Cannot delete all columns '{}' in the table.", full_name),
-            ));
+            field_ids_to_drop.insert(field.id);
         }
 
-        Ok(self)
+        Ok(field_ids_to_drop)
     }
 
     /// Get updated schema.
     fn get_updated_schema(&self) -> Result<Schema> {
+        let field_ids_to_drop = self.get_field_ids_to_drop()?;
         let old_schema_id = self.schema.schema_id();
         let new_schema_id = old_schema_id + 1;
 
         let mut new_fields = vec![];
         for (field_id, field) in self.schema.field_id_to_fields() {
-            if self.deletes.contains(field_id) {
+            if field_ids_to_drop.contains(field_id) {
                 continue;
             }
             new_fields.push(field.clone());
@@ -124,7 +131,7 @@ impl UpdateSchemaAction {
         let schema_builder = Schema::builder();
         let new_schema = schema_builder
             .with_schema_id(new_schema_id)
-            .with_identifier_field_ids(self.identifier_field_ids.clone())
+            .with_identifier_field_ids(self.schema.identifier_field_ids())
             .with_fields(new_fields)
             .build()?;
         Ok(new_schema)
@@ -136,7 +143,7 @@ impl TransactionAction for UpdateSchemaAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let mut updates: Vec<TableUpdate> = vec![];
         let requirements: Vec<TableRequirement> = vec![];
-        if self.deletes.is_empty() {
+        if self.drops.is_empty() {
             return Ok(ActionCommit::new(updates, requirements));
         }
 
@@ -193,34 +200,25 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_empty_columns() {
+    fn test_drop_empty_columns() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
         let action = tx.update_schema();
-        assert!(action.deletes.is_empty());
+        assert!(action.drops.is_empty());
     }
 
     #[test]
-    fn test_fail_to_delete_identifier_column() {
+    fn test_drop_column() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
         let mut action = tx.update_schema();
-        let res = action.delete_column(vec!["x".to_string()]);
-        assert!(res.is_err());
+        action = action.drop_column("z".to_string());
+        assert_eq!(action.drops, HashSet::from([("z".to_string())]));
     }
 
-    #[test]
-    fn test_delete_non_identifier_column() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let mut action = tx.update_schema();
-        action.delete_column(vec!["z".to_string()]).unwrap();
-        assert_eq!(action.deletes, HashSet::from([(3)]));
-    }
-
-    // Test column deletion with memory catalog.
+    // Test invalid column drop: identifier ids get dropped.
     #[tokio::test]
-    async fn test_delete_columns_with_catalog() {
+    async fn test_drop_identifier_ids_with_catalog() {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let warehouse_location = temp_dir.path().to_str().unwrap().to_string();
@@ -232,7 +230,53 @@ mod tests {
 
         let mut tx = Transaction::new(&table);
         let mut action = tx.update_schema();
-        action.delete_column(vec!["z".to_string()]).unwrap();
+        action = action.drop_column("x".to_string());
+        tx = action.apply(tx).unwrap();
+
+        let res = tx.commit(&memory_catalog).await;
+        assert!(res.is_err());
+    }
+
+    // Test empty columns drop with memory catalog.
+    #[tokio::test]
+    async fn test_drop_empty_columns_with_catalog() {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table = make_v2_table();
+        let mut memory_catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
+        let schema = table.metadata().current_schema().clone();
+        create_table(&mut memory_catalog, schema, &warehouse_location).await;
+
+        let mut tx = Transaction::new(&table);
+        let action = tx.update_schema();
+        tx = action.apply(tx).unwrap();
+
+        let table = tx.commit(&memory_catalog).await.unwrap();
+        let schema = table.metadata().current_schema();
+        assert!(schema.field_by_id(/*field_id=*/ 1).is_some());
+        assert!(schema.field_by_id(/*field_id=*/ 2).is_some());
+        assert!(schema.field_by_id(/*field_id=*/ 3).is_some());
+        assert_eq!(schema.highest_field_id(), 3);
+        assert_eq!(schema.identifier_field_ids().len(), 2);
+    }
+
+    // Test column drop with memory catalog.
+    #[tokio::test]
+    async fn test_drop_columns_with_catalog() {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table = make_v2_table();
+        let mut memory_catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
+        let schema = table.metadata().current_schema().clone();
+        create_table(&mut memory_catalog, schema, &warehouse_location).await;
+
+        let mut tx = Transaction::new(&table);
+        let mut action = tx.update_schema();
+        action = action.drop_column("z".to_string());
         tx = action.apply(tx).unwrap();
 
         let table = tx.commit(&memory_catalog).await.unwrap();
@@ -242,5 +286,27 @@ mod tests {
         assert!(schema.field_by_id(/*field_id=*/ 3).is_none());
         assert_eq!(schema.highest_field_id(), 2);
         assert_eq!(schema.identifier_field_ids().len(), 2);
+    }
+
+    // Test case sensitive column drop with memory catalog.
+    #[tokio::test]
+    async fn test_drop_case_sensitive_columns_with_catalog() {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table = make_v2_table();
+        let mut memory_catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
+        let schema = table.metadata().current_schema().clone();
+        create_table(&mut memory_catalog, schema, &warehouse_location).await;
+
+        let mut tx = Transaction::new(&table);
+        let mut action = tx.update_schema();
+        action = action.set_case_sensitivity(true);
+        action = action.drop_column("Z".to_string());
+        tx = action.apply(tx).unwrap();
+
+        let res = tx.commit(&memory_catalog).await;
+        assert!(res.is_err());
     }
 }
