@@ -741,21 +741,21 @@ impl Catalog for GlueCatalog {
                 Some(current_metadata_location),
             )?);
         let builder = with_catalog_id!(builder, self.config);
-        let _update_table_output = builder.send().await.map_err(|e| {
+        let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
             match error {
                 UpdateTableError::EntityNotFoundException(_) => Error::new(
                     ErrorKind::TableNotFound,
-                    format!("Table {} is not found", table_ident),
+                    format!("Table {table_ident} is not found"),
                 ),
                 UpdateTableError::ConcurrentModificationException(_) => Error::new(
                     ErrorKind::CatalogCommitConflicts,
-                    format!("Commit failed for table: {}", table_ident),
+                    format!("Commit failed for table: {table_ident}"),
                 )
                 .with_retryable(true),
                 _ => Error::new(
                     ErrorKind::Unexpected,
-                    "Operation failed for hitting aws sdk error".to_string(),
+                    "Operation failed for hitting aws sdk error",
                 ),
             }
             .with_source(anyhow!("aws sdk error: {:?}", error))
