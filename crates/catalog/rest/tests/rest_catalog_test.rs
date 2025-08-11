@@ -24,8 +24,8 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -67,10 +67,16 @@ async fn get_catalog() -> RestCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
-    let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}", rest_socket_addr))
-        .build();
-    RestCatalog::new(config)
+    RestCatalogBuilder::default()
+        .load(
+            "rest",
+            HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                format!("http://{}", rest_socket_addr),
+            )]),
+        )
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

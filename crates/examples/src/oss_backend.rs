@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 
 use futures::stream::StreamExt;
-use iceberg::{Catalog, NamespaceIdent, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 
 // Configure these values according to your environment
 
@@ -42,24 +42,27 @@ static OSS_ACCESS_KEY_SECRET: &str = "99999999999999999999999999999999";
 #[tokio::main]
 async fn main() {
     // Create the REST iceberg catalog.
-    let config = RestCatalogConfig::builder()
-        .uri(REST_URI.to_string())
-        .props(HashMap::from([
-            (
-                iceberg::io::OSS_ENDPOINT.to_string(),
-                OSS_ENDPOINT.to_string(),
-            ),
-            (
-                iceberg::io::OSS_ACCESS_KEY_ID.to_string(),
-                OSS_ACCESS_KEY_ID.to_string(),
-            ),
-            (
-                iceberg::io::OSS_ACCESS_KEY_SECRET.to_string(),
-                OSS_ACCESS_KEY_SECRET.to_string(),
-            ),
-        ]))
-        .build();
-    let catalog = RestCatalog::new(config);
+    let catalog = RestCatalogBuilder::default()
+        .load(
+            "rest",
+            HashMap::from([
+                (REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string()),
+                (
+                    iceberg::io::OSS_ENDPOINT.to_string(),
+                    OSS_ENDPOINT.to_string(),
+                ),
+                (
+                    iceberg::io::OSS_ACCESS_KEY_ID.to_string(),
+                    OSS_ACCESS_KEY_ID.to_string(),
+                ),
+                (
+                    iceberg::io::OSS_ACCESS_KEY_SECRET.to_string(),
+                    OSS_ACCESS_KEY_SECRET.to_string(),
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
 
     // Create the table identifier.
     let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
