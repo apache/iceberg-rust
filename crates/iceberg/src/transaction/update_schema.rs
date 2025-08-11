@@ -78,7 +78,7 @@ impl UpdateSchemaAction {
         }
 
         let identifier_field_ids = self.schema.identifier_field_ids().collect::<HashSet<i32>>();
-        let mut field_ids_to_drop = HashSet::new();
+        let mut field_ids_to_drop = HashSet::with_capacity(self.drops.len());
 
         // Get field id to drop.
         for cur_column_name in self.drops.iter() {
