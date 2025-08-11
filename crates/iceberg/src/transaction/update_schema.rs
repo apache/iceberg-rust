@@ -73,7 +73,7 @@ impl UpdateSchemaAction {
         if self.schema.field_id_to_fields().len() == self.drops.len() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                format!("Cannot drop all columns in the table."),
+                "Cannot drop all columns in the table.".to_string(),
             ));
         }
 
@@ -83,9 +83,9 @@ impl UpdateSchemaAction {
         // Get field id to drop.
         for cur_column_name in self.drops.iter() {
             let field = if self.case_sensitive {
-                self.schema.field_by_name(&cur_column_name)
+                self.schema.field_by_name(cur_column_name)
             } else {
-                self.schema.field_by_name_case_insensitive(&cur_column_name)
+                self.schema.field_by_name_case_insensitive(cur_column_name)
             }
             .ok_or_else(|| {
                 Error::new(
