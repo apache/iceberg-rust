@@ -673,8 +673,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3tables_update_table() {
-        let Some(catalog) = load_s3tables_catalog_from_env().await.unwrap() else {
-            panic!("Failed to load S3TablesCatalog!")
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {}", e),
         };
 
         // Create a test namespace and table
@@ -714,7 +716,7 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // Store the original metadata location for comparison
-        let original_metadata_location = table.metadata_location().clone();
+        let original_metadata_location = table.metadata_location();
 
         // Update table properties using the transaction
         let tx = tx
