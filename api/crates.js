@@ -1,2 +1,2 @@
-window.ALL_CRATES = ["iceberg","iceberg_cache_moka","iceberg_catalog_glue","iceberg_catalog_hms","iceberg_catalog_rest","iceberg_catalog_s3tables","iceberg_catalog_sql","iceberg_datafusion","iceberg_integration_tests","iceberg_playground","iceberg_sqllogictest","iceberg_test_utils"];
-//{"start":21,"fragment_lengths":[9,21,23,22,23,27,22,21,28,21,23,21]}
+window.ALL_CRATES = ["iceberg","iceberg_cache_moka","iceberg_catalog_glue","iceberg_catalog_hms","iceberg_catalog_loader","iceberg_catalog_rest","iceberg_catalog_s3tables","iceberg_catalog_sql","iceberg_datafusion","iceberg_integration_tests","iceberg_playground","iceberg_sqllogictest","iceberg_test_utils"];
+//{"start":21,"fragment_lengths":[9,21,23,22,25,23,27,22,21,28,21,23,21]}

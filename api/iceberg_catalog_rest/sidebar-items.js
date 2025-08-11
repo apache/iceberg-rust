@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["RestCatalog","RestCatalogConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["REST_CATALOG_PROP_URI","REST_CATALOG_PROP_WAREHOUSE"],"struct":["RestCatalog","RestCatalogBuilder"]};
