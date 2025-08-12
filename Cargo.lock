@@ -3596,6 +3596,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-glue",
  "iceberg-catalog-rest",
+ "iceberg-catalog-s3tables",
  "tokio",
 ]
 
