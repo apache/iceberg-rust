@@ -21,7 +21,7 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::{DataType, Schema as ArrowSchema};
+use arrow_schema::{DataType, FieldRef, Schema as ArrowSchema};
 use uuid::Uuid;
 
 use super::{get_field_id, schema_to_arrow_schema};
@@ -425,38 +425,40 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     }
 }
 
+/// todo doc
+pub enum FieldMatchMode {
+    Id,
+    Name,
+}
+
+impl FieldMatchMode {
+    pub fn match_field(&self, arrow_field: &FieldRef, iceberg_field: &NestedField) -> bool {
+        match self {
+            FieldMatchMode::Id => get_field_id(arrow_field)
+                .map(|id| id == iceberg_field.id)
+                .unwrap_or(false),
+            FieldMatchMode::Name => arrow_field.name() == &iceberg_field.name,
+        }
+    }
+}
+
 /// Partner type representing accessing and walking arrow arrays alongside iceberg schema
 pub struct ArrowArrayAccessor {
-    arrow_schema: Option<ArrowSchema>,
+    match_mode: FieldMatchMode,
 }
 
 impl ArrowArrayAccessor {
     /// Creates a new instance of ArrowArrayAccessor without arrow schema fallback
-    pub fn new() -> Result<Self> {
-        Ok(Self { arrow_schema: None })
+    pub fn new() -> Self {
+        Self {
+            match_mode: FieldMatchMode::Id,
+        }
     }
 
     /// Creates a new instance of ArrowArrayAccessor with arrow schema converted from table schema
     /// for field ID resolution fallback
-    pub fn new_with_table_schema(table_schema: &Schema) -> Result<Self> {
-        Ok(Self {
-            arrow_schema: Some(schema_to_arrow_schema(table_schema)?),
-        })
-    }
-
-    /// Check if an arrow field matches the target field ID, either directly or through schema lookup
-    fn arrow_field_matches_id(&self, arrow_field: &arrow_schema::Field, target_id: i32) -> bool {
-        // First try direct match via field metadata
-        if let Ok(id) = get_field_id(arrow_field) {
-            id == target_id
-        } else {
-            // Only if direct match fails, try fallback via schema lookup
-            self.arrow_schema
-                .as_ref()
-                .and_then(|schema| schema.field_with_name(arrow_field.name()).ok())
-                .and_then(|field_from_schema| get_field_id(field_from_schema).ok())
-                .is_some_and(|id| id == target_id)
-        }
+    pub fn new_with_match_mode(match_mode: FieldMatchMode) -> Self {
+        Self { match_mode }
     }
 }
 
@@ -493,21 +495,11 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let field_pos = struct_array
             .fields()
             .iter()
-            .position(|arrow_field| self.arrow_field_matches_id(arrow_field, field.id))
+            .position(|arrow_field| self.match_mode.match_field(arrow_field, field))
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "Field with id={} or name={} not found in struct array. Available fields: [{}]",
-                        field.id,
-                        field.name,
-                        struct_array
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
+                    format!("Field id {} not found in struct array", field.id),
                 )
             })?;
 
@@ -590,7 +582,7 @@ pub fn arrow_struct_to_literal(
         ty,
         struct_array,
         &mut ArrowArrayToIcebergStructConverter,
-        &ArrowArrayAccessor::new()?,
+        &ArrowArrayAccessor::new(),
     )
 }
 
