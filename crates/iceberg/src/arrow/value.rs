@@ -474,6 +474,12 @@ impl ArrowArrayAccessor {
     }
 }
 
+impl Default for ArrowArrayAccessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
