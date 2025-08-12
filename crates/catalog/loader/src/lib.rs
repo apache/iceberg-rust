@@ -21,18 +21,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_s3tables::S3TablesCatalogBuilder;
 
 /// A CatalogBuilderFactory creating a new catalog builder.
 type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
 
-// A registry of catalog builders.
-fn rest_factory() -> Box<dyn BoxedCatalogBuilder> {
-    Box::new(RestCatalogBuilder::default())
-}
-
 /// A registry of catalog builders.
-static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] =
-    &[("rest", rest_factory as CatalogBuilderFactory)];
+static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
+    ("rest", || Box::new(RestCatalogBuilder::default())),
+    ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
+];
 
 /// Return the list of supported catalog types.
 pub fn supported_types() -> Vec<&'static str> {
@@ -144,6 +142,26 @@ mod tests {
                     (
                         REST_CATALOG_PROP_URI.to_string(),
                         "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern_s3tables() {
+        use iceberg_catalog_s3tables::S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN;
+
+        let catalog = CatalogLoader::from("s3tables")
+            .load(
+                "s3tables".to_string(),
+                HashMap::from([
+                    (
+                        S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+                        "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
