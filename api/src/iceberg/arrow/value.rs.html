@@ -262,7 +262,7 @@
 <a href=#262 id=262 data-nosnippet>262</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#263 id=263 data-nosnippet>263</a>                            ErrorKind::DataInvalid,
 <a href=#264 id=264 data-nosnippet>264</a>                            <span class="macro">format!</span>(
-<a href=#265 id=265 data-nosnippet>265</a>                                <span class="string">"The precision or scale ({},{}) of arrow decimal128 array is not compatitable with iceberg decimal type ({},{})"</span>,
+<a href=#265 id=265 data-nosnippet>265</a>                                <span class="string">"The precision or scale ({},{}) of arrow decimal128 array is not compatible with iceberg decimal type ({},{})"</span>,
 <a href=#266 id=266 data-nosnippet>266</a>                                arrow_precision, arrow_scale, precision, scale
 <a href=#267 id=267 data-nosnippet>267</a>                            ),
 <a href=#268 id=268 data-nosnippet>268</a>                        ));
@@ -395,7 +395,7 @@
 <a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">if </span>array.value_length() != <span class="kw-2">*</span>len <span class="kw">as </span>i32 {
 <a href=#396 id=396 data-nosnippet>396</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#397 id=397 data-nosnippet>397</a>                        ErrorKind::DataInvalid,
-<a href=#398 id=398 data-nosnippet>398</a>                        <span class="string">"The length of fixed size binary array is not compatitable with iceberg fixed type"</span>,
+<a href=#398 id=398 data-nosnippet>398</a>                        <span class="string">"The length of fixed size binary array is not compatible with iceberg fixed type"</span>,
 <a href=#399 id=399 data-nosnippet>399</a>                    ));
 <a href=#400 id=400 data-nosnippet>400</a>                }
 <a href=#401 id=401 data-nosnippet>401</a>                <span class="prelude-val">Ok</span>(array
