@@ -21,12 +21,12 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::{DataType, FieldRef, Schema as ArrowSchema};
+use arrow_schema::{DataType, FieldRef};
 use uuid::Uuid;
 
-use super::{get_field_id, schema_to_arrow_schema};
+use super::get_field_id;
 use crate::spec::{
-    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType, Schema,
+    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
     SchemaWithPartnerVisitor, Struct, StructType, visit_struct_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -425,13 +425,26 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     }
 }
 
-/// todo doc
+/// Defines how Arrow fields are matched with Iceberg fields when converting data.
+///
+/// This enum provides two strategies for matching fields:
+/// - `Id`: Match fields by their ID, which is stored in Arrow field metadata.
+/// - `Name`: Match fields by their name, ignoring the field ID.
+///
+/// The ID matching mode is the default and preferred approach as it's more robust
+/// against schema evolution where field names might change but IDs remain stable.
+/// The name matching mode can be useful in scenarios where field IDs are not available
+/// or when working with systems that don't preserve field IDs.
+#[derive(Clone, Copy, Debug)]
 pub enum FieldMatchMode {
+    /// Match fields by their ID stored in Arrow field metadata
     Id,
+    /// Match fields by their name, ignoring field IDs
     Name,
 }
 
 impl FieldMatchMode {
+    /// Determines if an Arrow field matches an Iceberg field based on the matching mode.
     pub fn match_field(&self, arrow_field: &FieldRef, iceberg_field: &NestedField) -> bool {
         match self {
             FieldMatchMode::Id => get_field_id(arrow_field)
@@ -448,15 +461,14 @@ pub struct ArrowArrayAccessor {
 }
 
 impl ArrowArrayAccessor {
-    /// Creates a new instance of ArrowArrayAccessor without arrow schema fallback
+    /// Creates a new instance of ArrowArrayAccessor with the default ID matching mode
     pub fn new() -> Self {
         Self {
             match_mode: FieldMatchMode::Id,
         }
     }
 
-    /// Creates a new instance of ArrowArrayAccessor with arrow schema converted from table schema
-    /// for field ID resolution fallback
+    /// Creates a new instance of ArrowArrayAccessor with the specified matching mode
     pub fn new_with_match_mode(match_mode: FieldMatchMode) -> Self {
         Self { match_mode }
     }
@@ -933,50 +945,180 @@ mod test {
     }
 
     #[test]
-    fn test_field_id_fallback_with_arrow_schema() {
-        // Create an Arrow struct array with a field that doesn't have field ID in metadata
-        let int32_array = Int32Array::from(vec![Some(42), Some(43), None]);
+    fn test_find_field_by_id() {
+        // Create Arrow arrays for the nested structure
+        let field_a_array = Int32Array::from(vec![Some(42), Some(43), None]);
+        let field_b_array = StringArray::from(vec![Some("value1"), Some("value2"), None]);
 
-        // Create the struct array with a field that has no field ID metadata
-        let struct_array = Arc::new(StructArray::from(vec![(
-            Arc::new(Field::new("field_a", DataType::Int32, true)), // No field ID metadata
-            Arc::new(int32_array) as ArrayRef,
-        )])) as ArrayRef;
+        // Create the nested struct array with field IDs in metadata
+        let nested_struct_array =
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("field_a", DataType::Int32, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                    )),
+                    Arc::new(field_a_array) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("field_b", DataType::Utf8, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                    )),
+                    Arc::new(field_b_array) as ArrayRef,
+                ),
+            ])) as ArrayRef;
 
-        // Create an Iceberg schema with field ID
-        let iceberg_schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![Arc::new(NestedField::optional(
-                100, // Field ID that we'll look for
-                "field_a",
-                Type::Primitive(PrimitiveType::Int),
-            ))])
-            .build()
+        let field_c_array = Int32Array::from(vec![Some(100), Some(200), None]);
+
+        // Create the top-level struct array with field IDs in metadata
+        let struct_array = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(
+                    Field::new(
+                        "nested_struct",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("field_a", DataType::Int32, true).with_metadata(
+                                HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    "1".to_string(),
+                                )]),
+                            ),
+                            Field::new("field_b", DataType::Utf8, true).with_metadata(
+                                HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    "2".to_string(),
+                                )]),
+                            ),
+                        ])),
+                        true,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "3".to_string(),
+                    )])),
+                ),
+                nested_struct_array,
+            ),
+            (
+                Arc::new(Field::new("field_c", DataType::Int32, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+                )),
+                Arc::new(field_c_array) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        // Create an ArrowArrayAccessor with ID matching mode
+        let accessor = ArrowArrayAccessor::new_with_match_mode(FieldMatchMode::Id);
+
+        // Test finding fields by ID
+        let nested_field = NestedField::optional(
+            3,
+            "nested_struct",
+            Type::Struct(StructType::new(vec![
+                Arc::new(NestedField::optional(
+                    1,
+                    "field_a",
+                    Type::Primitive(PrimitiveType::Int),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "field_b",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])),
+        );
+        let nested_partner = accessor
+            .field_partner(&struct_array, &nested_field)
             .unwrap();
 
-        // Create an ArrowArrayAccessor with the table schema for fallback
-        let accessor = ArrowArrayAccessor::new_with_table_schema(&iceberg_schema).unwrap();
+        // Verify we can access the nested field
+        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int));
+        let field_a_partner = accessor.field_partner(nested_partner, &field_a).unwrap();
 
-        // Create a nested field to look up
-        let field = NestedField::optional(100, "field_a", Type::Primitive(PrimitiveType::Int));
-
-        // This should succeed by using the arrow_schema fallback
-        let result = accessor.field_partner(&struct_array, &field);
-
-        // Verify that the field was found
-        assert!(result.is_ok());
-
-        // Verify that the field has the expected value
-        let array_ref = result.unwrap();
-        let int_array = array_ref.as_any().downcast_ref::<Int32Array>().unwrap();
+        // Verify the field has the expected value
+        let int_array = field_a_partner
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
         assert_eq!(int_array.value(0), 42);
         assert_eq!(int_array.value(1), 43);
         assert!(int_array.is_null(2));
+    }
 
-        // Now try with an accessor without arrow_schema - this should fail
-        let accessor_without_schema = ArrowArrayAccessor::new().unwrap();
-        let result = accessor_without_schema.field_partner(&struct_array, &field);
-        assert!(result.is_err());
+    #[test]
+    fn test_find_field_by_name() {
+        // Create Arrow arrays for the nested structure
+        let field_a_array = Int32Array::from(vec![Some(42), Some(43), None]);
+        let field_b_array = StringArray::from(vec![Some("value1"), Some("value2"), None]);
+
+        // Create the nested struct array WITHOUT field IDs in metadata
+        let nested_struct_array = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("field_a", DataType::Int32, true)),
+                Arc::new(field_a_array) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("field_b", DataType::Utf8, true)),
+                Arc::new(field_b_array) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        let field_c_array = Int32Array::from(vec![Some(100), Some(200), None]);
+
+        // Create the top-level struct array WITHOUT field IDs in metadata
+        let struct_array = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new(
+                    "nested_struct",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("field_a", DataType::Int32, true),
+                        Field::new("field_b", DataType::Utf8, true),
+                    ])),
+                    true,
+                )),
+                nested_struct_array,
+            ),
+            (
+                Arc::new(Field::new("field_c", DataType::Int32, true)),
+                Arc::new(field_c_array) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        // Create an ArrowArrayAccessor with Name matching mode
+        let accessor = ArrowArrayAccessor::new_with_match_mode(FieldMatchMode::Name);
+
+        // Test finding fields by name
+        let nested_field = NestedField::optional(
+            3,
+            "nested_struct",
+            Type::Struct(StructType::new(vec![
+                Arc::new(NestedField::optional(
+                    1,
+                    "field_a",
+                    Type::Primitive(PrimitiveType::Int),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "field_b",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])),
+        );
+        let nested_partner = accessor
+            .field_partner(&struct_array, &nested_field)
+            .unwrap();
+
+        // Verify we can access the nested field by name
+        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int));
+        let field_a_partner = accessor.field_partner(nested_partner, &field_a).unwrap();
+
+        // Verify the field has the expected value
+        let int_array = field_a_partner
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(int_array.value(0), 42);
+        assert_eq!(int_array.value(1), 43);
+        assert!(int_array.is_null(2));
     }
 
     #[test]
