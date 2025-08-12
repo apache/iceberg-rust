@@ -262,7 +262,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "The precision or scale ({},{}) of arrow decimal128 array is not compatitable with iceberg decimal type ({},{})",
+                                "The precision or scale ({},{}) of arrow decimal128 array is not compatible with iceberg decimal type ({},{})",
                                 arrow_precision, arrow_scale, precision, scale
                             ),
                         ));
@@ -395,7 +395,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 if array.value_length() != *len as i32 {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        "The length of fixed size binary array is not compatitable with iceberg fixed type",
+                        "The length of fixed size binary array is not compatible with iceberg fixed type",
                     ));
                 }
                 Ok(array
