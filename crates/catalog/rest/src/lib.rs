@@ -51,6 +51,8 @@
 
 #![deny(missing_docs)]
 
+/// Authentication for the REST catalog.
+pub mod auth;
 mod catalog;
 mod client;
 mod types;
