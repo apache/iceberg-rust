@@ -42,6 +42,7 @@ rust-version = "1.85"
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
+arrow = { version = "55" }
 arrow-arith = { version = "55" }
 arrow-array = { version = "55" }
 arrow-buffer = { version = "55" }
@@ -65,6 +66,7 @@ clap = { version = "4.5.35", features = ["derive", "cargo"] }
 ctor = "0.2.8"
 datafusion = "47"
 datafusion-cli = "47"
+datafusion-common = { version = "47" }
 datafusion-sqllogictest = "47"
 derive_builder = "0.20"
 dirs = "6"
@@ -77,6 +79,7 @@ futures = "0.3"
 hive_metastore = "0.2.0"
 http = "1.2"
 iceberg = { version = "0.6.0", path = "./crates/iceberg" }
+iceberg-catalog-loader = { version = "0.6.0", path = "./crates/catalog/loader" }
 iceberg-catalog-rest = { version = "0.6.0", path = "./crates/catalog/rest" }
 iceberg-catalog-glue = { version = "0.6.0", path = "./crates/catalog/glue" }
 iceberg-catalog-s3tables = { version = "0.6.0", path = "./crates/catalog/s3tables" }
