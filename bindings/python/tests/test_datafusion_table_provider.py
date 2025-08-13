@@ -16,15 +16,16 @@
 # under the License.
 
 
-from datetime import date, datetime
 import uuid
+from datetime import date, datetime
+from pathlib import Path
+
+import datafusion
+import pyarrow as pa
 import pytest
-from pyiceberg_core.datafusion import IcebergDataFusionTable
 from datafusion import SessionContext
 from pyiceberg.catalog import Catalog, load_catalog
-import pyarrow as pa
-from pathlib import Path
-import datafusion
+from pyiceberg_core.datafusion import IcebergDataFusionTable
 
 assert (
     datafusion.__version__ >= "45"
@@ -102,7 +103,7 @@ def test_register_iceberg_table_provider(
     iceberg_table_provider = IcebergDataFusionTable(
         identifier=iceberg_table.name(),
         metadata_location=iceberg_table.metadata_location,
-        file_io_properties=iceberg_table.io.properties,
+        storage_options=iceberg_table.io.properties,
     )
 
     ctx = SessionContext()
@@ -146,7 +147,7 @@ def test_register_pyiceberg_table(
         return IcebergDataFusionTable(
             identifier=self.name(),
             metadata_location=self.metadata_location,
-            file_io_properties=self.io.properties,
+            storage_options=self.io.properties,
         ).__datafusion_table_provider__()
 
     iceberg_table.__datafusion_table_provider__ = MethodType(
