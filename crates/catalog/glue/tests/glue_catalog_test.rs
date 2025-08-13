@@ -18,9 +18,8 @@
 //! Integration tests for glue catalog.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::RwLock;
-
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -55,19 +54,23 @@ fn after_all() {
     guard.take();
 }
 
-async fn get_catalog() -> GlueCatalog {
+async fn get_glue_endpoint() -> IpAddr {
+    let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+    let docker_compose = guard.as_ref().unwrap();
+    docker_compose.get_container_ip("moto")
+}
+
+async fn get_s3_endpoint() -> IpAddr {
+    let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+    let docker_compose = guard.as_ref().unwrap();
+    docker_compose.get_container_ip("minio")
+}
+
+async fn get_catalog(config: Option<GlueCatalogConfig>) -> GlueCatalog {
     set_up();
 
-    let (glue_catalog_ip, minio_ip) = {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        (
-            docker_compose.get_container_ip("moto"),
-            docker_compose.get_container_ip("minio"),
-        )
-    };
-    let glue_socket_addr = SocketAddr::new(glue_catalog_ip, GLUE_CATALOG_PORT);
-    let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
+    let glue_socket_addr = SocketAddr::new(get_glue_endpoint().await, GLUE_CATALOG_PORT);
+    let minio_socket_addr = SocketAddr::new(get_s3_endpoint().await, MINIO_PORT);
     while !scan_port_addr(glue_socket_addr) {
         info!("Waiting for 1s glue catalog to ready...");
         sleep(std::time::Duration::from_millis(1000)).await;
@@ -89,11 +92,14 @@ async fn get_catalog() -> GlueCatalog {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let config = GlueCatalogConfig::builder()
-        .uri(format!("http://{}", glue_socket_addr))
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(props.clone())
-        .build();
+    let config = match config {
+        Some(glue_config) => glue_config,
+        None => GlueCatalogConfig::builder()
+            .uri(format!("http://{}", glue_socket_addr))
+            .warehouse("s3a://warehouse/hive".to_string())
+            .props(props.clone())
+            .build()
+    };
 
     GlueCatalog::new(config).await.unwrap()
 }
@@ -125,7 +131,7 @@ fn set_table_creation(location: Option<String>, name: impl ToString) -> Result<T
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
 
@@ -152,7 +158,7 @@ async fn test_rename_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
 
@@ -176,7 +182,7 @@ async fn test_table_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
 
@@ -197,7 +203,7 @@ async fn test_drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let creation = set_table_creation(None, "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
 
@@ -223,7 +229,7 @@ async fn test_load_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_table() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let namespace = NamespaceIdent::new("test_create_table".to_string());
     set_test_namespace(&catalog, &namespace).await?;
     // inject custom location, ignore the namespace prefix
@@ -237,7 +243,7 @@ async fn test_create_table() -> Result<()> {
             .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
     );
     assert!(
-        catalog
+        result
             .file_io()
             .exists("s3a://warehouse/hive/metadata/")
             .await?
@@ -248,7 +254,7 @@ async fn test_create_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_tables() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let namespace = NamespaceIdent::new("test_list_tables".to_string());
     set_test_namespace(&catalog, &namespace).await?;
 
@@ -262,7 +268,7 @@ async fn test_list_tables() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_namespace() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let namespace = NamespaceIdent::new("test_drop_namespace".to_string());
     set_test_namespace(&catalog, &namespace).await?;
 
@@ -279,7 +285,7 @@ async fn test_drop_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_namespace() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
     let namespace = NamespaceIdent::new("test_update_namespace".into());
     set_test_namespace(&catalog, &namespace).await?;
 
@@ -302,7 +308,7 @@ async fn test_update_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_namespace_exists() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let namespace = NamespaceIdent::new("test_namespace_exists".into());
 
@@ -319,7 +325,7 @@ async fn test_namespace_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_get_namespace() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let namespace = NamespaceIdent::new("test_get_namespace".into());
 
@@ -338,7 +344,7 @@ async fn test_get_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_namespace() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let properties = HashMap::new();
     let namespace = NamespaceIdent::new("test_create_namespace".into());
@@ -354,7 +360,7 @@ async fn test_create_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_namespace() -> Result<()> {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let namespace = NamespaceIdent::new("test_list_namespace".to_string());
     set_test_namespace(&catalog, &namespace).await?;
