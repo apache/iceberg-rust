@@ -25,7 +25,10 @@ use iceberg::io::{
 };
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
-use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
+};
 use typed_builder::TypedBuilder;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
@@ -88,17 +91,25 @@ impl CatalogBuilder for GlueCatalogBuilder {
         // Collect other remaining properties
         self.0.props = props
             .into_iter()
-            .filter(|(k, _)| k != GLUE_CATALOG_PROP_URI &&
-                k != GLUE_CATALOG_PROP_CATALOG_ID &&
-                k != GLUE_CATALOG_PROP_WAREHOUSE)
+            .filter(|(k, _)| {
+                k != GLUE_CATALOG_PROP_URI
+                    && k != GLUE_CATALOG_PROP_CATALOG_ID
+                    && k != GLUE_CATALOG_PROP_WAREHOUSE
+            })
             .collect();
 
         async move {
             if self.0.name.is_none() {
-                return Err(Error::new(ErrorKind::DataInvalid, "Catalog name is required"));
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name is required",
+                ));
             }
             if self.0.warehouse.is_empty() {
-                return Err(Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required"));
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse is required",
+                ));
             }
 
             GlueCatalog::new(self.0).await

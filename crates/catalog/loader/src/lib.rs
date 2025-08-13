@@ -46,6 +46,7 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
 pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
     match r#type {
         "rest" => Ok(Box::new(RestCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
+        // "glue" => Ok(Box::new(GlueCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
         _ => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported catalog type: {}", r#type),
