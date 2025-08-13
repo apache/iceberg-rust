@@ -24,20 +24,17 @@
 //! use std::collections::HashMap;
 //!
 //! use iceberg::CatalogBuilder;
-//! use iceberg_catalog_glue::GlueCatalogBuilder;
+//! use iceberg_catalog_glue::{GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalogBuilder};
 //!
 //! #[tokio::main]
 //! async fn main() {
-//! use iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE;
-//! let catalog = GlueCatalogBuilder::default()
+//!     let catalog = GlueCatalogBuilder::default()
 //!         .load(
 //!             "glue",
-//!             HashMap::from([
-//!                 (
-//!                     GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
-//!                     "s3://warehouse".to_string(),
-//!                 ),
-//!             ]),
+//!             HashMap::from([(
+//!                 GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+//!                 "s3://warehouse".to_string(),
+//!             )]),
 //!         )
 //!         .await
 //!         .unwrap();
