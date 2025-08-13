@@ -917,7 +917,7 @@ impl Catalog for RestCatalog {
             StatusCode::OK => deserialize_catalog_response(http_response).await?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::TableNotFound,
                     "Tried to update a table that does not exist",
                 ));
             }
