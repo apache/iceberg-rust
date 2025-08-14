@@ -154,7 +154,10 @@ impl TableProvider for IcebergTableProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Refresh table if catalog is available
         let table = if let Some(catalog) = &self.catalog {
-            catalog.load_table(self.table.identifier()).await.map_err(to_datafusion_error)?
+            catalog
+                .load_table(self.table.identifier())
+                .await
+                .map_err(to_datafusion_error)?
         } else {
             self.table.clone()
         };
