@@ -21,16 +21,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, Int32Array, RecordBatch, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
-use futures::StreamExt;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
@@ -437,7 +436,7 @@ async fn test_metadata_table() -> Result<()> {
 #[tokio::test]
 async fn test_insert_into() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog();
-    let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
+    let namespace = NamespaceIdent::new("test_insert_into".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
     let creation = get_table_creation(temp_path(), "my_table", None)?;
@@ -449,42 +448,81 @@ async fn test_insert_into() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_catalog("catalog", catalog);
 
+    // Verify table schema
     let provider = ctx.catalog("catalog").unwrap();
-    let schema = provider.schema("test_provider_get_table_schema").unwrap();
-
+    let schema = provider.schema("test_insert_into").unwrap();
     let table = schema.table("my_table").await.unwrap().unwrap();
     let table_schema = table.schema();
 
     let expected = [("foo1", &DataType::Int32), ("foo2", &DataType::Utf8)];
-
     for (field, exp) in table_schema.fields().iter().zip(expected.iter()) {
         assert_eq!(field.name(), exp.0);
         assert_eq!(field.data_type(), exp.1);
         assert!(!field.is_nullable())
     }
 
+    // Insert data into the table
     let df = ctx
-        .sql("insert into catalog.test_provider_get_table_schema.my_table values (1, 'alan'),(2, 'turing')")
+        .sql("INSERT INTO catalog.test_insert_into.my_table VALUES (1, 'alan'), (2, 'turing')")
         .await
         .unwrap();
 
-    let task_ctx = Arc::new(df.task_ctx());
-    let plan = df.create_physical_plan().await.unwrap();
-    let mut stream = plan.execute(0, task_ctx).unwrap();
+    // Verify the insert operation result
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert!(
+        batch.num_rows() == 1 && batch.num_columns() == 1,
+        "Results should only have one row and one column that has the number of rows inserted"
+    );
+    // Verify the number of rows inserted
+    let rows_inserted = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), 2);
 
-    while let Some(batch_result) = stream.next().await {
-        match batch_result {
-            Ok(batch) => {
-                println!("Got RecordBatch with {} rows", batch.num_rows());
-                for column in batch.columns() {
-                    println!("{:?}", column);
-                }
-            }
-            Err(e) => {
-                eprintln!("Error reading batch: {:?}", e);
-            }
-        }
-    }
+    ctx.refresh_catalogs().await.unwrap();
+    // Query the table to verify the inserted data
+    let df = ctx
+        .sql("SELECT * FROM catalog.test_insert_into.my_table")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+
+    // Verify we have 2 rows
+    assert_eq!(batch.num_rows(), 2);
+    assert_eq!(batch.num_columns(), 2);
+
+    // Verify the data in the columns
+    let foo1_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let foo2_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    assert_eq!(foo1_col.value(0), 1);
+    assert_eq!(foo2_col.value(0), "alan");
+    assert_eq!(foo1_col.value(1), 2);
+    assert_eq!(foo2_col.value(1), "turing");
 
     Ok(())
+}
+
+fn debug_batches(batches: &Vec<RecordBatch>) {
+    for batch in batches {
+        for (i, column) in batch.columns().iter().enumerate() {
+            println!("index: {i}, column: {:?}", column);
+        }
+    }
 }
