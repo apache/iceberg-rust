@@ -24,17 +24,23 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::DataFusionError;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::write::IcebergWriteExec;
+use crate::to_datafusion_error;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
@@ -46,6 +52,8 @@ pub struct IcebergTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
+    /// The catalog that the table belongs to.
+    catalog: Option<Arc<dyn Catalog>>,
 }
 
 impl IcebergTableProvider {
@@ -54,6 +62,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -73,6 +82,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: Some(client),
         })
     }
 
@@ -84,6 +94,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            catalog: None,
         })
     }
 
@@ -108,6 +119,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            catalog: None,
         })
     }
 
@@ -140,8 +152,18 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        // Refresh table if catalog is available
+        let table = if let Some(catalog) = &self.catalog {
+            catalog
+                .load_table(self.table.identifier())
+                .await
+                .map_err(to_datafusion_error)?
+        } else {
+            self.table.clone()
+        };
+
         Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
+            table,
             self.snapshot_id,
             self.schema.clone(),
             projection,
@@ -152,10 +174,51 @@ impl TableProvider for IcebergTableProvider {
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
-    ) -> std::result::Result<Vec<TableProviderFilterPushDown>, datafusion::error::DataFusionError>
-    {
+    ) -> DFResult<Vec<TableProviderFilterPushDown>> {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+
+    async fn insert_into(
+        &self,
+        _state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        _insert_op: InsertOp,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if !self
+            .table
+            .metadata()
+            .default_partition_spec()
+            .is_unpartitioned()
+        {
+            // TODO add insert into support for partitioned tables
+            return Err(DataFusionError::NotImplemented(
+                "IcebergTableProvider::insert_into does not support partitioned tables yet"
+                    .to_string(),
+            ));
+        }
+
+        let Some(catalog) = self.catalog.clone() else {
+            return Err(DataFusionError::Execution(
+                "Catalog cannot be none for insert_into".to_string(),
+            ));
+        };
+
+        let write_plan = Arc::new(IcebergWriteExec::new(
+            self.table.clone(),
+            input,
+            self.schema.clone(),
+        ));
+
+        // Merge the outputs of write_plan into one so we can commit all files together
+        let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
+
+        Ok(Arc::new(IcebergCommitExec::new(
+            self.table.clone(),
+            catalog,
+            coalesce_partitions,
+            self.schema.clone(),
+        )))
     }
 }
 
