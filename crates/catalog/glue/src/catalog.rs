@@ -29,7 +29,6 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
-use typed_builder::TypedBuilder;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
@@ -117,9 +116,9 @@ impl CatalogBuilder for GlueCatalogBuilder {
     }
 }
 
-#[derive(Debug, TypedBuilder)]
+#[derive(Debug)]
 /// Glue Catalog configuration
-pub struct GlueCatalogConfig {
+pub(crate) struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
     name: Option<String>,
 
