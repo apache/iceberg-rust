@@ -135,7 +135,7 @@ impl TransactionAction for MergeAppendAction {
 
         if self.merge_enabled {
             snapshot_producer
-                .commit(AppendOperation, MergeManifsetProcess {
+                .commit(AppendOperation, MergeManifestProcess {
                     target_size_bytes: self.target_size_bytes,
                     min_count_to_merge: self.min_count_to_merge,
                 })
@@ -271,6 +271,10 @@ impl MergeManifestManager {
         Ok(merged_bins.into_iter().flatten().collect())
     }
 
+    // Merge Algorithm:
+    // 1. Split manifests into groups by partition spec id.
+    // 2. For each group, pack manifests into bins by target size, the sum of manifest length in each bin should be less than target size.
+    // 3. For the bin contains the first manifest, if the number of manifests in the bin is less than min count, then don't merge it. Otherwise, merge the bin.
     async fn merge_manifest(
         &self,
         snapshot_produce: &mut SnapshotProducer<'_>,
@@ -296,12 +300,12 @@ impl MergeManifestManager {
     }
 }
 
-struct MergeManifsetProcess {
+struct MergeManifestProcess {
     target_size_bytes: u32,
     min_count_to_merge: u32,
 }
 
-impl ManifestProcess for MergeManifsetProcess {
+impl ManifestProcess for MergeManifestProcess {
     async fn process_manifests(
         &self,
         snapshot_produce: &mut SnapshotProducer<'_>,

@@ -299,14 +299,17 @@ impl<'a> SnapshotProducer<'a> {
             ));
         }
 
-        let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
-        let mut manifest_files = existing_manifests;
-
-        // Process added entries.
+        // # NOTE
+        // The order of manifest files is matter:
+        // [added_manifest, ... ]
+        // # TODO
+        // Should we use type safe way to guarantee this order?
+        let mut manifest_files = vec![];
         if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
         }
+        manifest_files.extend(snapshot_produce_operation.existing_manifest(self).await?);
 
         // # TODO
         // Support process delete entries.

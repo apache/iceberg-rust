@@ -111,18 +111,7 @@ async fn test_append_data_file() {
         .await
         .unwrap();
 
-    // Enable merge append for table
-    let tx = Transaction::new(&table);
-    let update_properties_action = tx
-        .update_table_properties()
-        .set(MANIFEST_MERGE_ENABLED.to_string(), "true".to_string())
-        .set(MANIFEST_MIN_MERGE_COUNT.to_string(), "4".to_string())
-        .set(MANIFEST_TARGET_SIZE_BYTES.to_string(), "8000".to_string());
-    let tx = update_properties_action.apply(tx).unwrap();
-    table = tx.commit(&rest_catalog).await.unwrap();
-
     // fast append data file 3 time to create 3 manifest
-    let mut original_manifest_entries = vec![];
     for _ in 0..3 {
         let data_file = write_new_data_file(&table).await;
         let tx = Transaction::new(&table);
@@ -138,15 +127,31 @@ async fn test_append_data_file() {
         .await
         .unwrap();
     assert_eq!(manifest_list.entries().len(), 3);
+    
+    // Set the merge size to make sure per two manifest will be packed together.
+    let manifest_file_len = manifest_list.entries().iter().map(|entry| entry.manifest_length).max().unwrap();
+    let tx = Transaction::new(&table);
+    let update_properties_action = tx
+        .update_table_properties()
+        .set(MANIFEST_MERGE_ENABLED.to_string(), "true".to_string())
+        .set(MANIFEST_MIN_MERGE_COUNT.to_string(), "4".to_string())
+        .set(MANIFEST_TARGET_SIZE_BYTES.to_string(), (manifest_file_len * 2 + 2).to_string());
+    let tx = update_properties_action.apply(tx).unwrap();
+    table = tx.commit(&rest_catalog).await.unwrap();
 
-    // construct test data
+    // Test case:
+    // There are 3 manifset, and we append one manifest with merge append. 
+    // Target size is 2 * manifest_file_len + 1, so each two manifest will be packed together.
+    // The first bin contains the first manifest and the first additional manifest, but it's count is less than min merge count, so it will not be merged.
+    // Other two manifests will be merged into one manifest.
+    // Expect three manifest in the new snapshot:
+    // 1. The new manifest with new added data file.
+    // 2. Original manifest with one original data file.
+    // 3. The merged manifest with two original data files.
+    let mut original_manifest_entries = vec![];
     for (idx, entry) in manifest_list.entries().iter().enumerate() {
         let manifest = entry.load_manifest(table.file_io()).await.unwrap();
         assert!(manifest.entries().len() == 1);
-
-        // For this first manifest, it will be pack with the first additional manifest and
-        // the count(2) is less than the min merge count(4), so these two will not merge.
-        // See detail: `MergeManifestProcess::merge_group`
         if idx == 0 {
             original_manifest_entries.push(Arc::new(
                 ManifestEntry::builder()
@@ -192,7 +197,6 @@ async fn test_append_data_file() {
             .unwrap();
         assert!(manifest.entries().len() == 1);
         original_manifest_entries.retain(|entry| !manifest.entries().contains(entry));
-        assert!(original_manifest_entries.len() == 2);
     }
     {
         let manifest = manifest_list.entries()[2]
