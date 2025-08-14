@@ -190,7 +190,7 @@
 <a href=#190 id=190 data-nosnippet>190</a><span class="doccomment">/// Accessor used to get child partner from parent partner.
 <a href=#191 id=191 data-nosnippet>191</a></span><span class="kw">pub trait </span>PartnerAccessor&lt;P&gt; {
 <a href=#192 id=192 data-nosnippet>192</a>    <span class="doccomment">/// Get the struct partner from schema partner.
-<a href=#193 id=193 data-nosnippet>193</a>    </span><span class="kw">fn </span>struct_parner&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, schema_partner: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>P) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>P&gt;;
+<a href=#193 id=193 data-nosnippet>193</a>    </span><span class="kw">fn </span>struct_partner&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, schema_partner: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>P) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>P&gt;;
 <a href=#194 id=194 data-nosnippet>194</a>    <span class="doccomment">/// Get the field partner from struct partner.
 <a href=#195 id=195 data-nosnippet>195</a>    </span><span class="kw">fn </span>field_partner&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, struct_partner: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>P, field: <span class="kw-2">&amp;</span>NestedField) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>P&gt;;
 <a href=#196 id=196 data-nosnippet>196</a>    <span class="doccomment">/// Get the list element partner from list partner.
@@ -274,7 +274,7 @@
 <a href=#274 id=274 data-nosnippet>274</a>) -&gt; <span class="prelude-ty">Result</span>&lt;V::T&gt; {
 <a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">let </span>result = visit_struct_with_partner(
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="kw-2">&amp;</span>schema.r#struct,
-<a href=#277 id=277 data-nosnippet>277</a>        accessor.struct_parner(partner)<span class="question-mark">?</span>,
+<a href=#277 id=277 data-nosnippet>277</a>        accessor.struct_partner(partner)<span class="question-mark">?</span>,
 <a href=#278 id=278 data-nosnippet>278</a>        visitor,
 <a href=#279 id=279 data-nosnippet>279</a>        accessor,
 <a href=#280 id=280 data-nosnippet>280</a>    )<span class="question-mark">?</span>;
