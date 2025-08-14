@@ -119,18 +119,10 @@ impl CatalogBuilder for GlueCatalogBuilder {
 #[derive(Debug)]
 /// Glue Catalog configuration
 pub(crate) struct GlueCatalogConfig {
-    #[builder(default, setter(strip_option))]
     name: Option<String>,
-
-    #[builder(default, setter(strip_option(fallback = uri_opt)))]
     uri: Option<String>,
-
-    #[builder(default, setter(strip_option(fallback = catalog_id_opt)))]
     catalog_id: Option<String>,
-
     warehouse: String,
-
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
