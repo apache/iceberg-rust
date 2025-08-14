@@ -171,7 +171,7 @@ impl TableProvider for IcebergTableProvider {
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
-    ) -> std::result::Result<Vec<TableProviderFilterPushDown>, DataFusionError> {
+    ) -> DFResult<Vec<TableProviderFilterPushDown>> {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
