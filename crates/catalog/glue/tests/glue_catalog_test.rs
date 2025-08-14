@@ -76,6 +76,11 @@ async fn get_catalog() -> GlueCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
+    while !scan_port_addr(minio_socket_addr) {
+        info!("Waiting for 1s minio to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
+    }
+
     let props = HashMap::from([
         (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
         (
@@ -91,6 +96,24 @@ async fn get_catalog() -> GlueCatalog {
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
+
+    // Wait for bucket to actually exist
+    let file_io = iceberg::io::FileIO::from_path("s3a://")
+        .unwrap()
+        .with_props(props.clone())
+        .build()
+        .unwrap();
+
+    let mut retries = 0;
+    while retries < 30 {
+        if file_io.exists("s3a://warehouse/").await.unwrap_or(false) {
+            info!("S3 bucket 'warehouse' is ready");
+            break;
+        }
+        info!("Waiting for bucket creation... (attempt {})", retries + 1);
+        sleep(std::time::Duration::from_millis(1000)).await;
+        retries += 1;
+    }
 
     let mut glue_props = HashMap::from([
         (

@@ -25,7 +25,7 @@ use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, StructArray
 use arrow_schema::DataType;
 
 use crate::Result;
-use crate::arrow::ArrowArrayAccessor;
+use crate::arrow::{ArrowArrayAccessor, FieldMatchMode};
 use crate::spec::{
     ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor,
     StructType, visit_struct_with_partner,
@@ -71,6 +71,7 @@ macro_rules! count_float_nans {
 pub struct NanValueCountVisitor {
     /// Stores field ID to NaN value count mapping
     pub nan_value_counts: HashMap<i32, u64>,
+    match_mode: FieldMatchMode,
 }
 
 impl SchemaWithPartnerVisitor<ArrayRef> for NanValueCountVisitor {
@@ -149,14 +150,20 @@ impl SchemaWithPartnerVisitor<ArrayRef> for NanValueCountVisitor {
 impl NanValueCountVisitor {
     /// Creates new instance of NanValueCountVisitor
     pub fn new() -> Self {
+        Self::new_with_match_mode(FieldMatchMode::Id)
+    }
+
+    /// Creates new instance of NanValueCountVisitor with explicit match mode
+    pub fn new_with_match_mode(match_mode: FieldMatchMode) -> Self {
         Self {
             nan_value_counts: HashMap::new(),
+            match_mode,
         }
     }
 
     /// Compute nan value counts in given schema and record batch
     pub fn compute(&mut self, schema: SchemaRef, batch: RecordBatch) -> Result<()> {
-        let arrow_arr_partner_accessor = ArrowArrayAccessor {};
+        let arrow_arr_partner_accessor = ArrowArrayAccessor::new_with_match_mode(self.match_mode);
 
         let struct_arr = Arc::new(StructArray::from(batch)) as ArrayRef;
         visit_struct_with_partner(
