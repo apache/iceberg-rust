@@ -40,10 +40,12 @@
 //!
 //! # Simple example for the data file writer used parquet physical format:
 //! ```rust, no_run
+//! use std::collections::HashMap;
 //! use std::sync::Arc;
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 //! use async_trait::async_trait;
+//! use iceberg::io::FileIOType::Memory;
 //! use iceberg::io::{FileIO, FileIOBuilder};
 //! use iceberg::spec::DataFile;
 //! use iceberg::transaction::Transaction;
@@ -53,14 +55,23 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
+//! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Build your file IO.
-//!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
-//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
+//!     let catalog = MemoryCatalogBuilder::default()
+//!         .load(
+//!             "memory",
+//!             HashMap::from([
+//!                 (
+//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
+//!                     Memory.as_str().to_string(),
+//!                 ), // specify the file io type
+//!             ]),
+//!         )
+//!         .await?;
 //!     // Add customized code to create a table first.
 //!
 //!     // Load table from catalog.
@@ -98,10 +109,13 @@
 //!
 //! # Custom writer to record latency
 //! ```rust, no_run
+//! use std::collections::HashMap;
 //! use std::time::Instant;
 //!
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
+//! use iceberg::io::FileIOType::Memory;
+//! use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 //! use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -109,7 +123,7 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
+//! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
@@ -160,11 +174,18 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Build your file IO.
-//!     use iceberg::NamespaceIdent;
-//!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
-//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     let catalog = MemoryCatalogBuilder::default()
+//!         .load(
+//!             "memory",
+//!             HashMap::from([
+//!                 (
+//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
+//!                     Memory.as_str().to_string(),
+//!                 ), // specify the file io type
+//!             ]),
+//!         )
+//!         .await?;
 //!
 //!     // Add customized code to create a table first.
 //!

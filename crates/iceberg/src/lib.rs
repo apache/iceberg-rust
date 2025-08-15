@@ -22,16 +22,28 @@
 //! ## Scan A Table
 //!
 //! ```rust, no_run
+//! use std::collections::HashMap;
+//!
 //! use futures::TryStreamExt;
+//! use iceberg::io::FileIOType::Memory;
 //! use iceberg::io::{FileIO, FileIOBuilder};
-//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
+//! use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
+//! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Build your file IO.
-//!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
-//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     let catalog = MemoryCatalogBuilder::default()
+//!         .load(
+//!             "memory",
+//!             HashMap::from([
+//!                 (
+//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
+//!                     Memory.as_str().to_string(),
+//!                 ), // specify the file io type
+//!             ]),
+//!         )
+//!         .await?;
 //!     // Load table from catalog.
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)

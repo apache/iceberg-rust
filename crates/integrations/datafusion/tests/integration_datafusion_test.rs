@@ -26,10 +26,10 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
-use iceberg::io::FileIOBuilder;
+use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
@@ -38,9 +38,14 @@ fn temp_path() -> String {
     temp_dir.path().to_str().unwrap().to_string()
 }
 
-fn get_iceberg_catalog() -> MemoryCatalog {
-    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-    MemoryCatalog::new(file_io, Some(temp_path()))
+async fn get_iceberg_catalog() -> MemoryCatalog {
+    MemoryCatalogBuilder::default()
+        .load(
+            "memory",
+            HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),
+        )
+        .await
+        .unwrap()
 }
 
 fn get_struct_type() -> StructType {
@@ -86,7 +91,7 @@ fn get_table_creation(
 
 #[tokio::test]
 async fn test_provider_plan_stream_schema() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -139,7 +144,7 @@ async fn test_provider_plan_stream_schema() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_table_names() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_list_table_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -171,7 +176,7 @@ async fn test_provider_list_table_names() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_schema_names() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_list_schema_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -196,7 +201,7 @@ async fn test_provider_list_schema_names() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_projection() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -264,7 +269,7 @@ async fn test_table_projection() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_predict_pushdown() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -309,7 +314,7 @@ async fn test_table_predict_pushdown() -> Result<()> {
 
 #[tokio::test]
 async fn test_metadata_table() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
