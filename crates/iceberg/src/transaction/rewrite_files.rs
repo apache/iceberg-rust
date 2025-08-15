@@ -165,7 +165,6 @@ fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
             )
         })?)
         // todo copy file seq no as well
-        
         .data_file(entry.data_file().clone());
 
     Ok(builder.build())
