@@ -33,7 +33,6 @@ pub struct RewriteFilesAction {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     data_files_to_add: Vec<DataFile>,
-    // Data files and delete files to delete
     data_files_to_delete: Vec<DataFile>,
 }
 
@@ -106,7 +105,7 @@ impl TransactionAction for RewriteFilesAction {
     }
 }
 
-fn set_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
+fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
     let builder = ManifestEntry::builder()
         .status(ManifestStatus::Deleted)
         .snapshot_id(entry.snapshot_id().ok_or_else(|| {
@@ -165,7 +164,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                         .iter()
                         .any(|f| f.file_path == entry.data_file().file_path)
                     {
-                        deleted_entries.push(set_deleted_status(entry)?);
+                        deleted_entries.push(copy_with_deleted_status(entry)?);
                     }
                 }
             }
