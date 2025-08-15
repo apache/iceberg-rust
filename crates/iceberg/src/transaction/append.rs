@@ -27,6 +27,7 @@ use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
+use crate::transaction::validate::SnapshotValidator;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
@@ -112,6 +113,8 @@ impl TransactionAction for FastAppendAction {
 }
 
 struct FastAppendOperation;
+
+impl SnapshotValidator for FastAppendOperation {}
 
 impl SnapshotProduceOperation for FastAppendOperation {
     fn operation(&self) -> Operation {
