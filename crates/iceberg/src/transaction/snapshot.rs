@@ -104,7 +104,7 @@ impl<'a> SnapshotProducer<'a> {
 
     pub(crate) fn validate_added_data_files(&self, added_data_files: &[DataFile]) -> Result<()> {
         for data_file in added_data_files {
-            if data_file.content_type() != crate::spec::DataContentType::Data {
+            if data_file.content_type() != DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed for fast append",
