@@ -269,8 +269,11 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self, content_type: ManifestContentType) -> Result<ManifestFile> {
-        let added_data_files =  match content_type {
+    async fn write_added_manifest(
+        &mut self,
+        content_type: ManifestContentType,
+    ) -> Result<ManifestFile> {
+        let added_data_files = match content_type {
             ManifestContentType::Data => std::mem::take(&mut self.added_data_files),
             ManifestContentType::Deletes => std::mem::take(&mut self.added_delete_files),
         };
@@ -385,7 +388,9 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_manifest);
         }
         if !self.added_delete_files.is_empty() {
-            let added_manifest = self.write_added_manifest(ManifestContentType::Deletes).await?;
+            let added_manifest = self
+                .write_added_manifest(ManifestContentType::Deletes)
+                .await?;
             manifest_files.push(added_manifest);
         }
 
