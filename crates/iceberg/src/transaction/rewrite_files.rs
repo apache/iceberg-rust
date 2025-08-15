@@ -23,10 +23,8 @@ use uuid::Uuid;
 
 use super::snapshot::{DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer};
 use super::{ActionCommit, TransactionAction};
-use crate::error::Result;
-use crate::spec::{
-    DataFile, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus, Operation,
-};
+use crate::error::{Error, ErrorKind, Result};
+use crate::spec::{DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile, ManifestStatus, Operation};
 use crate::table::Table;
 
 /// Transaction action for rewriting files.
@@ -108,6 +106,32 @@ impl TransactionAction for RewriteFilesAction {
     }
 }
 
+fn set_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
+    let builder = ManifestEntry::builder()
+        .status(ManifestStatus::Deleted)
+        .snapshot_id(entry.snapshot_id().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Missing snapshot_id for entry with file path: {}", entry.file_path()),
+            )
+        })?)
+        .sequence_number(entry.sequence_number().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Missing sequence_number for entry with file path: {}", entry.file_path()),
+            )
+        })?)
+        .file_sequence_number(entry.file_sequence_number().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Missing file_sequence_number for entry with file path: {}", entry.file_path()),
+            )
+        })?)
+        .data_file(entry.data_file().clone());
+
+    Ok(builder.build())
+}
+
 impl SnapshotProduceOperation for RewriteFilesOperation {
     fn operation(&self) -> Operation {
         Operation::Replace
@@ -121,18 +145,6 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
         let snapshot = snapshot_producer.table.metadata().current_snapshot();
 
         if let Some(snapshot) = snapshot {
-            let gen_manifest_entry = |old_entry: &Arc<ManifestEntry>| {
-                // todo should not unwrap
-                let builder = ManifestEntry::builder()
-                    .status(ManifestStatus::Deleted)
-                    .snapshot_id(old_entry.snapshot_id().unwrap())
-                    .sequence_number(old_entry.sequence_number().unwrap())
-                    .file_sequence_number(old_entry.file_sequence_number().unwrap())
-                    .data_file(old_entry.data_file().clone());
-
-                builder.build()
-            };
-
             let manifest_list = snapshot
                 .load_manifest_list(
                     snapshot_producer.table.file_io(),
@@ -153,7 +165,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                         .iter()
                         .any(|f| f.file_path == entry.data_file().file_path)
                     {
-                        deleted_entries.push(gen_manifest_entry(entry));
+                        deleted_entries.push(set_deleted_status(entry)?);
                     }
                 }
             }
