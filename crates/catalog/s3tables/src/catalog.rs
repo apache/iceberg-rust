@@ -31,7 +31,6 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
-use typed_builder::TypedBuilder;
 
 use crate::utils::create_sdk_config;
 
@@ -41,10 +40,9 @@ pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
 pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
 
 /// S3Tables catalog configuration.
-#[derive(Debug, TypedBuilder)]
-pub struct S3TablesCatalogConfig {
+#[derive(Debug)]
+struct S3TablesCatalogConfig {
     /// Catalog name.
-    #[builder(default, setter(strip_option))]
     name: Option<String>,
     /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
     /// that is managed by s3tables. We can't directly access the bucket with path like
@@ -52,10 +50,8 @@ pub struct S3TablesCatalogConfig {
     /// ARN.
     table_bucket_arn: String,
     /// Endpoint URL for the catalog.
-    #[builder(default)]
     endpoint_url: Option<String>,
     /// Optional pre-configured AWS SDK client for S3Tables.
-    #[builder(default)]
     client: Option<aws_sdk_s3tables::Client>,
     /// Properties for the catalog. The available properties are:
     /// - `profile_name`: The name of the AWS profile to use.
@@ -63,7 +59,6 @@ pub struct S3TablesCatalogConfig {
     /// - `aws_access_key_id`: The AWS access key ID to use.
     /// - `aws_secret_access_key`: The AWS secret access key to use.
     /// - `aws_session_token`: The AWS session token to use.
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
@@ -87,6 +82,13 @@ impl Default for S3TablesCatalogBuilder {
 /// Builder methods for [`S3TablesCatalog`].
 impl S3TablesCatalogBuilder {
     /// Configure the catalog with a custom endpoint URL (useful for local testing/mocking).
+    ///
+    /// # Behavior with Properties
+    ///
+    /// If both this method and the `endpoint_url` property are provided during catalog loading,
+    /// the property value will take precedence and overwrite the value set by this method.
+    /// This follows the general pattern where properties specified in the `load()` method
+    /// have higher priority than builder method configurations.
     pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
         self.0.endpoint_url = Some(endpoint_url.into());
         self
@@ -99,6 +101,13 @@ impl S3TablesCatalogBuilder {
     }
 
     /// Configure the catalog with a table bucket ARN.
+    ///
+    /// # Behavior with Properties
+    ///
+    /// If both this method and the `table_bucket_arn` property are provided during catalog loading,
+    /// the property value will take precedence and overwrite the value set by this method.
+    /// This follows the general pattern where properties specified in the `load()` method
+    /// have higher priority than builder method configurations.
     pub fn with_table_bucket_arn(mut self, table_bucket_arn: impl Into<String>) -> Self {
         self.0.table_bucket_arn = table_bucket_arn.into();
         self
@@ -113,7 +122,8 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        let catalog_name = name.into();
+        self.0.name = Some(catalog_name.clone());
 
         if props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
             self.0.table_bucket_arn = props
@@ -136,7 +146,12 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
             .collect();
 
         async move {
-            if self.0.table_bucket_arn.is_empty() {
+            if catalog_name.trim().is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name cannot be empty",
+                ))
+            } else if self.0.table_bucket_arn.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Table bucket ARN is required",
@@ -605,9 +620,13 @@ mod tests {
             None => return Ok(None),
         };
 
-        let config = S3TablesCatalogConfig::builder()
-            .table_bucket_arn(table_bucket_arn)
-            .build();
+        let config = S3TablesCatalogConfig {
+            name: None,
+            table_bucket_arn,
+            endpoint_url: None,
+            client: None,
+            props: HashMap::new(),
+        };
 
         Ok(Some(S3TablesCatalog::new(config).await?))
     }
@@ -742,7 +761,6 @@ mod tests {
                         S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
                         "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
                     ),
-                    // This should be ignored and end up in props filtering
                     ("some_prop".to_string(), "some_value".to_string()),
                 ]),
             )
@@ -755,7 +773,6 @@ mod tests {
     async fn test_builder_with_client_ok() {
         use aws_config::BehaviorVersion;
 
-        // Build a minimal AWS sdk config and client (no network calls here)
         let sdk_config = aws_config::defaults(BehaviorVersion::latest()).load().await;
         let client = aws_sdk_s3tables::Client::new(&sdk_config);
 
@@ -787,7 +804,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_builder_empty_table_bucket_arn_edge_cases() {
-        // Test with explicit empty string in properties
         let mut props = HashMap::new();
         props.insert(
             S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
@@ -805,26 +821,175 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_builder_chaining() {
+    async fn test_endpoint_url_property_overrides_builder_method() {
         let test_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket";
-        let test_endpoint = "http://localhost:4566";
+        let builder_endpoint = "http://localhost:4566";
+        let property_endpoint = "http://localhost:8080";
 
-        use aws_config::BehaviorVersion;
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest()).load().await;
-        let client = aws_sdk_s3tables::Client::new(&sdk_config);
-
-        // Test method chaining works correctly
         let builder = S3TablesCatalogBuilder::default()
             .with_table_bucket_arn(test_arn)
-            .with_endpoint_url(test_endpoint)
-            .with_client(client);
+            .with_endpoint_url(builder_endpoint);
+
+        let mut props = HashMap::new();
+        props.insert(
+            S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+            property_endpoint.to_string(),
+        );
+
+        let result = builder.load("s3tables", props).await;
+
+        assert!(result.is_ok());
+        let catalog = result.unwrap();
+
+        // Property value should override builder method value
+        assert_eq!(
+            catalog.config.endpoint_url,
+            Some(property_endpoint.to_string())
+        );
+        assert_ne!(
+            catalog.config.endpoint_url,
+            Some(builder_endpoint.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_endpoint_url_builder_method_only() {
+        let test_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket";
+        let builder_endpoint = "http://localhost:4566";
+
+        let builder = S3TablesCatalogBuilder::default()
+            .with_table_bucket_arn(test_arn)
+            .with_endpoint_url(builder_endpoint);
 
         let result = builder.load("s3tables", HashMap::new()).await;
 
         assert!(result.is_ok());
         let catalog = result.unwrap();
-        assert_eq!(catalog.config.table_bucket_arn, test_arn);
-        assert_eq!(catalog.config.endpoint_url, Some(test_endpoint.to_string()));
-        assert!(catalog.config.client.is_some());
+
+        assert_eq!(
+            catalog.config.endpoint_url,
+            Some(builder_endpoint.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_endpoint_url_property_only() {
+        let test_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket";
+        let property_endpoint = "http://localhost:8080";
+
+        let builder = S3TablesCatalogBuilder::default().with_table_bucket_arn(test_arn);
+
+        let mut props = HashMap::new();
+        props.insert(
+            S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+            property_endpoint.to_string(),
+        );
+
+        let result = builder.load("s3tables", props).await;
+
+        assert!(result.is_ok());
+        let catalog = result.unwrap();
+
+        assert_eq!(
+            catalog.config.endpoint_url,
+            Some(property_endpoint.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_table_bucket_arn_property_overrides_builder_method() {
+        let builder_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/builder-bucket";
+        let property_arn = "arn:aws:s3tables:us-east-1:987654321098:bucket/property-bucket";
+
+        let builder = S3TablesCatalogBuilder::default().with_table_bucket_arn(builder_arn);
+
+        let mut props = HashMap::new();
+        props.insert(
+            S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+            property_arn.to_string(),
+        );
+
+        let result = builder.load("s3tables", props).await;
+
+        assert!(result.is_ok());
+        let catalog = result.unwrap();
+
+        assert_eq!(catalog.config.table_bucket_arn, property_arn);
+        assert_ne!(catalog.config.table_bucket_arn, builder_arn);
+    }
+
+    #[tokio::test]
+    async fn test_table_bucket_arn_builder_method_only() {
+        let builder_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/builder-bucket";
+
+        let builder = S3TablesCatalogBuilder::default().with_table_bucket_arn(builder_arn);
+
+        let result = builder.load("s3tables", HashMap::new()).await;
+
+        assert!(result.is_ok());
+        let catalog = result.unwrap();
+
+        assert_eq!(catalog.config.table_bucket_arn, builder_arn);
+    }
+
+    #[tokio::test]
+    async fn test_table_bucket_arn_property_only() {
+        let property_arn = "arn:aws:s3tables:us-east-1:987654321098:bucket/property-bucket";
+
+        let builder = S3TablesCatalogBuilder::default();
+
+        let mut props = HashMap::new();
+        props.insert(
+            S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+            property_arn.to_string(),
+        );
+
+        let result = builder.load("s3tables", props).await;
+
+        assert!(result.is_ok());
+        let catalog = result.unwrap();
+
+        assert_eq!(catalog.config.table_bucket_arn, property_arn);
+    }
+
+    #[tokio::test]
+    async fn test_builder_empty_name_validation() {
+        let test_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket";
+        let builder = S3TablesCatalogBuilder::default().with_table_bucket_arn(test_arn);
+
+        let result = builder.load("", HashMap::new()).await;
+
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(err.message(), "Catalog name cannot be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_builder_whitespace_only_name_validation() {
+        let test_arn = "arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket";
+        let builder = S3TablesCatalogBuilder::default().with_table_bucket_arn(test_arn);
+
+        let result = builder.load("   \t\n  ", HashMap::new()).await;
+
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(err.message(), "Catalog name cannot be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_builder_name_validation_with_missing_arn() {
+        let builder = S3TablesCatalogBuilder::default();
+
+        let result = builder.load("", HashMap::new()).await;
+
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(err.message(), "Catalog name cannot be empty");
+        }
     }
 }

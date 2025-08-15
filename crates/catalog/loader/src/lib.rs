@@ -106,7 +106,6 @@ impl CatalogLoader<'_> {
 mod tests {
     use std::collections::HashMap;
 
-
     use crate::{CatalogLoader, load};
 
     #[tokio::test]
