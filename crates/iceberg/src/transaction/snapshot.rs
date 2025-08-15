@@ -73,8 +73,8 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
-    data_files_to_add: Vec<DataFile>,
-    pub data_files_to_delete: Vec<DataFile>,
+    added_data_files: Vec<DataFile>,
+    pub deleted_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -87,8 +87,8 @@ impl<'a> SnapshotProducer<'a> {
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
-        data_files_to_add: Vec<DataFile>,
-        data_files_to_delete: Vec<DataFile>,
+        added_data_files: Vec<DataFile>,
+        deleted_data_files: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
@@ -96,8 +96,8 @@ impl<'a> SnapshotProducer<'a> {
             commit_uuid,
             key_metadata,
             snapshot_properties,
-            data_files_to_add,
-            data_files_to_delete,
+            added_data_files,
+            deleted_data_files,
             manifest_counter: (0..),
         }
     }
@@ -263,8 +263,8 @@ impl<'a> SnapshotProducer<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let data_files_to_add = std::mem::take(&mut self.data_files_to_add);
-        if data_files_to_add.is_empty() {
+        let added_data_files = std::mem::take(&mut self.added_data_files);
+        if added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files found when write an added manifest file",
@@ -273,7 +273,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let manifest_entries = data_files_to_add.into_iter().map(|data_file| {
+        let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
@@ -358,7 +358,7 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.data_files_to_add.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files or added snapshot properties found when write a manifest file",
@@ -369,7 +369,7 @@ impl<'a> SnapshotProducer<'a> {
         let mut manifest_files = existing_manifests;
 
         // Process added entries.
-        if !self.data_files_to_add.is_empty() {
+        if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
         }
@@ -406,7 +406,7 @@ impl<'a> SnapshotProducer<'a> {
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
-        for data_file in &self.data_files_to_add {
+        for data_file in &self.added_data_files {
             summary_collector.add_file(
                 data_file,
                 table_metadata.current_schema().clone(),
