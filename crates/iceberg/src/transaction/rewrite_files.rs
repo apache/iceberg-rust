@@ -32,8 +32,8 @@ pub struct RewriteFilesAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
-    data_files_to_add: Vec<DataFile>,
-    data_files_to_delete: Vec<DataFile>,
+    added_data_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
 }
 
 pub struct RewriteFilesOperation;
@@ -44,26 +44,26 @@ impl RewriteFilesAction {
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: Default::default(),
-            data_files_to_add: vec![],
-            data_files_to_delete: vec![],
+            added_data_files: vec![],
+            deleted_data_files: vec![],
         }
     }
 
-    /// Add data files to the snapshot.
+    /// Add added data files to the snapshot.
     pub fn add_data_files(
         mut self,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<Self> {
-        self.data_files_to_add.extend(data_files);
+        self.added_data_files.extend(data_files);
         Ok(self)
     }
 
-    /// Add data files to delete to the snapshot.
+    /// Add deleted data files to the snapshot.
     pub fn delete_data_files(
         mut self,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<Self> {
-        self.data_files_to_delete.extend(data_files);
+        self.deleted_data_files.extend(data_files);
         Ok(self)
     }
 
@@ -94,8 +94,8 @@ impl TransactionAction for RewriteFilesAction {
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
-            self.data_files_to_add.clone(),
-            self.data_files_to_delete.clone(),
+            self.added_data_files.clone(),
+            self.deleted_data_files.clone(),
         );
 
         // todo should be able to configure merge manifest process
@@ -140,7 +140,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
         &self,
         snapshot_producer: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestEntry>> {
-        // Find entries that are associated with files to delete
+        // Find entries that are associated with deleted files
         let snapshot = snapshot_producer.table.metadata().current_snapshot();
 
         if let Some(snapshot) = snapshot {
@@ -151,7 +151,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 )
                 .await?;
 
-            let mut deleted_entries = Vec::new();
+            let mut delete_entries = Vec::new();
 
             for manifest_file in manifest_list.entries() {
                 let manifest = manifest_file
@@ -160,16 +160,16 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
 
                 for entry in manifest.entries() {
                     if snapshot_producer
-                        .data_files_to_delete
+                        .deleted_data_files
                         .iter()
                         .any(|f| f.file_path == entry.data_file().file_path)
                     {
-                        deleted_entries.push(copy_with_deleted_status(entry)?);
+                        delete_entries.push(copy_with_deleted_status(entry)?);
                     }
                 }
             }
 
-            Ok(deleted_entries)
+            Ok(delete_entries)
         } else {
             Ok(vec![])
         }
@@ -203,7 +203,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 .iter()
                 .filter_map(|entry| {
                     if snapshot_producer
-                        .data_files_to_delete
+                        .deleted_data_files
                         .iter()
                         .any(|f| f.file_path == entry.data_file().file_path)
                     {
@@ -220,8 +220,8 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 // All files from the existing manifest entries are still valid
                 existing_files.push(manifest_file.clone());
             } else {
-                // Some files are about to be deleted
-                // Rewrite the manifest file and exclude the data files to delete
+                // Some files are deleted already
+                // Rewrite the manifest file and exclude the deleted data files
                 let mut manifest_writer = snapshot_producer.new_manifest_writer(
                     ManifestContentType::Data,
                     manifest_file.partition_spec_id,
