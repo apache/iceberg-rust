@@ -85,6 +85,7 @@ pub(crate) struct SnapshotProducer<'a> {
 }
 
 impl<'a> SnapshotProducer<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
