@@ -91,6 +91,8 @@ impl TransactionAction for FastAppendAction {
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
             vec![],
+            vec![],
+            vec![],
         );
 
         // validate added files

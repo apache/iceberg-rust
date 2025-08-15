@@ -24,7 +24,10 @@ use uuid::Uuid;
 use super::snapshot::{DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer};
 use super::{ActionCommit, TransactionAction};
 use crate::error::{Error, ErrorKind, Result};
-use crate::spec::{DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile, ManifestStatus, Operation};
+use crate::spec::{
+    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile,
+    ManifestStatus, Operation,
+};
 use crate::table::Table;
 
 /// Transaction action for rewriting files.
@@ -33,7 +36,9 @@ pub struct RewriteFilesAction {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
+    deleted_delete_files: Vec<DataFile>,
 }
 
 pub struct RewriteFilesOperation;
@@ -45,7 +50,9 @@ impl RewriteFilesAction {
             key_metadata: None,
             snapshot_properties: Default::default(),
             added_data_files: vec![],
+            added_delete_files: vec![],
             deleted_data_files: vec![],
+            deleted_delete_files: vec![],
         }
     }
 
@@ -54,7 +61,14 @@ impl RewriteFilesAction {
         mut self,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<Self> {
-        self.added_data_files.extend(data_files);
+        for data_file in data_files {
+            match data_file.content {
+                DataContentType::Data => self.added_data_files.push(data_file),
+                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                    self.added_delete_files.push(data_file)
+                }
+            }
+        }
         Ok(self)
     }
 
@@ -63,7 +77,15 @@ impl RewriteFilesAction {
         mut self,
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<Self> {
-        self.deleted_data_files.extend(data_files);
+        for data_file in data_files {
+            match data_file.content {
+                DataContentType::Data => self.deleted_data_files.push(data_file),
+                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                    self.deleted_delete_files.push(data_file)
+                }
+            }
+        }
+
         Ok(self)
     }
 
@@ -95,8 +117,14 @@ impl TransactionAction for RewriteFilesAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            self.added_delete_files.clone(),
             self.deleted_data_files.clone(),
+            self.deleted_delete_files.clone(),
         );
+
+        // todo need to figure out validation
+        // 1. validate replace and added files
+        // 2. validate no new deletes using the starting snapshot id
 
         // todo should be able to configure merge manifest process
         snapshot_producer
@@ -111,19 +139,28 @@ fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
         .snapshot_id(entry.snapshot_id().ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Missing snapshot_id for entry with file path: {}", entry.file_path()),
+                format!(
+                    "Missing snapshot_id for entry with file path: {}",
+                    entry.file_path()
+                ),
             )
         })?)
         .sequence_number(entry.sequence_number().ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Missing sequence_number for entry with file path: {}", entry.file_path()),
+                format!(
+                    "Missing sequence_number for entry with file path: {}",
+                    entry.file_path()
+                ),
             )
         })?)
         .file_sequence_number(entry.file_sequence_number().ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Missing file_sequence_number for entry with file path: {}", entry.file_path()),
+                format!(
+                    "Missing file_sequence_number for entry with file path: {}",
+                    entry.file_path()
+                ),
             )
         })?)
         .data_file(entry.data_file().clone());
@@ -159,12 +196,25 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                     .await?;
 
                 for entry in manifest.entries() {
-                    if snapshot_producer
-                        .deleted_data_files
-                        .iter()
-                        .any(|f| f.file_path == entry.data_file().file_path)
-                    {
-                        delete_entries.push(copy_with_deleted_status(entry)?);
+                    match entry.content_type() {
+                        DataContentType::Data => {
+                            if snapshot_producer
+                                .deleted_data_files
+                                .iter()
+                                .any(|f| f.file_path == entry.data_file().file_path)
+                            {
+                                delete_entries.push(copy_with_deleted_status(entry)?)
+                            }
+                        }
+                        DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                            if snapshot_producer
+                                .deleted_delete_files
+                                .iter()
+                                .any(|f| f.file_path == entry.data_file().file_path)
+                            {
+                                delete_entries.push(copy_with_deleted_status(entry)?)
+                            }
+                        }
                     }
                 }
             }
@@ -202,15 +252,27 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 .entries()
                 .iter()
                 .filter_map(|entry| {
-                    if snapshot_producer
-                        .deleted_data_files
-                        .iter()
-                        .any(|f| f.file_path == entry.data_file().file_path)
-                    {
-                        Some(entry.data_file().file_path().to_string())
-                    } else {
-                        None
+                    match entry.content_type() {
+                        DataContentType::Data => {
+                            if snapshot_producer
+                                .deleted_data_files
+                                .iter()
+                                .any(|f| f.file_path == entry.data_file().file_path)
+                            {
+                                return Some(entry.data_file().file_path().to_string());
+                            }
+                        }
+                        DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
+                            if snapshot_producer
+                                .deleted_delete_files
+                                .iter()
+                                .any(|f| f.file_path == entry.data_file().file_path)
+                            {
+                                return Some(entry.data_file().file_path().to_string());
+                            }
+                        }
                     }
+                    None
                 })
                 .collect();
 
