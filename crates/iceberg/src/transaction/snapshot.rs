@@ -17,14 +17,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::ops::RangeFrom;
+use std::ops::{Deref, RangeFrom};
 
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULTSnapshot,
     SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
     TableProperties, update_snapshot_summaries,
 };
@@ -36,14 +37,13 @@ const META_ROOT_PATH: &str = "metadata";
 
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
-    #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
     fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
@@ -73,7 +73,8 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
-    added_data_files: Vec<DataFile>,
+    data_files_to_add: Vec<DataFile>,
+    pub data_files_to_delete: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -86,7 +87,8 @@ impl<'a> SnapshotProducer<'a> {
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
-        added_data_files: Vec<DataFile>,
+        data_files_to_add: Vec<DataFile>,
+        data_files_to_delete: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
@@ -94,7 +96,8 @@ impl<'a> SnapshotProducer<'a> {
             commit_uuid,
             key_metadata,
             snapshot_properties,
-            added_data_files,
+            data_files_to_add,
+            data_files_to_delete,
             manifest_counter: (0..),
         }
     }
@@ -185,7 +188,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+        spec_id: i32,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -202,8 +209,12 @@ impl<'a> SnapshotProducer<'a> {
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
-                .default_partition_spec()
-                .as_ref()
+                .partition_spec_by_id(spec_id)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Partition spec with id: {spec_id} is not found!"),
+                ))?
+                .deref()
                 .clone(),
         );
         match self.table.metadata().format_version() {
@@ -252,8 +263,8 @@ impl<'a> SnapshotProducer<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
-        if added_data_files.is_empty() {
+        let data_files_to_add = std::mem::take(&mut self.data_files_to_add);
+        if data_files_to_add.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files found when write an added manifest file",
@@ -262,7 +273,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let manifest_entries = data_files_to_add.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
@@ -274,11 +285,67 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(
+            ManifestContentType::Data,
+            self.table.metadata().default_partition_spec_id(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
         writer.write_manifest_file().await
+    }
+
+    async fn write_deleted_manifest(
+        &mut self,
+        deleted_entries: Vec<ManifestEntry>,
+    ) -> Result<Vec<ManifestFile>> {
+        if deleted_entries.is_empty() {
+            Ok(Vec::new())
+        } else {
+            // Initialize partition groups
+            let mut partition_groups = HashMap::new();
+            for entry in deleted_entries {
+                partition_groups
+                    .entry(entry.data_file().partition_spec_id)
+                    .or_insert_with(Vec::new)
+                    .push(entry);
+            }
+
+            // Write manifest files for each spec-entries pair
+            let mut deleted_manifests = Vec::new();
+            for (spec_id, entries) in partition_groups {
+                let mut data_manifest_writer: Option<ManifestWriter> = None;
+                let mut delete_manifest_writer: Option<ManifestWriter> = None;
+                for entry in entries {
+                    match entry.data_file().content_type() {
+                        DataContentType::Data => data_manifest_writer
+                            .get_or_insert(
+                                self.new_manifest_writer(ManifestContentType::Data, spec_id)?,
+                            )
+                            .add_entry(entry)?,
+                        DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                            delete_manifest_writer
+                                .get_or_insert(
+                                    self.new_manifest_writer(
+                                        ManifestContentType::Deletes,
+                                        spec_id,
+                                    )?,
+                                )
+                                .add_delete_entry(entry)?
+                        }
+                    }
+                }
+
+                if let Some(writer) = data_manifest_writer {
+                    deleted_manifests.push(writer.write_manifest_file().await?);
+                };
+                if let Some(writer) = delete_manifest_writer {
+                    deleted_manifests.push(writer.write_manifest_file().await?);
+                };
+            }
+
+            Ok(deleted_manifests)
+        }
     }
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
@@ -291,7 +358,7 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.data_files_to_add.is_empty() && self.snapshot_properties.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files or added snapshot properties found when write a manifest file",
@@ -302,13 +369,15 @@ impl<'a> SnapshotProducer<'a> {
         let mut manifest_files = existing_manifests;
 
         // Process added entries.
-        if !self.added_data_files.is_empty() {
+        if !self.data_files_to_add.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
+        let delete_manifests = self
+            .write_deleted_manifest(snapshot_produce_operation.delete_entries(self).await?)
+            .await?;
+        manifest_files.extend(delete_manifests);
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
@@ -337,7 +406,7 @@ impl<'a> SnapshotProducer<'a> {
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
-        for data_file in &self.added_data_files {
+        for data_file in &self.data_files_to_add {
             summary_collector.add_file(
                 data_file,
                 table_metadata.current_schema().clone(),
