@@ -90,6 +90,7 @@ impl TransactionAction for FastAppendAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            vec![],
         );
 
         // validate added files
@@ -124,7 +125,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
