@@ -74,7 +74,9 @@ pub(crate) struct SnapshotProducer<'a> {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
     pub deleted_data_files: Vec<DataFile>,
+    pub deleted_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -88,7 +90,9 @@ impl<'a> SnapshotProducer<'a> {
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
+        added_delete_files: Vec<DataFile>,
         deleted_data_files: Vec<DataFile>,
+        deleted_delete_files: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
@@ -97,7 +101,9 @@ impl<'a> SnapshotProducer<'a> {
             key_metadata,
             snapshot_properties,
             added_data_files,
+            added_delete_files,
             deleted_data_files,
+            deleted_delete_files,
             manifest_counter: (0..),
         }
     }
