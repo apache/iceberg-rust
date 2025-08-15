@@ -26,9 +26,10 @@ use super::{ActionCommit, TransactionAction};
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{
     DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile,
-    ManifestStatus, Operation,
+    ManifestStatus, Operation, SnapshotRef,
 };
 use crate::table::Table;
+use crate::transaction::validate::SnapshotValidator;
 
 /// Transaction action for rewriting files.
 pub struct RewriteFilesAction {
@@ -41,7 +42,12 @@ pub struct RewriteFilesAction {
     deleted_delete_files: Vec<DataFile>,
 }
 
-pub struct RewriteFilesOperation;
+pub struct RewriteFilesOperation {
+    added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
+    deleted_delete_files: Vec<DataFile>,
+}
 
 impl RewriteFilesAction {
     pub fn new() -> Self {
@@ -122,13 +128,16 @@ impl TransactionAction for RewriteFilesAction {
             self.deleted_delete_files.clone(),
         );
 
-        // todo need to figure out validation
-        // 1. validate replace and added files
-        // 2. validate no new deletes using the starting snapshot id
+        let rewrite_operation = RewriteFilesOperation {
+            added_data_files: self.added_data_files.clone(),
+            added_delete_files: self.added_delete_files.clone(),
+            deleted_data_files: self.deleted_data_files.clone(),
+            deleted_delete_files: self.deleted_delete_files.clone(),
+        };
 
         // todo should be able to configure merge manifest process
         snapshot_producer
-            .commit(RewriteFilesOperation, DefaultManifestProcess)
+            .commit(rewrite_operation, DefaultManifestProcess)
             .await
     }
 }
@@ -166,6 +175,36 @@ fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
         .data_file(entry.data_file().clone());
 
     Ok(builder.build())
+}
+
+impl SnapshotValidator for RewriteFilesOperation {
+    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) -> Result<()> {
+        // Validate replaced and added files
+        if self.deleted_data_files.is_empty() && self.deleted_delete_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Files to delete cannot be empty",
+            ));
+        }
+        if self.deleted_data_files.is_empty() && !self.added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Data files to add must be empty because there's no data file to be rewritten",
+            ));
+        }
+        if self.deleted_delete_files.is_empty() && !self.added_delete_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Delete files to add must be empty because there's no delete file to be rewritten",
+            ));
+        }
+
+        // todo add use_starting_seq_number to help the validation
+        // todo validate no new deletes since the current base
+        // if there are replaced data files, there cannot be any new row-level deletes for those data files
+
+        Ok(())
+    }
 }
 
 impl SnapshotProduceOperation for RewriteFilesOperation {

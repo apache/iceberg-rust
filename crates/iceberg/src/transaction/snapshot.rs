@@ -31,11 +31,12 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
+use crate::transaction::validate::SnapshotValidator;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
-pub(crate) trait SnapshotProduceOperation: Send + Sync {
+pub(crate) trait SnapshotProduceOperation: Send + Sync + SnapshotValidator {
     fn operation(&self) -> Operation;
     fn delete_entries(
         &self,
@@ -268,8 +269,12 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
+    async fn write_added_manifest(&mut self, content_type: ManifestContentType) -> Result<ManifestFile> {
+        let added_data_files =  match content_type {
+            ManifestContentType::Data => std::mem::take(&mut self.added_data_files),
+            ManifestContentType::Deletes => std::mem::take(&mut self.added_delete_files),
+        };
+
         if added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
@@ -292,7 +297,7 @@ impl<'a> SnapshotProducer<'a> {
             }
         });
         let mut writer = self.new_manifest_writer(
-            ManifestContentType::Data,
+            content_type,
             self.table.metadata().default_partition_spec_id(),
         )?;
         for entry in manifest_entries {
@@ -376,7 +381,11 @@ impl<'a> SnapshotProducer<'a> {
 
         // Process added entries.
         if !self.added_data_files.is_empty() {
-            let added_manifest = self.write_added_manifest().await?;
+            let added_manifest = self.write_added_manifest(ManifestContentType::Data).await?;
+            manifest_files.push(added_manifest);
+        }
+        if !self.added_delete_files.is_empty() {
+            let added_manifest = self.write_added_manifest(ManifestContentType::Deletes).await?;
             manifest_files.push(added_manifest);
         }
 
@@ -458,6 +467,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
+        // Validate to avoid conflicts
+        snapshot_produce_operation
+            .validate(self.table, self.table.metadata().current_snapshot())?;
+
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
