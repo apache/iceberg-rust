@@ -114,6 +114,12 @@ impl RewriteFilesAction {
     }
 }
 
+impl Default for RewriteFilesAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl TransactionAction for RewriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
