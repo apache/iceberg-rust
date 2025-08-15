@@ -143,6 +143,7 @@ impl TransactionAction for RewriteFilesAction {
 }
 
 fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
+    // todo should we fail on missing properties?
     let builder = ManifestEntry::builder()
         .status(ManifestStatus::Deleted)
         .snapshot_id(entry.snapshot_id().ok_or_else(|| {
@@ -163,15 +164,8 @@ fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
                 ),
             )
         })?)
-        .file_sequence_number(entry.file_sequence_number().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Missing file_sequence_number for entry with file path: {}",
-                    entry.file_path()
-                ),
-            )
-        })?)
+        // todo copy file seq no as well
+        
         .data_file(entry.data_file().clone());
 
     Ok(builder.build())
