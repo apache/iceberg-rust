@@ -178,4 +178,4 @@ jobs:
         run: cargo miri setup
 
       - name: Run Miri 
-        run: cargo miri test
+        run: cargo miri test -Zmiri-disable-isolation
