@@ -35,7 +35,7 @@ runs:
         rustup toolchain install ${RUST_VERSION}
         rustup override set ${RUST_VERSION}
         rustup component add rustfmt clippy
-        rustup component add miri
+        rustup component add --toolchain ${RUST_VERSION} miri
     - name: Setup Rust toolchain according to rust-toolchain.toml
       shell: bash
       if: ${{ inputs.rust-version == '' }}
