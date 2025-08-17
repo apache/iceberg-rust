@@ -31,6 +31,7 @@ concurrency:
 
 env:
   rust_msrv: "1.85.0"
+  MIRIFLAGS: "-Zmiri-disable-isolation"
 
 jobs:
   check:
@@ -178,4 +179,4 @@ jobs:
         run: cargo miri setup
 
       - name: Run Miri 
-        run: cargo miri test -Zmiri-disable-isolation
+        run: cargo miri test
