@@ -755,7 +755,7 @@ impl ArrowReader {
 }
 
 /// Build the map of parquet field id to Parquet column index in the schema.
-fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<HashMap<i32, usize>> {
+pub fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<HashMap<i32, usize>> {
     let mut column_map = HashMap::new();
     for (idx, field) in parquet_schema.columns().iter().enumerate() {
         let field_type = field.self_type();
@@ -790,12 +790,12 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<HashMap<i32, 
 }
 
 /// A visitor to collect field ids from bound predicates.
-struct CollectFieldIdVisitor {
-    field_ids: HashSet<i32>,
+pub(crate) struct CollectFieldIdVisitor {
+    pub field_ids: HashSet<i32>,
 }
 
 impl CollectFieldIdVisitor {
-    fn field_ids(self) -> HashSet<i32> {
+    pub fn field_ids(self) -> HashSet<i32> {
         self.field_ids
     }
 }
