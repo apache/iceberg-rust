@@ -160,3 +160,13 @@ jobs:
       - name: Check MSRV
         run: |
           cargo +${{ env.rust_msrv }} check --locked --workspace
+
+  miri:
+    name: Run Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Nightly Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Run Miri
+        run: cargo miri test
