@@ -31,7 +31,8 @@ concurrency:
 
 env:
   rust_msrv: "1.85.0"
-  MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-backtrace=full"
+  # Disable stacked borrows due to crossbeam-epoch limitations
+  MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-backtrace=full -Zmiri-disable-stacked-borrows"
 
 jobs:
   check:
