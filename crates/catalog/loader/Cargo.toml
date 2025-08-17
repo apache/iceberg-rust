@@ -31,5 +31,6 @@ repository = { workspace = true }
 [dependencies]
 iceberg = { workspace = true }
 iceberg-catalog-rest = {workspace = true}
+iceberg-catalog-hms = { workspace = true }
 tokio = { workspace = true }
 async-trait = {workspace = true}

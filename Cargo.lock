@@ -3613,6 +3613,7 @@ version = "0.6.0"
 dependencies = [
  "async-trait",
  "iceberg",
+ "iceberg-catalog-hms",
  "iceberg-catalog-rest",
  "tokio",
 ]

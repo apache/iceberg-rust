@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
+use iceberg_catalog_hms::HmsCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 
 #[async_trait]
@@ -46,6 +47,7 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
 pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
     match r#type {
         "rest" => Ok(Box::new(RestCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
+        "hms" => Ok(Box::new(HmsCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
         _ => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported catalog type: {}", r#type),
@@ -71,6 +73,31 @@ mod tests {
                     (
                         REST_CATALOG_PROP_URI.to_string(),
                         "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_hms_catalog() {
+        use iceberg_catalog_hms::{HMS_CATALOG_PROP_ADDRESS, HMS_CATALOG_PROP_WAREHOUSE};
+
+        let catalog_loader = load("hms").unwrap();
+        let catalog = catalog_loader
+            .load(
+                "hms".to_string(),
+                HashMap::from([
+                    (
+                        HMS_CATALOG_PROP_ADDRESS.to_string(),
+                        "127.0.0.1:1".to_string(),
+                    ),
+                    (
+                        HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://warehouse".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
