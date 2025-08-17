@@ -31,7 +31,7 @@ concurrency:
 
 env:
   rust_msrv: "1.85.0"
-  MIRIFLAGS: "-Zmiri-disable-isolation"
+  MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-backtrace=full"
 
 jobs:
   check:
