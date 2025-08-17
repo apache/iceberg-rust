@@ -1757,8 +1757,6 @@ pub mod tests {
             let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
 
             assert_eq!(task.data_file_path, deserialized.data_file_path);
-            assert_eq!(task.start, deserialized.start);
-            assert_eq!(task.length, deserialized.length);
             assert_eq!(task.project_field_ids, deserialized.project_field_ids);
             assert_eq!(task.predicate, deserialized.predicate);
             assert_eq!(task.schema, deserialized.schema);
@@ -1777,8 +1775,7 @@ pub mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            start: 0,
-            length: 100,
+            file_range: None,
             project_field_ids: vec![1, 2, 3],
             predicate: None,
             schema: schema.clone(),
@@ -1791,8 +1788,7 @@ pub mod tests {
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            start: 0,
-            length: 100,
+            file_range: None,
             project_field_ids: vec![1, 2, 3],
             predicate: Some(BoundPredicate::AlwaysTrue),
             schema,

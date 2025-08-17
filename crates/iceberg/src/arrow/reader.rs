@@ -52,7 +52,7 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
+use crate::scan::{ArrowRecordBatchStream, FileScanGroup, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
@@ -68,7 +68,7 @@ pub struct ArrowReaderBuilder {
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
-    pub(crate) fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO) -> Self {
         let num_cpus = available_parallelism().get();
 
         ArrowReaderBuilder {
@@ -238,7 +238,14 @@ impl ArrowReader {
         // equality delete files OR (there is a scan predicate AND row_selection_enabled),
         // since the only implemented method of applying positional deletes is
         // by using a `RowSelection`.
-        let mut selected_row_group_indices = None;
+        let mut selected_row_group_indices = task
+            .file_range
+            .as_ref()
+            .map(|file_range| {
+                let FileScanGroup::Parquet(parquet_file_scan_range) = file_range;
+                Some(parquet_file_scan_range.row_group_indexes.clone())
+            })
+            .flatten();
         let mut row_selection = None;
 
         if let Some(predicate) = final_predicate {
@@ -261,6 +268,7 @@ impl ArrowReader {
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     &task.schema,
+                    &selected_row_group_indices,
                 )?;
 
                 selected_row_group_indices = Some(result);
@@ -649,8 +657,25 @@ impl ArrowReader {
         parquet_metadata: &Arc<ParquetMetaData>,
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
+        selected_row_groups: &Option<Vec<usize>>,
     ) -> Result<Vec<usize>> {
-        let row_groups_metadata = parquet_metadata.row_groups();
+        let row_groups_metadata = if let Some(selected_row_groups) = selected_row_groups {
+            parquet_metadata
+                .row_groups()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, row_group_metadata)| {
+                    if selected_row_groups.contains(&idx) {
+                        Some(row_group_metadata)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            parquet_metadata.row_groups().iter().collect::<Vec<_>>()
+        };
+
         let mut results = Vec::with_capacity(row_groups_metadata.len());
 
         for (idx, row_group_metadata) in row_groups_metadata.iter().enumerate() {
@@ -1736,8 +1761,7 @@ message schema {
     ) -> Vec<Option<String>> {
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                start: 0,
-                length: 0,
+                file_range: None,
                 record_count: None,
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
