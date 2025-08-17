@@ -148,15 +148,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
+
       - name: Generate minimal versions lockfile
         run: |
           cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
+
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
+
       - name: Check MSRV
         run: |
           cargo +${{ env.rust_msrv }} check --locked --workspace
@@ -166,7 +170,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Run Miri
+
+      - name: Miri setup
+        run: cargo miri setup
+
+      - name: Run Miri 
         run: cargo miri test
