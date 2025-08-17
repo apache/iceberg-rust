@@ -16,6 +16,38 @@
 // under the License.
 
 //! Iceberg Hive Metastore Catalog implementation.
+//!
+//! To build a hive metastore with configurations
+//! # Example
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::CatalogBuilder;
+//! use iceberg_catalog_hms::{
+//!     HMS_CATALOG_PROP_ADDRESS, HMS_CATALOG_PROP_WAREHOUSE, HmsCatalogBuilder,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let catalog = HmsCatalogBuilder::default()
+//!         .load(
+//!             "hms",
+//!             HashMap::from([
+//!                 (
+//!                     HMS_CATALOG_PROP_ADDRESS.to_string(),
+//!                     "127.0.0.1:1".to_string(),
+//!                 ),
+//!                 (
+//!                     HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+//!                     "s3://warehouse".to_string(),
+//!                 ),
+//!             ]),
+//!         )
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
 
 #![deny(missing_docs)]
 

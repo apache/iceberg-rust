@@ -45,7 +45,7 @@ pub const HMS_CATALOG_PROP_ADDRESS: &str = "address";
 pub const HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str = "thrift_transport";
 /// HMS Catalog framed thrift transport
 pub const THRIFT_TRANSPORT_FRAMED: &str = "framed";
-/// HMS Catalog framed buffered transport
+/// HMS Catalog buffered thrift transport
 pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
 
 /// HMS Catalog warehouse location
