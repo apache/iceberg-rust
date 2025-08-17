@@ -34,7 +34,7 @@ runs:
         echo "Installing ${RUST_VERSION}"
         rustup toolchain install ${RUST_VERSION}
         rustup override set ${RUST_VERSION}
-        rustup component add rustfmt clippy miri
+        rustup component add rustfmt clippy
 
     - name: Setup Rust toolchain according to rust-toolchain.toml
       shell: bash
