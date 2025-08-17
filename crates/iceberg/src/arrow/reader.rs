@@ -238,14 +238,10 @@ impl ArrowReader {
         // equality delete files OR (there is a scan predicate AND row_selection_enabled),
         // since the only implemented method of applying positional deletes is
         // by using a `RowSelection`.
-        let mut selected_row_group_indices = task
-            .file_range
-            .as_ref()
-            .map(|file_range| {
-                let FileScanGroup::Parquet(parquet_file_scan_range) = file_range;
-                Some(parquet_file_scan_range.row_group_indexes.clone())
-            })
-            .flatten();
+        let mut selected_row_group_indices = task.file_range.as_ref().map(|file_range| {
+            let FileScanGroup::Parquet(parquet_file_scan_range) = file_range;
+            parquet_file_scan_range.row_group_indexes.clone()
+        });
         let mut row_selection = None;
 
         if let Some(predicate) = final_predicate {

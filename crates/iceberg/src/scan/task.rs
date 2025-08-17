@@ -48,11 +48,11 @@ impl ParquetFileScanGroup {
     pub fn merge<'a, I>(ranges: I) -> Option<FileScanGroup>
     where I: IntoIterator<Item = &'a Option<FileScanGroup>> {
         let mut merged_row_groups = Vec::new();
-        
+
         for range_opt in ranges {
             // If any range is None, return None
             let range = range_opt.as_ref()?;
-            
+
             // Extract row group indexes from Parquet ranges
             match range {
                 FileScanGroup::Parquet(parquet_range) => {
@@ -60,11 +60,11 @@ impl ParquetFileScanGroup {
                 }
             }
         }
-        
+
         // Sort and deduplicate the row group indexes
         merged_row_groups.sort_unstable();
         merged_row_groups.dedup();
-        
+
         Some(FileScanGroup::Parquet(ParquetFileScanGroup {
             row_group_indexes: merged_row_groups,
         }))

@@ -69,7 +69,7 @@ impl ParquetGroupPruner {
     ) -> Result<Vec<usize>> {
         if let Some(predicate) = &task.predicate {
             let (_iceberg_field_ids, field_id_map) =
-                Self::build_field_id_set_and_map(parquet_schema, &predicate)?;
+                Self::build_field_id_set_and_map(parquet_schema, predicate)?;
 
             let row_groups_metadata = parquet_metadata.row_groups();
             let mut results = Vec::with_capacity(parquet_metadata.row_groups().len());

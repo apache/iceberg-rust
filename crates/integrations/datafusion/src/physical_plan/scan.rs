@@ -46,12 +46,7 @@ struct PartitionTask {
 impl PartitionTask {
     pub fn to_file_scan_task_stream(&self) -> FileScanTaskStream {
         let file_scan_tasks = self.file_scan_tasks.clone();
-        let file_scan_task_stream = Box::pin(futures::stream::iter(
-            file_scan_tasks
-                .into_iter()
-                .map(|file_scan_task| Ok(file_scan_task)),
-        ));
-        file_scan_task_stream
+        Box::pin(futures::stream::iter(file_scan_tasks.into_iter().map(Ok)))
     }
 }
 
@@ -192,8 +187,7 @@ impl ExecutionPlan for IcebergTableScan {
             .partition_tasks
             .clone()
             .into_iter()
-            .map(|p_tasks| p_tasks.file_scan_tasks)
-            .flatten();
+            .flat_map(|p_tasks| p_tasks.file_scan_tasks);
 
         let merged_tasks = FileScanTask::merge(original_tasks).unwrap();
 
@@ -201,7 +195,7 @@ impl ExecutionPlan for IcebergTableScan {
 
         Ok(Some(Arc::new(IcebergTableScan {
             table: self.table.clone(),
-            snapshot_id: self.snapshot_id.clone(),
+            snapshot_id: self.snapshot_id,
             plan_properties: self.plan_properties.clone(),
             projection: self.projection.clone(),
             predicates: self.predicates.clone(),
