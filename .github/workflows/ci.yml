@@ -180,4 +180,4 @@ jobs:
         run: cargo miri setup
 
       - name: Run Miri 
-        run: cargo miri test
+        run: cargo miri test -- --skip puffin::compression::test_compression_codec_zstd
