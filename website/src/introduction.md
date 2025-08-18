@@ -19,4 +19,4 @@
 
 # Iceberg Rust
 
-Iceberg Rust is a rust implementation for accessing iceberg tables.
+Iceberg Rust is a Rust implementation for accessing Apache Iceberg tables.

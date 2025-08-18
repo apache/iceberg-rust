@@ -38,8 +38,7 @@ There is support for the following catalogs:
 
 ## `RestCatalog` 
 
-Here is an 
-example of how to create a `RestCatalog`:
+Here is an example of how to create a `RestCatalog`:
 
 ```rust,no_run,noplayground
 {{#rustdoc_include ../../crates/examples/src/rest_catalog_namespace.rs:create_catalog}}
