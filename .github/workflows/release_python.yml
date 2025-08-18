@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -128,7 +128,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
