@@ -207,7 +207,7 @@ impl<'a> RemoveSnapshotAction<'a> {
                 }
             }
 
-            let spec_to_remove = self
+            let spec_to_remove: Vec<i32> = self
                 .tx
                 .current_table
                 .metadata()
@@ -222,14 +222,16 @@ impl<'a> RemoveSnapshotAction<'a> {
                 .unique()
                 .collect();
 
-            self.tx.apply(
-                vec![TableUpdate::RemovePartitionSpecs {
-                    spec_ids: spec_to_remove,
-                }],
-                vec![],
-            )?;
+            if !spec_to_remove.is_empty() {
+                self.tx.apply(
+                    vec![TableUpdate::RemovePartitionSpecs {
+                        spec_ids: spec_to_remove,
+                    }],
+                    vec![],
+                )?;
+            }
 
-            let schema_to_remove = self
+            let schema_to_remove: Vec<i32> = self
                 .tx
                 .current_table
                 .metadata()
@@ -244,12 +246,14 @@ impl<'a> RemoveSnapshotAction<'a> {
                 .unique()
                 .collect();
 
-            self.tx.apply(
-                vec![TableUpdate::RemoveSchemas {
-                    schema_ids: schema_to_remove,
-                }],
-                vec![],
-            )?;
+            if !schema_to_remove.is_empty() {
+                self.tx.apply(
+                    vec![TableUpdate::RemoveSchemas {
+                        schema_ids: schema_to_remove,
+                    }],
+                    vec![],
+                )?;
+            }
         }
 
         self.tx.apply(vec![], vec![TableRequirement::UuidMatch {
