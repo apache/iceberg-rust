@@ -289,7 +289,7 @@ impl ArrowSchemaConverter {
             let field_type = &field_results[i];
             let id = get_field_id(field)?;
             let mut doc = get_field_doc(field);
-            
+
             // Store unsigned type info in doc if field is unsigned
             if let Some(type_name) = get_unsigned_type_name(field.data_type()) {
                 let unsigned_doc = format!("{}{}", UNSIGNED_TYPE_PREFIX, type_name);
@@ -298,7 +298,7 @@ impl ArrowSchemaConverter {
                     None => unsigned_doc,
                 });
             }
-            
+
             let nested_field = NestedField {
                 id,
                 doc,
@@ -497,31 +497,44 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             ArrowSchemaOrFieldOrType::Type(ty) => ty,
             _ => unreachable!(),
         };
-        let mut metadata = HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())]);
+        let mut metadata =
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())]);
         let mut clean_doc = field.doc.clone();
-        
+
         // Check for unsigned type info in doc and restore unsigned Arrow type
         if let Some(doc) = &field.doc {
             if doc.contains(UNSIGNED_TYPE_PREFIX) {
-                if let Some(unsigned_part) = doc.split(';').find(|part| part.starts_with(UNSIGNED_TYPE_PREFIX)) {
+                if let Some(unsigned_part) = doc
+                    .split(';')
+                    .find(|part| part.starts_with(UNSIGNED_TYPE_PREFIX))
+                {
                     if let Some(unsigned_type) = unsigned_part.strip_prefix(UNSIGNED_TYPE_PREFIX) {
                         ty = restore_unsigned_type(ty, unsigned_type);
-                        if matches!(ty, DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64) {
-                            metadata.insert(ARROW_FIELD_UNSIGNED_KEY.to_string(), "true".to_string());
+                        if matches!(
+                            ty,
+                            DataType::UInt8
+                                | DataType::UInt16
+                                | DataType::UInt32
+                                | DataType::UInt64
+                        ) {
+                            metadata
+                                .insert(ARROW_FIELD_UNSIGNED_KEY.to_string(), "true".to_string());
                         }
                     }
                 }
                 // Clean the doc by removing unsigned type info
-                clean_doc = Some(doc.split(';')
-                    .filter(|part| !part.starts_with(UNSIGNED_TYPE_PREFIX))
-                    .collect::<Vec<_>>()
-                    .join(";"));
-                if clean_doc.as_ref().map_or(true, |d| d.is_empty()) {
+                clean_doc = Some(
+                    doc.split(';')
+                        .filter(|part| !part.starts_with(UNSIGNED_TYPE_PREFIX))
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                );
+                if clean_doc.as_ref().is_none_or(|d| d.is_empty()) {
                     clean_doc = None;
                 }
             }
         }
-        
+
         if let Some(doc) = clean_doc {
             metadata.insert(ARROW_FIELD_DOC_KEY.to_string(), doc);
         }
@@ -1777,70 +1790,74 @@ mod tests {
     fn test_unsigned_type_conversion() {
         // Test UInt32 conversion
         {
-            let arrow_field = Field::new("test", DataType::UInt32, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )]));
+            let arrow_field = Field::new("test", DataType::UInt32, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
-            
+
             // Convert to Iceberg and back
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
             let restored_arrow_schema = schema_to_arrow_schema(&iceberg_schema).unwrap();
-            
+
             // Check if UInt32 was preserved
-            assert!(matches!(restored_arrow_schema.field(0).data_type(), DataType::UInt32));
+            assert!(matches!(
+                restored_arrow_schema.field(0).data_type(),
+                DataType::UInt32
+            ));
         }
-        
+
         // Test UInt64 conversion
         {
-            let arrow_field = Field::new("test", DataType::UInt64, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )]));
+            let arrow_field = Field::new("test", DataType::UInt64, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
-            
+
             // Convert to Iceberg and back
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
             let restored_arrow_schema = schema_to_arrow_schema(&iceberg_schema).unwrap();
-            
+
             // Check if UInt64 was preserved
-            assert!(matches!(restored_arrow_schema.field(0).data_type(), DataType::UInt64));
+            assert!(matches!(
+                restored_arrow_schema.field(0).data_type(),
+                DataType::UInt64
+            ));
         }
-        
+
         // Test UInt8 conversion
         {
-            let arrow_field = Field::new("test", DataType::UInt8, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )]));
+            let arrow_field = Field::new("test", DataType::UInt8, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
-            
+
             // Convert to Iceberg and back
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
             let restored_arrow_schema = schema_to_arrow_schema(&iceberg_schema).unwrap();
-            
+
             // Check if UInt8 was preserved
-            assert!(matches!(restored_arrow_schema.field(0).data_type(), DataType::UInt8));
+            assert!(matches!(
+                restored_arrow_schema.field(0).data_type(),
+                DataType::UInt8
+            ));
         }
-        
+
         // Test UInt16 conversion
         {
-            let arrow_field = Field::new("test", DataType::UInt16, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )]));
+            let arrow_field = Field::new("test", DataType::UInt16, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
-            
+
             // Convert to Iceberg and back
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
             let restored_arrow_schema = schema_to_arrow_schema(&iceberg_schema).unwrap();
-            
+
             // Check if UInt16 was preserved
-            assert!(matches!(restored_arrow_schema.field(0).data_type(), DataType::UInt16));
+            assert!(matches!(
+                restored_arrow_schema.field(0).data_type(),
+                DataType::UInt16
+            ));
         }
     }
 
