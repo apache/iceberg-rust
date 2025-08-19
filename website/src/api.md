@@ -30,7 +30,7 @@ There is support for the following catalogs:
 |---------|------------|
 | `Rest`   | the Iceberg REST catalog              |
 | `Glue`          | the AWS Glue Data Catalog             |
-| `MemoryCatalog` | a memory-based Catalog                |
+| `Memory` | a memory-based Catalog                |
 | `HMS`           | Apache Iceberg HiveMetaStore catalog  |
 | `S3Tables`      | AWS S3 Tables                         |
 | `SQL`           | SQL-based catalog                     |
