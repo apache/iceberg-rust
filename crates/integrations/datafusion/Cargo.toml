@@ -34,7 +34,9 @@ async-trait = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
+parquet = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }
