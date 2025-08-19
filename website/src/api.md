@@ -28,7 +28,7 @@ There is support for the following catalogs:
 
 | Catalog | Description |
 |---------|------------|
-| `RestCatalog`   | the Iceberg REST catalog              |
+| `Rest`   | the Iceberg REST catalog              |
 | `Glue`          | the AWS Glue Data Catalog             |
 | `MemoryCatalog` | a memory-based Catalog                |
 | `HMS`           | Apache Iceberg HiveMetaStore catalog  |
