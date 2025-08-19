@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
@@ -71,7 +71,7 @@ impl IcebergPartitionSortExec {
     /// Create sort expressions from partition spec
     fn create_sort_expressions(
         partition_spec: &PartitionSpecRef,
-        schema: SchemaRef,
+        schema: ArrowSchemaRef,
     ) -> DFResult<Vec<PhysicalSortExpr>> {
         if partition_spec.is_unpartitioned() {
             return Err(DataFusionError::Execution(
@@ -89,7 +89,7 @@ impl IcebergPartitionSortExec {
                 continue;
             }
 
-            // todo revisit this part, seems wrong
+            // todo revisit this part, the input schema may not have field ids, and using field ids as indices is wrong
             // Find the column in the schema that corresponds to the source_id
             // In a real implementation, we would need to map from Iceberg schema to Arrow schema
             let source_id_usize = field.source_id as usize;
@@ -108,7 +108,7 @@ impl IcebergPartitionSortExec {
                 ))
             })?;
 
-            // todo need to handle partition value transform as well
+            // todo need to handle partition value transform as well (how without field ids??)
             // Create a physical expression based on the transform
             // For now, we'll just use the column directly for all transforms
             let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
@@ -222,3 +222,6 @@ impl DisplayAs for IcebergPartitionSortExec {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {}
