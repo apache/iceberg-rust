@@ -24,9 +24,12 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, TableCreation, TableIdent,
+};
 use iceberg_catalog_glue::{
-    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GlueCatalog, GlueCatalogConfig,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
+    GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalog, GlueCatalogBuilder,
 };
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -112,13 +115,22 @@ async fn get_catalog() -> GlueCatalog {
         retries += 1;
     }
 
-    let config = GlueCatalogConfig::builder()
-        .uri(format!("http://{}", glue_socket_addr))
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(props.clone())
-        .build();
+    let mut glue_props = HashMap::from([
+        (
+            GLUE_CATALOG_PROP_URI.to_string(),
+            format!("http://{}", glue_socket_addr),
+        ),
+        (
+            GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+            "s3a://warehouse/hive".to_string(),
+        ),
+    ]);
+    glue_props.extend(props.clone());
 
-    GlueCatalog::new(config).await.unwrap()
+    GlueCatalogBuilder::default()
+        .load("glue", glue_props)
+        .await
+        .unwrap()
 }
 
 async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {

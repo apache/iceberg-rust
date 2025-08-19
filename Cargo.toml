@@ -77,6 +77,7 @@ hive_metastore = "0.1"
 http = "1.2"
 iceberg = { version = "0.6.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.6.0", path = "./crates/catalog/rest" }
+iceberg-catalog-glue = { version = "0.6.0", path = "./crates/catalog/glue" }
 iceberg-datafusion = { version = "0.6.0", path = "./crates/integrations/datafusion" }
 indicatif = "0.17"
 itertools = "0.13"
