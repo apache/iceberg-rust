@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["AWS_ACCESS_KEY_ID","AWS_PROFILE_NAME","AWS_REGION_NAME","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"],"macro":["with_catalog_id"],"struct":["GlueCatalog","GlueCatalogConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["AWS_ACCESS_KEY_ID","AWS_PROFILE_NAME","AWS_REGION_NAME","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN","GLUE_CATALOG_PROP_CATALOG_ID","GLUE_CATALOG_PROP_URI","GLUE_CATALOG_PROP_WAREHOUSE"],"macro":["with_catalog_id"],"struct":["GlueCatalog","GlueCatalogBuilder"]};
