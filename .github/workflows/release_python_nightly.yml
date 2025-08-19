@@ -43,7 +43,7 @@ jobs:
     if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
         with:
@@ -78,7 +78,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
         with:

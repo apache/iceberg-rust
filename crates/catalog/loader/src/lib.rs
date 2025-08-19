@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
+use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 
 #[async_trait]
@@ -46,6 +47,7 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
 pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
     match r#type {
         "rest" => Ok(Box::new(RestCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
+        "glue" => Ok(Box::new(GlueCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
         _ => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported catalog type: {}", r#type),
@@ -57,12 +59,12 @@ pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
 mod tests {
     use std::collections::HashMap;
 
-    use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
-
     use crate::load;
 
     #[tokio::test]
     async fn test_load_rest_catalog() {
+        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
         let catalog_loader = load("rest").unwrap();
         let catalog = catalog_loader
             .load(
@@ -71,6 +73,27 @@ mod tests {
                     (
                         REST_CATALOG_PROP_URI.to_string(),
                         "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_glue_catalog() {
+        use iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE;
+
+        let catalog_loader = load("glue").unwrap();
+        let catalog = catalog_loader
+            .load(
+                "glue".to_string(),
+                HashMap::from([
+                    (
+                        GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://test".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
