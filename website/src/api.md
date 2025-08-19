@@ -26,13 +26,16 @@
 
 There is support for the following catalogs:
 
-| Catalog | Description | Implementation Status |
-|---------|------------|------------------------|
-| `RestCatalog` | the Iceberg REST catalog              | ✅ |
-| `Glue`        | the AWS Glue Data Catalog             | ✅ |
-| `HMS`         | Apache Iceberg HiveMetaStore catalog  | ✅ |
-| `S3Tables`    | AWS S3 Tables                         | 🚧 |
-| `SQL`         | SQL-based catalog                     | 🚧 |
+| Catalog | Description |
+|---------|------------|
+| `RestCatalog`   | the Iceberg REST catalog              |
+| `Glue`          | the AWS Glue Data Catalog             |
+| `MemoryCatalog` | a memory-based Catalog                |
+| `HMS`           | Apache Iceberg HiveMetaStore catalog  |
+| `S3Tables`      | AWS S3 Tables                         |
+| `SQL`           | SQL-based catalog                     |
+
+Not all catalog implementations are complete.
 
 ## `RestCatalog` 
 
