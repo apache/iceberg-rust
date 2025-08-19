@@ -23,7 +23,7 @@
 
 ## What is Apache Iceberg?
 
-[Apache Iceberg](https://iceberg.apache.org/docs/nightly/) is a modern, high-performance open table format
+[Apache Iceberg](https://iceberg.apache.org) is a modern, high-performance open table format
 for huge analytic datasets that brings SQL-like tables to processing engines including Spark, Trino, PrestoDB, Flink, Hive and Impala. 
 
 Rather than being a new file type, Iceberg provides a metadata layer that sits on top of formats like Parquet 
