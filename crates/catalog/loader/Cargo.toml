@@ -32,5 +32,6 @@ repository = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 iceberg-catalog-glue = { workspace = true }
+iceberg-catalog-s3tables = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }

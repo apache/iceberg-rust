@@ -19,4 +19,14 @@
 
 # Iceberg Rust
 
-Iceberg Rust is a rust implementation for accessing iceberg tables.
+`iceberg-rust` is a Rust implementation for managing Apache Iceberg tables.
+
+## What is Apache Iceberg?
+
+[Apache Iceberg](https://iceberg.apache.org) is a modern, high-performance open table format
+for huge analytic datasets that brings SQL-like tables to processing engines including Spark, Trino, PrestoDB, Flink, Hive and Impala. 
+
+Iceberg provides a metadata layer that sits on top of formats like Parquet 
+and ORC, ensuring data is organized, accessible, and safe to work with at scale. It introduces features long
+expected in databases such as transactional consistency, schema evolution, and time travel into environments 
+where files are stored directly on systems like Amazon S3.

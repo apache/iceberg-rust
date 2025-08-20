@@ -125,7 +125,7 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
 ///
 /// The namespace identifier is a list of strings, where each string is a
-/// component of the namespace. It's catalog implementer's responsibility to
+/// component of the namespace. It's the catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespaceIdent(Vec<String>);
