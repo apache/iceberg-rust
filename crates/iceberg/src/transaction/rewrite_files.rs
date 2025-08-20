@@ -26,7 +26,7 @@ use super::{ActionCommit, TransactionAction};
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{
     DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile,
-    ManifestStatus, Operation, SnapshotRef,
+    ManifestStatus, Operation,
 };
 use crate::table::Table;
 use crate::transaction::validate::SnapshotValidator;
@@ -40,7 +40,7 @@ pub struct RewriteFilesAction {
     added_delete_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
     deleted_delete_files: Vec<DataFile>,
-    starting_sequence_number: Option<i64>,
+    data_sequence_number: Option<i64>,
     starting_snapshot_id: Option<i64>,
 }
 
@@ -50,6 +50,7 @@ pub struct RewriteFilesOperation {
     deleted_data_files: Vec<DataFile>,
     deleted_delete_files: Vec<DataFile>,
     starting_snapshot_id: Option<i64>,
+    data_sequence_number: Option<i64>,
 }
 
 impl RewriteFilesAction {
@@ -62,7 +63,7 @@ impl RewriteFilesAction {
             added_delete_files: vec![],
             deleted_data_files: vec![],
             deleted_delete_files: vec![],
-            starting_sequence_number: None,
+            data_sequence_number: None,
             starting_snapshot_id: None,
         }
     }
@@ -120,8 +121,8 @@ impl RewriteFilesAction {
 
     /// Set the data sequence number for this rewrite operation.
     /// The number will be used for all new data files that are added in this rewrite.
-    pub fn set_starting_sequence_number(mut self, sequence_number: i64) -> Self {
-        self.starting_sequence_number = Some(sequence_number);
+    pub fn set_data_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.data_sequence_number = Some(sequence_number);
         self
     }
 
@@ -150,7 +151,7 @@ impl TransactionAction for RewriteFilesAction {
             self.added_delete_files.clone(),
             self.deleted_data_files.clone(),
             self.deleted_delete_files.clone(),
-            self.starting_sequence_number.clone(),
+            self.data_sequence_number.clone(),
         );
 
         let rewrite_operation = RewriteFilesOperation {
@@ -159,9 +160,10 @@ impl TransactionAction for RewriteFilesAction {
             deleted_data_files: self.deleted_data_files.clone(),
             deleted_delete_files: self.deleted_delete_files.clone(),
             starting_snapshot_id: self.starting_snapshot_id.clone(),
+            data_sequence_number: self.data_sequence_number.clone(),
         };
 
-        // todo should be able to configure merge manifest process
+        // todo should be able to configure to use the merge manifest process
         snapshot_producer
             .commit(rewrite_operation, DefaultManifestProcess)
             .await
@@ -169,7 +171,7 @@ impl TransactionAction for RewriteFilesAction {
 }
 
 fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
-    // todo should we fail on missing properties?
+    // todo should we fail on missing properties or should we ignore them when they don't exist?
     let builder = ManifestEntry::builder()
         .status(ManifestStatus::Deleted)
         .snapshot_id(entry.snapshot_id().ok_or_else(|| {
@@ -197,7 +199,7 @@ fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
 }
 
 impl SnapshotValidator for RewriteFilesOperation {
-    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) -> Result<()> {
+    async fn validate(&self, base: &Table, parent_snapshot_id: Option<i64>) -> Result<()> {
         // Validate replaced and added files
         if self.deleted_data_files.is_empty() && self.deleted_delete_files.is_empty() {
             return Err(Error::new(
@@ -218,9 +220,18 @@ impl SnapshotValidator for RewriteFilesOperation {
             ));
         }
 
-        // todo add use_starting_seq_number to help the validation
-        // todo validate no new deletes since the current base
-        // if there are replaced data files, there cannot be any new row-level deletes for those data files
+        // todo add use_starting_seq_number to determine if we want to use data_sequence_number
+        // If there are replaced data files, there cannot be any new row-level deletes for those data files
+        if !self.deleted_data_files.is_empty() {
+            self.validate_no_new_delete_files_for_data_files(
+                base,
+                self.starting_snapshot_id,
+                parent_snapshot_id,
+                &self.deleted_data_files,
+                self.data_sequence_number.is_some(),
+            )
+            .await?;
+        }
 
         Ok(())
     }

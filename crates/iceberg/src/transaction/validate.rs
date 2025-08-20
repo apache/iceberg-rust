@@ -18,14 +18,17 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use futures::SinkExt;
 use futures::future::try_join_all;
-use futures::{Sink, SinkExt};
 use once_cell::sync::Lazy;
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::error::Result;
 use crate::scan::DeleteFileContext;
-use crate::spec::{DataFile, ManifestContentType, ManifestFile, Operation, SnapshotRef};
+use crate::spec::{
+    DataContentType, DataFile, FormatVersion, INITIAL_SEQUENCE_NUMBER, ManifestContentType,
+    ManifestFile, Operation, SnapshotRef,
+};
 use crate::table::Table;
 use crate::util::snapshot::ancestors_between;
 use crate::{Error, ErrorKind};
@@ -39,7 +42,7 @@ pub(crate) trait SnapshotValidator {
     // snapshot: parent snapshot
     // usually snapshot is the latest snapshot of base table, unless it's non-main branch
     // but we don't support writing to branches as of now
-    fn validate(&self, _table: &Table, _snapshot: Option<&SnapshotRef>) -> Result<()> {
+    async fn validate(&self, _base: &Table, _parent_snapshot_id: Option<i64>) -> Result<()> {
         // todo: add default implementation
         Ok(())
     }
@@ -48,8 +51,8 @@ pub(crate) trait SnapshotValidator {
     async fn validation_history(
         &self,
         base: &Table,
-        to_snapshot: SnapshotRef, // todo maybe the naming/variable order can be better, or just snapshot id is better? this is parent
         from_snapshot_id: Option<i64>,
+        to_snapshot_id: i64,
         matching_operations: &HashSet<Operation>,
         manifest_content_type: ManifestContentType,
     ) -> Result<(Vec<ManifestFile>, HashSet<i64>)> {
@@ -59,7 +62,7 @@ pub(crate) trait SnapshotValidator {
 
         let snapshots = ancestors_between(
             &Arc::new(base.metadata().clone()),
-            to_snapshot.snapshot_id(),
+            to_snapshot_id,
             from_snapshot_id.clone(),
         );
 
@@ -101,27 +104,33 @@ pub(crate) trait SnapshotValidator {
         Ok((manifests, new_snapshots))
     }
 
-    #[allow(dead_code)]
     async fn validate_no_new_delete_files_for_data_files(
         &self,
         base: &Table,
         from_snapshot_id: Option<i64>,
-        _data_files: &[DataFile],
-        to_snapshot: SnapshotRef,
+        to_snapshot_id: Option<i64>,
+        data_files: &[DataFile],
+        ignore_equality_deletes: bool,
     ) -> Result<()> {
+        // If there is no current table state, no files have been added
+        if to_snapshot_id.is_none() || base.metadata().format_version() != FormatVersion::V1 {
+            return Ok(());
+        }
+        let to_snapshot_id = to_snapshot_id.unwrap();
+
         // Get matching delete files have been added since the from_snapshot_id
-        let (delete_manifests, snapshot_ids) = self
+        let (delete_manifests, _) = self
             .validation_history(
                 base,
-                to_snapshot,
                 from_snapshot_id,
+                to_snapshot_id,
                 &VALIDATE_ADDED_DELETE_FILES_OPERATIONS,
                 ManifestContentType::Deletes,
             )
             .await?;
 
-        // Building delete file index
-        let (_delete_file_index, mut delete_file_tx) = DeleteFileIndex::new();
+        // Build delete file index
+        let (delete_file_index, mut delete_file_tx) = DeleteFileIndex::new();
         let manifests = try_join_all(
             delete_manifests
                 .iter()
@@ -129,21 +138,61 @@ pub(crate) trait SnapshotValidator {
                 .collect::<Vec<_>>(),
         )
         .await?;
-
-        let delete_files_ctx = manifests
-            .iter()
-            .flat_map(|manifest| manifest.entries())
-            .map(|entry| DeleteFileContext {
+        let manifest_entries = manifests.iter().flat_map(|manifest| manifest.entries());
+        for entry in manifest_entries {
+            let delete_file_ctx = DeleteFileContext {
                 manifest_entry: entry.clone(),
                 partition_spec_id: entry.data_file().partition_spec_id,
-            })
-            .collect::<Vec<_>>();
-
-        for ctx in delete_files_ctx {
-            delete_file_tx.send(ctx).await?
+            };
+            delete_file_tx.send(delete_file_ctx).await?;
         }
 
-        // todo validate if there are deletes
+        // Get starting seq num from starting snapshot if available
+        let starting_sequence_number = if from_snapshot_id.is_some()
+            && base
+                .metadata()
+                .snapshots
+                .get(&from_snapshot_id.unwrap())
+                .is_some()
+        {
+            base.metadata()
+                .snapshots
+                .get(&from_snapshot_id.unwrap())
+                .unwrap()
+                .sequence_number()
+        } else {
+            INITIAL_SEQUENCE_NUMBER
+        };
+
+        // Validate if there are deletes using delete file index
+        for data_file in data_files {
+            let delete_files = delete_file_index
+                .get_deletes_for_data_file(data_file, Some(starting_sequence_number))
+                .await;
+
+            if ignore_equality_deletes {
+                if delete_files
+                    .iter()
+                    .any(|delete_file| delete_file.file_type == DataContentType::PositionDeletes)
+                {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot commit, found new positional delete for added data file: {}",
+                            data_file.file_path
+                        ),
+                    ));
+                }
+            } else if !delete_files.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot commit, found new delete for added data file: {}",
+                        data_file.file_path
+                    ),
+                ));
+            }
+        }
 
         Ok(())
     }

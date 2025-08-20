@@ -479,7 +479,8 @@ impl<'a> SnapshotProducer<'a> {
     ) -> Result<ActionCommit> {
         // Validate to avoid conflicts
         snapshot_produce_operation
-            .validate(self.table, self.table.metadata().current_snapshot())?;
+            .validate(self.table, self.table.metadata().current_snapshot_id)
+            .await?;
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
