@@ -111,7 +111,33 @@ mod tests {
     use crate::{CatalogLoader, load};
 
     #[tokio::test]
-    async fn test_load_glue_catalog() {
+    async fn test_load_unsupported_catalog() {
+        let result = load("unsupported");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern() {
+        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
+        let catalog = CatalogLoader::from("rest")
+            .load(
+                "rest".to_string(),
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern_glue_catalog() {
         use iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE;
 
         let catalog_loader = load("glue").unwrap();
@@ -132,7 +158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_rest_catalog() {
+    async fn test_catalog_loader_pattern_rest_catalog() {
         use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 
         let catalog_loader = load("rest").unwrap();
@@ -153,7 +179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_hms_catalog() {
+    async fn test_catalog_loader_pattern_hms_catalog() {
         use iceberg_catalog_hms::{HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE};
 
         let catalog_loader = load("hms").unwrap();
@@ -165,32 +191,6 @@ mod tests {
                     (
                         HMS_CATALOG_PROP_WAREHOUSE.to_string(),
                         "s3://warehouse".to_string(),
-                    ),
-                    ("key".to_string(), "value".to_string()),
-                ]),
-            )
-            .await;
-
-        assert!(catalog.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_load_unsupported_catalog() {
-        let result = load("unsupported");
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_catalog_loader_pattern() {
-        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
-
-        let catalog = CatalogLoader::from("rest")
-            .load(
-                "rest".to_string(),
-                HashMap::from([
-                    (
-                        REST_CATALOG_PROP_URI.to_string(),
-                        "http://localhost:8080".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
