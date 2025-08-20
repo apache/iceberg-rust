@@ -3583,7 +3583,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "typed-builder 0.20.1",
  "volo",
  "volo-thrift",
 ]

@@ -161,10 +161,7 @@ mod tests {
             .load(
                 "hms".to_string(),
                 HashMap::from([
-                    (
-                        HMS_CATALOG_PROP_URI.to_string(),
-                        "127.0.0.1:1".to_string(),
-                    ),
+                    (HMS_CATALOG_PROP_URI.to_string(), "127.0.0.1:1".to_string()),
                     (
                         HMS_CATALOG_PROP_WAREHOUSE.to_string(),
                         "s3://warehouse".to_string(),

@@ -32,7 +32,6 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
-use typed_builder::TypedBuilder;
 use volo_thrift::MaybeException;
 
 use super::utils::*;
@@ -78,10 +77,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
         self.0.name = Some(name.into());
 
         if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.0.address = props
-                .get(HMS_CATALOG_PROP_URI)
-                .cloned()
-                .unwrap_or_default();
+            self.0.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
         }
 
         if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
@@ -145,13 +141,12 @@ pub enum HmsThriftTransport {
 }
 
 /// Hive metastore Catalog configuration.
-#[derive(Debug, TypedBuilder)]
+#[derive(Debug)]
 pub(crate) struct HmsCatalogConfig {
     name: Option<String>,
     address: String,
     thrift_transport: HmsThriftTransport,
     warehouse: String,
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
