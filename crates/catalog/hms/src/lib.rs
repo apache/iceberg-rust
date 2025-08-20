@@ -25,7 +25,7 @@
 //!
 //! use iceberg::CatalogBuilder;
 //! use iceberg_catalog_hms::{
-//!     HMS_CATALOG_PROP_ADDRESS, HMS_CATALOG_PROP_WAREHOUSE, HmsCatalogBuilder,
+//!     HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE, HmsCatalogBuilder,
 //! };
 //!
 //! #[tokio::main]
@@ -35,7 +35,7 @@
 //!             "hms",
 //!             HashMap::from([
 //!                 (
-//!                     HMS_CATALOG_PROP_ADDRESS.to_string(),
+//!                     HMS_CATALOG_PROP_URI.to_string(),
 //!                     "127.0.0.1:1".to_string(),
 //!                 ),
 //!                 (
