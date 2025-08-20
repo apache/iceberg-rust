@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["S3TablesCatalog","S3TablesCatalogConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["S3TABLES_CATALOG_PROP_ENDPOINT_URL","S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN"],"struct":["S3TablesCatalog","S3TablesCatalogBuilder"]};

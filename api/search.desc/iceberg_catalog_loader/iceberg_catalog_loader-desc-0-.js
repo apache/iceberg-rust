@@ -1,1 +1,1 @@
-searchState.loadedDescShard("iceberg_catalog_loader", 0, "")
+searchState.loadedDescShard("iceberg_catalog_loader", 0, "Ergonomic catalog loader builder pattern.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nLoad a catalog from a string.\nReturn the list of supported catalog types.")

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["load"],"trait":["BoxedCatalogBuilder"]};
+window.SIDEBAR_ITEMS = {"fn":["load","supported_types"],"struct":["CatalogLoader"],"trait":["BoxedCatalogBuilder"]};
