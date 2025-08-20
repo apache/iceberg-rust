@@ -40,6 +40,8 @@ pub struct RewriteFilesAction {
     added_delete_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
     deleted_delete_files: Vec<DataFile>,
+    starting_sequence_number: Option<i64>,
+    starting_snapshot_id: Option<i64>,
 }
 
 pub struct RewriteFilesOperation {
@@ -47,6 +49,7 @@ pub struct RewriteFilesOperation {
     added_delete_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
     deleted_delete_files: Vec<DataFile>,
+    starting_snapshot_id: Option<i64>,
 }
 
 impl RewriteFilesAction {
@@ -59,6 +62,8 @@ impl RewriteFilesAction {
             added_delete_files: vec![],
             deleted_data_files: vec![],
             deleted_delete_files: vec![],
+            starting_sequence_number: None,
+            starting_snapshot_id: None,
         }
     }
 
@@ -112,6 +117,19 @@ impl RewriteFilesAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    /// Set the data sequence number for this rewrite operation.
+    /// The number will be used for all new data files that are added in this rewrite.
+    pub fn set_starting_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.starting_sequence_number = Some(sequence_number);
+        self
+    }
+
+    /// Set the snapshot ID used in any reads for this operation.
+    pub fn set_starting_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.starting_snapshot_id = Some(snapshot_id);
+        self
+    }
 }
 
 impl Default for RewriteFilesAction {
@@ -132,6 +150,7 @@ impl TransactionAction for RewriteFilesAction {
             self.added_delete_files.clone(),
             self.deleted_data_files.clone(),
             self.deleted_delete_files.clone(),
+            self.starting_sequence_number.clone(),
         );
 
         let rewrite_operation = RewriteFilesOperation {
@@ -139,6 +158,7 @@ impl TransactionAction for RewriteFilesAction {
             added_delete_files: self.added_delete_files.clone(),
             deleted_data_files: self.deleted_data_files.clone(),
             deleted_delete_files: self.deleted_delete_files.clone(),
+            starting_snapshot_id: self.starting_snapshot_id.clone(),
         };
 
         // todo should be able to configure merge manifest process

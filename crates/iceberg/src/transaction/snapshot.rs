@@ -82,9 +82,11 @@ pub(crate) struct SnapshotProducer<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
+    starting_sequence_number: Option<i64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
+    // todo add a builder for this to fix the clippy
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         table: &'a Table,
@@ -95,6 +97,7 @@ impl<'a> SnapshotProducer<'a> {
         added_delete_files: Vec<DataFile>,
         deleted_data_files: Vec<DataFile>,
         deleted_delete_files: Vec<DataFile>,
+        starting_sequence_number: Option<i64>,
     ) -> Self {
         Self {
             table,
@@ -107,6 +110,7 @@ impl<'a> SnapshotProducer<'a> {
             deleted_data_files,
             deleted_delete_files,
             manifest_counter: (0..),
+            starting_sequence_number,
         }
     }
 
