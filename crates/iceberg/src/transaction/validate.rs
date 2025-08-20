@@ -18,16 +18,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use futures::{Sink, SinkExt};
 use futures::future::try_join_all;
+use futures::{Sink, SinkExt};
 use once_cell::sync::Lazy;
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::error::Result;
 use crate::scan::DeleteFileContext;
-use crate::spec::{
-    DataFile, ManifestContentType, ManifestFile, Operation, SnapshotRef,
-};
+use crate::spec::{DataFile, ManifestContentType, ManifestFile, Operation, SnapshotRef};
 use crate::table::Table;
 use crate::util::snapshot::ancestors_between;
 use crate::{Error, ErrorKind};
@@ -131,19 +129,20 @@ pub(crate) trait SnapshotValidator {
                 .collect::<Vec<_>>(),
         )
         .await?;
-        
+
         let delete_files_ctx = manifests
-        .iter()
-        .flat_map(|manifest| manifest.entries())
-        .map(|entry| DeleteFileContext {
-            manifest_entry: entry.clone(),
-            partition_spec_id: entry.data_file().partition_spec_id
-        }).collect::<Vec<_>>();
-        
+            .iter()
+            .flat_map(|manifest| manifest.entries())
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.clone(),
+                partition_spec_id: entry.data_file().partition_spec_id,
+            })
+            .collect::<Vec<_>>();
+
         for ctx in delete_files_ctx {
             delete_file_tx.send(ctx).await?
         }
-        
+
         // todo validate if there are deletes
 
         Ok(())
