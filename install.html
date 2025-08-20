@@ -202,8 +202,11 @@
 Cargo 1.75.0 or later is required to build.
 </div>
 <p>Add <code>iceberg</code> and <code>iceberg-catalog-rest</code> into <code>Cargo.toml</code> dependencies:</p>
-<pre><code class="language-toml">iceberg = &quot;0.2.0&quot;
-iceberg-catalog-rest = &quot;0.2.0&quot;
+<pre><code class="language-toml">iceberg = &quot;0.6.0&quot;
+iceberg-catalog-rest = &quot;0.6.0&quot;
+</code></pre>
+<p>using <code>cargo add</code>:</p>
+<pre><code class="language-bash">$ cargo add iceberg iceberg-catalog-rest
 </code></pre>
 <p>iceberg is under active development, you may want to use the git version instead:</p>
 <pre><code class="language-toml">iceberg = { git = &quot;https://github.com/apache/iceberg-rust&quot;, rev = &quot;commit-hash&quot; }

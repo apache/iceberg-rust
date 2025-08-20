@@ -203,8 +203,19 @@
 <li>Create and list namespaces.</li>
 <li>Create, load, and drop tables</li>
 </ul>
-<p>Currently only rest catalog has been implemented, and other catalogs are under active development. Here is an 
-example of how to create a <code>RestCatalog</code>:</p>
+<p>There is support for the following catalogs:</p>
+<div class="table-wrapper"><table><thead><tr><th>Catalog</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>Rest</code></td><td>the Iceberg REST catalog</td></tr>
+<tr><td><code>Glue</code></td><td>the AWS Glue Data Catalog</td></tr>
+<tr><td><code>Memory</code></td><td>a memory-based Catalog</td></tr>
+<tr><td><code>HMS</code></td><td>Apache Iceberg HiveMetaStore catalog</td></tr>
+<tr><td><code>S3Tables</code></td><td>AWS S3 Tables</td></tr>
+<tr><td><code>SQL</code></td><td>SQL-based catalog</td></tr>
+</tbody></table>
+</div>
+<p>Not all catalog implementations are complete.</p>
+<h2 id="restcatalog"><a class="header" href="#restcatalog"><code>RestCatalog</code></a></h2>
+<p>Here is an example of how to create a <code>RestCatalog</code>:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
 </span><span class="boring">// or more contributor license agreements.  See the NOTICE file
 </span><span class="boring">// distributed with this work for additional information
