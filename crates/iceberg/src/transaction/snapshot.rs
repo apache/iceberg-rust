@@ -476,7 +476,8 @@ impl<'a> SnapshotProducer<'a> {
     ) -> Result<ActionCommit> {
         // Validate to avoid conflicts
         snapshot_produce_operation
-            .validate(self.table, self.table.metadata().current_snapshot())?;
+            .validate(self.table, self.table.metadata().current_snapshot_id)
+            .await?;
 
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
