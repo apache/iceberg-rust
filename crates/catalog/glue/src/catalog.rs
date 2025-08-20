@@ -755,7 +755,7 @@ impl Catalog for GlueCatalog {
                 .with_retryable(true),
                 _ => Error::new(
                     ErrorKind::Unexpected,
-                    "Operation failed for hitting aws sdk error",
+                    format!("Operation failed for table: {table_ident} for hitting aws sdk error"),
                 ),
             }
             .with_source(anyhow!("aws sdk error: {:?}", error))
