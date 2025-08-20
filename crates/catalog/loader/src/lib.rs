@@ -33,6 +33,7 @@ static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
     ("rest", || Box::new(RestCatalogBuilder::default())),
     ("glue", || Box::new(GlueCatalogBuilder::default())),
     ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
+    ("hms", || Box::new(HmsCatalogBuilder::default())),
 ];
 
 /// Return the list of supported catalog types.

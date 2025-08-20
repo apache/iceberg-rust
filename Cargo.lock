@@ -3595,6 +3595,7 @@ dependencies = [
  "async-trait",
  "iceberg",
  "iceberg-catalog-glue",
+ "iceberg-catalog-hms",
  "iceberg-catalog-rest",
  "iceberg-catalog-s3tables",
  "tokio",
