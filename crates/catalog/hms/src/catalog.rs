@@ -39,7 +39,7 @@ use super::utils::*;
 use crate::error::{from_io_error, from_thrift_error, from_thrift_exception};
 
 /// HMS catalog address
-pub const HMS_CATALOG_PROP_ADDRESS: &str = "address";
+pub const HMS_CATALOG_PROP_URI: &str = "uri";
 
 /// HMS Catalog thrift transport
 pub const HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str = "thrift_transport";
