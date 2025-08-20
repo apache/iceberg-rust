@@ -699,7 +699,7 @@ impl Catalog for RestCatalog {
             .config
             .unwrap_or_default()
             .into_iter()
-            .chain(self.user_config.props.clone().into_iter())
+            .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self
@@ -750,7 +750,7 @@ impl Catalog for RestCatalog {
             .config
             .unwrap_or_default()
             .into_iter()
-            .chain(self.user_config.props.clone().into_iter())
+            .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self

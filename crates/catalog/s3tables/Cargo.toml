@@ -29,12 +29,11 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-s3tables = "1.10.0"
+aws-sdk-s3tables = { workspace = true }
 iceberg = { workspace = true }
-typed-builder = { workspace = true }
+
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
