@@ -26,7 +26,7 @@ use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{
-    HMS_CATALOG_PROP_ADDRESS, HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_WAREHOUSE,
+    HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_WAREHOUSE,
     HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
 };
 use iceberg_test_utils::docker::DockerCompose;
@@ -83,7 +83,7 @@ async fn get_catalog() -> HmsCatalog {
 
     let props = HashMap::from([
         (
-            HMS_CATALOG_PROP_ADDRESS.to_string(),
+            HMS_CATALOG_PROP_URI.to_string(),
             hms_socket_addr.to_string(),
         ),
         (

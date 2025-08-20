@@ -84,7 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_hms_catalog() {
-        use iceberg_catalog_hms::{HMS_CATALOG_PROP_ADDRESS, HMS_CATALOG_PROP_WAREHOUSE};
+        use iceberg_catalog_hms::{HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE};
 
         let catalog_loader = load("hms").unwrap();
         let catalog = catalog_loader
@@ -92,7 +92,7 @@ mod tests {
                 "hms".to_string(),
                 HashMap::from([
                     (
-                        HMS_CATALOG_PROP_ADDRESS.to_string(),
+                        HMS_CATALOG_PROP_URI.to_string(),
                         "127.0.0.1:1".to_string(),
                     ),
                     (

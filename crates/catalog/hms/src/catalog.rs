@@ -77,9 +77,9 @@ impl CatalogBuilder for HmsCatalogBuilder {
     ) -> impl Future<Output = Result<Self::C>> + Send {
         self.0.name = Some(name.into());
 
-        if props.contains_key(HMS_CATALOG_PROP_ADDRESS) {
+        if props.contains_key(HMS_CATALOG_PROP_URI) {
             self.0.address = props
-                .get(HMS_CATALOG_PROP_ADDRESS)
+                .get(HMS_CATALOG_PROP_URI)
                 .cloned()
                 .unwrap_or_default();
         }
@@ -102,7 +102,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
         self.0.props = props
             .into_iter()
             .filter(|(k, _)| {
-                k != HMS_CATALOG_PROP_ADDRESS
+                k != HMS_CATALOG_PROP_URI
                     && k != HMS_CATALOG_PROP_THRIFT_TRANSPORT
                     && k != HMS_CATALOG_PROP_WAREHOUSE
             })
