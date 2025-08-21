@@ -19,7 +19,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use iceberg_sqllogictest::schedule;
 use iceberg_sqllogictest::schedule::Schedule;
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::normalize_test_name;
@@ -104,7 +103,6 @@ pub(crate) fn collect_schedule_files() -> anyhow::Result<Vec<PathBuf>> {
 }
 
 pub(crate) async fn run_schedule(schedule_file: PathBuf) -> anyhow::Result<()> {
-    let schedule_file_name = schedule_file.file_name().unwrap().to_string_lossy();
     let schedules = Schedule::parse(schedule_file).await?;
     schedules.run().await?;
 

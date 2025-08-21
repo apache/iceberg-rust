@@ -21,9 +21,11 @@ on:
   push:
     branches:
       - main
+      - 'sqllogic-test'
   pull_request:
     branches:
       - main
+      - 'sqllogic-test'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -55,7 +57,15 @@ jobs:
           tool: taplo-cli@0.9.3
 
       - name: Install protobuf
-        run: brew install protobuf
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install protobuf
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            choco install protoc
+          fi
+        shell: bash
 
       - name: Check toml format
         run: make check-toml
@@ -94,7 +104,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install protobuf
-        run: brew install protobuf
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install protobuf
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            choco install protoc
+          fi
+        shell: bash
 
       - name: Build
         run: make build
@@ -117,7 +135,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install protobuf
-        run: brew install protobuf
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install protobuf
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            choco install protoc
+          fi
+        shell: bash
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -144,6 +170,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protobuf
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
 
@@ -160,6 +189,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
+
+      - name: Install protobuf
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
       - name: Generate minimal versions lockfile
         run: |
           cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions

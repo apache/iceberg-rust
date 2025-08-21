@@ -1,5 +1,5 @@
 query I
-SELECT * FROM demo.s1.t1 ORDER BY id;
+SELECT * FROM default.s1.t1 ORDER BY id;
 ----
 1
 2

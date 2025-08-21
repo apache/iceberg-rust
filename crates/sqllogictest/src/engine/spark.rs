@@ -27,8 +27,6 @@ use toml::Table as TomlTable;
 use crate::engine::EngineRunner;
 use crate::error::{Error, Result};
 
-pub type SparkOutput = DBOutput<DFColumnType>;
-
 pub struct SparkEngine {
     session: SparkSession,
 }
@@ -109,7 +107,7 @@ impl SparkEngine {
     {
         println!("run file in runner");
 
-        let records = parse_file(&path).context("Failed to parse slt file")?;
+        let records = parse_file(path).context("Failed to parse slt file")?;
 
         let mut errs = vec![];
         for record in records.into_iter() {

@@ -31,10 +31,10 @@ pub trait EngineRunner {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
-pub async fn load_engine(typ: &str, cfg: TomlTable) -> Result<Box<dyn EngineRunner>> {
-    match typ {
+pub async fn load_engine(engine_type: &str, cfg: TomlTable) -> Result<Box<dyn EngineRunner>> {
+    match engine_type {
         "datafusion" => Ok(Box::new(DataFusionEngine::new(cfg).await?)),
         "spark-connect" => Ok(Box::new(SparkEngine::new(cfg).await?)),
-        _ => Err(anyhow::anyhow!("Unsupported engine type: {}", typ).into()),
+        _ => Err(anyhow::anyhow!("Unsupported engine type: {}", engine_type).into()),
     }
 }

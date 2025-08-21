@@ -35,7 +35,6 @@ use crate::engine::EngineRunner;
 use crate::error::{Error, Result};
 
 pub struct DataFusionEngine {
-    ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
     config: TomlTable,
@@ -44,12 +43,9 @@ pub struct DataFusionEngine {
 #[async_trait::async_trait]
 impl EngineRunner for DataFusionEngine {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()> {
-        let path_dir = path.to_str().unwrap();
-        println!("engine running slt file on path: {path_dir}");
-
         let session_config = SessionConfig::new().with_target_partitions(4);
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("demo", Self::create_catalog(&self.config).await?);
+        ctx.register_catalog("default", Self::create_catalog(&self.config).await?);
 
         let runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusion::new(
@@ -68,11 +64,7 @@ impl EngineRunner for DataFusionEngine {
 
 impl DataFusionEngine {
     pub async fn new(config: TomlTable) -> Result<Self> {
-        let session_config = SessionConfig::new().with_target_partitions(4);
-        let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("demo", Self::create_catalog(&config).await?);
         Ok(Self {
-            ctx,
             relative_path: PathBuf::from("testdata"),
             pb: ProgressBar::new(100),
             config,
@@ -111,7 +103,7 @@ impl DataFusionEngine {
     ) -> Result<()> {
         println!("run file in runner");
 
-        let records = parse_file(&path).context("Failed to parse slt file")?;
+        let records = parse_file(path).context("Failed to parse slt file")?;
 
         let mut errs = vec![];
         for record in records.into_iter() {

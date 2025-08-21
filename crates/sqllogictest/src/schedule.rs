@@ -20,8 +20,6 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use iceberg::{Catalog, CatalogBuilder};
-use iceberg_catalog_rest::RestCatalogBuilder;
 use itertools::Itertools;
 use toml::{Table, Value};
 
@@ -77,26 +75,18 @@ impl Schedule {
 
             println!("name {name}, engine config {engine_configs}");
 
-            let typ = engine_configs
+            let engine_type = engine_configs
                 .get("type")
                 .ok_or_else(|| anyhow::anyhow!("Engine {name} doesn't have a 'type' field"))?
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Engine {name} type must be a string"))?;
 
-            let engine = load_engine(typ, engine_configs.clone()).await?;
+            let engine = load_engine(engine_type, engine_configs.clone()).await?;
 
             result.insert(name.clone(), engine);
         }
 
         Ok(result)
-    }
-
-    async fn parse_catalog() -> anyhow::Result<Box<dyn Catalog>> {
-        let catalog = RestCatalogBuilder::default()
-            .load("rest", HashMap::from([]))
-            .await?;
-
-        Ok(Box::new(catalog))
     }
 
     async fn parse_steps(table: &Table) -> anyhow::Result<Vec<Step>> {

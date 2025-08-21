@@ -172,7 +172,7 @@ mod tests {
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
         let metadata_file_path = format!(
-            "{}/tests/testdata/{}",
+            "{}/tests/test_data/{}",
             env!("CARGO_MANIFEST_DIR"),
             metadata_file_name
         );

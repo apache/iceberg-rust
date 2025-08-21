@@ -25,11 +25,9 @@ rust-version = { workspace = true }
 version = { workspace = true }
 
 [dependencies]
-arrow = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
 datafusion-sqllogictest = { workspace = true }
 enum-ordinalize = { workspace = true }
 indicatif = { workspace = true }
@@ -43,14 +41,12 @@ tokio = { workspace = true }
 env_logger = "0.11.8"
 log = "0.4.25"
 itertools = "0.13.0"
-tempfile = { workspace = true }
 spark-connect-rs = { git = "https://github.com/apache/spark-connect-rust.git", rev = "061cb3ecb187b039141f20c722c7984e915f3b9d" }
-half = "2.6.0"
-bigdecimal = "0.4.1"
-rust_decimal = { version = "1.27.0" }
+#spark-connect-rs = "0.0.2"
 
 [dev-dependencies]
 libtest-mimic = "0.7.3"
+async-stream = ">=0.3.5, <0.4"
 
 [[test]]
 harness = false
