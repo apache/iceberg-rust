@@ -149,7 +149,7 @@ pub(crate) trait SnapshotValidator {
     /// # Errors
     ///
     /// Returns an error if new delete files are found for any of the data files
-    async fn validate_no_new_delete_files_for_data_files(
+    async fn validate_no_new_deletes_for_data_files(
         &self,
         base: &Table,
         from_snapshot_id: Option<i64>,
