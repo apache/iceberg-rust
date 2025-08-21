@@ -26,8 +26,14 @@ Cargo 1.75.0 or later is required to build.
 Add `iceberg` and `iceberg-catalog-rest` into `Cargo.toml` dependencies:
 
 ```toml
-iceberg = "0.2.0"
-iceberg-catalog-rest = "0.2.0"
+iceberg = "0.6.0"
+iceberg-catalog-rest = "0.6.0"
+```
+
+using `cargo add`:
+
+```bash
+$ cargo add iceberg iceberg-catalog-rest
 ```
 
 iceberg is under active development, you may want to use the git version instead:
