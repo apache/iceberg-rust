@@ -383,9 +383,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                 // Cast to next larger signed type to prevent overflow
                 let bit_width = p.primitive_width().unwrap_or(0) * 8; // Convert bytes to bits
                 match bit_width {
-                    8 | 16 => Ok(Type::Primitive(PrimitiveType::Int)),   // uint8/16 → int32
-                    32 => Ok(Type::Primitive(PrimitiveType::Long)),      // uint32 → int64
-                    _ => Ok(Type::Primitive(PrimitiveType::Int)), // fallback
+                    8 | 16 => Ok(Type::Primitive(PrimitiveType::Int)), // uint8/16 → int32
+                    32 => Ok(Type::Primitive(PrimitiveType::Long)),    // uint32 → int64
+                    _ => Ok(Type::Primitive(PrimitiveType::Int)),      // fallback
                 }
             }
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
@@ -1744,7 +1744,7 @@ mod tests {
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
 
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-            
+
             // Verify UInt32 was cast to Long (int64)
             let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
             assert!(matches!(
@@ -1761,7 +1761,7 @@ mod tests {
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
 
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-            
+
             // Verify UInt8 was cast to Int (int32)
             let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
             assert!(matches!(
@@ -1779,7 +1779,12 @@ mod tests {
 
             let result = arrow_schema_to_schema(&arrow_schema);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("UInt64 is not supported"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("UInt64 is not supported")
+            );
         }
     }
 
