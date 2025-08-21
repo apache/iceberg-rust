@@ -222,7 +222,7 @@ impl SnapshotValidator for RewriteFilesOperation {
         // todo add use_starting_seq_number to determine if we want to use data_sequence_number
         // If there are replaced data files, there cannot be any new row-level deletes for those data files
         if !self.deleted_data_files.is_empty() {
-            self.validate_no_new_delete_files_for_data_files(
+            self.validate_no_new_deletes_for_data_files(
                 base,
                 self.starting_snapshot_id,
                 parent_snapshot_id,
