@@ -53,6 +53,10 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: taplo-cli@0.9.3
+
+      - name: Install protobuf
+        run: brew install protobuf
+
       - name: Check toml format
         run: make check-toml
 
