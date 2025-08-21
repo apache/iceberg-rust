@@ -16,6 +16,35 @@
 // under the License.
 
 //! Iceberg s3tables catalog implementation.
+//!
+//! To build an s3tables catalog with configurations
+//!
+//! # Example
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::CatalogBuilder;
+//! use iceberg_catalog_s3tables::{
+//!     S3TABLES_CATALOG_PROP_ENDPOINT_URL, S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN,
+//!     S3TablesCatalogBuilder,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let catalog = S3TablesCatalogBuilder::default()
+//!         .with_endpoint_url("http://localhost:4566")
+//!         .load(
+//!             "s3tables",
+//!             HashMap::from([(
+//!                 S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+//!                 "arn:aws:s3tables:us-east-1:123456789012:bucket/my-bucket".to_string(),
+//!             )]),
+//!         )
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
 
 #![deny(missing_docs)]
 

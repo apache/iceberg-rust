@@ -24,9 +24,12 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, TableCreation, TableIdent,
+};
 use iceberg_catalog_glue::{
-    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GlueCatalog, GlueCatalogConfig,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
+    GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalog, GlueCatalogBuilder,
 };
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -73,6 +76,11 @@ async fn get_catalog() -> GlueCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
+    while !scan_port_addr(minio_socket_addr) {
+        info!("Waiting for 1s minio to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
+    }
+
     let props = HashMap::from([
         (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
         (
@@ -89,13 +97,40 @@ async fn get_catalog() -> GlueCatalog {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let config = GlueCatalogConfig::builder()
-        .uri(format!("http://{}", glue_socket_addr))
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(props.clone())
-        .build();
+    // Wait for bucket to actually exist
+    let file_io = iceberg::io::FileIO::from_path("s3a://")
+        .unwrap()
+        .with_props(props.clone())
+        .build()
+        .unwrap();
 
-    GlueCatalog::new(config).await.unwrap()
+    let mut retries = 0;
+    while retries < 30 {
+        if file_io.exists("s3a://warehouse/").await.unwrap_or(false) {
+            info!("S3 bucket 'warehouse' is ready");
+            break;
+        }
+        info!("Waiting for bucket creation... (attempt {})", retries + 1);
+        sleep(std::time::Duration::from_millis(1000)).await;
+        retries += 1;
+    }
+
+    let mut glue_props = HashMap::from([
+        (
+            GLUE_CATALOG_PROP_URI.to_string(),
+            format!("http://{}", glue_socket_addr),
+        ),
+        (
+            GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+            "s3a://warehouse/hive".to_string(),
+        ),
+    ]);
+    glue_props.extend(props.clone());
+
+    GlueCatalogBuilder::default()
+        .load("glue", glue_props)
+        .await
+        .unwrap()
 }
 
 async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {

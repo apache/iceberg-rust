@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     execute_input_stream,
 };
 use futures::StreamExt;
-use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
 use iceberg::spec::{
     DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
     PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
@@ -232,9 +232,10 @@ impl ExecutionPlan for IcebergWriteExec {
         }
 
         // Create data file writer builder
-        let parquet_file_writer_builder = ParquetWriterBuilder::new(
+        let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
+            FieldMatchMode::Name,
             self.table.file_io().clone(),
             DefaultLocationGenerator::new(self.table.metadata().clone())
                 .map_err(to_datafusion_error)?,

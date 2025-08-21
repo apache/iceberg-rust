@@ -37,8 +37,8 @@ use thrift::protocol::TOutputProtocol;
 use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
-    ArrowFileReader, DEFAULT_MAP_FIELD_NAME, NanValueCountVisitor, get_parquet_stat_max_as_datum,
-    get_parquet_stat_min_as_datum,
+    ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
@@ -55,6 +55,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
     props: WriterProperties,
     schema: SchemaRef,
+    match_mode: FieldMatchMode,
 
     file_io: FileIO,
     location_generator: T,
@@ -71,9 +72,29 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
         location_generator: T,
         file_name_generator: F,
     ) -> Self {
+        Self::new_with_match_mode(
+            props,
+            schema,
+            FieldMatchMode::Id,
+            file_io,
+            location_generator,
+            file_name_generator,
+        )
+    }
+
+    /// Create a new `ParquetWriterBuilder` with custom match mode
+    pub fn new_with_match_mode(
+        props: WriterProperties,
+        schema: SchemaRef,
+        match_mode: FieldMatchMode,
+        file_io: FileIO,
+        location_generator: T,
+        file_name_generator: F,
+    ) -> Self {
         Self {
             props,
             schema,
+            match_mode,
             file_io,
             location_generator,
             file_name_generator,
@@ -96,7 +117,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
             writer_properties: self.props,
             current_row_num: 0,
             out_file,
-            nan_value_count_visitor: NanValueCountVisitor::new(),
+            nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
         })
     }
 }
