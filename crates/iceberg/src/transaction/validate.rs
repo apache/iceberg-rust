@@ -193,7 +193,6 @@ pub(crate) trait SnapshotValidator {
         }
 
         // Get starting seq num from starting snapshot if available
-
         let starting_sequence_number = if let Some(from_snapshot_id) = from_snapshot_id {
             match base.metadata().snapshots.get(&from_snapshot_id) {
                 Some(snapshot) => snapshot.sequence_number(),
