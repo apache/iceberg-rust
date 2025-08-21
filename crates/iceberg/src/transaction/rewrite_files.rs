@@ -151,7 +151,6 @@ impl TransactionAction for RewriteFilesAction {
             self.added_delete_files.clone(),
             self.deleted_data_files.clone(),
             self.deleted_delete_files.clone(),
-            self.data_sequence_number.clone(),
         );
 
         let rewrite_operation = RewriteFilesOperation {
@@ -159,8 +158,8 @@ impl TransactionAction for RewriteFilesAction {
             added_delete_files: self.added_delete_files.clone(),
             deleted_data_files: self.deleted_data_files.clone(),
             deleted_delete_files: self.deleted_delete_files.clone(),
-            starting_snapshot_id: self.starting_snapshot_id.clone(),
-            data_sequence_number: self.data_sequence_number.clone(),
+            starting_snapshot_id: self.starting_snapshot_id,
+            data_sequence_number: self.data_sequence_number,
         };
 
         // todo should be able to configure to use the merge manifest process

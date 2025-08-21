@@ -91,7 +91,7 @@ pub(crate) trait SnapshotValidator {
         let snapshots = ancestors_between(
             &Arc::new(base.metadata().clone()),
             to_snapshot_id,
-            from_snapshot_id.clone(),
+            from_snapshot_id,
         );
 
         for current_snapshot in snapshots {
@@ -193,18 +193,12 @@ pub(crate) trait SnapshotValidator {
         }
 
         // Get starting seq num from starting snapshot if available
-        let starting_sequence_number = if from_snapshot_id.is_some()
-            && base
-                .metadata()
-                .snapshots
-                .get(&from_snapshot_id.unwrap())
-                .is_some()
-        {
-            base.metadata()
-                .snapshots
-                .get(&from_snapshot_id.unwrap())
-                .unwrap()
-                .sequence_number()
+
+        let starting_sequence_number = if let Some(from_snapshot_id) = from_snapshot_id {
+            match base.metadata().snapshots.get(&from_snapshot_id) {
+                Some(snapshot) => snapshot.sequence_number(),
+                None => INITIAL_SEQUENCE_NUMBER,
+            }
         } else {
             INITIAL_SEQUENCE_NUMBER
         };
