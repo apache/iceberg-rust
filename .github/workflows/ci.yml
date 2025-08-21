@@ -93,6 +93,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protobuf
+        run: brew install protobuf
+
       - name: Build
         run: make build
 
@@ -112,6 +115,9 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install protobuf
+        run: brew install protobuf
 
       - name: Build
         run: cargo build -p iceberg --no-default-features

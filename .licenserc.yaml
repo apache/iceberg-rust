@@ -33,4 +33,5 @@ header:
     - 'dist/*'
     - 'Cargo.lock'
     - '.github/PULL_REQUEST_TEMPLATE.md'
+    - '**/*.slt'
   comment: on-failure
