@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["HmsThriftTransport"],"struct":["HmsCatalog","HmsCatalogConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["HMS_CATALOG_PROP_THRIFT_TRANSPORT","HMS_CATALOG_PROP_URI","HMS_CATALOG_PROP_WAREHOUSE","THRIFT_TRANSPORT_BUFFERED","THRIFT_TRANSPORT_FRAMED"],"enum":["HmsThriftTransport"],"struct":["HmsCatalog","HmsCatalogBuilder"]};
