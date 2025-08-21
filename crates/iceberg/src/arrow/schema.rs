@@ -378,16 +378,10 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
             }
-            // Cast unsigned types based on bit width (following Python implementation)
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => {
-                // Cast to next larger signed type to prevent overflow
-                let bit_width = p.primitive_width().unwrap_or(0) * 8; // Convert bytes to bits
-                match bit_width {
-                    8 | 16 => Ok(Type::Primitive(PrimitiveType::Int)), // uint8/16 → int32
-                    32 => Ok(Type::Primitive(PrimitiveType::Long)),    // uint32 → int64
-                    _ => Ok(Type::Primitive(PrimitiveType::Int)),      // fallback
-                }
+            DataType::UInt8 | DataType::UInt16 => {
+                Ok(Type::Primitive(PrimitiveType::Int))
             }
+            DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::UInt64 => {
                 // Block uint64 - no safe casting option
@@ -1735,39 +1729,26 @@ mod tests {
     }
 
     #[test]
-    fn test_unsigned_type_casting() {
-        // Test UInt32 → Int64 casting
-        {
-            let arrow_field = Field::new("test", DataType::UInt32, false).with_metadata(
+    fn test_unsigned_integer_type_conversion() {
+        let test_cases = vec![
+            (DataType::UInt8, PrimitiveType::Int),
+            (DataType::UInt16, PrimitiveType::Int),
+            (DataType::UInt32, PrimitiveType::Long),
+        ];
+
+        for (arrow_type, expected_iceberg_type) in test_cases {
+            let arrow_field = Field::new("test", arrow_type.clone(), false).with_metadata(
                 HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
             );
             let arrow_schema = ArrowSchema::new(vec![arrow_field]);
 
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-
-            // Verify UInt32 was cast to Long (int64)
             let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
-            assert!(matches!(
-                iceberg_field.field_type.as_ref(),
-                Type::Primitive(PrimitiveType::Long)
-            ));
-        }
-
-        // Test UInt8/UInt16 → Int32 casting
-        {
-            let arrow_field = Field::new("test", DataType::UInt8, false).with_metadata(
-                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            
+            assert!(
+                matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
+                "Expected {:?} to map to {:?}", arrow_type, expected_iceberg_type
             );
-            let arrow_schema = ArrowSchema::new(vec![arrow_field]);
-
-            let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-
-            // Verify UInt8 was cast to Int (int32)
-            let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
-            assert!(matches!(
-                iceberg_field.field_type.as_ref(),
-                Type::Primitive(PrimitiveType::Int)
-            ));
         }
 
         // Test UInt64 blocking
