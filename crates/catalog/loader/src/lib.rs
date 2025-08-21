@@ -137,6 +137,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_catalog_loader_pattern_rest_catalog() {
+        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
+        let catalog_loader = load("rest").unwrap();
+        let catalog = catalog_loader
+            .load(
+                "rest".to_string(),
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_catalog_loader_pattern_glue_catalog() {
         use iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE;
 
@@ -158,17 +179,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_catalog_loader_pattern_rest_catalog() {
-        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+    async fn test_catalog_loader_pattern_s3tables() {
+        use iceberg_catalog_s3tables::S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN;
 
-        let catalog_loader = load("rest").unwrap();
-        let catalog = catalog_loader
+        let catalog = CatalogLoader::from("s3tables")
             .load(
-                "rest".to_string(),
+                "s3tables".to_string(),
                 HashMap::from([
                     (
-                        REST_CATALOG_PROP_URI.to_string(),
-                        "http://localhost:8080".to_string(),
+                        S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+                        "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
@@ -191,26 +211,6 @@ mod tests {
                     (
                         HMS_CATALOG_PROP_WAREHOUSE.to_string(),
                         "s3://warehouse".to_string(),
-                    ),
-                    ("key".to_string(), "value".to_string()),
-                ]),
-            )
-            .await;
-
-        assert!(catalog.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_catalog_loader_pattern_s3tables() {
-        use iceberg_catalog_s3tables::S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN;
-
-        let catalog = CatalogLoader::from("s3tables")
-            .load(
-                "s3tables".to_string(),
-                HashMap::from([
-                    (
-                        S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
-                        "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
                 ]),
