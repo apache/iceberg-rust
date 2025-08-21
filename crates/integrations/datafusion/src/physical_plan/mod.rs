@@ -19,10 +19,12 @@ pub(crate) mod commit;
 pub(crate) mod expr_to_predicate;
 pub(crate) mod metadata_scan;
 pub(crate) mod project;
+pub(crate) mod repartition;
 pub(crate) mod scan;
 pub(crate) mod write;
 
 pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
 
 pub use project::project_with_partition;
+pub use repartition::IcebergRepartitionExec;
 pub use scan::IcebergTableScan;

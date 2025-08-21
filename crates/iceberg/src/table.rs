@@ -24,7 +24,7 @@ use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::scan::TableScanBuilder;
-use crate::spec::{TableMetadata, TableMetadataRef};
+use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -233,6 +233,11 @@ impl Table {
     /// Returns the flag indicating whether the `Table` is readonly or not
     pub fn readonly(&self) -> bool {
         self.readonly
+    }
+
+    /// Returns the current schema as a shared reference.
+    pub fn schema_ref(&self) -> SchemaRef {
+        self.metadata.current_schema().clone()
     }
 
     /// Create a reader for the table.
