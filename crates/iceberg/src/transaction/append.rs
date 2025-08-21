@@ -94,7 +94,6 @@ impl TransactionAction for FastAppendAction {
             vec![],
             vec![],
             vec![],
-            None,
         );
 
         // validate added files
