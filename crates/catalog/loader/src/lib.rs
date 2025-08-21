@@ -20,7 +20,24 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
+use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_s3tables::S3TablesCatalogBuilder;
+
+/// A CatalogBuilderFactory creating a new catalog builder.
+type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
+
+/// A registry of catalog builders.
+static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
+    ("rest", || Box::new(RestCatalogBuilder::default())),
+    ("glue", || Box::new(GlueCatalogBuilder::default())),
+    ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
+];
+
+/// Return the list of supported catalog types.
+pub fn supported_types() -> Vec<&'static str> {
+    CATALOG_REGISTRY.iter().map(|(k, _)| *k).collect()
+}
 
 #[async_trait]
 pub trait BoxedCatalogBuilder {
@@ -43,13 +60,45 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
     }
 }
 
+/// Load a catalog from a string.
 pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
-    match r#type {
-        "rest" => Ok(Box::new(RestCatalogBuilder::default()) as Box<dyn BoxedCatalogBuilder>),
-        _ => Err(Error::new(
+    let key = r#type.trim();
+    if let Some((_, factory)) = CATALOG_REGISTRY
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+    {
+        Ok(factory())
+    } else {
+        Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            format!("Unsupported catalog type: {}", r#type),
-        )),
+            format!(
+                "Unsupported catalog type: {}. Supported types: {}",
+                r#type,
+                supported_types().join(", ")
+            ),
+        ))
+    }
+}
+
+/// Ergonomic catalog loader builder pattern.
+pub struct CatalogLoader<'a> {
+    catalog_type: &'a str,
+}
+
+impl<'a> From<&'a str> for CatalogLoader<'a> {
+    fn from(s: &'a str) -> Self {
+        Self { catalog_type: s }
+    }
+}
+
+impl CatalogLoader<'_> {
+    pub async fn load(
+        self,
+        name: String,
+        props: HashMap<String, String>,
+    ) -> Result<Arc<dyn Catalog>> {
+        let builder = load(self.catalog_type)?;
+        builder.load(name, props).await
     }
 }
 
@@ -57,12 +106,33 @@ pub fn load(r#type: &str) -> Result<Box<dyn BoxedCatalogBuilder>> {
 mod tests {
     use std::collections::HashMap;
 
-    use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+    use crate::{CatalogLoader, load};
 
-    use crate::load;
+    #[tokio::test]
+    async fn test_load_glue_catalog() {
+        use iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE;
+
+        let catalog_loader = load("glue").unwrap();
+        let catalog = catalog_loader
+            .load(
+                "glue".to_string(),
+                HashMap::from([
+                    (
+                        GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://test".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
 
     #[tokio::test]
     async fn test_load_rest_catalog() {
+        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
         let catalog_loader = load("rest").unwrap();
         let catalog = catalog_loader
             .load(
@@ -78,5 +148,63 @@ mod tests {
             .await;
 
         assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_unsupported_catalog() {
+        let result = load("unsupported");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern() {
+        use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
+
+        let catalog = CatalogLoader::from("rest")
+            .load(
+                "rest".to_string(),
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern_s3tables() {
+        use iceberg_catalog_s3tables::S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN;
+
+        let catalog = CatalogLoader::from("s3tables")
+            .load(
+                "s3tables".to_string(),
+                HashMap::from([
+                    (
+                        S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+                        "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
+                    ),
+                    ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_error_message_includes_supported_types() {
+        let err = match load("does-not-exist") {
+            Ok(_) => panic!("expected error for unsupported type"),
+            Err(e) => e,
+        };
+        let msg = err.message().to_string();
+        assert!(msg.contains("Supported types:"));
+        // Should include at least the built-in type
+        assert!(msg.contains("rest"));
     }
 }
