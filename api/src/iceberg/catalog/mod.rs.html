@@ -561,7 +561,7 @@
 <a href=#561 id=561 data-nosnippet>561</a>    </span><span class="kw">pub fn </span>apply(<span class="self">self</span>, builder: TableMetadataBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;TableMetadataBuilder&gt; {
 <a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#563 id=563 data-nosnippet>563</a>            TableUpdate::AssignUuid { uuid } =&gt; <span class="prelude-val">Ok</span>(builder.assign_uuid(uuid)),
-<a href=#564 id=564 data-nosnippet>564</a>            TableUpdate::AddSchema { schema, .. } =&gt; <span class="prelude-val">Ok</span>(builder.add_schema(schema)),
+<a href=#564 id=564 data-nosnippet>564</a>            TableUpdate::AddSchema { schema, .. } =&gt; <span class="prelude-val">Ok</span>(builder.add_schema(schema)<span class="question-mark">?</span>),
 <a href=#565 id=565 data-nosnippet>565</a>            TableUpdate::SetCurrentSchema { schema_id } =&gt; builder.set_current_schema(schema_id),
 <a href=#566 id=566 data-nosnippet>566</a>            TableUpdate::AddSpec { spec } =&gt; builder.add_partition_spec(spec),
 <a href=#567 id=567 data-nosnippet>567</a>            TableUpdate::SetDefaultSpec { spec_id } =&gt; builder.set_default_partition_spec(spec_id),
