@@ -25,11 +25,28 @@ use crate::spec::{DataFileFormat, PartitionSpec, Struct, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
-    /// Generate an absolute path for the given file name.
-    /// e.g.
-    /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
+    /// Generate an absolute path for the given file name without partition information.
+    /// 
+    /// # Arguments
+    ///
+    /// * `file_name` - The name of the file
+    ///
+    /// # Returns
+    ///
+    /// An absolute path, e.g., "/table/data/part-00000.parquet"
     fn generate_location(&self, file_name: &str) -> String;
-    /// todo doc
+    /// Generate an absolute path for the given file name that includes the partition path.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - The partition specification that defines how to produce partition values
+    /// * `partition_values` - The struct containing partition values
+    /// * `file_name` - The name of the file
+    ///
+    /// # Returns
+    ///
+    /// An absolute path that includes the partition path, e.g.,
+    /// "/table/data/id=1/name=alice/part-00000.parquet"
     fn generate_location_with_partition(
         &self,
         spec: &PartitionSpec,
@@ -140,7 +157,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::spec::{FormatVersion, PartitionSpec, Struct, StructType, TableMetadata};
+    use crate::spec::{FormatVersion, PartitionSpec, Struct, StructType, TableMetadata, Transform};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -163,8 +180,8 @@ pub(crate) mod test {
 
         fn generate_location_with_partition(
             &self,
-            spec: &PartitionSpec,
-            partition_values: &Struct,
+            _spec: &PartitionSpec,
+            _partition_values: &Struct,
             file_name: &str,
         ) -> String {
             format!("{}/{}", self.root, file_name)
@@ -249,5 +266,85 @@ pub(crate) mod test {
         let location =
             location_generator.generate_location(&file_name_genertaor.generate_file_name());
         assert_eq!(location, "s3://data.db/data_3/part-00003-test.parquet");
+    }
+
+    #[test]
+    fn test_default_location_generate_with_partition() {
+        use std::sync::Arc;
+
+        use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Transform, Type};
+
+        // Create a schema with id and name fields
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Create a partition spec with identity transforms for both fields
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .add_partition_field("name", "name", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Create partition values
+        let partition_values =
+            Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
+
+        // Create table metadata
+        let table_metadata = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: "s3://data.db/table".to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 2,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(0, Arc::new(partition_spec.clone()))]),
+            default_spec: Arc::new(partition_spec.clone()),
+            default_partition_type: partition_spec.partition_type().unwrap(),
+            last_partition_id: 1001,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: vec![],
+            refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
+        };
+
+        // Create a file name generator
+        let file_name_generator = super::DefaultFileNameGenerator::new(
+            "part".to_string(),
+            Some("test".to_string()),
+            crate::spec::DataFileFormat::Parquet,
+        );
+        let file_name = file_name_generator.generate_file_name();
+
+        // Create a location generator
+        let location_generator = super::DefaultLocationGenerator::new(table_metadata).unwrap();
+
+        // Test generate_location_with_partition
+        let location = location_generator.generate_location_with_partition(
+            &partition_spec,
+            &partition_values,
+            &file_name,
+        );
+
+        // Verify the result
+        assert_eq!(
+            location,
+            "s3://data.db/table/data/id=42/name=\"alice\"/part-00000-test.parquet"
+        );
     }
 }
