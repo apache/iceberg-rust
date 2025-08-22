@@ -194,7 +194,7 @@
 //!     let partition_key = PartitionKey::new(
 //!         table.metadata().default_partition_spec().as_ref().clone(),
 //!         table.metadata().current_schema().clone(),
-//!         Struct::from_iter(vec![Some(Literal::int("seattle"))]),
+//!         Struct::from_iter(vec![Some(Literal::string("Seattle"))]),
 //!     );
 //!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
