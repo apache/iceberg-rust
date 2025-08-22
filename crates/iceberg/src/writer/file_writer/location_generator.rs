@@ -251,4 +251,78 @@ pub(crate) mod test {
             location_generator.generate_location(None, &file_name_generator.generate_file_name());
         assert_eq!(location, "s3://data.db/data_3/part-00003-test.parquet");
     }
+
+    #[test]
+    fn test_location_generate_with_partition() {
+        use std::sync::Arc;
+        use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Transform, Type};
+
+        // Create a schema with two fields: id (int) and name (string)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Create a partition spec with both fields
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .add_partition_field("name", "name", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Create partition data with values
+        let partition_data = Struct::from_iter([
+            Some(Literal::int(42)),
+            Some(Literal::string("alice")),
+        ]);
+
+        // Create a partition key
+        let partition_key = PartitionKey::new(partition_spec, schema, partition_data);
+
+        // Test with MockLocationGenerator
+        let mock_location_gen = MockLocationGenerator::new("/base/path".to_string());
+        let file_name = "data-00000.parquet";
+        let location = mock_location_gen.generate_location(Some(partition_key.clone()), file_name);
+        assert_eq!(location, "/base/path/id=42/name=\"alice\"/data-00000.parquet");
+
+        // Create a table metadata for DefaultLocationGenerator
+        let table_metadata = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: "s3://data.db/table".to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 2,
+            schemas: HashMap::new(),
+            current_schema_id: 1,
+            partition_specs: HashMap::new(),
+            default_spec: PartitionSpec::unpartition_spec().into(),
+            default_partition_type: StructType::new(vec![]),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: vec![],
+            refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
+        };
+
+        // Test with DefaultLocationGenerator
+        let default_location_gen = super::DefaultLocationGenerator::new(table_metadata).unwrap();
+        let location = default_location_gen.generate_location(Some(partition_key), file_name);
+        assert_eq!(location, "s3://data.db/table/data/id=42/name=\"alice\"/data-00000.parquet");
+    }
 }
