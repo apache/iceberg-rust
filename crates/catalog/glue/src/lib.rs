@@ -16,6 +16,30 @@
 // under the License.
 
 //! Iceberg Glue Catalog implementation.
+//!
+//! To build a glue catalog with configurations
+//! # Example
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::CatalogBuilder;
+//! use iceberg_catalog_glue::{GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalogBuilder};
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let catalog = GlueCatalogBuilder::default()
+//!         .load(
+//!             "glue",
+//!             HashMap::from([(
+//!                 GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+//!                 "s3://warehouse".to_string(),
+//!             )]),
+//!         )
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
 
 #![deny(missing_docs)]
 

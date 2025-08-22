@@ -125,7 +125,7 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
 ///
 /// The namespace identifier is a list of strings, where each string is a
-/// component of the namespace. It's catalog implementer's responsibility to
+/// component of the namespace. It's the catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespaceIdent(Vec<String>);
@@ -561,7 +561,7 @@ impl TableUpdate {
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
             TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
-            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)),
+            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)?),
             TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
             TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
             TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
