@@ -24,6 +24,7 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{
     Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, TableCreation, TableIdent,
 };
@@ -399,6 +400,72 @@ async fn test_list_namespace() -> Result<()> {
 
     let empty_result = catalog.list_namespaces(Some(&namespace)).await?;
     assert!(empty_result.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_table() -> Result<()> {
+    let catalog = get_catalog().await;
+    let creation = set_table_creation(None, "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("test_update_table".into()));
+
+    catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let expected = catalog.create_table(namespace.name(), creation).await?;
+
+    let table = catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(table.identifier(), expected.identifier());
+    assert_eq!(table.metadata_location(), expected.metadata_location());
+    assert_eq!(table.metadata(), expected.metadata());
+
+    // Store the original metadata location for comparison
+    let original_metadata_location = table.metadata_location();
+
+    // Update table properties using the transaction
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_table_properties()
+        .set("test_property".to_string(), "test_value".to_string())
+        .apply(tx)?;
+
+    // Commit the transaction to the catalog
+    let updated_table = tx.commit(&catalog).await?;
+
+    // Verify the update was successful
+    assert_eq!(
+        updated_table.metadata().properties().get("test_property"),
+        Some(&"test_value".to_string())
+    );
+
+    // Verify the metadata location has been updated
+    assert_ne!(
+        updated_table.metadata_location(),
+        original_metadata_location,
+        "Metadata location should be updated after commit"
+    );
+
+    // Load the table again from the catalog to verify changes were persisted
+    let reloaded_table = catalog.load_table(table.identifier()).await?;
+
+    // Verify the reloaded table matches the updated table
+    assert_eq!(
+        reloaded_table.metadata().properties().get("test_property"),
+        Some(&"test_value".to_string())
+    );
+    assert_eq!(
+        reloaded_table.metadata_location(),
+        updated_table.metadata_location(),
+        "Reloaded table should have the same metadata location as the updated table"
+    );
 
     Ok(())
 }
