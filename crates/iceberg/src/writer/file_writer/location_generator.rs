@@ -21,14 +21,34 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, TableMetadata};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
-    /// Generate an absolute path for the given file name.
-    /// e.g.
-    /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
+    /// Generate an absolute path for the given file name without partition information.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_name` - The name of the file
+    ///
+    /// # Returns
+    ///
+    /// An absolute path, e.g., "/table/data/part-00000.parquet"
     fn generate_location(&self, file_name: &str) -> String;
+
+    /// Generate an absolute path for the given file name that includes the partition path.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - The partition specification that defines how to produce partition values
+    /// * `partition_values` - The struct containing partition values
+    /// * `file_name` - The name of the file
+    ///
+    /// # Returns
+    ///
+    /// An absolute path that includes the partition path, e.g.,
+    /// "/table/data/id=1/name=alice/part-00000.parquet"
+    fn generate_location_with_partition(&self, partition: PartitionKey, file_name: &str) -> String;
 }
 
 const WRITE_DATA_LOCATION: &str = "write.data.path";
@@ -39,7 +59,7 @@ const DEFAULT_DATA_DIR: &str = "/data";
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
-    dir_path: String,
+    data_location: String,
 }
 
 impl DefaultLocationGenerator {
@@ -47,21 +67,30 @@ impl DefaultLocationGenerator {
     pub fn new(table_metadata: TableMetadata) -> Result<Self> {
         let table_location = table_metadata.location();
         let prop = table_metadata.properties();
-        let data_location = prop
+        let configured_data_location = prop
             .get(WRITE_DATA_LOCATION)
             .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
-        let dir_path = if let Some(data_location) = data_location {
+        let data_location = if let Some(data_location) = configured_data_location {
             data_location.clone()
         } else {
             format!("{}{}", table_location, DEFAULT_DATA_DIR)
         };
-        Ok(Self { dir_path })
+        Ok(Self { data_location })
     }
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
     fn generate_location(&self, file_name: &str) -> String {
-        format!("{}/{}", self.dir_path, file_name)
+        format!("{}/{}", self.data_location, file_name)
+    }
+
+    fn generate_location_with_partition(&self, partition: PartitionKey, file_name: &str) -> String {
+        format!(
+            "{}/{}/{}",
+            self.data_location,
+            partition.to_path(),
+            file_name
+        )
     }
 }
 
@@ -119,7 +148,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
+    use crate::spec::{FormatVersion, PartitionKey, PartitionSpec, StructType, TableMetadata};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -138,6 +167,14 @@ pub(crate) mod test {
     impl LocationGenerator for MockLocationGenerator {
         fn generate_location(&self, file_name: &str) -> String {
             format!("{}/{}", self.root, file_name)
+        }
+
+        fn generate_location_with_partition(
+            &self,
+            partition: PartitionKey,
+            file_name: &str,
+        ) -> String {
+            format!("{}/{}/{}", self.root, partition.to_path(), file_name)
         }
     }
 
@@ -169,7 +206,7 @@ pub(crate) mod test {
             encryption_keys: HashMap::new(),
         };
 
-        let file_name_genertaor = super::DefaultFileNameGenerator::new(
+        let file_name_generator = super::DefaultFileNameGenerator::new(
             "part".to_string(),
             Some("test".to_string()),
             crate::spec::DataFileFormat::Parquet,
@@ -179,7 +216,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&file_name_generator.generate_file_name());
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
@@ -190,7 +227,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&file_name_generator.generate_file_name());
         assert_eq!(
             location,
             "s3://data.db/table/data_1/part-00001-test.parquet"
@@ -203,7 +240,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&file_name_generator.generate_file_name());
         assert_eq!(
             location,
             "s3://data.db/table/data_2/part-00002-test.parquet"
@@ -217,7 +254,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&file_name_generator.generate_file_name());
         assert_eq!(location, "s3://data.db/data_3/part-00003-test.parquet");
     }
 }
