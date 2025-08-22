@@ -36,6 +36,8 @@ pub trait LocationGenerator: Clone + Send + 'static {
     ///
     /// An absolute path that includes the partition path, e.g.,
     /// "/table/data/id=1/name=alice/part-00000.parquet"
+    /// or non-partitioned path:
+    /// "/table/data/part-00000.parquet"
     fn generate_location(&self, partition_key: Option<PartitionKey>, file_name: &str) -> String;
 }
 
