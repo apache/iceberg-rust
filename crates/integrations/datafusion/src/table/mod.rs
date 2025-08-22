@@ -140,13 +140,17 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-        )))
+        Ok(Arc::new(
+            IcebergTableScan::new(
+                _state,
+                self.table.clone(),
+                self.snapshot_id,
+                self.schema.clone(),
+                projection,
+                filters,
+            )
+            .await?,
+        ))
     }
 
     fn supports_filters_pushdown(

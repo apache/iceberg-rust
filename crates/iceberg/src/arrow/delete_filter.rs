@@ -330,8 +330,7 @@ pub(crate) mod tests {
 
         let file_scan_tasks = vec![
             FileScanTask {
-                start: 0,
-                length: 0,
+                file_range: None,
                 record_count: None,
                 data_file_path: format!("{}/1.parquet", table_location.to_str().unwrap()),
                 data_file_format: DataFileFormat::Parquet,
@@ -341,8 +340,7 @@ pub(crate) mod tests {
                 deletes: vec![pos_del_1, pos_del_2.clone()],
             },
             FileScanTask {
-                start: 0,
-                length: 0,
+                file_range: None,
                 record_count: None,
                 data_file_path: format!("{}/2.parquet", table_location.to_str().unwrap()),
                 data_file_format: DataFileFormat::Parquet,
