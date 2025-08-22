@@ -176,7 +176,8 @@ impl PartitionSpec {
     }
 }
 
-/// todo doc
+/// A partition key represents a specific partition in a table, containing the partition spec,
+/// schema, and the actual partition values.
 #[derive(Clone, Debug)]
 pub struct PartitionKey {
     /// The partition spec that contains the partition fields.
@@ -188,15 +189,23 @@ pub struct PartitionKey {
 }
 
 impl PartitionKey {
+    /// Creates a new partition key with the given spec, schema, and data.
+    pub fn new(spec: PartitionSpec, schema: SchemaRef, data: Struct) -> Self {
+        Self { spec, schema, data }
+    }
+
     /// Generates a partition path based on the partition values.
     pub fn to_path(&self) -> String {
         self.spec.partition_to_path(&self.data, self.schema.clone())
     }
 }
 
-/// todo doc
+/// Checks if a partition key is effectively none.
 pub fn partition_key_is_none(partition_key: Option<&PartitionKey>) -> bool {
-    partition_key.is_none_or(|pk| pk.spec.is_unpartitioned())
+    match partition_key {
+        None => true,
+        Some(pk) => pk.spec.is_unpartitioned(),
+    }
 }
 
 /// Reference to [`UnboundPartitionSpec`].

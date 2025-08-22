@@ -173,6 +173,8 @@
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
 //!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
+//!     use iceberg::spec::{Literal, PartitionKey, Struct};
+//!
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
@@ -189,6 +191,11 @@
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
 //!         .await?;
+//!     let partition_key = PartitionKey::new(
+//!         table.metadata().default_partition_spec().as_ref().clone(),
+//!         table.metadata().current_schema().clone(),
+//!         Struct::from_iter(vec![Some(Literal::int("seattle"))]),
+//!     );
 //!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
 //!         "test".to_string(),
@@ -272,7 +279,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
-    // This function is used to guarantee the trait can be used as a object safe trait.
+    // This function is used to guarantee the trait can be used as an object safe trait.
     async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
         let _ = w
             .write(RecordBatch::new_empty(Schema::empty().into()))
