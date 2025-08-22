@@ -164,7 +164,7 @@
 //!     // Build your file IO.
 //!     use iceberg::NamespaceIdent;
 //!     use iceberg::spec::{Literal, PartitionKey, Struct};
-//! 
+//!
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
