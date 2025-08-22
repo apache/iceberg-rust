@@ -134,13 +134,14 @@ impl FileNameGenerator for DefaultFileNameGenerator {
 #[cfg(test)]
 pub(crate) mod test {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use uuid::Uuid;
 
     use super::LocationGenerator;
     use crate::spec::{
-        FormatVersion, PartitionKey, PartitionSpec, StructType, TableMetadata,
-        partition_key_is_none,
+        FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
+        Struct, StructType, TableMetadata, Transform, Type, partition_key_is_none,
     };
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
@@ -254,9 +255,6 @@ pub(crate) mod test {
 
     #[test]
     fn test_location_generate_with_partition() {
-        use std::sync::Arc;
-        use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Transform, Type};
-
         // Create a schema with two fields: id (int) and name (string)
         let schema = Arc::new(
             Schema::builder()
@@ -279,10 +277,8 @@ pub(crate) mod test {
             .unwrap();
 
         // Create partition data with values
-        let partition_data = Struct::from_iter([
-            Some(Literal::int(42)),
-            Some(Literal::string("alice")),
-        ]);
+        let partition_data =
+            Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
 
         // Create a partition key
         let partition_key = PartitionKey::new(partition_spec, schema, partition_data);
@@ -291,7 +287,10 @@ pub(crate) mod test {
         let mock_location_gen = MockLocationGenerator::new("/base/path".to_string());
         let file_name = "data-00000.parquet";
         let location = mock_location_gen.generate_location(Some(partition_key.clone()), file_name);
-        assert_eq!(location, "/base/path/id=42/name=\"alice\"/data-00000.parquet");
+        assert_eq!(
+            location,
+            "/base/path/id=42/name=\"alice\"/data-00000.parquet"
+        );
 
         // Create a table metadata for DefaultLocationGenerator
         let table_metadata = TableMetadata {
@@ -323,6 +322,9 @@ pub(crate) mod test {
         // Test with DefaultLocationGenerator
         let default_location_gen = super::DefaultLocationGenerator::new(table_metadata).unwrap();
         let location = default_location_gen.generate_location(Some(partition_key), file_name);
-        assert_eq!(location, "s3://data.db/table/data/id=42/name=\"alice\"/data-00000.parquet");
+        assert_eq!(
+            location,
+            "s3://data.db/table/data/id=42/name=\"alice\"/data-00000.parquet"
+        );
     }
 }
