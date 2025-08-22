@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, TableMetadata};
+use crate::spec::{DataFileFormat, PartitionSpec, Struct, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
@@ -29,6 +29,13 @@ pub trait LocationGenerator: Clone + Send + 'static {
     /// e.g.
     /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
     fn generate_location(&self, file_name: &str) -> String;
+    /// todo doc
+    fn generate_location_with_partition(
+        &self,
+        spec: &PartitionSpec,
+        partition_values: &Struct,
+        file_name: &str,
+    ) -> String;
 }
 
 const WRITE_DATA_LOCATION: &str = "write.data.path";
@@ -39,7 +46,7 @@ const DEFAULT_DATA_DIR: &str = "/data";
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
-    dir_path: String,
+    data_location: String,
 }
 
 impl DefaultLocationGenerator {
@@ -47,21 +54,35 @@ impl DefaultLocationGenerator {
     pub fn new(table_metadata: TableMetadata) -> Result<Self> {
         let table_location = table_metadata.location();
         let prop = table_metadata.properties();
-        let data_location = prop
+        let data_location_from_props = prop
             .get(WRITE_DATA_LOCATION)
             .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
-        let dir_path = if let Some(data_location) = data_location {
+        let data_location = if let Some(data_location) = data_location_from_props {
             data_location.clone()
         } else {
             format!("{}{}", table_location, DEFAULT_DATA_DIR)
         };
-        Ok(Self { dir_path })
+        Ok(Self { data_location })
     }
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
     fn generate_location(&self, file_name: &str) -> String {
-        format!("{}/{}", self.dir_path, file_name)
+        format!("{}/{}", self.data_location, file_name)
+    }
+
+    fn generate_location_with_partition(
+        &self,
+        spec: &PartitionSpec,
+        partition_values: &Struct,
+        file_name: &str,
+    ) -> String {
+        format!(
+            "{}/{}/{}",
+            self.data_location,
+            spec.partition_to_path(partition_values),
+            file_name
+        )
     }
 }
 
@@ -119,7 +140,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
+    use crate::spec::{FormatVersion, PartitionSpec, Struct, StructType, TableMetadata};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -137,6 +158,15 @@ pub(crate) mod test {
 
     impl LocationGenerator for MockLocationGenerator {
         fn generate_location(&self, file_name: &str) -> String {
+            format!("{}/{}", self.root, file_name)
+        }
+
+        fn generate_location_with_partition(
+            &self,
+            spec: &PartitionSpec,
+            partition_values: &Struct,
+            file_name: &str,
+        ) -> String {
             format!("{}/{}", self.root, file_name)
         }
     }

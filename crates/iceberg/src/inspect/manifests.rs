@@ -187,9 +187,7 @@ impl<'a> ManifestsTable<'a> {
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
                     .unwrap();
-                let spec_struct = spec
-                    .partition_type(self.table.metadata().current_schema())
-                    .unwrap();
+                let spec_struct = spec.partition_type().unwrap();
                 self.append_partition_summaries(
                     &mut partition_summaries,
                     &manifest.partitions.clone().unwrap_or_else(Vec::new),

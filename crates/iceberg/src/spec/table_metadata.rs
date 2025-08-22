@@ -935,7 +935,7 @@ pub(super) mod _serde {
                     )
                 })?
                 .into();
-            let default_partition_type = default_spec.partition_type(current_schema)?;
+            let default_partition_type = default_spec.partition_type()?;
 
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V2,
@@ -1088,7 +1088,7 @@ pub(super) mod _serde {
                     )
                 })?
                 .into();
-            let default_partition_type = default_spec.partition_type(&current_schema)?;
+            let default_partition_type = default_spec.partition_type()?;
 
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V1,
@@ -1516,7 +1516,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
@@ -1695,7 +1695,7 @@ mod tests {
             .with_summary(Summary { operation: Operation::Append, additional_properties: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
             .build();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str("df838b92-0b32-465d-a44e-d39936e538b7").unwrap(),
@@ -1793,7 +1793,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
@@ -2311,7 +2311,7 @@ mod tests {
             })
             .build();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
@@ -2452,7 +2452,7 @@ mod tests {
             })
             .build();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
@@ -2609,7 +2609,7 @@ mod tests {
             })
             .build();
 
-        let default_partition_type = partition_spec.partition_type(&schema2).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
@@ -2713,7 +2713,7 @@ mod tests {
             .build_unbound()
             .unwrap();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
@@ -2781,7 +2781,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let default_partition_type = partition_spec.partition_type().unwrap();
         let expected = TableMetadata {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap(),

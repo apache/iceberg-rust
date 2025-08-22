@@ -69,6 +69,8 @@ pub struct PartitionSpec {
     spec_id: i32,
     /// Details of the partition spec
     fields: Vec<PartitionField>,
+    /// The schema to which this PartitionSpec is bound
+    schema: SchemaRef,
 }
 
 impl PartitionSpec {
@@ -92,6 +94,7 @@ impl PartitionSpec {
         Self {
             spec_id: DEFAULT_PARTITION_SPEC_ID,
             fields: vec![],
+            schema: Arc::new(Schema::default()),
         }
     }
 
@@ -103,8 +106,8 @@ impl PartitionSpec {
     }
 
     /// Returns the partition type of this partition spec.
-    pub fn partition_type(&self, schema: &Schema) -> Result<StructType> {
-        PartitionSpecBuilder::partition_type(&self.fields, schema)
+    pub fn partition_type(&self) -> Result<StructType> {
+        PartitionSpecBuilder::partition_type(&self.fields, self.schema.as_ref())
     }
 
     /// Convert to unbound partition spec
@@ -155,8 +158,8 @@ impl PartitionSpec {
         true
     }
 
-    pub(crate) fn partition_to_path(&self, data: &Struct, schema: SchemaRef) -> String {
-        let partition_type = self.partition_type(&schema).unwrap();
+    pub(crate) fn partition_to_path(&self, data: &Struct) -> String {
+        let partition_type = self.partition_type().unwrap();
         let field_types = partition_type.fields();
 
         self.fields
@@ -456,6 +459,7 @@ impl PartitionSpecBuilder {
         Ok(PartitionSpec {
             spec_id: self.spec_id.unwrap_or(DEFAULT_PARTITION_SPEC_ID),
             fields,
+            schema: self.schema,
         })
     }
 
@@ -875,7 +879,7 @@ mod tests {
             .with_spec_id(0)
             .build()
             .unwrap();
-        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        let partition_type = partition_spec.partition_type().unwrap();
         assert_eq!(0, partition_type.fields().len());
 
         let unpartition_spec = PartitionSpec::unpartition_spec();
@@ -945,7 +949,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        let partition_type = partition_spec.partition_type().unwrap();
         assert_eq!(3, partition_type.fields().len());
         assert_eq!(
             *partition_type.fields()[0],
@@ -1021,7 +1025,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        let partition_type = partition_spec.partition_type().unwrap();
         assert_eq!(0, partition_type.fields().len());
     }
 
@@ -1064,7 +1068,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec.partition_type(&schema).is_err());
+        assert!(partition_spec.partition_type().is_err());
     }
 
     #[test]
@@ -1197,9 +1201,10 @@ mod tests {
                 name: "id_bucket[16]".to_string(),
                 transform: Transform::Bucket(16),
             }],
+            schema: Arc::new(Schema::default()),
         });
         assert_eq!(
-            spec.partition_type(&schema).unwrap(),
+            spec.partition_type().unwrap(),
             StructType::new(vec![
                 NestedField::optional(1000, "id_bucket[16]", Type::Primitive(PrimitiveType::Int))
                     .into()
@@ -1770,9 +1775,6 @@ mod tests {
 
         let data = Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
 
-        assert_eq!(
-            spec.partition_to_path(&data, schema.into()),
-            "id=42/name=\"alice\""
-        );
+        assert_eq!(spec.partition_to_path(&data), "id=42/name=\"alice\"");
     }
 }

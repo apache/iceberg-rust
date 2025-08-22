@@ -341,10 +341,7 @@ impl ManifestWriter {
     /// Write manifest file and return it.
     pub async fn write_manifest_file(mut self) -> Result<ManifestFile> {
         // Create the avro writer
-        let partition_type = self
-            .metadata
-            .partition_spec
-            .partition_type(&self.metadata.schema)?;
+        let partition_type = self.metadata.partition_spec.partition_type()?;
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,

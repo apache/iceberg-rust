@@ -69,7 +69,7 @@ impl PartitionFilterCache {
                 format!("Could not find partition spec for id {}", spec_id),
             ))?;
 
-        let partition_type = partition_spec.partition_type(schema)?;
+        let partition_type = partition_spec.partition_type()?;
         let partition_fields = partition_type.fields().to_owned();
         let partition_schema = Arc::new(
             Schema::builder()

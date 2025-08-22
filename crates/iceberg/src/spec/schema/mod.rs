@@ -421,6 +421,12 @@ impl Schema {
     }
 }
 
+impl Default for Schema {
+    fn default() -> Self {
+        Schema::builder().build().unwrap()
+    }
+}
+
 impl Display for Schema {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "table {{")?;

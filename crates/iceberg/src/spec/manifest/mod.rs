@@ -53,7 +53,7 @@ impl Manifest {
         let metadata = ManifestMetadata::parse(meta)?;
 
         // Parse manifest entries
-        let partition_type = metadata.partition_spec.partition_type(&metadata.schema)?;
+        let partition_type = metadata.partition_spec.partition_type()?;
 
         let entries = match metadata.format_version {
             FormatVersion::V1 => {
@@ -1115,7 +1115,7 @@ mod tests {
             .unwrap();
 
         // Get partition type from the partition spec
-        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        let partition_type = partition_spec.partition_type().unwrap();
 
         // Create a vector of DataFile objects
         let data_files = vec![

@@ -776,7 +776,7 @@ impl TableMetadataBuilder {
             })?
             .clone();
         let spec = Arc::unwrap_or_clone(schemaless_spec);
-        let spec_type = spec.partition_type(self.get_current_schema()?)?;
+        let spec_type = spec.partition_type()?;
         self.metadata.default_spec = Arc::new(spec);
         self.metadata.default_partition_type = spec_type;
 
@@ -939,8 +939,7 @@ impl TableMetadataBuilder {
                 .into_unbound()
                 .bind(schema.clone())?,
         );
-        self.metadata.default_partition_type =
-            self.metadata.default_spec.partition_type(&schema)?;
+        self.metadata.default_partition_type = self.metadata.default_spec.partition_type()?;
         SortOrder::builder()
             .with_fields(sort_order.fields)
             .build(&schema)?;

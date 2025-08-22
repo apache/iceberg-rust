@@ -113,7 +113,7 @@ impl SnapshotSummaryCollector {
         data_file: &DataFile,
         is_add_file: bool,
     ) {
-        let partition_path = partition_spec.partition_to_path(&data_file.partition, schema);
+        let partition_path = partition_spec.partition_to_path(&data_file.partition);
         let metrics = self.partition_metrics.entry(partition_path).or_default();
 
         if is_add_file {

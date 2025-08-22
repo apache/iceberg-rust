@@ -299,7 +299,7 @@ mod tests {
         predicate: &BoundPredicate,
         case_sensitive: bool,
     ) -> Result<BoundPredicate> {
-        let partition_type = partition_spec.partition_type(schema).unwrap();
+        let partition_type = partition_spec.partition_type().unwrap();
         let partition_fields = partition_type.fields().to_owned();
 
         let partition_schema = Schema::builder()
