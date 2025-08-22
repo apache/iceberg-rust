@@ -176,6 +176,23 @@ impl PartitionSpec {
     }
 }
 
+/// todo doc
+pub struct PartitionKey {
+    /// The partition spec that contains the partition fields.
+    spec: PartitionSpec,
+    /// The schema to which the partition spec is bound.
+    schema: SchemaRef,
+    /// Partition fields' values in struct.
+    data: Struct,
+}
+
+impl PartitionKey {
+    /// Generates a partition path based on the partition values.
+    pub fn to_path(&self) -> String {
+        self.spec.partition_to_path(&self.data, self.schema.clone())
+    }
+}
+
 /// Reference to [`UnboundPartitionSpec`].
 pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
 /// Unbound partition field can be built without a schema and later bound to a schema.
