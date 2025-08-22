@@ -177,6 +177,7 @@ impl PartitionSpec {
 }
 
 /// todo doc
+#[derive(Clone, Debug)]
 pub struct PartitionKey {
     /// The partition spec that contains the partition fields.
     spec: PartitionSpec,
@@ -191,6 +192,11 @@ impl PartitionKey {
     pub fn to_path(&self) -> String {
         self.spec.partition_to_path(&self.data, self.schema.clone())
     }
+}
+
+/// todo doc
+pub fn partition_key_is_none(partition_key: Option<&PartitionKey>) -> bool {
+    partition_key.is_none_or(|pk| pk.spec.is_unpartitioned())
 }
 
 /// Reference to [`UnboundPartitionSpec`].
