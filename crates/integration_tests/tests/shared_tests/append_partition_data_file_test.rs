@@ -21,7 +21,9 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
+use iceberg::spec::{
+    Literal, PartitionKey, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec,
+};
 use iceberg::table::Table;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -59,7 +61,7 @@ async fn test_append_partition_data_file() {
     let table_creation = TableCreation::builder()
         .name("t1".to_string())
         .schema(schema.clone())
-        .partition_spec(partition_spec)
+        .partition_spec(partition_spec.clone())
         .build();
 
     let table = rest_catalog
@@ -78,6 +80,11 @@ async fn test_append_partition_data_file() {
     );
 
     let first_partition_id_value = 100;
+    let partition_key = PartitionKey::new(
+        partition_spec.clone(),
+        table.metadata().current_schema().clone(),
+        Struct::from_iter(vec![Some(Literal::int(first_partition_id_value))]),
+    );
 
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
@@ -89,7 +96,7 @@ async fn test_append_partition_data_file() {
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
         table.metadata().current_schema().clone(),
-        None,
+        Some(partition_key),
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
