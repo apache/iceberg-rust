@@ -1744,7 +1744,7 @@ mod tests {
 
             let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
             let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
-            
+
             assert!(
                 matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
                 "Expected {:?} to map to {:?}", arrow_type, expected_iceberg_type
