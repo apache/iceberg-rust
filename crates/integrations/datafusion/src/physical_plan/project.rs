@@ -19,8 +19,10 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StructArray};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -36,16 +38,16 @@ use iceberg::spec::{PartitionSpec, Schema};
 
 use crate::to_datafusion_error;
 
-/// Prefix for partition column names to avoid collisions with regular columns
-const PARTITION_COLUMN_PREFIX: &str = "__partition_";
+/// Column name for the combined partition values struct
+const PARTITION_VALUES_COLUMN: &str = "_iceberg_partition_values";
 
 /// An execution plan node that calculates partition values for Iceberg tables.
 ///
-/// This execution plan takes input data from a child execution plan and adds partition columns
-/// based on the table's partition specification. The partition values are computed by applying
-/// the appropriate transforms to the source columns.
+/// This execution plan takes input data from a child execution plan and adds a single struct column
+/// containing all partition values based on the table's partition specification. The partition values
+/// are computed by applying the appropriate transforms to the source columns.
 ///
-/// The output schema includes all original columns plus additional partition columns.
+/// The output schema includes all original columns plus a single `_iceberg_partition_values` struct column.
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergProjectExec {
     input: Arc<dyn ExecutionPlan>,
@@ -56,10 +58,12 @@ pub(crate) struct IcebergProjectExec {
 }
 
 /// IcebergProjectExec is responsible for calculating partition values for Iceberg tables.
-/// It takes input data from a child execution plan and adds partition columns based on the table's
-/// partition specification. The partition values are computed by applying the appropriate transforms
-/// to the source columns. The output schema includes all original columns plus additional partition
-/// columns.
+/// It takes input data from a child execution plan and adds a single struct column containing
+/// all partition values based on the table's partition specification. The partition values are
+/// computed by applying the appropriate transforms to the source columns. The output schema
+/// includes all original columns plus a single `_iceberg_partition_values` struct column.
+/// This approach simplifies downstream repartitioning operations by providing a single column
+/// that can be directly used for sorting and repartitioning.
 impl IcebergProjectExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
@@ -92,7 +96,7 @@ impl IcebergProjectExec {
         )
     }
 
-    /// Create the output schema by adding partition columns to the input schema
+    /// Create the output schema by adding a single partition values struct column to the input schema
     fn create_output_schema(
         input_schema: &ArrowSchema,
         partition_spec: &PartitionSpec,
@@ -104,37 +108,50 @@ impl IcebergProjectExec {
 
         let mut fields: Vec<Arc<Field>> = input_schema.fields().to_vec();
 
-        let partition_struct = partition_spec
+        let partition_struct_type = partition_spec
             .partition_type(table_schema)
             .map_err(to_datafusion_error)?;
 
-        for (idx, pf) in partition_spec.fields().iter().enumerate() {
-            let struct_field = partition_struct.fields().get(idx).ok_or_else(|| {
-                DataFusionError::Internal(
-                    "Partition field index out of bounds when creating output schema".to_string(),
-                )
-            })?;
-            let arrow_type = iceberg::arrow::type_to_arrow_type(&struct_field.field_type)
+        // Convert the Iceberg struct type to Arrow struct type
+        let arrow_struct_type =
+            iceberg::arrow::type_to_arrow_type(&iceberg::spec::Type::Struct(partition_struct_type))
                 .map_err(to_datafusion_error)?;
-            let partition_column_name = Self::create_partition_column_name(&pf.name);
-            let nullable = !struct_field.required;
-            fields.push(Arc::new(Field::new(
-                &partition_column_name,
-                arrow_type,
-                nullable,
-            )));
-        }
+
+        // Add a single struct column containing all partition values
+        fields.push(Arc::new(Field::new(
+            PARTITION_VALUES_COLUMN,
+            arrow_struct_type,
+            false, // Partition values are generally not null
+        )));
+
         Ok(Arc::new(ArrowSchema::new(fields)))
     }
 
-    /// Calculate partition values for a record batch
-    fn calculate_partition_values(&self, batch: &RecordBatch) -> DFResult<Vec<ArrayRef>> {
+    /// Calculate partition values for a record batch and return as a single struct array
+    fn calculate_partition_values(&self, batch: &RecordBatch) -> DFResult<Option<ArrayRef>> {
         if self.partition_spec.is_unpartitioned() {
-            return Ok(vec![]);
+            return Ok(None);
         }
 
         let batch_schema = batch.schema();
         let mut partition_values = Vec::with_capacity(self.partition_spec.fields().len());
+
+        // Get the expected struct fields from our output schema
+        let partition_column_field = self
+            .output_schema
+            .field_with_name(PARTITION_VALUES_COLUMN)
+            .map_err(|e| {
+                DataFusionError::Internal(format!("Partition column not found in schema: {}", e))
+            })?;
+
+        let expected_struct_fields = match partition_column_field.data_type() {
+            DataType::Struct(fields) => fields.clone(),
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Partition column is not a struct type".to_string(),
+                ));
+            }
+        };
 
         for pf in self.partition_spec.fields() {
             // Find the source field in the table schema
@@ -158,7 +175,16 @@ impl IcebergProjectExec {
 
             partition_values.push(partition_value);
         }
-        Ok(partition_values)
+
+        // Create struct array using the expected fields from the schema
+        let struct_array = StructArray::try_new(
+            expected_struct_fields,
+            partition_values,
+            None, // No null buffer for the struct array itself
+        )
+        .map_err(|e| DataFusionError::ArrowError(e, None))?;
+
+        Ok(Some(Arc::new(struct_array)))
     }
 
     /// Extract a column by an index path
@@ -287,21 +313,18 @@ impl IcebergProjectExec {
         Ok(indices)
     }
 
-    /// Apply a naming convention for partition columns using spec alias, prefixed to avoid collisions
-    fn create_partition_column_name(partition_field_alias: &str) -> String {
-        format!("{}{}", PARTITION_COLUMN_PREFIX, partition_field_alias)
-    }
-
-    /// Process a single batch by adding partition columns
+    /// Process a single batch by adding a partition values struct column
     fn process_batch(&self, batch: RecordBatch) -> DFResult<RecordBatch> {
         if self.partition_spec.is_unpartitioned() {
             return Ok(batch);
         }
 
-        let partition_arrays = self.calculate_partition_values(&batch)?;
+        let partition_array = self.calculate_partition_values(&batch)?;
 
         let mut all_columns = batch.columns().to_vec();
-        all_columns.extend(partition_arrays);
+        if let Some(partition_array) = partition_array {
+            all_columns.push(partition_array);
+        }
 
         RecordBatch::try_new(Arc::clone(&self.output_schema), all_columns)
             .map_err(|e| DataFusionError::ArrowError(e, None))
@@ -501,11 +524,11 @@ mod tests {
             IcebergProjectExec::create_output_schema(&arrow_schema, &partition_spec, &table_schema)
                 .unwrap();
 
-        // Should have 3 fields: original 2 + 1 partition field
+        // Should have 3 fields: original 2 + 1 partition values struct
         assert_eq!(output_schema.fields().len(), 3);
         assert_eq!(output_schema.field(0).name(), "id");
         assert_eq!(output_schema.field(1).name(), "name");
-        assert_eq!(output_schema.field(2).name(), "__partition_id_partition");
+        assert_eq!(output_schema.field(2).name(), "_iceberg_partition_values");
     }
 
     #[test]
@@ -548,11 +571,11 @@ mod tests {
             IcebergProjectExec::create_output_schema(&arrow_schema, &partition_spec, &table_schema)
                 .unwrap();
 
-        // Should have 3 fields: id, address, and partition field for city
+        // Should have 3 fields: id, address, and partition values struct
         assert_eq!(output_schema.fields().len(), 3);
         assert_eq!(output_schema.field(0).name(), "id");
         assert_eq!(output_schema.field(1).name(), "address");
-        assert_eq!(output_schema.field(2).name(), "__partition_city_partition");
+        assert_eq!(output_schema.field(2).name(), "_iceberg_partition_values");
     }
 
     #[test]
@@ -636,7 +659,7 @@ mod tests {
         let result_batch = project_exec.process_batch(batch).unwrap();
 
         // Verify the result
-        assert_eq!(result_batch.num_columns(), 3); // id, address, partition
+        assert_eq!(result_batch.num_columns(), 3); // id, address, partition_values
         assert_eq!(result_batch.num_rows(), 3);
 
         // Verify column names
@@ -644,18 +667,26 @@ mod tests {
         assert_eq!(result_batch.schema().field(1).name(), "address");
         assert_eq!(
             result_batch.schema().field(2).name(),
-            "__partition_city_partition"
+            "_iceberg_partition_values"
         );
 
-        // Verify that the partition column contains the city values extracted from the struct
+        // Verify that the partition values struct contains the city values extracted from the struct
         let partition_column = result_batch.column(2);
-        let partition_array = partition_column
+        let partition_struct_array = partition_column
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        // Get the city_partition field from the struct
+        let city_partition_array = partition_struct_array
+            .column_by_name("city_partition")
+            .unwrap()
             .as_any()
             .downcast_ref::<datafusion::arrow::array::StringArray>()
             .unwrap();
 
-        assert_eq!(partition_array.value(0), "New York");
-        assert_eq!(partition_array.value(1), "Los Angeles");
-        assert_eq!(partition_array.value(2), "Chicago");
+        assert_eq!(city_partition_array.value(0), "New York");
+        assert_eq!(city_partition_array.value(1), "Los Angeles");
+        assert_eq!(city_partition_array.value(2), "Chicago");
     }
 }
