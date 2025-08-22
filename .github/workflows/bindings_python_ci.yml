@@ -24,6 +24,7 @@ on:
   pull_request:
     branches:
       - main
+      - 'sqllogic-test'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}

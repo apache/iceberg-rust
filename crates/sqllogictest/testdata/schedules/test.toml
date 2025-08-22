@@ -15,32 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
+[engines]
+sc = { type = "spark-connect", url = "sc://localhost:15002" }
+df = { type = "datafusion", url = "http://localhost:8181" }
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-      - 'sqllogic-test'
+[[steps]]
+engine = "sc"
+sql = "demo/prepare.slt"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
-
-jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@v5
-      - name: Check typos
-        uses: crate-ci/typos@v1.35.4
+[[steps]]
+engine = "df"
+sql = "demo/verify.slt"

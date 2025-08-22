@@ -1,0 +1,6 @@
+query I
+SELECT * FROM default.s1.t1 ORDER BY id;
+----
+1
+2
+3

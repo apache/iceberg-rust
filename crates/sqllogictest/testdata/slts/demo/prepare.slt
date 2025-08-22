@@ -1,0 +1,18 @@
+statement ok
+CREATE DATABASE IF NOT EXISTS s1;
+
+statement ok
+USE DATABASE s1;
+
+statement ok
+CREATE TABLE t1 (id INTEGER);
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+query I
+SELECT * FROM t1 ORDER BY id
+----
+1
+2
+3

@@ -24,7 +24,7 @@ This crate contains a suite of [sqllogictest](https://crates.io/crates/sqllogict
 Just run the following command:
 
 ```bash
-cargo test
+cargo test --test sqllogictests
 ```
 
 ## Sql Engines
