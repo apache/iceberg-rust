@@ -378,9 +378,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
             }
-            DataType::UInt8 | DataType::UInt16 => {
-                Ok(Type::Primitive(PrimitiveType::Int))
-            }
+            DataType::UInt8 | DataType::UInt16 => Ok(Type::Primitive(PrimitiveType::Int)),
             DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::UInt64 => {
@@ -1747,7 +1745,9 @@ mod tests {
 
             assert!(
                 matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
-                "Expected {:?} to map to {:?}", arrow_type, expected_iceberg_type
+                "Expected {:?} to map to {:?}",
+                arrow_type,
+                expected_iceberg_type
             );
         }
 
