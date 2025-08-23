@@ -40,7 +40,6 @@ use metadata_table::IcebergMetadataTableProvider;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::scan::IcebergTableScan;
 use crate::physical_plan::write::IcebergWriteExec;
-use crate::to_datafusion_error;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
@@ -152,18 +151,8 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Refresh table if catalog is available
-        let table = if let Some(catalog) = &self.catalog {
-            catalog
-                .load_table(self.table.identifier())
-                .await
-                .map_err(to_datafusion_error)?
-        } else {
-            self.table.clone()
-        };
-
         Ok(Arc::new(IcebergTableScan::new(
-            table,
+            self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
             projection,

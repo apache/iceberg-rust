@@ -443,7 +443,7 @@ async fn test_insert_into() -> Result<()> {
     iceberg_catalog.create_table(&namespace, creation).await?;
 
     let client = Arc::new(iceberg_catalog);
-    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
 
     let ctx = SessionContext::new();
     ctx.register_catalog("catalog", catalog);
@@ -483,6 +483,10 @@ async fn test_insert_into() -> Result<()> {
         .unwrap();
     assert_eq!(rows_inserted.value(0), 2);
 
+    // Refresh context to avoid getting stale table
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    ctx.register_catalog("catalog", catalog);
+    
     // Query the table to verify the inserted data
     let df = ctx
         .sql("SELECT * FROM catalog.test_insert_into.my_table")
@@ -564,7 +568,7 @@ async fn test_insert_into_nested() -> Result<()> {
     iceberg_catalog.create_table(&namespace, creation).await?;
 
     let client = Arc::new(iceberg_catalog);
-    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
 
     let ctx = SessionContext::new();
     ctx.register_catalog("catalog", catalog);
@@ -637,7 +641,9 @@ async fn test_insert_into_nested() -> Result<()> {
         .unwrap();
     assert_eq!(rows_inserted.value(0), 2);
 
-    ctx.refresh_catalogs().await.unwrap();
+    // Refresh context to avoid getting stale table
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    ctx.register_catalog("catalog", catalog);
 
     // Query the table to verify the inserted data
     let df = ctx
