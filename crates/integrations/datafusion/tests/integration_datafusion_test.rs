@@ -486,7 +486,7 @@ async fn test_insert_into() -> Result<()> {
     // Refresh context to avoid getting stale table
     let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
     ctx.register_catalog("catalog", catalog);
-    
+
     // Query the table to verify the inserted data
     let df = ctx
         .sql("SELECT * FROM catalog.test_insert_into.my_table")
