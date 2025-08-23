@@ -3583,7 +3583,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "typed-builder 0.20.1",
  "volo",
  "volo-thrift",
 ]
@@ -3595,6 +3594,7 @@ dependencies = [
  "async-trait",
  "iceberg",
  "iceberg-catalog-glue",
+ "iceberg-catalog-hms",
  "iceberg-catalog-rest",
  "iceberg-catalog-s3tables",
  "tokio",

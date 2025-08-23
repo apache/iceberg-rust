@@ -561,7 +561,7 @@ impl TableUpdate {
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
             TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
-            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)),
+            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)?),
             TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
             TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
             TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
