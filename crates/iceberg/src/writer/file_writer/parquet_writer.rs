@@ -114,7 +114,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
         let out_file = self
             .file_io
             .new_output(self.location_generator.generate_location(
-                self.partition_key,
+                self.partition_key.as_ref(),
                 &self.file_name_generator.generate_file_name(),
             ))?;
 

@@ -38,7 +38,7 @@ pub trait LocationGenerator: Clone + Send + 'static {
     /// "/table/data/id=1/name=alice/part-00000.parquet"
     /// or non-partitioned path:
     /// "/table/data/part-00000.parquet"
-    fn generate_location(&self, partition_key: Option<PartitionKey>, file_name: &str) -> String;
+    fn generate_location(&self, partition_key: Option<&PartitionKey>, file_name: &str) -> String;
 }
 
 const WRITE_DATA_LOCATION: &str = "write.data.path";
@@ -70,8 +70,8 @@ impl DefaultLocationGenerator {
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
-    fn generate_location(&self, partition_key: Option<PartitionKey>, file_name: &str) -> String {
-        if partition_key.as_ref().is_effectively_none() {
+    fn generate_location(&self, partition_key: Option<&PartitionKey>, file_name: &str) -> String {
+        if partition_key.is_effectively_none() {
             format!("{}/{}", self.data_location, file_name)
         } else {
             format!(
@@ -318,7 +318,7 @@ pub(crate) mod test {
 
         // Test with DefaultLocationGenerator
         let default_location_gen = super::DefaultLocationGenerator::new(table_metadata).unwrap();
-        let location = default_location_gen.generate_location(Some(partition_key), file_name);
+        let location = default_location_gen.generate_location(Some(&partition_key), file_name);
         assert_eq!(
             location,
             "s3://data.db/table/data/id=42/name=alice/data-00000.parquet"
