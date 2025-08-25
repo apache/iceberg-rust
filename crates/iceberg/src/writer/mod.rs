@@ -45,7 +45,6 @@
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 //! use async_trait::async_trait;
-//! use iceberg::io::FileIOType::Memory;
 //! use iceberg::io::{FileIO, FileIOBuilder};
 //! use iceberg::spec::DataFile;
 //! use iceberg::transaction::Transaction;
@@ -112,7 +111,6 @@
 //!
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
-//! use iceberg::io::FileIOType::Memory;
 //! use iceberg::memory::MemoryCatalogBuilder;
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
