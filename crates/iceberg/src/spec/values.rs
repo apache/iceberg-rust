@@ -356,6 +356,7 @@ impl Display for Datum {
             (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
                 write!(f, "{}", days_to_date(*val))
             }
@@ -374,7 +375,6 @@ impl Display for Datum {
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", nanoseconds_to_datetimetz(*val))
             }
-            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", Uuid::from_u128(*val))
             }

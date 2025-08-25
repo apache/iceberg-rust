@@ -1812,7 +1812,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=\"alice\""
+            "id=42/name=alice"
         );
     }
 }
