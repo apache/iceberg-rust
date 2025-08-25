@@ -25,7 +25,6 @@
 //! use std::collections::HashMap;
 //!
 //! use futures::TryStreamExt;
-//! use iceberg::io::FileIOType::Memory;
 //! use iceberg::io::{FileIO, FileIOBuilder};
 //! use iceberg::memory::MemoryCatalogBuilder;
 //! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};

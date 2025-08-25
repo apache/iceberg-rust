@@ -32,8 +32,6 @@ use crate::{
     TableCommit, TableCreation, TableIdent,
 };
 
-// /// Memory catalog io type
-// pub const MEMORY_CATALOG_IO_TYPE: &str = "io_type";
 /// Memory catalog warehouse location
 pub const MEMORY_CATALOG_WAREHOUSE: &str = "warehouse";
 
