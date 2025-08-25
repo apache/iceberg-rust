@@ -159,8 +159,8 @@ pub(crate) mod test {
     }
 
     impl LocationGenerator for MockLocationGenerator {
-        fn generate_location(&self, partition: Option<PartitionKey>, file_name: &str) -> String {
-            if partition.as_ref().is_effectively_none() {
+        fn generate_location(&self, partition: Option<&PartitionKey>, file_name: &str) -> String {
+            if partition.is_effectively_none() {
                 format!("{}/{}", self.root, file_name)
             } else {
                 format!(
@@ -286,7 +286,7 @@ pub(crate) mod test {
         // Test with MockLocationGenerator
         let mock_location_gen = MockLocationGenerator::new("/base/path".to_string());
         let file_name = "data-00000.parquet";
-        let location = mock_location_gen.generate_location(Some(partition_key.clone()), file_name);
+        let location = mock_location_gen.generate_location(Some(&partition_key), file_name);
         assert_eq!(location, "/base/path/id=42/name=alice/data-00000.parquet");
 
         // Create a table metadata for DefaultLocationGenerator

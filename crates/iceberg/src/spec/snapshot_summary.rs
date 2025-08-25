@@ -819,7 +819,7 @@ mod tests {
         assert_eq!(props.get(ADDED_FILE_SIZE).unwrap(), "300");
         assert_eq!(props.get(REMOVED_FILE_SIZE).unwrap(), "100");
 
-        let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=\"2025\"");
+        let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=2025");
 
         assert!(props.contains_key(&partition_key));
 
