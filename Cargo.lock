@@ -3728,7 +3728,10 @@ dependencies = [
  "enum-ordinalize",
  "indicatif",
  "serde",
+ "serde_json",
  "sqllogictest",
+ "tempfile",
+ "tokio",
  "toml",
  "tracing",
 ]

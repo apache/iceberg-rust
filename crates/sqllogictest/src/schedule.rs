@@ -16,18 +16,24 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 
+use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
+use toml::{Table as TomlTable, Value};
+use tracing::info;
 
 use crate::engine::Engine;
 
 pub struct Schedule {
+    /// Engine names to engine instances
     engines: HashMap<String, Engine>,
+    /// List of test steps to run
     steps: Vec<Step>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     /// Engine name
     engine: String,
@@ -40,9 +46,22 @@ impl Schedule {
         Self { engines, steps }
     }
 
+    pub async fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let content = read_to_string(path)?;
+        let toml_value = content.parse::<Value>()?;
+        let toml_table = toml_value
+            .as_table()
+            .ok_or_else(|| anyhow!("Schedule file must be a TOML table"))?;
+
+        let engines = Schedule::parse_engines(toml_table).await?;
+        let steps = Schedule::parse_steps(toml_table)?;
+
+        Ok(Self::new(engines, steps))
+    }
+
     pub async fn run(mut self) -> anyhow::Result<()> {
         for (idx, step) in self.steps.iter().enumerate() {
-            tracing::info!(
+            info!(
                 "Running step {}/{}, using engine {}, slt file path: {}",
                 idx + 1,
                 self.steps.len(),
@@ -53,12 +72,12 @@ impl Schedule {
             let engine = self
                 .engines
                 .get_mut(&step.engine)
-                .ok_or_else(|| anyhow::anyhow!("Engine {} not found", step.engine))?;
+                .ok_or_else(|| anyhow!("Engine {} not found", step.engine))?;
 
             engine
                 .run_slt_file(&PathBuf::from(step.slt.clone()))
                 .await?;
-            tracing::info!(
+            info!(
                 "Step {}/{}, engine {}, slt file path: {} finished",
                 idx + 1,
                 self.steps.len(),
@@ -68,17 +87,57 @@ impl Schedule {
         }
         Ok(())
     }
+
+    async fn parse_engines(table: &TomlTable) -> anyhow::Result<HashMap<String, Engine>> {
+        let engines_tbl = table
+            .get("engines")
+            .with_context(|| "Schedule file must have an 'engines' table")?
+            .as_table()
+            .ok_or_else(|| anyhow!("'engines' must be a table"))?;
+
+        let mut engines = HashMap::new();
+
+        for (name, engine_val) in engines_tbl {
+            let cfg_tbl = engine_val
+                .as_table()
+                .ok_or_else(|| anyhow!("Config of engine '{name}' is not a table"))?
+                .clone();
+
+            let engine = Engine::new(cfg_tbl)
+                .await
+                .with_context(|| format!("Failed to construct engine '{name}'"))?;
+
+            if engines.insert(name.clone(), engine).is_some() {
+                return Err(anyhow!("Duplicate engine '{name}'"));
+            }
+        }
+
+        Ok(engines)
+    }
+
+    fn parse_steps(table: &TomlTable) -> anyhow::Result<Vec<Step>> {
+        let steps_val = table
+            .get("steps")
+            .with_context(|| "Schedule file must have a 'steps' array")?;
+
+        let steps: Vec<Step> = steps_val
+            .clone()
+            .try_into()
+            .with_context(|| "Failed to deserialize steps")?;
+
+        Ok(steps)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use toml::Table as TomlTable;
 
-    use crate::schedule::Step;
+    use crate::schedule::Schedule;
 
     #[test]
     fn test_parse_steps() {
-        let steps = r#"
+        let input = r#"
             [[steps]]
             engine = "datafusion"
             slt = "test.slt"
@@ -88,18 +147,37 @@ mod tests {
             slt = "test2.slt"
         "#;
 
-        let steps: Vec<Step> = toml::from_str::<TomlTable>(steps)
-            .unwrap()
-            .get("steps")
-            .unwrap()
-            .clone()
-            .try_into()
-            .unwrap();
+        let tbl: TomlTable = toml::from_str(input).unwrap();
+        let steps = Schedule::parse_steps(&tbl).unwrap();
 
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0].engine, "datafusion");
         assert_eq!(steps[0].slt, "test.slt");
         assert_eq!(steps[1].engine, "spark");
         assert_eq!(steps[1].slt, "test2.slt");
+    }
+
+    #[test]
+    fn test_parse_steps_empty() {
+        let input = r#"
+            [[steps]]
+        "#;
+
+        let tbl: TomlTable = toml::from_str(input).unwrap();
+        let steps = Schedule::parse_steps(&tbl);
+
+        assert!(steps.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parse_engines_invalid_table() {
+        let toml_content = r#"
+            engines = "not_a_table"
+        "#;
+
+        let table: TomlTable = toml::from_str(toml_content).unwrap();
+        let result = Schedule::parse_engines(&table).await;
+
+        assert!(result.is_err());
     }
 }

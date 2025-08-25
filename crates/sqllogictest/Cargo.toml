@@ -34,7 +34,12 @@ indicatif = { workspace = true }
 sqllogictest = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
-tracing = {workspace = true}
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version

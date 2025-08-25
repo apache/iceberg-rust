@@ -59,3 +59,30 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use toml::Table as TomlTable;
+
+    use crate::engine::Engine;
+
+    #[tokio::test]
+    async fn test_engine_new_missing_type_key() {
+        let config = TomlTable::new();
+        let result = Engine::new(config).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_engine_invalid_type() {
+        let input = r#"
+            [engines]
+            random = { type = "random_engine", url = "http://localhost:8181" }
+        "#;
+        let tbl = toml::from_str(input).unwrap();
+        let result = Engine::new(tbl).await;
+
+        assert!(result.is_err());
+    }
+}
