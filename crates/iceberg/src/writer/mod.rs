@@ -78,6 +78,7 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
+//!         None,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
@@ -162,6 +163,8 @@
 //! async fn main() -> Result<()> {
 //!     // Build your file IO.
 //!     use iceberg::NamespaceIdent;
+//!     use iceberg::spec::{Literal, PartitionKey, Struct};
+//!
 //!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
 //!     let catalog = MemoryCatalog::new(file_io, None);
@@ -172,6 +175,11 @@
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
 //!         .await?;
+//!     let partition_key = PartitionKey::new(
+//!         table.metadata().default_partition_spec().as_ref().clone(),
+//!         table.metadata().current_schema().clone(),
+//!         Struct::from_iter(vec![Some(Literal::string("Seattle"))]),
+//!     );
 //!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
 //!         "test".to_string(),
@@ -183,6 +191,7 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
+//!         None,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
@@ -254,7 +263,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
-    // This function is used to guarantee the trait can be used as a object safe trait.
+    // This function is used to guarantee the trait can be used as an object safe trait.
     async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
         let _ = w
             .write(RecordBatch::new_empty(Schema::empty().into()))

@@ -43,8 +43,8 @@ use crate::arrow::{
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema,
+    NestedFieldRef, PartitionKey, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
+    Struct, StructType, TableMetadata, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -55,6 +55,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
     props: WriterProperties,
     schema: SchemaRef,
+    partition_key: Option<PartitionKey>,
     match_mode: FieldMatchMode,
 
     file_io: FileIO,
@@ -68,6 +69,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
     pub fn new(
         props: WriterProperties,
         schema: SchemaRef,
+        partition_key: Option<PartitionKey>,
         file_io: FileIO,
         location_generator: T,
         file_name_generator: F,
@@ -75,6 +77,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
         Self::new_with_match_mode(
             props,
             schema,
+            partition_key,
             FieldMatchMode::Id,
             file_io,
             location_generator,
@@ -86,6 +89,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
     pub fn new_with_match_mode(
         props: WriterProperties,
         schema: SchemaRef,
+        partition_key: Option<PartitionKey>,
         match_mode: FieldMatchMode,
         file_io: FileIO,
         location_generator: T,
@@ -94,6 +98,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
         Self {
             props,
             schema,
+            partition_key,
             match_mode,
             file_io,
             location_generator,
@@ -106,10 +111,12 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     type R = ParquetWriter;
 
     async fn build(self) -> Result<Self::R> {
-        let out_file = self.file_io.new_output(
-            self.location_generator
-                .generate_location(&self.file_name_generator.generate_file_name()),
-        )?;
+        let out_file = self
+            .file_io
+            .new_output(self.location_generator.generate_location(
+                self.partition_key,
+                &self.file_name_generator.generate_file_name(),
+            ))?;
 
         Ok(ParquetWriter {
             schema: self.schema.clone(),
@@ -880,6 +887,7 @@ mod tests {
                 .set_max_row_group_size(128)
                 .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -1077,6 +1085,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -1268,6 +1277,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(schema),
+            None,
             file_io.clone(),
             loccation_gen,
             file_name_gen,
@@ -1417,6 +1427,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             schema.clone(),
+            None,
             file_io.clone(),
             loccation_gen.clone(),
             file_name_gen.clone(),
@@ -1472,6 +1483,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             schema.clone(),
+            None,
             file_io.clone(),
             loccation_gen.clone(),
             file_name_gen.clone(),
@@ -1530,6 +1542,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             schema,
+            None,
             file_io.clone(),
             loccation_gen,
             file_name_gen,
@@ -1660,6 +1673,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            None,
             file_io.clone(),
             location_gen.clone(),
             file_name_gen,
@@ -1677,6 +1691,7 @@ mod tests {
         let pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -1729,6 +1744,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -1868,6 +1884,7 @@ mod tests {
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -2032,6 +2049,7 @@ mod tests {
                     .try_into()
                     .expect("Could not convert iceberg schema"),
             ),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -2212,6 +2230,7 @@ mod tests {
                     .try_into()
                     .expect("Could not convert iceberg schema"),
             ),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -2295,6 +2314,7 @@ mod tests {
                     .build()
                     .expect("Failed to create schema"),
             ),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,

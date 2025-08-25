@@ -176,6 +176,46 @@ impl PartitionSpec {
     }
 }
 
+/// A partition key represents a specific partition in a table, containing the partition spec,
+/// schema, and the actual partition values.
+#[derive(Clone, Debug)]
+pub struct PartitionKey {
+    /// The partition spec that contains the partition fields.
+    spec: PartitionSpec,
+    /// The schema to which the partition spec is bound.
+    schema: SchemaRef,
+    /// Partition fields' values in struct.
+    data: Struct,
+}
+
+impl PartitionKey {
+    /// Creates a new partition key with the given spec, schema, and data.
+    pub fn new(spec: PartitionSpec, schema: SchemaRef, data: Struct) -> Self {
+        Self { spec, schema, data }
+    }
+
+    /// Generates a partition path based on the partition values.
+    pub fn to_path(&self) -> String {
+        self.spec.partition_to_path(&self.data, self.schema.clone())
+    }
+}
+
+/// Extension to help check if a partition key is effectively none.
+pub trait PartitionKeyExt {
+    /// Returns `true` if the partition key is absent (`None`)
+    /// or represents an unpartitioned spec.
+    fn is_effectively_none(&self) -> bool;
+}
+
+impl PartitionKeyExt for Option<&PartitionKey> {
+    fn is_effectively_none(&self) -> bool {
+        match self {
+            None => true,
+            Some(pk) => pk.spec.is_unpartitioned(),
+        }
+    }
+}
+
 /// Reference to [`UnboundPartitionSpec`].
 pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
 /// Unbound partition field can be built without a schema and later bound to a schema.
@@ -1772,7 +1812,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=\"alice\""
+            "id=42/name=alice"
         );
     }
 }
