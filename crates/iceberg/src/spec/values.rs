@@ -356,7 +356,6 @@ impl Display for Datum {
             (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
                 write!(f, "{}", days_to_date(*val))
             }
@@ -375,6 +374,7 @@ impl Display for Datum {
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", nanoseconds_to_datetimetz(*val))
             }
+            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", Uuid::from_u128(*val))
             }
@@ -1264,6 +1264,17 @@ impl Datum {
             PrimitiveLiteral::Double(val) => val.is_nan(),
             PrimitiveLiteral::Float(val) => val.is_nan(),
             _ => false,
+        }
+    }
+
+    /// Returns a human-readable string representation of this literal.
+    ///
+    /// For string literals, this returns the raw string value without quotes.
+    /// For all other literals, it falls back to [`to_string()`].
+    pub(crate) fn to_human_string(&self) -> String {
+        match self.literal() {
+            PrimitiveLiteral::String(s) => s.to_string(),
+            _ => self.to_string()
         }
     }
 }
