@@ -271,8 +271,7 @@ mod tests {
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
     use futures::StreamExt;
-    use iceberg::io::FileIOType::Memory;
-    use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
         Struct, Type,
@@ -379,16 +378,10 @@ mod tests {
             MemoryCatalogBuilder::default()
                 .load(
                     "memory",
-                    HashMap::from([
-                        (
-                            MEMORY_CATALOG_IO_TYPE.to_string(),
-                            Memory.as_str().to_string(),
-                        ),
-                        (
-                            MEMORY_CATALOG_WAREHOUSE.to_string(),
-                            "memory://root".to_string(),
-                        ),
-                    ]),
+                    HashMap::from([(
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory://root".to_string(),
+                    )]),
                 )
                 .await
                 .unwrap(),

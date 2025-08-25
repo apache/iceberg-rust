@@ -101,34 +101,3 @@ pub use storage_s3::*;
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }
-
-/// All supported File IO types
-#[derive(Debug)]
-pub enum FileIOType {
-    /// In-Memory FileIO with scheme prefix 'memory'
-    Memory,
-    /// Local file system FileIO with scheme prefix 'file'
-    Fs,
-    /// S3 FileIO with scheme prefix 's3', 's3a'
-    S3,
-    /// GCS FileIO with scheme prefix 'gs', 'gcs'
-    Gcs,
-    /// Object Storage Service FileIO  with scheme prefix 'oss'
-    Oss,
-    /// Azdls FileIO with scheme prefix 'abfss', 'abfs', 'wasbs', 'wasb'
-    Azdls,
-}
-
-impl FileIOType {
-    /// Get string representation of file io type
-    pub const fn as_str(&self) -> &str {
-        match self {
-            FileIOType::Memory => "memory",
-            FileIOType::S3 => "s3",
-            FileIOType::Fs => "file",
-            FileIOType::Gcs => "gcs",
-            FileIOType::Oss => "oss",
-            FileIOType::Azdls => "azdls",
-        }
-    }
-}

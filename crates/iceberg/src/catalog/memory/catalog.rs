@@ -24,7 +24,7 @@ use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
-use crate::io::{FileIO, FileIOBuilder};
+use crate::io::FileIO;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
@@ -32,8 +32,8 @@ use crate::{
     TableCommit, TableCreation, TableIdent,
 };
 
-/// Memory catalog io type
-pub const MEMORY_CATALOG_IO_TYPE: &str = "io_type";
+// /// Memory catalog io type
+// pub const MEMORY_CATALOG_IO_TYPE: &str = "io_type";
 /// Memory catalog warehouse location
 pub const MEMORY_CATALOG_WAREHOUSE: &str = "warehouse";
 
@@ -48,8 +48,7 @@ impl Default for MemoryCatalogBuilder {
     fn default() -> Self {
         Self(MemoryCatalogConfig {
             name: None,
-            io_type: None,
-            warehouse: None,
+            warehouse: "".to_string(),
             props: HashMap::new(),
         })
     }
@@ -65,18 +64,21 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     ) -> impl Future<Output = Result<Self::C>> + Send {
         self.0.name = Some(name.into());
 
-        if props.contains_key(MEMORY_CATALOG_IO_TYPE) {
-            self.0.io_type = props.get(MEMORY_CATALOG_IO_TYPE).cloned()
-        }
+        // if props.contains_key(MEMORY_CATALOG_IO_TYPE) {
+        //     self.0.io_type = props.get(MEMORY_CATALOG_IO_TYPE).cloned()
+        // }
 
         if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.0.warehouse = props.get(MEMORY_CATALOG_WAREHOUSE).cloned()
+            self.0.warehouse = props
+                .get(MEMORY_CATALOG_WAREHOUSE)
+                .cloned()
+                .unwrap_or_default()
         }
 
         // Collect other remaining properties
         self.0.props = props
             .into_iter()
-            .filter(|(k, _)| k != MEMORY_CATALOG_IO_TYPE && k != MEMORY_CATALOG_WAREHOUSE)
+            .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
         let result = {
@@ -84,6 +86,11 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
+                ))
+            } else if self.0.warehouse.is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse is required",
                 ))
             } else {
                 Ok(MemoryCatalog::new(self.0))
@@ -97,8 +104,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 #[derive(Clone, Debug)]
 pub(crate) struct MemoryCatalogConfig {
     name: Option<String>,
-    io_type: Option<String>,
-    warehouse: Option<String>,
+    warehouse: String,
     props: HashMap<String, String>,
 }
 
@@ -107,7 +113,7 @@ pub(crate) struct MemoryCatalogConfig {
 pub struct MemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
-    warehouse_location: Option<String>,
+    warehouse_location: String,
 }
 
 impl MemoryCatalog {
@@ -115,16 +121,11 @@ impl MemoryCatalog {
     fn new(config: MemoryCatalogConfig) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: match config.io_type {
-                Some(scheme) => FileIOBuilder::new(scheme)
-                    .with_props(config.props)
-                    .build()
-                    .unwrap(),
-                None => FileIOBuilder::new_fs_io()
-                    .with_props(config.props)
-                    .build()
-                    .unwrap(),
-            },
+            file_io: FileIO::from_path(&config.warehouse)
+                .unwrap()
+                .with_props(config.props)
+                .build()
+                .unwrap(),
             warehouse_location: config.warehouse,
         }
     }
@@ -264,22 +265,9 @@ impl Catalog for MemoryCatalog {
             None => {
                 let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
                 let location_prefix = match namespace_properties.get(LOCATION) {
-                    Some(namespace_location) => Ok(namespace_location.clone()),
-                    None => match self.warehouse_location.clone() {
-                        Some(warehouse_location) => Ok(format!(
-                            "{}/{}",
-                            warehouse_location,
-                            namespace_ident.join("/")
-                        )),
-                        None => Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!(
-                                "Cannot create table {:?}. No default path is set, please specify a location when creating a table.",
-                                &table_ident
-                            ),
-                        )),
-                    },
-                }?;
+                    Some(namespace_location) => namespace_location.clone(),
+                    None => format!("{}/{}", self.warehouse_location, namespace_ident.join("/")),
+                };
 
                 let location = format!("{}/{}", location_prefix, table_ident.name());
 
@@ -1383,32 +1371,13 @@ mod tests {
      {
         let catalog = MemoryCatalogBuilder::default()
             .load("memory", HashMap::from([]))
-            .await
-            .unwrap();
+            .await;
 
-        let namespace_ident = NamespaceIdent::new("a".into());
-        create_namespace(&catalog, &namespace_ident).await;
-
-        let table_name = "tbl1";
-        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-
+        assert!(catalog.is_err());
         assert_eq!(
-            catalog
-                .create_table(
-                    &namespace_ident,
-                    TableCreation::builder()
-                        .name(table_name.into())
-                        .schema(simple_table_schema())
-                        .build(),
-                )
-                .await
-                .unwrap_err()
-                .to_string(),
-            format!(
-                "Unexpected => Cannot create table {:?}. No default path is set, please specify a location when creating a table.",
-                &expected_table_ident
-            )
-        )
+            catalog.unwrap_err().to_string(),
+            "DataInvalid => Catalog warehouse is required"
+        );
     }
 
     #[tokio::test]

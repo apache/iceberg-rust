@@ -60,16 +60,14 @@
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
-//!     use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
+//!     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
-//!             HashMap::from([
-//!                 (
-//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
-//!                     Memory.as_str().to_string(),
-//!                 ), // specify the file io type
-//!             ]),
+//!             HashMap::from([(
+//!                 MEMORY_CATALOG_WAREHOUSE.to_string(),
+//!                 "file:///path/to/warehouse".to_string(),
+//!             )]),
 //!         )
 //!         .await?;
 //!     // Add customized code to create a table first.
@@ -115,7 +113,7 @@
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
 //! use iceberg::io::FileIOType::Memory;
-//! use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
+//! use iceberg::memory::MemoryCatalogBuilder;
 //! use iceberg::spec::DataFile;
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 //! use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -175,15 +173,14 @@
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
+//!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
-//!             HashMap::from([
-//!                 (
-//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
-//!                     Memory.as_str().to_string(),
-//!                 ), // specify the file io type
-//!             ]),
+//!             HashMap::from([(
+//!                 MEMORY_CATALOG_WAREHOUSE.to_string(),
+//!                 "file:///path/to/warehouse".to_string(),
+//!             )]),
 //!         )
 //!         .await?;
 //!

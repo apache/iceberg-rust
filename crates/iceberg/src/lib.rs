@@ -27,21 +27,20 @@
 //! use futures::TryStreamExt;
 //! use iceberg::io::FileIOType::Memory;
 //! use iceberg::io::{FileIO, FileIOBuilder};
-//! use iceberg::memory::{MEMORY_CATALOG_IO_TYPE, MemoryCatalogBuilder};
+//! use iceberg::memory::MemoryCatalogBuilder;
 //! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
+//!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
-//!             HashMap::from([
-//!                 (
-//!                     MEMORY_CATALOG_IO_TYPE.to_string(),
-//!                     Memory.as_str().to_string(),
-//!                 ), // specify the file io type
-//!             ]),
+//!             HashMap::from([(
+//!                 MEMORY_CATALOG_WAREHOUSE.to_string(),
+//!                 "file:///path/to/warehouse".to_string(),
+//!             )]),
 //!         )
 //!         .await?;
 //!     // Load table from catalog.
