@@ -200,11 +200,19 @@ impl PartitionKey {
     }
 }
 
-/// Checks if a partition key is effectively none.
-pub fn partition_key_is_none(partition_key: Option<&PartitionKey>) -> bool {
-    match partition_key {
-        None => true,
-        Some(pk) => pk.spec.is_unpartitioned(),
+/// Extension to help check if a partition key is effectively none.
+pub trait PartitionKeyExt {
+    /// Returns `true` if the partition key is absent (`None`)
+    /// or represents an unpartitioned spec.
+    fn is_effectively_none(&self) -> bool;
+}
+
+impl PartitionKeyExt for Option<&PartitionKey> {
+    fn is_effectively_none(&self) -> bool {
+        match self {
+            None => true,
+            Some(pk) => pk.spec.is_unpartitioned(),
+        }
     }
 }
 
