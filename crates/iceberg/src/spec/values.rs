@@ -1274,7 +1274,7 @@ impl Datum {
     pub(crate) fn to_human_string(&self) -> String {
         match self.literal() {
             PrimitiveLiteral::String(s) => s.to_string(),
-            _ => self.to_string()
+            _ => self.to_string(),
         }
     }
 }
