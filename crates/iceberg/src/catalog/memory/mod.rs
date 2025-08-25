@@ -20,4 +20,4 @@
 mod catalog;
 mod namespace_state;
 
-pub use catalog::MemoryCatalog;
+pub use catalog::*;
