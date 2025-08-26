@@ -33,35 +33,31 @@ use iceberg::spec::{SchemaRef, TableMetadata, TableMetadataRef, Transform};
 /// for parallel processing while respecting Iceberg table partitioning semantics.
 ///
 /// This execution plan automatically determines the optimal partitioning strategy based on
-/// the table's partition specification and the configured write distribution mode:
+/// the table's partition specification and sort order:
 ///
 /// ## Partitioning Strategies
 ///
 /// - **Unpartitioned tables**: Uses round-robin distribution to ensure balanced load
 ///   across all workers, maximizing parallelism for write operations.
 ///
-/// - **Partitioned tables**: Uses hash partitioning on partition columns (identity transforms)
-///   and bucket columns to maintain data co-location. This ensures:
-///   - Better file clustering within partitions
-///   - Improved query pruning performance
-///   - Optimal join performance on partitioned columns
+/// - **Hash partitioning**: Used for tables with identity transforms or bucket transforms:
+///   - Identity partition columns (e.g., `PARTITIONED BY (user_id, category)`)
+///   - Bucket columns from partition spec or sort order
+///   - This ensures data co-location within partitions and buckets for optimal file clustering
 ///
-/// - **Range-distributed tables**: Approximates range distribution by hashing on sort order
-///   columns since DataFusion lacks native range exchange. Falls back to partition/bucket
-///   column hashing when available.
+/// - **Round-robin partitioning**: Used for:
+///   - Range-only partitions (e.g., date/time partitions that concentrate data)
+///   - Tables with only temporal/range transforms that don't provide good distribution
+///   - Unpartitioned or non-bucketed tables
 ///
-/// ## Write Distribution Modes
-///
-/// Respects the table's `write.distribution-mode` property:
-/// - `hash` (default): Distributes by partition and bucket columns
-/// - `range`: Distributes by sort order columns
-/// - `none`: Uses round-robin distribution
+/// - **Mixed transforms**: Tables with both range and identity/bucket transforms use hash
+///   partitioning on the identity/bucket columns for optimal distribution.
 ///
 /// ## Performance notes
 ///
 /// - Only repartitions when the input partitioning scheme differs from the desired strategy
 /// - Only repartitions when the input partition count differs from the target
-/// - Automatically detects optimal partition count from DataFusion's SessionConfig
+/// - Requires explicit target partition count for deterministic behavior
 /// - Preserves column order (partitions first, then buckets) for consistent file layout
 #[derive(Debug)]
 pub struct IcebergRepartitionExec {
@@ -82,18 +78,16 @@ pub struct IcebergRepartitionExec {
 impl IcebergRepartitionExec {
     /// Creates a new IcebergRepartitionExec with automatic partitioning strategy selection.
     ///
-    /// This constructor analyzes the table's partition specification, sort order, and write
-    /// distribution mode to determine the optimal repartitioning strategy for insert operations.
+    /// This constructor analyzes the table's partition specification and sort order to determine
+    /// the optimal repartitioning strategy for insert operations.
     ///
     /// # Arguments
     ///
     /// * `input` - The input execution plan providing data to be repartitioned
     /// * `table_schema` - The Iceberg table schema used to resolve column references
-    /// * `table_metadata` - The Iceberg table metadata containing partition spec, sort order,
-    ///   and table properties including write distribution mode
+    /// * `table_metadata` - The Iceberg table metadata containing partition spec and sort order
     /// * `target_partitions` - Target number of partitions for parallel processing:
-    ///   - `0`: Auto-detect from DataFusion's SessionConfig target_partitions (recommended)
-    ///   - `> 0`: Use explicit partition count for specific performance tuning
+    ///   - Must be > 0 (explicit partition count for performance tuning)
     ///
     /// # Returns
     ///
@@ -108,7 +102,7 @@ impl IcebergRepartitionExec {
     ///     input_plan,
     ///     table.schema_ref(),
     ///     table.metadata_ref(),
-    ///     state.config().target_partitions(),
+    ///     4, // Explicit partition count
     /// )?;
     /// ```
     pub fn new(
@@ -159,27 +153,28 @@ impl IcebergRepartitionExec {
         ))
     }
 
-    /// Determines the optimal partitioning strategy based on table metadata and distribution mode.
+    /// Determines the optimal partitioning strategy based on table metadata.
     ///
-    /// This function analyzes the table's partition specification, sort order, and write distribution
-    /// mode to select the most appropriate DataFusion partitioning strategy for insert operations.
+    /// This function analyzes the table's partition specification and sort order to select
+    /// the most appropriate DataFusion partitioning strategy for insert operations.
     ///
-    /// ## Distribution Mode Logic
+    /// ## Partitioning Strategy Logic
     ///
-    /// The strategy is determined by the table's `write.distribution-mode` property:
+    /// The strategy is determined by analyzing the table's partition transforms:
     ///
-    /// - **`hash` (default)**: Uses hash partitioning on:
-    ///   1. Identity partition columns (e.g., `PARTITIONED BY (year, month)`)
+    /// - **Hash partitioning**: Used only when there are identity transforms (direct column partitioning)
+    ///   or bucket transforms that provide good data distribution:
+    ///   1. Identity partition columns (e.g., `PARTITIONED BY (user_id, category)`)
     ///   2. Bucket columns from partition spec (e.g., `bucket(16, user_id)`)
     ///   3. Bucket columns from sort order
     ///   
     ///   This ensures data co-location within partitions and buckets for optimal file clustering.
     ///
-    /// - **`range`**: Approximates range distribution by hashing on sort order columns.
-    ///   Since DataFusion lacks native range exchange, this provides the closest alternative
-    ///   while maintaining some ordering characteristics.
-    ///
-    /// - **`none` or other**: Falls back to round-robin distribution for balanced load.
+    /// - **Round-robin partitioning**: Used for:
+    ///   - Unpartitioned tables
+    ///   - Range-only partitions (e.g., date/time partitions that concentrate data)
+    ///   - Tables with only temporal/range transforms that don't provide good distribution
+    ///   - Tables with no suitable hash columns
     ///
     /// ## Column Priority and Deduplication
     ///
@@ -187,13 +182,12 @@ impl IcebergRepartitionExec {
     /// 1. Partition identity columns (highest priority)
     /// 2. Bucket columns from partition spec  
     /// 3. Bucket columns from sort order
-    /// 4. Sort order columns (for range mode)
     ///
     /// Duplicate columns are automatically removed while preserving the priority order.
     ///
     /// ## Fallback Behavior
     ///
-    /// If no suitable hash columns are found (e.g., unpartitioned, non-bucketed table),
+    /// If no suitable hash columns are found (e.g., unpartitioned, range-only, or non-bucketed table),
     /// falls back to round-robin batch partitioning for even load distribution.
     fn determine_partitioning_strategy(
         input: &Arc<dyn ExecutionPlan>,
@@ -206,55 +200,39 @@ impl IcebergRepartitionExec {
         let partition_spec = table_metadata.default_partition_spec();
         let sort_order = table_metadata.default_sort_order();
 
-        // Determine distribution mode from table properties (default: hash)
-        let distribution_mode = table_metadata
-            .properties()
-            .get("write.distribution-mode")
-            .map(|s| s.as_str())
-            .unwrap_or("hash");
-
         // Column name iter for hashing depending on mode
-        let names_iter: Box<dyn Iterator<Item = &str>> = match distribution_mode {
-            // For range mode, approximate by hashing on sort order columns
-            // (DataFusion has no built-in range exchange)
-            "range" => Box::new(sort_order.fields.iter().filter_map(|sf| {
-                table_schema
-                    .field_by_id(sf.source_id)
-                    .map(|sf| sf.name.as_str())
-            })),
-            _ => {
-                // Partition identity columns
-                let part_names = partition_spec.fields().iter().filter_map(|pf| {
-                    if matches!(pf.transform, Transform::Identity) {
-                        table_schema
-                            .field_by_id(pf.source_id)
-                            .map(|sf| sf.name.as_str())
-                    } else {
-                        None
-                    }
-                });
-                // Bucket columns from partition spec
-                let bucket_names_part = partition_spec.fields().iter().filter_map(|pf| {
-                    if let Transform::Bucket(_) = pf.transform {
-                        table_schema
-                            .field_by_id(pf.source_id)
-                            .map(|sf| sf.name.as_str())
-                    } else {
-                        None
-                    }
-                });
-                // Bucket columns from sort order
-                let bucket_names_sort = sort_order.fields.iter().filter_map(|sf| {
-                    if let Transform::Bucket(_) = sf.transform {
-                        table_schema
-                            .field_by_id(sf.source_id)
-                            .map(|field| field.name.as_str())
-                    } else {
-                        None
-                    }
-                });
-                Box::new(part_names.chain(bucket_names_part).chain(bucket_names_sort))
-            }
+        let names_iter: Box<dyn Iterator<Item = &str>> = {
+            // Partition identity columns
+            let part_names = partition_spec.fields().iter().filter_map(|pf| {
+                if matches!(pf.transform, Transform::Identity) {
+                    table_schema
+                        .field_by_id(pf.source_id)
+                        .map(|sf| sf.name.as_str())
+                } else {
+                    None
+                }
+            });
+            // Bucket columns from partition spec
+            let bucket_names_part = partition_spec.fields().iter().filter_map(|pf| {
+                if let Transform::Bucket(_) = pf.transform {
+                    table_schema
+                        .field_by_id(pf.source_id)
+                        .map(|sf| sf.name.as_str())
+                } else {
+                    None
+                }
+            });
+            // Bucket columns from sort order
+            let bucket_names_sort = sort_order.fields.iter().filter_map(|sf| {
+                if let Transform::Bucket(_) = sf.transform {
+                    table_schema
+                        .field_by_id(sf.source_id)
+                        .map(|field| field.name.as_str())
+                } else {
+                    None
+                }
+            });
+            Box::new(part_names.chain(bucket_names_part).chain(bucket_names_sort))
         };
 
         // Order: partitions first, then buckets
@@ -276,7 +254,7 @@ impl IcebergRepartitionExec {
             return Ok(Partitioning::Hash(hash_exprs, target_partitions));
         }
 
-        // Fallback to round-robin for unpartitioned, non-bucketed tables
+        // Fallback to round-robin for unpartitioned, non-bucketed tables, and range-only partitions
         Ok(Partitioning::RoundRobinBatch(target_partitions))
     }
 
@@ -525,8 +503,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(repartition_exec.target_partitions, target_partitions);
-
-        println!("Using {} target partitions", target_partitions);
     }
 
     #[tokio::test]
@@ -558,8 +534,6 @@ mod tests {
 
         // Verify the stream was created successfully
         assert!(!stream.schema().fields().is_empty());
-
-        println!("DataFusion repartitioning integration test completed successfully");
     }
 
     #[tokio::test]
@@ -634,8 +608,6 @@ mod tests {
             matches!(partitioning, Partitioning::Hash(_, _)),
             "Should use hash partitioning for bucketed table"
         );
-
-        println!("Bucket-aware partitioning test completed successfully");
     }
 
     #[tokio::test]
@@ -744,90 +716,6 @@ mod tests {
             }
             _ => panic!("Expected Hash partitioning for partitioned+bucketed table"),
         }
-
-        println!("Combined partition+bucket strategy test completed successfully");
-    }
-
-    #[tokio::test]
-    async fn test_range_distribution_mode() {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "timestamp",
-                    Type::Primitive(PrimitiveType::Timestamp),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "value",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            ])
-            .build()
-            .unwrap();
-
-        let sort_order = SortOrder::builder()
-            .with_order_id(1)
-            .with_sort_field(SortField {
-                source_id: 1, // timestamp column
-                transform: Transform::Identity,
-                direction: SortDirection::Ascending,
-                null_order: NullOrder::First,
-            })
-            .build(&schema)
-            .unwrap();
-
-        let partition_spec = iceberg::spec::PartitionSpec::builder(schema.clone())
-            .build()
-            .unwrap();
-
-        let mut properties = std::collections::HashMap::new();
-        properties.insert("write.distribution-mode".to_string(), "range".to_string());
-
-        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
-            schema,
-            partition_spec,
-            sort_order,
-            "/test/range_table".to_string(),
-            iceberg::spec::FormatVersion::V2,
-            properties,
-        )
-        .unwrap();
-
-        let table_metadata = table_metadata_builder.build().unwrap();
-        let table = Table::builder()
-            .metadata(table_metadata.metadata)
-            .identifier(TableIdent::from_strs(["test", "range_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
-            .metadata_location("/test/range_metadata.json".to_string())
-            .build()
-            .unwrap();
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            ArrowField::new(
-                "timestamp",
-                ArrowDataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
-                false,
-            ),
-            ArrowField::new("value", ArrowDataType::Int64, false),
-        ]));
-        let input = Arc::new(EmptyExec::new(arrow_schema));
-        let repartition_exec = IcebergRepartitionExec::new(
-            input,
-            table.metadata().current_schema().clone(),
-            table.metadata_ref(),
-            4,
-        )
-        .unwrap();
-
-        // Should use hash partitioning on sort order columns for range mode
-        let partitioning = repartition_exec.properties().output_partitioning();
-        assert!(
-            matches!(partitioning, Partitioning::Hash(_, _)),
-            "Should use hash partitioning for range distribution mode"
-        );
-
-        println!("Range distribution mode test completed successfully");
     }
 
     #[tokio::test]
@@ -883,8 +771,6 @@ mod tests {
             matches!(partitioning, Partitioning::RoundRobinBatch(_)),
             "Should use round-robin for 'none' distribution mode"
         );
-
-        println!("None distribution mode fallback test completed successfully");
     }
 
     #[tokio::test]
@@ -900,7 +786,160 @@ mod tests {
             Arc::ptr_eq(&schema_ref_1, &schema_ref_2),
             "schema_ref() should return the same Arc as manual approach"
         );
+    }
 
-        println!("Schema ref convenience method test completed successfully");
+    #[tokio::test]
+    async fn test_range_only_partitions_use_round_robin() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "date",
+                    Type::Primitive(PrimitiveType::Date),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "amount",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = iceberg::spec::PartitionSpec::builder(schema.clone())
+            .add_partition_field("date", "date_day", Transform::Day)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
+            schema,
+            partition_spec,
+            sort_order,
+            "/test/range_only_table".to_string(),
+            iceberg::spec::FormatVersion::V2,
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let table_metadata = table_metadata_builder.build().unwrap();
+        let table = Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "range_only_table"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .metadata_location("/test/range_only_metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("date", ArrowDataType::Date32, false),
+            ArrowField::new("amount", ArrowDataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(arrow_schema));
+        let repartition_exec = IcebergRepartitionExec::new(
+            input,
+            table.metadata().current_schema().clone(),
+            table.metadata_ref(),
+            4,
+        )
+        .unwrap();
+
+        let partitioning = repartition_exec.properties().output_partitioning();
+        assert!(
+            matches!(partitioning, Partitioning::RoundRobinBatch(_)),
+            "Should use round-robin for range-only partitions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mixed_transforms_use_hash_partitioning() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "date",
+                    Type::Primitive(PrimitiveType::Date),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "user_id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::required(
+                    3,
+                    "amount",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        // Create partition spec with both range (date) and identity (user_id) transforms
+        let partition_spec = iceberg::spec::PartitionSpec::builder(schema.clone())
+            .add_partition_field("date", "date_day", Transform::Day)
+            .unwrap()
+            .add_partition_field("user_id", "user_id", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
+            schema,
+            partition_spec,
+            sort_order,
+            "/test/mixed_transforms_table".to_string(),
+            iceberg::spec::FormatVersion::V2,
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let table_metadata = table_metadata_builder.build().unwrap();
+        let table = Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "mixed_transforms_table"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .metadata_location("/test/mixed_transforms_metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("date", ArrowDataType::Date32, false),
+            ArrowField::new("user_id", ArrowDataType::Int64, false),
+            ArrowField::new("amount", ArrowDataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(arrow_schema));
+        let repartition_exec = IcebergRepartitionExec::new(
+            input,
+            table.metadata().current_schema().clone(),
+            table.metadata_ref(),
+            4,
+        )
+        .unwrap();
+
+        let partitioning = repartition_exec.properties().output_partitioning();
+        match partitioning {
+            Partitioning::Hash(exprs, _) => {
+                assert_eq!(
+                    exprs.len(),
+                    1,
+                    "Should have one hash column (user_id identity transform)"
+                );
+                let column_names: Vec<String> = exprs
+                    .iter()
+                    .filter_map(|expr| {
+                        expr.as_any()
+                            .downcast_ref::<Column>()
+                            .map(|col| col.name().to_string())
+                    })
+                    .collect();
+                assert!(
+                    column_names.contains(&"user_id".to_string()),
+                    "Should include identity transform column 'user_id'"
+                );
+            }
+            _ => panic!("Expected Hash partitioning for table with identity transforms"),
+        }
     }
 }
