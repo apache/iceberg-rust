@@ -742,18 +742,15 @@ impl Catalog for GlueCatalog {
             match error {
                 CreateTableError::EntityNotFoundException(_) => Error::new(
                     ErrorKind::NamespaceNotFound,
-                    format!("Database {} does not exist", db_name),
+                    format!("Database {db_name} does not exist"),
                 ),
                 CreateTableError::AlreadyExistsException(_) => Error::new(
                     ErrorKind::TableAlreadyExists,
-                    format!("Table {}.{} already exists", db_name, table_name),
+                    format!("Table {table_ident} already exists"),
                 ),
                 _ => Error::new(
                     ErrorKind::Unexpected,
-                    format!(
-                        "Failed to register table {}.{} due to AWS SDK error",
-                        db_name, table_name
-                    ),
+                    format!("Failed to register table {table_ident} due to AWS SDK error"),
                 ),
             }
             .with_source(anyhow!("aws sdk error: {:?}", error))
