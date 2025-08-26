@@ -20,6 +20,7 @@ use std::fmt::Debug;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
@@ -700,15 +701,70 @@ impl Catalog for GlueCatalog {
         }
     }
 
+    /// registers an existing table into the Glue Catalog.
+    ///
+    /// Converts the provided table identifier and metadata location into a
+    /// Glue-compatible table representation, and attempts to create the
+    /// corresponding table in the Glue Catalog.
+    ///
+    /// # Returns
+    /// Returns `Ok(Table)` if the table is successfully registered and loaded.
+    /// If the registration fails due to validation issues, existing table conflicts,
+    /// metadata problems, or errors during the registration or loading process,
+    /// an `Err(...)` is returned.
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table_ident: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        let db_name = validate_namespace(table_ident.namespace())?;
+        let table_name = table_ident.name();
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+
+        let table_input = convert_to_glue_table(
+            table_name,
+            metadata_location.clone(),
+            &metadata,
+            metadata.properties(),
+            None,
+        )?;
+
+        let builder = self
+            .client
+            .0
+            .create_table()
+            .database_name(&db_name)
+            .table_input(table_input);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(|e| {
+            let error = e.into_service_error();
+            match error {
+                CreateTableError::EntityNotFoundException(_) => Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Database {} does not exist", db_name),
+                ),
+                CreateTableError::AlreadyExistsException(_) => Error::new(
+                    ErrorKind::TableAlreadyExists,
+                    format!("Table {}.{} already exists", db_name, table_name),
+                ),
+                _ => Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Failed to register table {}.{} due to AWS SDK error",
+                        db_name, table_name
+                    ),
+                ),
+            }
+            .with_source(anyhow!("aws sdk error: {:?}", error))
+        })?;
+
+        Ok(Table::builder()
+            .identifier(table_ident.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .file_io(self.file_io())
+            .build()?)
     }
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {

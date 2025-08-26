@@ -476,7 +476,10 @@ async fn test_register_table() -> Result<()> {
     let namespace = NamespaceIdent::new("test_register_table".into());
     set_test_namespace(&catalog, &namespace).await?;
 
-    let creation = set_table_creation(Some("s3a://warehouse/hive/test_register_table".into()), "my_table")?;
+    let creation = set_table_creation(
+        Some("s3a://warehouse/hive/test_register_table".into()),
+        "my_table",
+    )?;
     let table = catalog.create_table(&namespace, creation).await?;
     let metadata_location = table
         .metadata_location()
@@ -492,7 +495,7 @@ async fn test_register_table() -> Result<()> {
 
     assert_eq!(registered.identifier(), &ident);
     assert_eq!(
-        registered.metadata_location().as_deref(),
+        registered.metadata_location(),
         Some(metadata_location.as_str())
     );
 
