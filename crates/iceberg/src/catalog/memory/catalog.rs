@@ -62,10 +62,6 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     ) -> impl Future<Output = Result<Self::C>> + Send {
         self.0.name = Some(name.into());
 
-        // if props.contains_key(MEMORY_CATALOG_IO_TYPE) {
-        //     self.0.io_type = props.get(MEMORY_CATALOG_IO_TYPE).cloned()
-        // }
-
         if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
             self.0.warehouse = props
                 .get(MEMORY_CATALOG_WAREHOUSE)
@@ -91,7 +87,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                     "Catalog warehouse is required",
                 ))
             } else {
-                Ok(MemoryCatalog::new(self.0))
+                MemoryCatalog::new(self.0)
             }
         };
 
@@ -116,16 +112,14 @@ pub struct MemoryCatalog {
 
 impl MemoryCatalog {
     /// Creates a memory catalog.
-    fn new(config: MemoryCatalogConfig) -> Self {
-        Self {
+    fn new(config: MemoryCatalogConfig) -> Result<Self> {
+        Ok(Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIO::from_path(&config.warehouse)
-                .unwrap()
+            file_io: FileIO::from_path(&config.warehouse)?
                 .with_props(config.props)
-                .build()
-                .unwrap(),
+                .build()?,
             warehouse_location: config.warehouse,
-        }
+        })
     }
 
     /// Loads a table from the locked namespace state.
