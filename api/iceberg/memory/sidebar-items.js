@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["MemoryCatalog"]};
+window.SIDEBAR_ITEMS = {"constant":["MEMORY_CATALOG_WAREHOUSE"],"struct":["MemoryCatalog","MemoryCatalogBuilder"]};
