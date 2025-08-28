@@ -226,6 +226,8 @@ impl ManifestListWriter {
 
 /// This is a helper module that defines the schema field of the manifest list entry.
 mod _const_schema {
+
+ use crate::spec::{Literal,PrimitiveLiteral};
     use std::sync::Arc;
 
     use apache_avro::Schema as AvroSchema;
@@ -233,7 +235,7 @@ mod _const_schema {
 
     use crate::avro::schema_to_avro_schema;
     use crate::spec::{
-        ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
+        ListType, ManifestContentType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type
     };
 
     static MANIFEST_PATH: Lazy<NestedFieldRef> = {
@@ -268,8 +270,9 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 517,
                 "content",
-                Type::Primitive(PrimitiveType::Int),
-            ))
+                Type::Primitive(PrimitiveType::Int)).with_initial_default(
+                    Literal::Primitive(PrimitiveLiteral::Int(ManifestContentType::Data as i32)))
+            )
         })
     };
     static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
@@ -277,8 +280,10 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 515,
                 "sequence_number",
-                Type::Primitive(PrimitiveType::Long),
-            ))
+                Type::Primitive(PrimitiveType::Long)).with_initial_default(
+                    Literal::Primitive(PrimitiveLiteral::Long(0))
+                )
+            )
         })
     };
     static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
@@ -286,8 +291,10 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 516,
                 "min_sequence_number",
-                Type::Primitive(PrimitiveType::Long),
-            ))
+                Type::Primitive(PrimitiveType::Long)).with_initial_default(
+                    Literal::Primitive(PrimitiveLiteral::Long(0))
+                )
+            )
         })
     };
     static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
@@ -1304,7 +1311,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, Some(0), 1);
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
