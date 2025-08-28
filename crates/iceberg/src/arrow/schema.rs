@@ -378,7 +378,16 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
             }
+            DataType::UInt8 | DataType::UInt16 => Ok(Type::Primitive(PrimitiveType::Int)),
+            DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
+            DataType::UInt64 => {
+                // Block uint64 - no safe casting option
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "UInt64 is not supported. Use Int64 for values ≤ 9,223,372,036,854,775,807 or Decimal(20,0) for full uint64 range.",
+                ))
+            }
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
             DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32).map_err(|e| {
@@ -1714,6 +1723,49 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean));
             let iceberg_type = Type::Primitive(PrimitiveType::Boolean);
             assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_unsigned_integer_type_conversion() {
+        let test_cases = vec![
+            (DataType::UInt8, PrimitiveType::Int),
+            (DataType::UInt16, PrimitiveType::Int),
+            (DataType::UInt32, PrimitiveType::Long),
+        ];
+
+        for (arrow_type, expected_iceberg_type) in test_cases {
+            let arrow_field = Field::new("test", arrow_type.clone(), false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
+            let arrow_schema = ArrowSchema::new(vec![arrow_field]);
+
+            let iceberg_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
+            let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
+
+            assert!(
+                matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
+                "Expected {:?} to map to {:?}",
+                arrow_type,
+                expected_iceberg_type
+            );
+        }
+
+        // Test UInt64 blocking
+        {
+            let arrow_field = Field::new("test", DataType::UInt64, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            );
+            let arrow_schema = ArrowSchema::new(vec![arrow_field]);
+
+            let result = arrow_schema_to_schema(&arrow_schema);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("UInt64 is not supported")
+            );
         }
     }
 
