@@ -27,7 +27,8 @@ use uuid::Uuid;
 use super::get_field_id;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType, visit_struct_with_partner,
+    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
+    visit_type_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -601,6 +602,20 @@ pub fn arrow_struct_to_literal(
         struct_array,
         &mut ArrowArrayToIcebergStructConverter,
         &ArrowArrayAccessor::new(),
+    )
+}
+
+/// Convert arrow primitive array to iceberg primitive value array.
+/// This function will assume the schema of arrow struct array is the same as iceberg struct type.
+pub fn arrow_primitive_to_literal(
+    primitive_array: &ArrayRef,
+    ty: &Type,
+) -> Result<Vec<Option<Literal>>> {
+    visit_type_with_partner(
+        ty,
+        primitive_array,
+        &mut ArrowArrayToIcebergStructConverter,
+        &ArrowArrayAccessor,
     )
 }
 
