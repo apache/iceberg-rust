@@ -27,7 +27,7 @@ from pathlib import Path
 import datafusion
 
 assert (
-    datafusion.__version__ >= "47"
+    datafusion.__version__ >= "45"
 )  # iceberg table provider only works for datafusion >= 45
 
 
