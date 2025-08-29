@@ -227,7 +227,6 @@ impl ManifestListWriter {
 /// This is a helper module that defines the schema field of the manifest list entry.
 mod _const_schema {
 
- use crate::spec::{Literal,PrimitiveLiteral};
     use std::sync::Arc;
 
     use apache_avro::Schema as AvroSchema;
@@ -235,7 +234,7 @@ mod _const_schema {
 
     use crate::avro::schema_to_avro_schema;
     use crate::spec::{
-        ListType, ManifestContentType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type
+        ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
     };
 
     static MANIFEST_PATH: Lazy<NestedFieldRef> = {
@@ -270,9 +269,8 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 517,
                 "content",
-                Type::Primitive(PrimitiveType::Int)).with_initial_default(
-                    Literal::Primitive(PrimitiveLiteral::Int(ManifestContentType::Data as i32)))
-            )
+                Type::Primitive(PrimitiveType::Int),
+            ))
         })
     };
     static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
@@ -280,10 +278,8 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 515,
                 "sequence_number",
-                Type::Primitive(PrimitiveType::Long)).with_initial_default(
-                    Literal::Primitive(PrimitiveLiteral::Long(0))
-                )
-            )
+                Type::Primitive(PrimitiveType::Long),
+            ))
         })
     };
     static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
@@ -291,10 +287,8 @@ mod _const_schema {
             Arc::new(NestedField::required(
                 516,
                 "min_sequence_number",
-                Type::Primitive(PrimitiveType::Long)).with_initial_default(
-                    Literal::Primitive(PrimitiveLiteral::Long(0))
-                )
-            )
+                Type::Primitive(PrimitiveType::Long),
+            ))
         })
     };
     static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
@@ -803,8 +797,11 @@ pub(super) mod _serde {
         pub manifest_path: String,
         pub manifest_length: i64,
         pub partition_spec_id: i32,
+        #[serde(default = "v2_default_content_for_v1")]
         pub content: i32,
+        #[serde(default = "v2_default_sequence_number_for_v1")]
         pub sequence_number: i64,
+        #[serde(default = "v2_default_min_sequence_number_for_v1")]
         pub min_sequence_number: i64,
         pub added_snapshot_id: i64,
         #[serde(alias = "added_data_files_count", alias = "added_files_count")]
@@ -841,6 +838,18 @@ pub(super) mod _serde {
                 key_metadata: self.key_metadata.map(|b| b.into_vec()),
             })
         }
+    }
+
+    fn v2_default_content_for_v1() -> i32 {
+        super::ManifestContentType::Data as i32
+    }
+
+    fn v2_default_sequence_number_for_v1() -> i64 {
+        0
+    }
+
+    fn v2_default_min_sequence_number_for_v1() -> i64 {
+        0
     }
 
     impl ManifestFileV1 {
