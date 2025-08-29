@@ -226,7 +226,6 @@ impl ManifestListWriter {
 
 /// This is a helper module that defines the schema field of the manifest list entry.
 mod _const_schema {
-
     use std::sync::Arc;
 
     use apache_avro::Schema as AvroSchema;
