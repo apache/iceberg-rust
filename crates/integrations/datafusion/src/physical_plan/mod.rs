@@ -24,5 +24,5 @@ pub(crate) mod write;
 
 pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
 
-pub use repartition::IcebergRepartitionExec;
+pub use repartition::repartition;
 pub use scan::IcebergTableScan;
