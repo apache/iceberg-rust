@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     execute_input_stream,
 };
 use futures::StreamExt;
-use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
 use iceberg::spec::{
     DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
     PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
@@ -232,9 +232,10 @@ impl ExecutionPlan for IcebergWriteExec {
         }
 
         // Create data file writer builder
-        let parquet_file_writer_builder = ParquetWriterBuilder::new(
+        let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
+            FieldMatchMode::Name,
             self.table.file_io().clone(),
             DefaultLocationGenerator::new(self.table.metadata().clone())
                 .map_err(to_datafusion_error)?,
@@ -327,11 +328,11 @@ mod tests {
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
     use futures::{StreamExt, stream};
-    use iceberg::io::FileIOBuilder;
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
         DataFileFormat, NestedField, PrimitiveType, Schema, Type, deserialize_data_file_from_json,
     };
-    use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+    use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
 
@@ -424,9 +425,14 @@ mod tests {
     }
 
     /// Helper function to create a memory catalog
-    fn get_iceberg_catalog() -> MemoryCatalog {
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        MemoryCatalog::new(file_io, Some(temp_path()))
+    async fn get_iceberg_catalog() -> MemoryCatalog {
+        MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),
+            )
+            .await
+            .unwrap()
     }
 
     /// Helper function to create a test table schema
@@ -457,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn test_iceberg_write_exec() -> Result<()> {
         // 1. Set up test environment
-        let iceberg_catalog = get_iceberg_catalog();
+        let iceberg_catalog = get_iceberg_catalog().await;
         let namespace = NamespaceIdent::new("test_namespace".to_string());
 
         // Create namespace

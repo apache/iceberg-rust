@@ -45,7 +45,7 @@ jobs:
           - "crates/catalog/sql"
           - "crates/integrations/datafusion"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder

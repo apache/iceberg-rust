@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2
