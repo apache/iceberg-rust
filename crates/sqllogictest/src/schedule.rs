@@ -31,6 +31,8 @@ pub struct Schedule {
     engines: HashMap<String, Engine>,
     /// List of test steps to run
     steps: Vec<Step>,
+    /// Path of the schedule file
+    schedule_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,11 +44,16 @@ pub struct Step {
 }
 
 impl Schedule {
-    pub fn new(engines: HashMap<String, Engine>, steps: Vec<Step>) -> Self {
-        Self { engines, steps }
+    pub fn new(engines: HashMap<String, Engine>, steps: Vec<Step>, schedule_file: String) -> Self {
+        Self {
+            engines,
+            steps,
+            schedule_file,
+        }
     }
 
     pub async fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
         let content = read_to_string(path)?;
         let toml_value = content.parse::<Value>()?;
         let toml_table = toml_value
@@ -56,10 +63,12 @@ impl Schedule {
         let engines = Schedule::parse_engines(toml_table).await?;
         let steps = Schedule::parse_steps(toml_table)?;
 
-        Ok(Self::new(engines, steps))
+        Ok(Self::new(engines, steps, path_str))
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
+        info!("Starting test run with schedule: {}", self.schedule_file);
+
         for (idx, step) in self.steps.iter().enumerate() {
             info!(
                 "Running step {}/{}, using engine {}, slt file path: {}",
@@ -74,11 +83,16 @@ impl Schedule {
                 .get_mut(&step.engine)
                 .ok_or_else(|| anyhow!("Engine {} not found", step.engine))?;
 
-            engine
-                .run_slt_file(&PathBuf::from(step.slt.clone()))
-                .await?;
+            let step_sql_path = PathBuf::from(format!(
+                "{}/testdata/slts/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                &step.slt
+            ));
+
+            engine.run_slt_file(&PathBuf::from(step_sql_path)).await?;
+
             info!(
-                "Step {}/{}, engine {}, slt file path: {} finished",
+                "Completed step {}/{}, engine {}, slt file path: {}",
                 idx + 1,
                 self.steps.len(),
                 &step.engine,
