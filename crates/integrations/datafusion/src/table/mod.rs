@@ -52,7 +52,7 @@ pub struct IcebergTableProvider {
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
     /// The catalog that the table belongs to.
-    catalog: Option<Arc<dyn Catalog>>,
+    catalog: Option<Arc<dyn Catalog + Send + Sync + 'static>>,
 }
 
 impl IcebergTableProvider {
