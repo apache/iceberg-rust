@@ -440,7 +440,7 @@ async fn test_metadata_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_insert_into() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_insert_into".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -553,7 +553,7 @@ fn get_nested_struct_type() -> StructType {
 
 #[tokio::test]
 async fn test_insert_into_nested() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_insert_nested".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
     let table_name = "nested_table";
