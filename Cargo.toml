@@ -42,14 +42,14 @@ rust-version = "1.85"
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
-arrow-arith = { version = "55" }
-arrow-array = { version = "55" }
-arrow-buffer = { version = "55" }
-arrow-cast = { version = "55" }
-arrow-ord = { version = "55" }
-arrow-schema = { version = "55" }
-arrow-select = { version = "55" }
-arrow-string = { version = "55" }
+arrow-arith = { version = "55.1" }
+arrow-array = { version = "55.1" }
+arrow-buffer = { version = "55.1" }
+arrow-cast = { version = "55.1" }
+arrow-ord = { version = "55.1" }
+arrow-schema = { version = "55.1" }
+arrow-select = { version = "55.1" }
+arrow-string = { version = "55.1" }
 as-any = "0.3.2"
 async-std = "1.12"
 async-trait = "0.1.88"
@@ -63,9 +63,9 @@ bytes = "1.10"
 chrono = "0.4.40"
 clap = { version = "4.5.35", features = ["derive", "cargo"] }
 ctor = "0.2.8"
-datafusion = "47"
-datafusion-cli = "47"
-datafusion-sqllogictest = "47"
+datafusion = "49.0.2"
+datafusion-cli = "49.0.2"
+datafusion-sqllogictest = "49.0.2"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
