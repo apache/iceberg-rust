@@ -16,6 +16,38 @@
 // under the License.
 
 //! Iceberg REST API implementation.
+//!
+//! To build a rest catalog with configurations
+//! # Example
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::CatalogBuilder;
+//! use iceberg_catalog_rest::{
+//!     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let catalog = RestCatalogBuilder::default()
+//!         .load(
+//!             "rest",
+//!             HashMap::from([
+//!                 (
+//!                     REST_CATALOG_PROP_URI.to_string(),
+//!                     "http://localhost:8181".to_string(),
+//!                 ),
+//!                 (
+//!                     REST_CATALOG_PROP_WAREHOUSE.to_string(),
+//!                     "s3://warehouse".to_string(),
+//!                 ),
+//!             ]),
+//!         )
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
 
 #![deny(missing_docs)]
 

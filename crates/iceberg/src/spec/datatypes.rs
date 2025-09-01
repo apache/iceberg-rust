@@ -1177,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_type_compatitable() {
+    fn test_primitive_type_compatible() {
         let pairs = vec![
             (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(true)),
             (PrimitiveType::Int, PrimitiveLiteral::Int(1)),

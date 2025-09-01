@@ -41,7 +41,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -81,7 +81,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -101,7 +101,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -126,7 +126,7 @@ jobs:
           root-reserve-mb: 10240
           temp-reserve-mb: 10240
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -137,8 +137,8 @@ jobs:
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
 
-      - name: Async-std Test
-        run: cargo test --no-fail-fast --all-targets --no-default-features  --features "async-std" --features "storage-all" --workspace
+      - name: Smol Test
+        run: cargo test --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
@@ -147,7 +147,7 @@ jobs:
     name: Verify MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Generate minimal versions lockfile

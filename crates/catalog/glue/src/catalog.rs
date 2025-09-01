@@ -18,7 +18,10 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_sdk_glue::operation::create_table::CreateTableError;
+use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
     FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
@@ -26,10 +29,9 @@ use iceberg::io::{
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
-use typed_builder::TypedBuilder;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
@@ -40,15 +42,90 @@ use crate::{
     AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
 };
 
-#[derive(Debug, TypedBuilder)]
+/// Glue catalog URI
+pub const GLUE_CATALOG_PROP_URI: &str = "uri";
+/// Glue catalog id
+pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
+/// Glue catalog warehouse location
+pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+
+/// Builder for [`GlueCatalog`].
+#[derive(Debug)]
+pub struct GlueCatalogBuilder(GlueCatalogConfig);
+
+impl Default for GlueCatalogBuilder {
+    fn default() -> Self {
+        Self(GlueCatalogConfig {
+            name: None,
+            uri: None,
+            catalog_id: None,
+            warehouse: "".to_string(),
+            props: HashMap::new(),
+        })
+    }
+}
+
+impl CatalogBuilder for GlueCatalogBuilder {
+    type C = GlueCatalog;
+
+    fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send {
+        self.0.name = Some(name.into());
+
+        if props.contains_key(GLUE_CATALOG_PROP_URI) {
+            self.0.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
+        }
+
+        if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
+            self.0.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
+        }
+
+        if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
+            self.0.warehouse = props
+                .get(GLUE_CATALOG_PROP_WAREHOUSE)
+                .cloned()
+                .unwrap_or_default();
+        }
+
+        // Collect other remaining properties
+        self.0.props = props
+            .into_iter()
+            .filter(|(k, _)| {
+                k != GLUE_CATALOG_PROP_URI
+                    && k != GLUE_CATALOG_PROP_CATALOG_ID
+                    && k != GLUE_CATALOG_PROP_WAREHOUSE
+            })
+            .collect();
+
+        async move {
+            if self.0.name.is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name is required",
+                ));
+            }
+            if self.0.warehouse.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse is required",
+                ));
+            }
+
+            GlueCatalog::new(self.0).await
+        }
+    }
+}
+
+#[derive(Debug)]
 /// Glue Catalog configuration
-pub struct GlueCatalogConfig {
-    #[builder(default, setter(strip_option(fallback = uri_opt)))]
+pub(crate) struct GlueCatalogConfig {
+    name: Option<String>,
     uri: Option<String>,
-    #[builder(default, setter(strip_option(fallback = catalog_id_opt)))]
     catalog_id: Option<String>,
     warehouse: String,
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
@@ -71,7 +148,7 @@ impl Debug for GlueCatalog {
 
 impl GlueCatalog {
     /// Create a new glue catalog
-    pub async fn new(config: GlueCatalogConfig) -> Result<Self> {
+    async fn new(config: GlueCatalogConfig) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
         let mut file_io_props = config.props.clone();
         if !file_io_props.contains_key(S3_ACCESS_KEY_ID) {
@@ -624,21 +701,119 @@ impl Catalog for GlueCatalog {
         }
     }
 
+    /// registers an existing table into the Glue Catalog.
+    ///
+    /// Converts the provided table identifier and metadata location into a
+    /// Glue-compatible table representation, and attempts to create the
+    /// corresponding table in the Glue Catalog.
+    ///
+    /// # Returns
+    /// Returns `Ok(Table)` if the table is successfully registered and loaded.
+    /// If the registration fails due to validation issues, existing table conflicts,
+    /// metadata problems, or errors during the registration or loading process,
+    /// an `Err(...)` is returned.
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table_ident: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        let db_name = validate_namespace(table_ident.namespace())?;
+        let table_name = table_ident.name();
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+
+        let table_input = convert_to_glue_table(
+            table_name,
+            metadata_location.clone(),
+            &metadata,
+            metadata.properties(),
+            None,
+        )?;
+
+        let builder = self
+            .client
+            .0
+            .create_table()
+            .database_name(&db_name)
+            .table_input(table_input);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(|e| {
+            let error = e.into_service_error();
+            match error {
+                CreateTableError::EntityNotFoundException(_) => Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Database {db_name} does not exist"),
+                ),
+                CreateTableError::AlreadyExistsException(_) => Error::new(
+                    ErrorKind::TableAlreadyExists,
+                    format!("Table {table_ident} already exists"),
+                ),
+                _ => Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Failed to register table {table_ident} due to AWS SDK error"),
+                ),
+            }
+            .with_source(anyhow!("aws sdk error: {:?}", error))
+        })?;
+
+        Ok(Table::builder()
+            .identifier(table_ident.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .file_io(self.file_io())
+            .build()?)
     }
 
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
-        ))
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let table_ident = commit.identifier().clone();
+        let table_namespace = validate_namespace(table_ident.namespace())?;
+        let current_table = self.load_table(&table_ident).await?;
+        let current_metadata_location = current_table.metadata_location_result()?.to_string();
+
+        let staged_table = commit.apply(current_table)?;
+        let staged_metadata_location = staged_table.metadata_location_result()?;
+
+        // Write new metadata
+        staged_table
+            .metadata()
+            .write_to(staged_table.file_io(), staged_metadata_location)
+            .await?;
+
+        // Persist staged table to Glue
+        let builder = self
+            .client
+            .0
+            .update_table()
+            .database_name(table_namespace)
+            .set_skip_archive(Some(true)) // todo make this configurable
+            .table_input(convert_to_glue_table(
+                table_ident.name(),
+                staged_metadata_location.to_string(),
+                staged_table.metadata(),
+                staged_table.metadata().properties(),
+                Some(current_metadata_location),
+            )?);
+        let builder = with_catalog_id!(builder, self.config);
+        let _ = builder.send().await.map_err(|e| {
+            let error = e.into_service_error();
+            match error {
+                UpdateTableError::EntityNotFoundException(_) => Error::new(
+                    ErrorKind::TableNotFound,
+                    format!("Table {table_ident} is not found"),
+                ),
+                UpdateTableError::ConcurrentModificationException(_) => Error::new(
+                    ErrorKind::CatalogCommitConflicts,
+                    format!("Commit failed for table: {table_ident}"),
+                )
+                .with_retryable(true),
+                _ => Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Operation failed for table: {table_ident} for hitting aws sdk error"),
+                ),
+            }
+            .with_source(anyhow!("aws sdk error: {:?}", error))
+        })?;
+
+        Ok(staged_table)
     }
 }

@@ -21,15 +21,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
-use iceberg::io::FileIOBuilder;
+use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
@@ -38,9 +38,14 @@ fn temp_path() -> String {
     temp_dir.path().to_str().unwrap().to_string()
 }
 
-fn get_iceberg_catalog() -> MemoryCatalog {
-    let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-    MemoryCatalog::new(file_io, Some(temp_path()))
+async fn get_iceberg_catalog() -> MemoryCatalog {
+    MemoryCatalogBuilder::default()
+        .load(
+            "memory",
+            HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),
+        )
+        .await
+        .unwrap()
 }
 
 fn get_struct_type() -> StructType {
@@ -86,7 +91,7 @@ fn get_table_creation(
 
 #[tokio::test]
 async fn test_provider_plan_stream_schema() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -139,7 +144,7 @@ async fn test_provider_plan_stream_schema() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_table_names() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_list_table_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -171,7 +176,7 @@ async fn test_provider_list_table_names() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_schema_names() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_provider_list_schema_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -196,7 +201,7 @@ async fn test_provider_list_schema_names() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_projection() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -264,7 +269,7 @@ async fn test_table_projection() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_predict_pushdown() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -309,7 +314,7 @@ async fn test_table_predict_pushdown() -> Result<()> {
 
 #[tokio::test]
 async fn test_metadata_table() -> Result<()> {
-    let iceberg_catalog = get_iceberg_catalog();
+    let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
@@ -428,6 +433,379 @@ async fn test_metadata_table() -> Result<()> {
             ]"#]],
         &[],
         None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_insert_into".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), "my_table", None)?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Verify table schema
+    let provider = ctx.catalog("catalog").unwrap();
+    let schema = provider.schema("test_insert_into").unwrap();
+    let table = schema.table("my_table").await.unwrap().unwrap();
+    let table_schema = table.schema();
+
+    let expected = [("foo1", &DataType::Int32), ("foo2", &DataType::Utf8)];
+    for (field, exp) in table_schema.fields().iter().zip(expected.iter()) {
+        assert_eq!(field.name(), exp.0);
+        assert_eq!(field.data_type(), exp.1);
+        assert!(!field.is_nullable())
+    }
+
+    // Insert data into the table
+    let df = ctx
+        .sql("INSERT INTO catalog.test_insert_into.my_table VALUES (1, 'alan'), (2, 'turing')")
+        .await
+        .unwrap();
+
+    // Verify the insert operation result
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert!(
+        batch.num_rows() == 1 && batch.num_columns() == 1,
+        "Results should only have one row and one column that has the number of rows inserted"
+    );
+    // Verify the number of rows inserted
+    let rows_inserted = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), 2);
+
+    // Refresh context to avoid getting stale table
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    ctx.register_catalog("catalog", catalog);
+
+    // Query the table to verify the inserted data
+    let df = ctx
+        .sql("SELECT * FROM catalog.test_insert_into.my_table")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    // Use check_record_batches to verify the data
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { name: "foo1", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            Field { name: "foo2", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} }"#]],
+        expect![[r#"
+            foo1: PrimitiveArray<Int32>
+            [
+              1,
+              2,
+            ],
+            foo2: StringArray
+            [
+              "alan",
+              "turing",
+            ]"#]],
+        &[],
+        Some("foo1"),
+    );
+
+    Ok(())
+}
+
+fn get_nested_struct_type() -> StructType {
+    // Create a nested struct type with:
+    // - address: STRUCT<street: STRING, city: STRING, zip: INT>
+    // - contact: STRUCT<email: STRING, phone: STRING>
+    StructType::new(vec![
+        NestedField::optional(
+            10,
+            "address",
+            Type::Struct(StructType::new(vec![
+                NestedField::required(11, "street", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(12, "city", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(13, "zip", Type::Primitive(PrimitiveType::Int)).into(),
+            ])),
+        )
+        .into(),
+        NestedField::optional(
+            20,
+            "contact",
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(21, "email", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(22, "phone", Type::Primitive(PrimitiveType::String)).into(),
+            ])),
+        )
+        .into(),
+    ])
+}
+
+#[tokio::test]
+async fn test_insert_into_nested() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_insert_nested".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+    let table_name = "nested_table";
+
+    // Create a schema with nested fields
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(3, "profile", Type::Struct(get_nested_struct_type())).into(),
+        ])
+        .build()?;
+
+    // Create the table with the nested schema
+    let creation = get_table_creation(temp_path(), table_name, Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Verify table schema
+    let provider = ctx.catalog("catalog").unwrap();
+    let schema = provider.schema("test_insert_nested").unwrap();
+    let table = schema.table("nested_table").await.unwrap().unwrap();
+    let table_schema = table.schema();
+
+    // Verify the schema has the expected structure
+    assert_eq!(table_schema.fields().len(), 3);
+    assert_eq!(table_schema.field(0).name(), "id");
+    assert_eq!(table_schema.field(1).name(), "name");
+    assert_eq!(table_schema.field(2).name(), "profile");
+    assert!(matches!(
+        table_schema.field(2).data_type(),
+        DataType::Struct(_)
+    ));
+
+    // In DataFusion, we need to use named_struct to create struct values
+    // Insert data with nested structs
+    let insert_sql = r#"
+    INSERT INTO catalog.test_insert_nested.nested_table
+    SELECT 
+        1 as id, 
+        'Alice' as name,
+        named_struct(
+            'address', named_struct(
+                'street', '123 Main St',
+                'city', 'San Francisco',
+                'zip', 94105
+            ),
+            'contact', named_struct(
+                'email', 'alice@example.com',
+                'phone', '555-1234'
+            )
+        ) as profile
+    UNION ALL
+    SELECT 
+        2 as id, 
+        'Bob' as name,
+        named_struct(
+            'address', named_struct(
+                'street', '456 Market St',
+                'city', 'San Jose',
+                'zip', 95113
+            ),
+            'contact', named_struct(
+                'email', 'bob@example.com',
+                'phone', NULL
+            )
+        ) as profile
+    "#;
+
+    // Execute the insert
+    let df = ctx.sql(insert_sql).await.unwrap();
+    let batches = df.collect().await.unwrap();
+
+    // Verify the insert operation result
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert!(batch.num_rows() == 1 && batch.num_columns() == 1);
+
+    // Verify the number of rows inserted
+    let rows_inserted = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), 2);
+
+    // Refresh context to avoid getting stale table
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    ctx.register_catalog("catalog", catalog);
+
+    // Query the table to verify the inserted data
+    let df = ctx
+        .sql("SELECT * FROM catalog.test_insert_nested.nested_table ORDER BY id")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    // Use check_record_batches to verify the data
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+            Field { name: "profile", data_type: Struct([Field { name: "address", data_type: Struct([Field { name: "street", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} }, Field { name: "contact", data_type: Struct([Field { name: "email", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }, Field { name: "phone", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }"#]],
+        expect![[r#"
+            id: PrimitiveArray<Int32>
+            [
+              1,
+              2,
+            ],
+            name: StringArray
+            [
+              "Alice",
+              "Bob",
+            ],
+            profile: StructArray
+            -- validity:
+            [
+              valid,
+              valid,
+            ]
+            [
+            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]))
+            StructArray
+            -- validity:
+            [
+              valid,
+              valid,
+            ]
+            [
+            -- child 0: "street" (Utf8)
+            StringArray
+            [
+              "123 Main St",
+              "456 Market St",
+            ]
+            -- child 1: "city" (Utf8)
+            StringArray
+            [
+              "San Francisco",
+              "San Jose",
+            ]
+            -- child 2: "zip" (Int32)
+            PrimitiveArray<Int32>
+            [
+              94105,
+              95113,
+            ]
+            ]
+            -- child 1: "contact" (Struct([Field { name: "email", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }, Field { name: "phone", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }]))
+            StructArray
+            -- validity:
+            [
+              valid,
+              valid,
+            ]
+            [
+            -- child 0: "email" (Utf8)
+            StringArray
+            [
+              "alice@example.com",
+              "bob@example.com",
+            ]
+            -- child 1: "phone" (Utf8)
+            StringArray
+            [
+              "555-1234",
+              null,
+            ]
+            ]
+            ]"#]],
+        &[],
+        Some("id"),
+    );
+
+    // Query with explicit field access to verify nested data
+    let df = ctx
+        .sql(
+            r#"
+            SELECT 
+                id, 
+                name,
+                profile.address.street,
+                profile.address.city,
+                profile.address.zip,
+                profile.contact.email,
+                profile.contact.phone
+            FROM catalog.test_insert_nested.nested_table 
+            ORDER BY id
+        "#,
+        )
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    // Use check_record_batches to verify the flattened data
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+            Field { name: "catalog.test_insert_nested.nested_table.profile[address][street]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+            Field { name: "catalog.test_insert_nested.nested_table.profile[address][city]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+            Field { name: "catalog.test_insert_nested.nested_table.profile[address][zip]", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+            Field { name: "catalog.test_insert_nested.nested_table.profile[contact][email]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+            Field { name: "catalog.test_insert_nested.nested_table.profile[contact][phone]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+        expect![[r#"
+            id: PrimitiveArray<Int32>
+            [
+              1,
+              2,
+            ],
+            name: StringArray
+            [
+              "Alice",
+              "Bob",
+            ],
+            catalog.test_insert_nested.nested_table.profile[address][street]: StringArray
+            [
+              "123 Main St",
+              "456 Market St",
+            ],
+            catalog.test_insert_nested.nested_table.profile[address][city]: StringArray
+            [
+              "San Francisco",
+              "San Jose",
+            ],
+            catalog.test_insert_nested.nested_table.profile[address][zip]: PrimitiveArray<Int32>
+            [
+              94105,
+              95113,
+            ],
+            catalog.test_insert_nested.nested_table.profile[contact][email]: StringArray
+            [
+              "alice@example.com",
+              "bob@example.com",
+            ],
+            catalog.test_insert_nested.nested_table.profile[contact][phone]: StringArray
+            [
+              "555-1234",
+              null,
+            ]"#]],
+        &[],
+        Some("id"),
     );
 
     Ok(())
