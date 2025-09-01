@@ -15,23 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[engines]
+sc = { type = "spark-connect", url = "sc://localhost:15002" }
+df = { type = "datafusion", url = "http://localhost:8181" }
 
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '.gitattributes'
-    - '**/*.json'
-    # Generated content by mdbook
-    - 'website/book'
-    # Generated content by scripts
-    - '**/DEPENDENCIES.*.tsv'
-    # Release distributions
-    - 'dist/*'
-    - 'Cargo.lock'
-    - '.github/PULL_REQUEST_TEMPLATE.md'
-    - '**/*.slt'
-  comment: on-failure
+[[steps]]
+engine = "sc"
+sql = "demo/prepare.slt"
+
+[[steps]]
+engine = "df"
+sql = "demo/verify.slt"
