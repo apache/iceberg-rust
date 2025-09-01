@@ -17,6 +17,7 @@
 
 use pyo3::prelude::*;
 
+mod data_file;
 mod datafusion_table_provider;
 mod error;
 mod manifest;
