@@ -16,13 +16,14 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::error::Result as DFResult;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use iceberg::spec::{SchemaRef, TableMetadata, TableMetadataRef, Transform};
+use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
 
 /// Creates an Iceberg-aware repartition execution plan that optimizes data distribution
 /// for parallel processing while respecting Iceberg table partitioning semantics.
@@ -57,8 +58,7 @@ use iceberg::spec::{SchemaRef, TableMetadata, TableMetadataRef, Transform};
 ///
 /// # Arguments
 ///
-/// * `input` - The input execution plan providing data to be repartitioned
-/// * `table_schema` - The Iceberg table schema used to resolve column references
+/// * `input` - The input execution plan providing data to be repartitioned (should already be projected to match table schema)
 /// * `table_metadata` - The Iceberg table metadata containing partition spec and sort order
 /// * `target_partitions` - Target number of partitions for parallel processing (must be > 0)
 ///
@@ -72,25 +72,17 @@ use iceberg::spec::{SchemaRef, TableMetadata, TableMetadataRef, Transform};
 /// ```ignore
 /// let repartitioned_plan = repartition(
 ///     input_plan,
-///     table.schema_ref(),
 ///     table.metadata_ref(),
 ///     4, // Explicit partition count
 /// )?;
 /// ```
-pub fn repartition(
+pub(crate) fn repartition(
     input: Arc<dyn ExecutionPlan>,
-    table_schema: SchemaRef,
     table_metadata: TableMetadataRef,
-    target_partitions: usize,
+    target_partitions: NonZeroUsize,
 ) -> DFResult<Arc<dyn ExecutionPlan>> {
-    if target_partitions == 0 {
-        return Err(datafusion::error::DataFusionError::Plan(
-            "repartition requires target_partitions > 0".to_string(),
-        ));
-    }
-
     let partitioning_strategy =
-        determine_partitioning_strategy(&input, &table_schema, &table_metadata, target_partitions)?;
+        determine_partitioning_strategy(&input, &table_metadata, target_partitions)?;
 
     if !needs_repartitioning(&input, &partitioning_strategy) {
         return Ok(input);
@@ -166,12 +158,11 @@ fn same_columns(
 /// falls back to round-robin batch partitioning for even load distribution.
 fn determine_partitioning_strategy(
     input: &Arc<dyn ExecutionPlan>,
-    table_schema: &SchemaRef,
     table_metadata: &TableMetadata,
-    target_partitions: usize,
+    target_partitions: NonZeroUsize,
 ) -> DFResult<Partitioning> {
     let partition_spec = table_metadata.default_partition_spec();
-    let sort_order = table_metadata.default_sort_order();
+    let table_schema = table_metadata.current_schema();
 
     let names_iter: Box<dyn Iterator<Item = &str>> = {
         // Partition identity columns
@@ -194,40 +185,35 @@ fn determine_partitioning_strategy(
                 None
             }
         });
-        // Bucket columns from sort order
-        let bucket_names_sort = sort_order.fields.iter().filter_map(|sf| {
-            if let Transform::Bucket(_) = sf.transform {
-                table_schema
-                    .field_by_id(sf.source_id)
-                    .map(|field| field.name.as_str())
-            } else {
-                None
-            }
-        });
-        Box::new(part_names.chain(bucket_names_part).chain(bucket_names_sort))
+        Box::new(part_names.chain(bucket_names_part))
     };
 
     // Order: partitions first, then buckets
     // Deduplicate while preserving order
     let input_schema = input.schema();
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen = HashSet::new();
     let hash_exprs: Vec<Arc<dyn datafusion::physical_expr::PhysicalExpr>> = names_iter
         .filter(|name| seen.insert(*name))
         .map(|name| {
             let idx = input_schema
                 .index_of(name)
-                .map_err(|e| datafusion::error::DataFusionError::Plan(e.to_string()))?;
+                .map_err(|e| {
+                    datafusion::error::DataFusionError::Plan(format!(
+                        "Column '{}' not found in input schema. Ensure projection happens before repartitioning. Error: {}",
+                        name, e
+                    ))
+                })?;
             Ok(Arc::new(Column::new(name, idx))
                 as Arc<dyn datafusion::physical_expr::PhysicalExpr>)
         })
         .collect::<DFResult<_>>()?;
 
     if !hash_exprs.is_empty() {
-        return Ok(Partitioning::Hash(hash_exprs, target_partitions));
+        return Ok(Partitioning::Hash(hash_exprs, target_partitions.get()));
     }
 
     // Fallback to round-robin for unpartitioned, non-bucketed tables, and range-only partitions
-    Ok(Partitioning::RoundRobinBatch(target_partitions))
+    Ok(Partitioning::RoundRobinBatch(target_partitions.get()))
 }
 
 #[cfg(test)]
