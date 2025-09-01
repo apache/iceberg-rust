@@ -138,7 +138,7 @@ jobs:
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
 
       - name: Smol Test
-        run: cargo test --no-fail-fast --all-targets --no-default-features  --features "smol" --features "storage-all" --workspace
+        run: cargo test --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
