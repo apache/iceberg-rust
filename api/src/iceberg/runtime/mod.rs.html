@@ -24,9 +24,9 @@
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">pub enum </span>JoinHandle&lt;T&gt; {
 <a href=#25 id=25 data-nosnippet>25</a>    <span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
 <a href=#26 id=26 data-nosnippet>26</a>    </span>Tokio(tokio::task::JoinHandle&lt;T&gt;),
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#28 id=28 data-nosnippet>28</a>    </span>AsyncStd(async_std::task::JoinHandle&lt;T&gt;),
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"async-std"</span>), not(feature = <span class="string">"tokio"</span>)))]
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#28 id=28 data-nosnippet>28</a>    </span>Smol(smol::Task&lt;T&gt;),
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"smol"</span>), not(feature = <span class="string">"tokio"</span>)))]
 <a href=#30 id=30 data-nosnippet>30</a>    </span>Unimplemented(Box&lt;T&gt;),
 <a href=#31 id=31 data-nosnippet>31</a>}
 <a href=#32 id=32 data-nosnippet>32</a>
@@ -39,9 +39,9 @@
 <a href=#39 id=39 data-nosnippet>39</a>            </span>JoinHandle::Tokio(handle) =&gt; Pin::new(handle)
 <a href=#40 id=40 data-nosnippet>40</a>                .poll(cx)
 <a href=#41 id=41 data-nosnippet>41</a>                .map(|h| h.expect(<span class="string">"tokio spawned task failed"</span>)),
-<a href=#42 id=42 data-nosnippet>42</a>            <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#43 id=43 data-nosnippet>43</a>            </span>JoinHandle::AsyncStd(handle) =&gt; Pin::new(handle).poll(cx),
-<a href=#44 id=44 data-nosnippet>44</a>            <span class="attr">#[cfg(all(not(feature = <span class="string">"async-std"</span>), not(feature = <span class="string">"tokio"</span>)))]
+<a href=#42 id=42 data-nosnippet>42</a>            <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#43 id=43 data-nosnippet>43</a>            </span>JoinHandle::Smol(handle) =&gt; Pin::new(handle).poll(cx),
+<a href=#44 id=44 data-nosnippet>44</a>            <span class="attr">#[cfg(all(not(feature = <span class="string">"smol"</span>), not(feature = <span class="string">"tokio"</span>)))]
 <a href=#45 id=45 data-nosnippet>45</a>            </span>JoinHandle::Unimplemented(<span class="kw">_</span>) =&gt; <span class="macro">unimplemented!</span>(<span class="string">"no runtime has been enabled"</span>),
 <a href=#46 id=46 data-nosnippet>46</a>        }
 <a href=#47 id=47 data-nosnippet>47</a>    }
@@ -56,10 +56,10 @@
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
 <a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">return </span>JoinHandle::Tokio(tokio::task::spawn(f));
 <a href=#58 id=58 data-nosnippet>58</a>
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#60 id=60 data-nosnippet>60</a>    </span><span class="kw">return </span>JoinHandle::AsyncStd(async_std::task::spawn(f));
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#60 id=60 data-nosnippet>60</a>    </span><span class="kw">return </span>JoinHandle::Smol(smol::spawn(f));
 <a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"async-std"</span>), not(feature = <span class="string">"tokio"</span>)))]
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"smol"</span>), not(feature = <span class="string">"tokio"</span>)))]
 <a href=#63 id=63 data-nosnippet>63</a>    </span><span class="macro">unimplemented!</span>(<span class="string">"no runtime has been enabled"</span>)
 <a href=#64 id=64 data-nosnippet>64</a>}
 <a href=#65 id=65 data-nosnippet>65</a>
@@ -72,10 +72,10 @@
 <a href=#72 id=72 data-nosnippet>72</a>    <span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
 <a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">return </span>JoinHandle::Tokio(tokio::task::spawn_blocking(f));
 <a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">return </span>JoinHandle::AsyncStd(async_std::task::spawn_blocking(f));
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">return </span>JoinHandle::Smol(smol::unblock(f));
 <a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"async-std"</span>), not(feature = <span class="string">"tokio"</span>)))]
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="attr">#[cfg(all(not(feature = <span class="string">"smol"</span>), not(feature = <span class="string">"tokio"</span>)))]
 <a href=#79 id=79 data-nosnippet>79</a>    </span><span class="macro">unimplemented!</span>(<span class="string">"no runtime has been enabled"</span>)
 <a href=#80 id=80 data-nosnippet>80</a>}
 <a href=#81 id=81 data-nosnippet>81</a>
@@ -97,16 +97,16 @@
 <a href=#97 id=97 data-nosnippet>97</a>        <span class="macro">assert_eq!</span>(handle.<span class="kw">await</span>, <span class="number">2</span>);
 <a href=#98 id=98 data-nosnippet>98</a>    }
 <a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#101 id=101 data-nosnippet>101</a>    #[async_std::test]
-<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">async fn </span>test_async_std_spawn() {
+<a href=#100 id=100 data-nosnippet>100</a>    <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#101 id=101 data-nosnippet>101</a>    #[smol::test]
+<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">async fn </span>test_smol_spawn() {
 <a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">let </span>handle = spawn(<span class="kw">async </span>{ <span class="number">1 </span>+ <span class="number">1 </span>});
 <a href=#104 id=104 data-nosnippet>104</a>        <span class="macro">assert_eq!</span>(handle.<span class="kw">await</span>, <span class="number">2</span>);
 <a href=#105 id=105 data-nosnippet>105</a>    }
 <a href=#106 id=106 data-nosnippet>106</a>
-<a href=#107 id=107 data-nosnippet>107</a>    <span class="attr">#[cfg(all(feature = <span class="string">"async-std"</span>, not(feature = <span class="string">"tokio"</span>)))]
-<a href=#108 id=108 data-nosnippet>108</a>    #[async_std::test]
-<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">async fn </span>test_async_std_spawn_blocking() {
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="attr">#[cfg(all(feature = <span class="string">"smol"</span>, not(feature = <span class="string">"tokio"</span>)))]
+<a href=#108 id=108 data-nosnippet>108</a>    #[smo::test]
+<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">async fn </span>test_smol_spawn_blocking() {
 <a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">let </span>handle = spawn_blocking(|| <span class="number">1 </span>+ <span class="number">1</span>);
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="macro">assert_eq!</span>(handle.<span class="kw">await</span>, <span class="number">2</span>);
 <a href=#112 id=112 data-nosnippet>112</a>    }
