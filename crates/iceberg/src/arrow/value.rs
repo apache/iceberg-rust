@@ -615,7 +615,7 @@ pub fn arrow_primitive_to_literal(
         ty,
         primitive_array,
         &mut ArrowArrayToIcebergStructConverter,
-        &ArrowArrayAccessor,
+        &ArrowArrayAccessor::new(),
     )
 }
 
