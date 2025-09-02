@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, PartitionKey, PartitionKeyExt, TableMetadata};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
@@ -71,7 +71,7 @@ impl DefaultLocationGenerator {
 
 impl LocationGenerator for DefaultLocationGenerator {
     fn generate_location(&self, partition_key: Option<&PartitionKey>, file_name: &str) -> String {
-        if partition_key.is_effectively_none() {
+        if PartitionKey::is_effectively_none(partition_key) {
             format!("{}/{}", self.data_location, file_name)
         } else {
             format!(
@@ -140,8 +140,8 @@ pub(crate) mod test {
 
     use super::LocationGenerator;
     use crate::spec::{
-        FormatVersion, Literal, NestedField, PartitionKey, PartitionKeyExt, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Transform, Type,
+        FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
+        Struct, StructType, TableMetadata, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
@@ -160,7 +160,7 @@ pub(crate) mod test {
 
     impl LocationGenerator for MockLocationGenerator {
         fn generate_location(&self, partition: Option<&PartitionKey>, file_name: &str) -> String {
-            if partition.is_effectively_none() {
+            if PartitionKey::is_effectively_none(partition) {
                 format!("{}/{}", self.root, file_name)
             } else {
                 format!(
