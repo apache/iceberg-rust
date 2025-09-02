@@ -61,7 +61,6 @@ bimap = "0.6"
 bytes = "1.10"
 chrono = "0.4.40"
 clap = { version = "4.5.35", features = ["derive", "cargo"] }
-bon-macros = "3.7.1"
 ctor = "0.2.8"
 datafusion = "47"
 datafusion-cli = "47"
