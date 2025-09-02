@@ -27,7 +27,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use super::arrow_struct_to_literal;
 use super::record_batch_projector::RecordBatchProjector;
 use crate::arrow::type_to_arrow_type;
-use crate::spec::{Literal, PartitionSpecRef, SchemaRef, Struct, Type};
+use crate::spec::{Literal, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
 use crate::transform::{BoxedTransformFunction, create_transform_function};
 use crate::{Error, ErrorKind, Result};
 
@@ -42,6 +42,9 @@ pub struct RecordBatchPartitionSplitter {
     partition_spec: PartitionSpecRef,
     projector: RecordBatchProjector,
     transform_functions: Vec<BoxedTransformFunction>,
+
+    partition_type: StructType,
+    partition_arrow_type: DataType,
 }
 
 // # TODO
@@ -83,26 +86,29 @@ impl RecordBatchPartitionSplitter {
             .map(|field| create_transform_function(&field.transform))
             .collect::<Result<Vec<_>>>()?;
 
+        let partition_type = partition_spec.partition_type(&iceberg_schema)?;
+        let partition_arrow_type = type_to_arrow_type(&Type::Struct(partition_type.clone()))?;
+
         Ok(Self {
             schema: iceberg_schema,
             partition_spec,
             projector,
             transform_functions,
+            partition_type,
+            partition_arrow_type,
         })
     }
 
     fn partition_columns_to_struct(&self, partition_columns: Vec<ArrayRef>) -> Result<Vec<Struct>> {
-        let partition_type = self.partition_spec.partition_type(&self.schema)?;
-        let partition_arrow_type = type_to_arrow_type(&Type::Struct(partition_type.clone()))?;
         let arrow_struct_array = {
             let partition_arrow_fields = {
-                let DataType::Struct(fields) = partition_arrow_type else {
+                let DataType::Struct(fields) = &self.partition_arrow_type else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         "The partition arrow type is not a struct type",
                     ));
                 };
-                fields
+                fields.clone()
             };
             Arc::new(StructArray::try_new(
                 partition_arrow_fields,
@@ -111,7 +117,7 @@ impl RecordBatchPartitionSplitter {
             )?) as ArrayRef
         };
         let struct_array = {
-            let struct_array = arrow_struct_to_literal(&arrow_struct_array, &partition_type)?;
+            let struct_array = arrow_struct_to_literal(&arrow_struct_array, &self.partition_type)?;
             struct_array
                 .into_iter()
                 .map(|s| {
