@@ -89,7 +89,7 @@ impl Schedule {
                 &step.slt
             ));
 
-            engine.run_slt_file(&PathBuf::from(step_sql_path)).await?;
+            engine.run_slt_file(&step_sql_path).await?;
 
             info!(
                 "Completed step {}/{}, engine {}, slt file path: {}",
