@@ -819,7 +819,7 @@
 <a href=#819 id=819 data-nosnippet>819</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_FILE_SIZE).unwrap(), <span class="string">"300"</span>);
 <a href=#820 id=820 data-nosnippet>820</a>        <span class="macro">assert_eq!</span>(props.get(REMOVED_FILE_SIZE).unwrap(), <span class="string">"100"</span>);
 <a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>partition_key = <span class="macro">format!</span>(<span class="string">"{}{}"</span>, CHANGED_PARTITION_PREFIX, <span class="string">"year=\"2025\""</span>);
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>partition_key = <span class="macro">format!</span>(<span class="string">"{}{}"</span>, CHANGED_PARTITION_PREFIX, <span class="string">"year=2025"</span>);
 <a href=#823 id=823 data-nosnippet>823</a>
 <a href=#824 id=824 data-nosnippet>824</a>        <span class="macro">assert!</span>(props.contains_key(<span class="kw-2">&amp;</span>partition_key));
 <a href=#825 id=825 data-nosnippet>825</a>
