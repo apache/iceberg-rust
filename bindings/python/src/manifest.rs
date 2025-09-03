@@ -24,8 +24,6 @@ use pyo3::prelude::*;
 
 use crate::data_file::PyDataFile;
 
-
-
 #[pyclass]
 pub struct PyManifest {
     inner: Manifest,
