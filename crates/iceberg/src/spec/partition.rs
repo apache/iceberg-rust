@@ -178,7 +178,7 @@ impl PartitionSpec {
 
 /// A partition key represents a specific partition in a table, containing the partition spec,
 /// schema, and the actual partition values.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionKey {
     /// The partition spec that contains the partition fields.
     spec: PartitionSpec,
