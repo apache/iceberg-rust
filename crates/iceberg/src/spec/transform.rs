@@ -142,7 +142,7 @@ impl Transform {
                 let field_type = field_type.as_primitive_type().unwrap();
                 let datum = Datum::new(field_type.clone(), value);
                 match self {
-                    Self::Identity => datum.to_string(),
+                    Self::Identity => datum.to_human_string(),
                     Self::Void => "null".to_string(),
                     _ => {
                         todo!()

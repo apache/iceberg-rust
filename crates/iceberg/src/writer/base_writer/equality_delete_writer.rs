@@ -404,6 +404,7 @@ mod test {
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(delete_schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -569,6 +570,7 @@ mod test {
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(delete_schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
