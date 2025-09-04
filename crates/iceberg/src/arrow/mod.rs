@@ -31,6 +31,7 @@ mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
 mod value;
+mod partition_value_visitor;
 
 pub use reader::*;
 pub use value::*;
