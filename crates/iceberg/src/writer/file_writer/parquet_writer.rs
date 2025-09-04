@@ -702,8 +702,9 @@ mod tests {
     use crate::arrow::schema_to_arrow_schema;
     use crate::io::FileIOBuilder;
     use crate::spec::{PrimitiveLiteral, Struct, *};
-    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
-    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
     use crate::writer::tests::check_parquet_data_file;
 
     fn schema_for_all_type() -> Schema {
@@ -862,8 +863,9 @@ mod tests {
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -933,8 +935,9 @@ mod tests {
     async fn test_parquet_writer_with_complex_schema() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1158,8 +1161,9 @@ mod tests {
     async fn test_all_type_for_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let loccation_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1401,8 +1405,9 @@ mod tests {
     async fn test_decimal_bound() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let loccation_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1654,8 +1659,9 @@ mod tests {
     async fn test_empty_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1709,8 +1715,9 @@ mod tests {
     async fn test_nan_val_cnts_primitive_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1797,8 +1804,9 @@ mod tests {
     async fn test_nan_val_cnts_struct_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -1937,8 +1945,9 @@ mod tests {
     async fn test_nan_val_cnts_list_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -2139,8 +2148,9 @@ mod tests {
     async fn test_nan_val_cnts_map_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -2295,8 +2305,9 @@ mod tests {
     async fn test_write_empty_parquet_file() {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
