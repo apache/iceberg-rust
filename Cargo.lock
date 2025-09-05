@@ -731,25 +731,28 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.12.6"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dabb68eb3a7aa08b46fddfd59a3d55c978243557a90ab804769f7e20e67d2b01"
+checksum = "184b9516b1a8e3e559a5ab75412b841527de41c75bf6145d61eaf0738a9258a3"
 dependencies = [
  "aws-lc-sys",
+ "mirai-annotations",
+ "paste",
  "zeroize",
 ]
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.27.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77926887776171ced7d662120a75998e444d3750c951abfe07f90da130514b1f"
+checksum = "b6e564487156f6ea22217c06263abd92ee65e4d9ff3dbc1f99f703f060f94715"
 dependencies = [
  "bindgen",
- "cc",
  "cmake",
  "dunce",
  "fs_extra",
+ "libc",
+ "paste",
 ]
 
 [[package]]
@@ -1200,17 +1203,17 @@ checksum = "f92b72b8f03128773278bf74418b9205f3d2a12c39a61f92395f47af390c32bf"
 
 [[package]]
 name = "bindgen"
-version = "0.69.5"
+version = "0.69.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
+checksum = "a4c69fae65a523209d34240b60abe0c42d33d1045d445c0839d8a4894a736e2d"
 dependencies = [
  "bitflags 2.8.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.0",
  "lazy_static",
  "lazycell",
  "log",
+ "peeking_take_while",
  "prettyplease",
  "proc-macro2 1.0.94",
  "quote 1.0.40",
@@ -4751,6 +4754,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirai-annotations"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9be0862c1b3f26a88803c4a49de6889c10e608b3ee9344e6ef5b45fb37ad3d1"
+
+[[package]]
 name = "mockall"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5335,6 +5344,12 @@ dependencies = [
  "digest 0.10.7",
  "hmac 0.12.0",
 ]
+
+[[package]]
+name = "peeking_take_while"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
 name = "pem"
