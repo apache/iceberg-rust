@@ -40,7 +40,10 @@ jobs:
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: '0.4.36'
+          mdbook-version: "0.4.36"
+
+      - name: Install protoc
+        run: sudo apt update && sudo apt install -y protobuf-compiler
 
       - name: Build
         working-directory: website

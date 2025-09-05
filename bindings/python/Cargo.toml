@@ -35,5 +35,5 @@ arrow = { version = "55", features = ["pyarrow", "chrono-tz"] }
 iceberg = { path = "../../crates/iceberg" }
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
-datafusion-ffi = { version = "47" }
+datafusion-ffi = { version = "48.0.1" }
 tokio = { version = "1.44", default-features = false }
