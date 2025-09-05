@@ -148,6 +148,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Generate minimal versions lockfile
