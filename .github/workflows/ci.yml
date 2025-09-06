@@ -49,10 +49,6 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.7.0
 
-      - name: Install taplo-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: taplo-cli@0.9.3
       - name: Check toml format
         run: make check-toml
 
@@ -65,12 +61,8 @@ jobs:
       - name: Cargo clippy
         run: make check-clippy
 
-      - name: Install cargo-machete
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-machete
       - name: Cargo Machete
-        run: cargo machete
+        run: make cargo-machete
 
   build:
     runs-on: ${{ matrix.os }}
