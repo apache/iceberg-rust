@@ -23,7 +23,7 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 env:
-  rust_msrv: "1.85"
+  rust_msrv: "1.86"
 
 permissions:
   contents: read
