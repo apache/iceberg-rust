@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 env:
-  rust_msrv: "1.85"
+  rust_msrv: "1.86"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}-${{ github.event_name }}
