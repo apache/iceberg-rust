@@ -26,11 +26,11 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
+use crate::io::OutputFile;
 use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
-use crate::io::OutputFile;
 
 /// Builder for `EqualityDeleteWriter`.
 #[derive(Clone, Debug)]

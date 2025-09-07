@@ -42,7 +42,7 @@ where
     file_name_generator: F,
     file_io: FileIO,
     partition_key: Option<PartitionKey>,
-    data_files: Vec<DataFile>, // this should be B::R::O? DefaultOutput?
+    data_files: Vec<DataFile>, // todo this should be B::R::O? DefaultOutput?
 }
 
 impl<B, L, F> RollingWriter<B, L, F>
@@ -122,8 +122,7 @@ where
         if self.should_roll() {
             if let Some(mut inner) = self.inner.take() {
                 // close the current writer, roll to a new file
-                let mut data_files = inner.close().await?;
-                self.data_files.append(&mut data_files);
+                self.data_files.extend(inner.close().await?);
 
                 // start a new writer
                 self.inner = Some(self.create_new_writer().await?);
@@ -145,8 +144,7 @@ where
     pub async fn close(&mut self) -> Result<Vec<DataFile>> {
         // close the current writer and merge the output
         if let Some(mut current_writer) = self.inner.take() {
-            let data_files = current_writer.close().await?;
-            self.data_files.extend(data_files);
+            self.data_files.extend(current_writer.close().await?);
         }
 
         Ok(std::mem::take(&mut self.data_files))

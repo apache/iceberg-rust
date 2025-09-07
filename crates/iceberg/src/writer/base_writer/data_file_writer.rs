@@ -19,8 +19,9 @@
 
 use arrow_array::RecordBatch;
 use itertools::Itertools;
-use crate::io::OutputFile;
+
 use crate::Result;
+use crate::io::OutputFile;
 use crate::spec::{DataContentType, DataFile, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
