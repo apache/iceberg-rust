@@ -30,6 +30,7 @@ use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
+use crate::io::OutputFile;
 
 /// Builder for `EqualityDeleteWriter`.
 #[derive(Clone, Debug)]
@@ -113,9 +114,9 @@ impl EqualityDeleteWriterConfig {
 impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
-            inner_writer: Some(self.inner.clone().build().await?),
+            inner_writer: Some(self.inner.clone().build(output_file).await?),
             projector: self.config.projector,
             equality_ids: self.config.equality_ids,
             partition_value: self.config.partition_value,

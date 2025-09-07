@@ -19,7 +19,7 @@
 
 use arrow_array::RecordBatch;
 use itertools::Itertools;
-
+use crate::io::OutputFile;
 use crate::Result;
 use crate::spec::{DataContentType, DataFile, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
@@ -48,9 +48,9 @@ impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner_writer: Some(self.inner.clone().build().await?),
+            inner_writer: Some(self.inner.clone().build(output_file).await?),
             partition_value: self.partition_value.unwrap_or(Struct::empty()),
             partition_spec_id: self.partition_spec_id,
         })

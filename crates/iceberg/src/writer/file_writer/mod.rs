@@ -22,6 +22,7 @@ use futures::Future;
 
 use super::CurrentFileStatus;
 use crate::Result;
+use crate::io::OutputFile;
 use crate::spec::DataFileBuilder;
 
 mod parquet_writer;
@@ -37,8 +38,8 @@ type DefaultOutput = Vec<DataFileBuilder>;
 pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
-    /// Build file writer.
-    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
+    /// Build file writer with the provided output file.
+    fn build(self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)

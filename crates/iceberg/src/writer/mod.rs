@@ -229,6 +229,7 @@ pub mod file_writer;
 use arrow_array::RecordBatch;
 
 use crate::Result;
+use crate::io::OutputFile;
 use crate::spec::DataFile;
 
 type DefaultInput = RecordBatch;
@@ -241,8 +242,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    /// Build the iceberg writer with the provided output file.
+    async fn build(self, output_file: OutputFile) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.
@@ -266,6 +267,15 @@ pub trait CurrentFileStatus {
     fn current_row_num(&self) -> usize;
     /// Get the current file written size.
     fn current_written_size(&self) -> usize;
+}
+
+/// The partitioning writer used to write data to multiple partitions.
+pub trait PartitioningWriter {
+    /// Write a record batch, which may contain rows for multiple partitions.
+    fn write(&mut self, batch: RecordBatch) -> Result<()>;
+
+    /// Close all writers and return the data files.
+    fn close(&mut self) -> Result<Vec<DataFile>>;
 }
 
 #[cfg(test)]
