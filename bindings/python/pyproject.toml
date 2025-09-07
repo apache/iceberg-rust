@@ -40,6 +40,9 @@ license = { file = "LICENSE" }
 features = ["pyo3/extension-module"]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 python-source = "python"
+include = [
+    { path = "NOTICE", format = ["sdist", "wheel"] }
+]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
