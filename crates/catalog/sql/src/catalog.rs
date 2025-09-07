@@ -19,12 +19,12 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::io::FileIO;
+use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
@@ -53,6 +53,47 @@ static NAMESPACE_LOCATION_PROPERTY_KEY: &str = "location";
 static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if not provided
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
+
+/// Builder for [`SqlCatalog`]
+#[derive(Debug)]
+pub struct SqlCatalogBuilder(SqlCatalogConfig);
+
+impl Default for SqlCatalogBuilder {
+    fn default() -> Self {
+        Self(SqlCatalogConfig {
+            uri: "".to_string(),
+            name: "".to_string(),
+            warehouse_location: "".to_string(),
+            file_io: FileIOBuilder::new_fs_io().build().unwrap(),
+            sql_bind_style: SqlBindStyle::DollarNumeric,
+            props: HashMap::new(),
+        })
+    }
+}
+
+impl CatalogBuilder for SqlCatalogBuilder {
+    type C = SqlCatalog;
+
+    fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send {
+        let name = name.into();
+        self.0.props = props;
+
+        async move {
+            if name.trim().is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name cannot be empty",
+                ))
+            } else {
+                SqlCatalog::new(self.0).await
+            }
+        }
+    }
+}
 
 /// A struct representing the SQL catalog configuration.
 ///
