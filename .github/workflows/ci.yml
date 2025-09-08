@@ -144,7 +144,7 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Generate minimal versions lockfile
         run: |
-          cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
+          cargo generate-lockfile -Z direct-minimal-versions
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
