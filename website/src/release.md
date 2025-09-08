@@ -318,6 +318,7 @@ gpg --import KEYS
 ```
 * Verify the `.asc` file: ```gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc```
 * Verify the checksums: ```shasum -a 512 -c apache-iceberg-rust-${iceberg_version}.tar.gz.sha512```
+* Verify license headers: ```docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check```
 * Verify build and test:
 ```bash
 tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
