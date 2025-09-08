@@ -41,6 +41,7 @@ features = ["pyo3/extension-module"]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 python-source = "python"
 include = [
+    { path = "LICENSE", format = ["sdist", "wheel"] }
     { path = "NOTICE", format = ["sdist", "wheel"] }
 ]
 
