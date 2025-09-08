@@ -134,7 +134,9 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Install protoc
-        run: sudo apt update && sudo apt install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -156,8 +158,9 @@ jobs:
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install protoc
-        run: sudo apt update && sudo apt install -y protobuf-compiler
-
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate minimal versions lockfile
         run: |
           cargo generate-lockfile -Z direct-minimal-versions

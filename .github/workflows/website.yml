@@ -43,7 +43,9 @@ jobs:
           mdbook-version: "0.4.36"
 
       - name: Install protoc
-        run: sudo apt update && sudo apt install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         working-directory: website
