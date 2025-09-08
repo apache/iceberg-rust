@@ -40,7 +40,7 @@ rust-version = "1.87"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = "0.17"
+apache-avro = "0.20"
 array-init = "2"
 arrow-arith = { version = "55.1" }
 arrow-array = { version = "55.1" }
@@ -102,17 +102,19 @@ rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
+# Until https://github.com/elastio/bon/pull/336/ has been resolved
+rustversion  = "1.0.19"
 rust_decimal = "1.37.1"
 serde = { version = "1.0.219", features = ["rc"] }
-serde_bytes = "0.11.15"
+serde_bytes = "0.11.17"
 serde_derive = "1.0.219"
-serde_json = "1.0.140"
+serde_json = "1.0.142"
 serde_repr = "0.1.16"
 serde_with = "3.4"
 smol = "2.0.2"
 sqllogictest = "0.28.3"
 stacker = "0.1.20"
-strum = "0.27"
+strum = "0.27.2"
 tempfile = "3.18"
 tera = "1"
 thrift = "0.17.0"
@@ -122,7 +124,7 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.8"
 typed-builder = "0.20"
 url = "2.5.4"
-uuid = { version = "1.17", features = ["v7"] }
+uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
 zstd = "0.13.2"
