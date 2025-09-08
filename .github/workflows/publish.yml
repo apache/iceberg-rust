@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
 
 env:
-  rust_msrv: "1.85"
+  rust_msrv: "1.87"
 
 jobs:
   publish:
