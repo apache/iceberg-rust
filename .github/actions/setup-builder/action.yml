@@ -35,13 +35,15 @@ runs:
         rustup toolchain install ${RUST_VERSION}
         rustup override set ${RUST_VERSION}
         rustup component add rustfmt clippy
+
     - name: Setup Rust toolchain according to rust-toolchain.toml
       shell: bash
       if: ${{ inputs.rust-version == '' }}
       run: |
         echo "Installing toolchain according to rust-toolchain.toml"
         rustup show
-        rustup component add rustfmt clippy
+        rustup component add rustfmt clippy miri
+
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash
