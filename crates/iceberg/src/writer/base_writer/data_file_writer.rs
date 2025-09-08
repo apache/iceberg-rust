@@ -144,6 +144,7 @@ mod test {
         let pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -221,6 +222,7 @@ mod test {
         let parquet_writer_builder = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(schema.clone()),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
