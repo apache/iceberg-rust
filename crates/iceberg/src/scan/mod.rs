@@ -21,26 +21,31 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod metrics;
 mod task;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
-use futures::channel::mpsc::{Sender, channel};
+use futures::channel::mpsc::{Receiver, Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
-use crate::delete_file_index::DeleteFileIndex;
+use crate::delete_file_index::{DeleteFileIndex, DeleteIndexMetrics};
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::runtime::spawn;
+use crate::metrics::{LoggingMetricsReporter, MetricsReport, MetricsReporter};
+use crate::runtime::{JoinHandle, spawn};
+use crate::scan::metrics::{FileMetrics, FileMetricsUpdate, ManifestMetrics, aggregate_metrics};
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
@@ -59,6 +64,9 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    /// If None, we default to a LoggingReporter.
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -77,6 +85,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            metrics_reporter: None,
         }
     }
 
@@ -98,6 +107,17 @@ impl<'a> TableScanBuilder<'a> {
         // calls rewrite_not to remove Not nodes, which must be absent
         // when applying the manifest evaluator
         self.filter = Some(predicate.rewrite_not());
+        self
+    }
+
+    /// Sets the metrics reporter to use for this scan.
+    ///
+    /// If unset, we default to a LoggingReporter.
+    pub(crate) fn with_metrics_reporter(
+        mut self,
+        metrics_reporter: Arc<dyn MetricsReporter>,
+    ) -> Self {
+        self.metrics_reporter = Some(metrics_reporter);
         self
     }
 
@@ -185,6 +205,11 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
+        let metrics_reporter = match self.metrics_reporter {
+            Some(metrics_reporter) => metrics_reporter,
+            None => Arc::new(LoggingMetricsReporter::new()),
+        };
+
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -200,6 +225,7 @@ impl<'a> TableScanBuilder<'a> {
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
+                        table: self.table.identifier().clone(),
                         batch_size: self.batch_size,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
@@ -209,6 +235,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        metrics_reporter,
                     });
                 };
                 current_snapshot_id.clone()
@@ -232,8 +259,7 @@ impl<'a> TableScanBuilder<'a> {
             }
         }
 
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
+        let all_column_names = self.column_names.clone().unwrap_or_else(|| {
             schema
                 .as_struct()
                 .fields()
@@ -242,7 +268,8 @@ impl<'a> TableScanBuilder<'a> {
                 .collect()
         });
 
-        for column_name in column_names.iter() {
+        let mut field_ids = vec![];
+        for column_name in all_column_names.iter() {
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -283,6 +310,7 @@ impl<'a> TableScanBuilder<'a> {
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
+            field_names: Arc::new(all_column_names),
             field_ids: Arc::new(field_ids),
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
@@ -290,6 +318,7 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         Ok(TableScan {
+            table: self.table.identifier().clone(),
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
@@ -299,6 +328,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            metrics_reporter,
         })
     }
 }
@@ -306,6 +336,8 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
+    table: TableIdent,
+
     /// A [PlanContext], if this table has at least one snapshot, otherwise None.
     ///
     /// If this is None, then the scan contains no rows.
@@ -327,6 +359,8 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    metrics_reporter: Arc<dyn MetricsReporter>,
 }
 
 impl TableScan {
@@ -336,82 +370,108 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
-        let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
-        let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
+        // Start the planning phase timer.
+        let plan_start_time = Instant::now();
 
         // used to stream ManifestEntryContexts between stages of the file plan operation
         let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
+            channel(self.concurrency_limit_manifest_files);
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
+            channel(self.concurrency_limit_manifest_files);
 
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
-
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+        let (delete_file_idx, delete_file_tx, index_metrics_handle) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose partitions cannot match this
-        // scan's filter
-        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
-            manifest_entry_data_ctx_tx,
-            delete_file_idx.clone(),
-            manifest_entry_delete_ctx_tx,
-        )?;
+        // whose partitions cannot match this scan's filter
+        let (manifest_file_contexts, manifest_metrics) = plan_context
+            .build_manifest_file_contexts(
+                manifest_list,
+                manifest_entry_data_ctx_tx,
+                delete_file_idx,
+                manifest_entry_delete_ctx_tx,
+            )?;
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
+        // used to stream the results back to the caller
+        let (result_tx, file_scan_task_rx) = channel(self.concurrency_limit_manifest_entries);
 
-        // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
+        let _handle = self.spawn_fetch_manifests(manifest_file_contexts, result_tx.clone());
+
+        let (delete_manifests_handle, delete_file_metrics_handle) = self
+            .spawn_process_delete_manifest_entries(
+                manifest_entry_delete_ctx_rx,
+                delete_file_tx,
+                result_tx.clone(),
+            );
+        delete_manifests_handle.await;
+
+        let (_handle, data_file_metrics_handle) =
+            self.spawn_process_manifest_entries(manifest_entry_data_ctx_rx, result_tx);
+
+        let _handle = self.report_metrics(
+            plan_start_time,
+            plan_context,
+            data_file_metrics_handle,
+            delete_file_metrics_handle,
+            index_metrics_handle,
+            manifest_metrics,
+        );
+
+        Ok(file_scan_task_rx.boxed())
+    }
+
+    fn spawn_fetch_manifests(
+        &self,
+        manifest_files: Vec<Result<ManifestFileContext>>,
+        mut error_tx: Sender<Result<FileScanTask>>,
+    ) -> JoinHandle<()> {
+        let concurrency_limit = self.concurrency_limit_manifest_files;
         spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
-                .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
+            let result = futures::stream::iter(manifest_files)
+                .try_for_each_concurrent(concurrency_limit, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
                 })
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_manifest_error.send(Err(error)).await;
-            }
-        });
-
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
-
-        // Process the delete file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_delete_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
-                    },
-                )
-                .await;
-
-            if let Err(error) = result {
-                let _ = channel_for_delete_manifest_entry_error
-                    .send(Err(error))
-                    .await;
+                let _ = error_tx.send(Err(error)).await;
             }
         })
-        .await;
+    }
 
-        // Process the data file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_data_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+    fn spawn_process_delete_manifest_entries(
+        &self,
+        manifest_entry_rx: Receiver<ManifestEntryContext>,
+        delete_file_tx: Sender<DeleteFileContext>,
+        mut error_tx: Sender<Result<FileScanTask>>,
+    ) -> (JoinHandle<()>, JoinHandle<FileMetrics>) {
+        let concurrency_limit = self.concurrency_limit_manifest_entries;
+
+        let (metrics_update_tx, metrics_update_rx) = channel(1);
+        let metrics_handle = spawn(FileMetrics::accumulate(metrics_update_rx));
+
+        let handle = spawn(async move {
+            let result = manifest_entry_rx
+                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone(), metrics_update_tx.clone())))
                 .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
+                    concurrency_limit,
+                    |(manifest_entry, mut file_tx, mut metrics_tx)| async move {
                         spawn(async move {
-                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
+                            let delete_file = Self::filter_delete_manifest_entry(manifest_entry)?;
+
+                            let metrics_update = if let Some(delete_file) = delete_file {
+                                let size_in_bytes = delete_file.manifest_entry.file_size_in_bytes();
+                                file_tx.send(delete_file).await?;
+
+                                FileMetricsUpdate::Scanned { size_in_bytes }
+                            } else {
+                                FileMetricsUpdate::Skipped
+                            };
+
+                            metrics_tx.send(metrics_update).await?;
+
+                            Ok(())
                         })
                         .await
                     },
@@ -419,11 +479,98 @@ impl TableScan {
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
+                let _ = error_tx.send(Err(error)).await;
             }
         });
 
-        Ok(file_scan_task_rx.boxed())
+        (handle, metrics_handle)
+    }
+
+    fn spawn_process_manifest_entries(
+        &self,
+        manifest_entry_rx: Receiver<ManifestEntryContext>,
+        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
+    ) -> (JoinHandle<()>, JoinHandle<FileMetrics>) {
+        let concurrency_limit = self.concurrency_limit_manifest_entries;
+
+        let (metrics_update_tx, metrics_update_rx) = channel(1);
+        let metrics_handle = spawn(FileMetrics::accumulate(metrics_update_rx));
+
+        let handle = spawn(async move {
+            let result = manifest_entry_rx
+                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone(), metrics_update_tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit,
+                    |(manifest_entry, mut task_tx, mut metrics_tx)| async move {
+                        spawn(async move {
+                            let file_task =
+                                Self::filter_data_manifest_entry(manifest_entry).await?;
+
+                            let metrics_update = if let Some(file_task) = file_task {
+                                let size_in_bytes = file_task.length;
+                                task_tx.send(Ok(file_task)).await?;
+
+                                FileMetricsUpdate::Scanned { size_in_bytes }
+                            } else {
+                                FileMetricsUpdate::Skipped
+                            };
+
+                            metrics_tx.send(metrics_update).await?;
+                            Ok(())
+                        })
+                        .await
+                    },
+                )
+                .await;
+
+            if let Err(error) = result {
+                let _ = file_scan_task_tx.send(Err(error)).await;
+            }
+        });
+
+        (handle, metrics_handle)
+    }
+
+    fn report_metrics(
+        &self,
+        plan_start_time: Instant,
+        plan_context: &PlanContext,
+        data_file_metrics_handle: JoinHandle<FileMetrics>,
+        delete_file_metrics_handle: JoinHandle<FileMetrics>,
+        index_metrics_handle: JoinHandle<DeleteIndexMetrics>,
+        manifest_metrics: ManifestMetrics,
+    ) -> JoinHandle<()> {
+        let table = self.table.clone();
+        let snapshot_id = plan_context.snapshot.snapshot_id();
+        let filter = plan_context.predicate.clone();
+        let schema_id = plan_context.snapshot_schema.schema_id();
+        let projected_field_ids = plan_context.field_ids.clone();
+        let projected_field_names = plan_context.field_names.clone();
+
+        let metrics_reporter = Arc::clone(&self.metrics_reporter);
+        spawn(async move {
+            let metrics = aggregate_metrics(
+                plan_start_time,
+                manifest_metrics,
+                data_file_metrics_handle,
+                delete_file_metrics_handle,
+                index_metrics_handle,
+            )
+            .await;
+
+            let report = MetricsReport::Scan {
+                table,
+                snapshot_id,
+                filter,
+                schema_id,
+                projected_field_ids,
+                projected_field_names,
+                metadata: HashMap::new(),
+                metrics: Arc::new(metrics),
+            };
+
+            metrics_reporter.report(report).await;
+        })
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -450,13 +597,12 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
-    async fn process_data_manifest_entry(
+    async fn filter_data_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-    ) -> Result<()> {
+    ) -> Result<Option<FileScanTask>> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry for a delete file
@@ -484,7 +630,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
+                return Ok(None);
             }
 
             // skip any data file whose metrics don't match this scan's filter
@@ -493,27 +639,24 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
-                return Ok(());
+                return Ok(None);
             }
         }
 
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
-            .await?;
+        let file_scan_task = manifest_entry_context.into_file_scan_task().await?;
 
-        Ok(())
+        Ok(Some(file_scan_task))
     }
 
-    async fn process_delete_manifest_entry(
+    fn filter_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut delete_file_ctx_tx: Sender<DeleteFileContext>,
-    ) -> Result<()> {
+    ) -> Result<Option<DeleteFileContext>> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
+            return Ok(None);
         }
 
         // abort the plan if we encounter a manifest entry that is not for a delete file
@@ -536,18 +679,18 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
+                return Ok(None);
             }
         }
 
-        delete_file_ctx_tx
-            .send(DeleteFileContext {
-                manifest_entry: manifest_entry_context.manifest_entry.clone(),
-                partition_spec_id: manifest_entry_context.partition_spec_id,
-            })
-            .await?;
+        let delete_file_ctx = DeleteFileContext {
+            manifest_entry: manifest_entry_context.manifest_entry.clone(),
+            partition_spec_id: manifest_entry_context.partition_spec_id,
+        };
 
-        Ok(())
+        // let size_in_bytes = manifest_entry_context.manifest_entry.file_size_in_bytes();
+
+        Ok(Some(delete_file_ctx))
     }
 }
 
@@ -564,11 +707,12 @@ pub mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
+    use async_trait::async_trait;
     use futures::{TryStreamExt, stream};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -581,6 +725,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
+    use crate::metrics::{MetricsReport, MetricsReporter, ScanMetrics};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
@@ -592,6 +737,7 @@ pub mod tests {
     pub struct TableTestFixture {
         pub table_location: String,
         pub table: Table,
+        metrics_reporter: Arc<TestMetricsReporter>,
     }
 
     impl TableTestFixture {
@@ -624,17 +770,21 @@ pub mod tests {
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -663,17 +813,21 @@ pub mod tests {
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -712,17 +866,21 @@ pub mod tests {
                 .partition_specs
                 .insert(0, table_metadata.default_spec.clone());
 
+            let metrics_reporter = Arc::new(TestMetricsReporter::new());
+
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.to_str().unwrap())
+                .metrics_reporter(Arc::clone(&metrics_reporter) as Arc<dyn MetricsReporter>)
                 .build()
                 .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
+                metrics_reporter,
             }
         }
 
@@ -1157,6 +1315,27 @@ pub mod tests {
 
                 // writer must be closed to write footer
                 writer.close().unwrap();
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestMetricsReporter {
+        last_report: Mutex<Option<MetricsReport>>,
+    }
+
+    #[async_trait]
+    impl MetricsReporter for TestMetricsReporter {
+        async fn report(&self, report: MetricsReport) {
+            let mut guard = self.last_report.lock().unwrap();
+            *guard = Some(report);
+        }
+    }
+
+    impl TestMetricsReporter {
+        fn new() -> Self {
+            Self {
+                last_report: Mutex::new(None),
             }
         }
     }
@@ -1796,5 +1975,79 @@ pub mod tests {
             deletes: vec![],
         };
         test_fn(task);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reporter() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture.table.scan().select(["x", "y"]).build().unwrap();
+
+        // Consume the table scan's results to finish the planning process, and
+        // send a report.
+        let _batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let report_guard = fixture.metrics_reporter.last_report.lock().unwrap();
+        assert!(report_guard.is_some());
+        let report = report_guard.as_ref().unwrap();
+
+        match report {
+            MetricsReport::Scan {
+                table,
+                snapshot_id,
+                filter,
+                schema_id,
+                projected_field_ids,
+                projected_field_names,
+                metrics,
+                metadata,
+            } => {
+                assert_eq!(table, fixture.table.identifier());
+                assert_eq!(
+                    snapshot_id,
+                    &fixture.table.metadata().current_snapshot_id().unwrap()
+                );
+                assert!(filter.is_none());
+                assert_eq!(schema_id, &fixture.table.metadata().current_schema_id);
+                assert_eq!(projected_field_ids, &Arc::new(vec![1, 2]));
+                assert_eq!(
+                    projected_field_names,
+                    &Arc::new(vec!["x".to_string(), "y".to_string()])
+                );
+
+                assert_metrics(metrics);
+
+                assert!(metadata.is_empty())
+            }
+        }
+    }
+
+    fn assert_metrics(metrics: &Arc<ScanMetrics>) {
+        assert!(!metrics.total_planning_duration.is_zero());
+        assert_eq!(metrics.total_data_manifests, 1);
+        assert_eq!(metrics.total_delete_manifests, 0);
+        assert_eq!(metrics.skipped_data_manifests, 0);
+        assert_eq!(metrics.skipped_delete_manifests, 0);
+        assert_eq!(metrics.scanned_data_manifests, 1);
+        assert_eq!(metrics.scanned_delete_manifests, 0);
+
+        assert_eq!(metrics.result_data_files, 2);
+        assert_eq!(metrics.skipped_data_files, 1);
+        assert_eq!(metrics.total_file_size_in_bytes, 200);
+
+        assert_eq!(metrics.result_delete_files, 0);
+        assert_eq!(metrics.skipped_delete_files, 0);
+        assert_eq!(metrics.total_delete_file_size_in_bytes, 0);
+
+        assert_eq!(metrics.indexed_delete_files, 0);
+        assert_eq!(metrics.equality_delete_files, 0);
+        assert_eq!(metrics.positional_delete_files, 0);
     }
 }

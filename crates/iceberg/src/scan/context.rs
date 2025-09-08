@@ -23,6 +23,7 @@ use futures::{SinkExt, TryFutureExt};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
+use crate::scan::metrics::ManifestMetrics;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
     PartitionFilterCache,
@@ -144,6 +145,7 @@ pub(crate) struct PlanContext {
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
+    pub field_names: Arc<Vec<String>>,
     pub field_ids: Arc<Vec<i32>>,
 
     pub partition_filter_cache: Arc<PartitionFilterCache>,
@@ -186,16 +188,25 @@ impl PlanContext {
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
-    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
+    ) -> Result<(Vec<Result<ManifestFileContext>>, ManifestMetrics)> {
         let manifest_files = manifest_list.entries().iter();
 
-        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
+        // TODO: Ideally we could ditch this intermediate Vec as we can return
+        // an iterator over the results. Updates to the manifest metrics somewhat
+        // complicate this because they need to be serialized somewhere, and an
+        // iterator can't easily take ownership of the metrics.
+        // A vec allows us to apply the mutations within this function.
+        // A vec also implicitly implements Send and Sync, meaning we can pass
+        // it around more easily in the concurrent planning step.
         let mut filtered_mfcs = vec![];
 
+        let mut metrics = ManifestMetrics::default();
         for manifest_file in manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
+                metrics.total_delete_manifests += 1;
                 delete_file_tx.clone()
             } else {
+                metrics.total_data_manifests += 1;
                 tx_data.clone()
             };
 
@@ -212,6 +223,10 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
+                    match manifest_file.content {
+                        ManifestContentType::Data => metrics.skipped_data_manifests += 1,
+                        ManifestContentType::Deletes => metrics.skipped_delete_manifests += 1,
+                    }
                     continue;
                 }
 
@@ -230,7 +245,14 @@ impl PlanContext {
             filtered_mfcs.push(Ok(mfc));
         }
 
-        Ok(Box::new(filtered_mfcs.into_iter()))
+        // They're not yet scanned, but will be scanned concurrently in the
+        // next processing step.
+        metrics.scanned_data_manifests =
+            metrics.total_data_manifests - metrics.skipped_data_manifests;
+        metrics.scanned_delete_manifests =
+            metrics.total_delete_manifests - metrics.skipped_delete_manifests;
+
+        Ok((filtered_mfcs, metrics))
     }
 
     fn create_manifest_file_context(
