@@ -39,7 +39,6 @@ repository = "https://github.com/apache/iceberg-rust"
 rust-version = "1.87"
 
 [workspace.dependencies]
-
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
