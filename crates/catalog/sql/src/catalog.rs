@@ -28,7 +28,6 @@ use iceberg::{
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
-use typed_builder::TypedBuilder;
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
@@ -71,6 +70,46 @@ impl Default for SqlCatalogBuilder {
     }
 }
 
+impl SqlCatalogBuilder {
+    /// Configure the database URI
+    pub fn uri(mut self, uri: impl Into<String>) -> Self {
+        self.0.uri = uri.into();
+        self
+    }
+
+    /// Configure the warehouse location
+    pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
+        self.0.warehouse_location = location.into();
+        self
+    }
+
+    /// Configure the FileIO
+    pub fn file_io(mut self, file_io: FileIO) -> Self {
+        self.0.file_io = file_io;
+        self
+    }
+
+    /// Configure the bound SQL Statement
+    pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
+        self.0.sql_bind_style = sql_bind_style;
+        self
+    }
+
+    /// Configure the any properties
+    pub fn props(mut self, props: HashMap<String, String>) -> Self {
+        self.0.props = props;
+        self
+    }
+
+    /// Set a new property on the property to be configured.
+    /// When multiple methods are executed with the same key,
+    /// the later-set value takes precedence.
+    pub fn prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.0.props.insert(key.into(), value.into());
+        self
+    }
+}
+
 impl CatalogBuilder for SqlCatalogBuilder {
     type C = SqlCatalog;
 
@@ -103,14 +142,13 @@ impl CatalogBuilder for SqlCatalogBuilder {
 /// The options available for this parameter include:
 /// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
 /// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
-#[derive(Debug, TypedBuilder)]
+#[derive(Debug)]
 pub struct SqlCatalogConfig {
     uri: String,
     name: String,
     warehouse_location: String,
     file_io: FileIO,
     sql_bind_style: SqlBindStyle,
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
@@ -135,7 +173,7 @@ pub enum SqlBindStyle {
 
 impl SqlCatalog {
     /// Create new sql catalog instance
-    pub async fn new(config: SqlCatalogConfig) -> Result<Self> {
+    async fn new(config: SqlCatalogConfig) -> Result<Self> {
         install_default_drivers();
         let max_connections: u32 = config
             .props
@@ -831,14 +869,14 @@ mod tests {
     use iceberg::io::FileIOBuilder;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
-    use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
     use itertools::Itertools;
     use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
     use crate::catalog::NAMESPACE_LOCATION_PROPERTY_KEY;
-    use crate::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
+    use crate::{SqlBindStyle, SqlCatalogBuilder};
 
     const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
@@ -859,15 +897,13 @@ mod tests {
         let sql_lite_uri = format!("sqlite:{}", temp_path());
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
 
-        let config = SqlCatalogConfig::builder()
+        let builder = SqlCatalogBuilder::default()
             .uri(sql_lite_uri.to_string())
-            .name("iceberg".to_string())
             .warehouse_location(warehouse_location)
             .file_io(FileIOBuilder::new_fs_io().build().unwrap())
-            .sql_bind_style(SqlBindStyle::QMark)
-            .build();
+            .sql_bind_style(SqlBindStyle::QMark);
 
-        SqlCatalog::new(config).await.unwrap()
+        builder.load("iceberg", HashMap::new()).await.unwrap()
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
