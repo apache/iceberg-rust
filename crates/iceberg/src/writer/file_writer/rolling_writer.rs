@@ -18,9 +18,11 @@
 use arrow_array::RecordBatch;
 
 use crate::io::FileIO;
-use crate::spec::{DataFile, PartitionKey};
+use crate::spec::PartitionKey;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
-use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{
+    CurrentFileStatus, DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// A writer that automatically rolls over to a new file when the data size
@@ -29,11 +31,12 @@ use crate::{Error, ErrorKind, Result};
 /// This writer wraps another writer that tracks the amount of data written.
 /// When the data size exceeds the target size, it closes the current file and
 /// starts writing to a new one.
-pub struct RollingWriter<B, L, F>
+pub struct RollingWriter<B, L, F, I = DefaultInput, O = DefaultOutput>
 where
-    B: IcebergWriterBuilder,
+    B: IcebergWriterBuilder<I, O>,
     L: LocationGenerator,
     F: FileNameGenerator,
+    O: IntoIterator,
 {
     inner: Option<B::R>,
     inner_builder: B,
@@ -42,15 +45,17 @@ where
     file_name_generator: F,
     file_io: FileIO,
     partition_key: Option<PartitionKey>,
-    data_files: Vec<DataFile>, // todo this should be B::R::O? DefaultOutput?
+    data_files: Vec<O::Item>,
 }
 
-impl<B, L, F> RollingWriter<B, L, F>
+impl<B, L, F, I, O> RollingWriter<B, L, F, I, O>
 where
-    B: IcebergWriterBuilder,
+    B: IcebergWriterBuilder<I, O>,
     B::R: CurrentFileStatus,
     L: LocationGenerator,
     F: FileNameGenerator,
+    O: IntoIterator,
+    O::Item: Clone,
 {
     /// Creates a new `RollingWriter` with the specified inner builder and target size.
     ///
@@ -108,12 +113,12 @@ where
         Ok(writer)
     }
 
-    /// Write a record batch to the current file, rolling over to a new file if necessary.
+    /// Write input data to the current file, rolling over to a new file if necessary.
     ///
     /// # Arguments
     ///
-    /// * `batch` - The record batch to write
-    pub async fn write(&mut self, batch: RecordBatch) -> Result<()> {
+    /// * `input` - The input data to write
+    pub async fn write(&mut self, input: I) -> Result<()> {
         if self.inner.is_none() {
             // initialize inner writer
             self.inner = Some(self.create_new_writer().await?);
@@ -131,7 +136,7 @@ where
 
         // write the input
         if let Some(writer) = &mut self.inner {
-            writer.write(batch).await
+            writer.write(input).await
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
@@ -140,8 +145,8 @@ where
         }
     }
 
-    /// Close the writer and return the data files for all files.
-    pub async fn close(&mut self) -> Result<Vec<DataFile>> {
+    /// Close the writer and return the output items for all files.
+    pub async fn close(&mut self) -> Result<Vec<O::Item>> {
         // close the current writer and merge the output
         if let Some(mut current_writer) = self.inner.take() {
             self.data_files.extend(current_writer.close().await?);
@@ -151,12 +156,13 @@ where
     }
 }
 
-impl<B, L, F> CurrentFileStatus for RollingWriter<B, L, F>
+impl<B, L, F, I, O> CurrentFileStatus for RollingWriter<B, L, F, I, O>
 where
-    B: IcebergWriterBuilder,
-    B::R: IcebergWriter + CurrentFileStatus,
+    B: IcebergWriterBuilder<I, O>,
+    B::R: IcebergWriter<I, O> + CurrentFileStatus,
     L: LocationGenerator,
     F: FileNameGenerator,
+    O: IntoIterator,
 {
     fn current_file_path(&self) -> String {
         if let Some(inner) = &self.inner {
