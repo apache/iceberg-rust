@@ -3715,13 +3715,11 @@ version = "0.6.0"
 dependencies = [
  "async-trait",
  "iceberg",
- "iceberg_test_utils",
  "itertools 0.13.0",
  "regex",
  "sqlx",
  "tempfile",
  "tokio",
- "typed-builder 0.20.1",
 ]
 
 [[package]]
