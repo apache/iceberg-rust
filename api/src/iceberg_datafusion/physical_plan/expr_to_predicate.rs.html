@@ -79,7 +79,7 @@
 <a href=#79 id=79 data-nosnippet>79</a>            }
 <a href=#80 id=80 data-nosnippet>80</a>        }
 <a href=#81 id=81 data-nosnippet>81</a>        Expr::Column(column) =&gt; TransformedResult::Column(Reference::new(column.name())),
-<a href=#82 id=82 data-nosnippet>82</a>        Expr::Literal(literal) =&gt; <span class="kw">match </span>scalar_value_to_datum(literal) {
+<a href=#82 id=82 data-nosnippet>82</a>        Expr::Literal(literal, <span class="kw">_</span>) =&gt; <span class="kw">match </span>scalar_value_to_datum(literal) {
 <a href=#83 id=83 data-nosnippet>83</a>            <span class="prelude-val">Some</span>(data) =&gt; TransformedResult::Literal(data),
 <a href=#84 id=84 data-nosnippet>84</a>            <span class="prelude-val">None </span>=&gt; TransformedResult::NotTransformed,
 <a href=#85 id=85 data-nosnippet>85</a>        },
