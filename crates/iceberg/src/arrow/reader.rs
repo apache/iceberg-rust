@@ -51,7 +51,7 @@ use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visi
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::io::{FileIO, FileMetadata, FileRead};
+use crate::io::{FileIO, FileMetadata, FileReadRef};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -327,7 +327,7 @@ impl ArrowReader {
         data_file_path: &str,
         file_io: FileIO,
         should_load_page_index: bool,
-    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
+    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
@@ -1322,18 +1322,18 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 }
 
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-pub struct ArrowFileReader<R: FileRead> {
+pub struct ArrowFileReader {
     meta: FileMetadata,
     preload_column_index: bool,
     preload_offset_index: bool,
     preload_page_index: bool,
     metadata_size_hint: Option<usize>,
-    r: R,
+    r: FileReadRef,
 }
 
-impl<R: FileRead> ArrowFileReader<R> {
+impl ArrowFileReader {
     /// Create a new ArrowFileReader
-    pub fn new(meta: FileMetadata, r: R) -> Self {
+    pub fn new(meta: FileMetadata, r: FileReadRef) -> Self {
         Self {
             meta,
             preload_column_index: false,
@@ -1372,7 +1372,7 @@ impl<R: FileRead> ArrowFileReader<R> {
     }
 }
 
-impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
+impl AsyncFileReader for ArrowFileReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r

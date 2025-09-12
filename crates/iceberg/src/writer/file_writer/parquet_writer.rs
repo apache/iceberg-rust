@@ -39,7 +39,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
-use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::io::{FileIO, FileWrite, OutputFileRef};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
@@ -214,7 +214,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
-    output_file: OutputFile,
+    out_file: OutputFileRef,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
     writer_properties: WriterProperties,
     current_row_num: usize,

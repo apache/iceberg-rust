@@ -30,7 +30,7 @@ use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEM
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
 use crate::error::Result;
-use crate::io::{FileIO, OutputFile};
+use crate::io::{FileIO, OutputFileRef};
 use crate::{Error, ErrorKind};
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -86,7 +86,7 @@ impl ManifestList {
 /// A manifest list writer.
 pub struct ManifestListWriter {
     format_version: FormatVersion,
-    output_file: OutputFile,
+    output_file: OutputFileRef,
     avro_writer: Writer<'static, Vec<u8>>,
     sequence_number: i64,
     snapshot_id: i64,
@@ -104,7 +104,11 @@ impl std::fmt::Debug for ManifestListWriter {
 
 impl ManifestListWriter {
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
+    pub fn v1(
+        output_file: OutputFileRef,
+        snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
+    ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
             ("format-version".to_string(), "1".to_string()),
@@ -120,7 +124,7 @@ impl ManifestListWriter {
 
     /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v2(
-        output_file: OutputFile,
+        output_file: OutputFileRef,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
@@ -147,7 +151,7 @@ impl ManifestListWriter {
 
     fn new(
         format_version: FormatVersion,
-        output_file: OutputFile,
+        output_file: OutputFileRef,
         metadata: HashMap<String, String>,
         sequence_number: i64,
         snapshot_id: i64,

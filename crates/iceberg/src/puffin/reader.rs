@@ -18,19 +18,19 @@
 use tokio::sync::OnceCell;
 
 use crate::Result;
-use crate::io::{FileRead, InputFile};
+use crate::io::InputFileRef;
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
 
 /// Puffin reader
 pub struct PuffinReader {
-    input_file: InputFile,
+    input_file: InputFileRef,
     file_metadata: OnceCell<FileMetadata>,
 }
 
 impl PuffinReader {
     /// Returns a new Puffin reader
-    pub fn new(input_file: InputFile) -> Self {
+    pub fn new(input_file: InputFileRef) -> Self {
         Self {
             input_file,
             file_metadata: OnceCell::new(),

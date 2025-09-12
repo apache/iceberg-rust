@@ -27,7 +27,7 @@ use super::{
     UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
-use crate::io::OutputFile;
+use crate::io::OutputFileRef;
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
@@ -38,7 +38,7 @@ use crate::{Error, ErrorKind};
 
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {
-    output: OutputFile,
+    output: OutputFileRef,
     snapshot_id: Option<i64>,
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
@@ -48,7 +48,7 @@ pub struct ManifestWriterBuilder {
 impl ManifestWriterBuilder {
     /// Create a new builder.
     pub fn new(
-        output: OutputFile,
+        output: OutputFileRef,
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
@@ -102,7 +102,7 @@ impl ManifestWriterBuilder {
 
 /// A manifest writer.
 pub struct ManifestWriter {
-    output: OutputFile,
+    output: OutputFileRef,
 
     snapshot_id: Option<i64>,
 
@@ -125,7 +125,7 @@ pub struct ManifestWriter {
 impl ManifestWriter {
     /// Create a new manifest writer.
     pub(crate) fn new(
-        output: OutputFile,
+        output: OutputFileRef,
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,

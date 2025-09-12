@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::io::{FileRead, InputFile};
+use crate::io::{FileReadRef, InputFileRef};
 use crate::puffin::compression::CompressionCodec;
 use crate::{Error, ErrorKind, Result};
 
@@ -198,7 +198,7 @@ impl FileMetadata {
     }
 
     async fn read_footer_payload_length(
-        file_read: &dyn FileRead,
+        file_read: FileReadRef,
         input_file_length: u64,
     ) -> Result<u32> {
         let start = input_file_length - FileMetadata::FOOTER_STRUCT_LENGTH as u64;
@@ -211,7 +211,7 @@ impl FileMetadata {
     }
 
     async fn read_footer_bytes(
-        file_read: &dyn FileRead,
+        file_read: FileReadRef,
         input_file_length: u64,
         footer_payload_length: u32,
     ) -> Result<Bytes> {
@@ -280,7 +280,7 @@ impl FileMetadata {
     }
 
     /// Returns the file metadata about a Puffin file
-    pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
+    pub(crate) async fn read(input_file: &InputFileRef) -> Result<FileMetadata> {
         let file_read = input_file.reader().await?;
 
         let first_four_bytes = file_read.read(0..FileMetadata::MAGIC_LENGTH.into()).await?;
@@ -288,9 +288,9 @@ impl FileMetadata {
 
         let input_file_length = input_file.metadata().await?.size;
         let footer_payload_length =
-            FileMetadata::read_footer_payload_length(&file_read, input_file_length).await?;
+            FileMetadata::read_footer_payload_length(file_read.clone(), input_file_length).await?;
         let footer_bytes =
-            FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length)
+            FileMetadata::read_footer_bytes(file_read, input_file_length, footer_payload_length)
                 .await?;
 
         let magic_length = FileMetadata::MAGIC_LENGTH as usize;
@@ -312,7 +312,7 @@ impl FileMetadata {
     /// read option.
     #[allow(dead_code)]
     pub(crate) async fn read_with_prefetch(
-        input_file: &InputFile,
+        input_file: &InputFileRef,
         prefetch_hint: u8,
     ) -> Result<FileMetadata> {
         if prefetch_hint > 16 {
@@ -388,7 +388,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::io::{FileIOBuilder, InputFile};
+    use crate::io::{FileIOBuilder, InputFile, InputFileRef};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,
@@ -399,7 +399,7 @@ mod tests {
 
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
 
-    async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFile {
+    async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFileRef {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
 
         let path_buf = temp_dir.path().join("abc.puffin");
@@ -414,7 +414,7 @@ mod tests {
         output_file.to_input_file()
     }
 
-    async fn input_file_with_payload(temp_dir: &TempDir, payload_str: &str) -> InputFile {
+    async fn input_file_with_payload(temp_dir: &TempDir, payload_str: &str) -> InputFileRef {
         let payload_bytes = payload_str.as_bytes();
 
         let mut bytes = vec![];

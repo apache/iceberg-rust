@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 
 use crate::Result;
-use crate::io::{FileWrite, OutputFile};
+use crate::io::{FileWrite, OutputFileRef};
 use crate::puffin::blob::Blob;
 use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
@@ -39,7 +39,7 @@ pub struct PuffinWriter {
 impl PuffinWriter {
     /// Returns a new Puffin writer
     pub async fn new(
-        output_file: &OutputFile,
+        output_file: &OutputFileRef,
         properties: HashMap<String, String>,
         compress_footer: bool,
     ) -> Result<Self> {
@@ -149,7 +149,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::Result;
-    use crate::io::{FileIOBuilder, InputFile, OutputFile};
+    use crate::io::{FileIOBuilder, InputFileRef, OutputFileRef};
     use crate::puffin::blob::Blob;
     use crate::puffin::compression::CompressionCodec;
     use crate::puffin::metadata::FileMetadata;
@@ -166,7 +166,7 @@ mod tests {
         temp_dir: &TempDir,
         blobs: Vec<(Blob, CompressionCodec)>,
         properties: HashMap<String, String>,
-    ) -> Result<OutputFile> {
+    ) -> Result<OutputFileRef> {
         let file_io = FileIOBuilder::new_fs_io().build()?;
 
         let path_buf = temp_dir.path().join("temp_puffin.bin");
@@ -182,7 +182,7 @@ mod tests {
         Ok(output_file)
     }
 
-    async fn read_all_blobs_from_puffin_file(input_file: InputFile) -> Vec<Blob> {
+    async fn read_all_blobs_from_puffin_file(input_file: InputFileRef) -> Vec<Blob> {
         let puffin_reader = PuffinReader::new(input_file);
         let mut blobs = Vec::new();
         let blobs_metadata = puffin_reader.file_metadata().await.unwrap().clone().blobs;
@@ -279,11 +279,11 @@ mod tests {
         );
     }
 
-    async fn get_file_as_byte_vec(input_file: InputFile) -> Vec<u8> {
+    async fn get_file_as_byte_vec(input_file: InputFileRef) -> Vec<u8> {
         input_file.read().await.unwrap().to_vec()
     }
 
-    async fn assert_files_are_bit_identical(actual: OutputFile, expected: InputFile) {
+    async fn assert_files_are_bit_identical(actual: OutputFileRef, expected: InputFileRef) {
         let actual_bytes = get_file_as_byte_vec(actual.to_input_file()).await;
         let expected_bytes = get_file_as_byte_vec(expected).await;
         assert_eq!(actual_bytes, expected_bytes);
