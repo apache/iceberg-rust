@@ -17,12 +17,19 @@
 //! Google Cloud Storage properties
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use bytes::Bytes;
 use opendal::Operator;
 use opendal::services::GcsConfig;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::io::is_truthy;
+use crate::io::{
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageFactory,
+    is_truthy,
+};
 use crate::{Error, ErrorKind, Result};
 
 // Reference: https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java
@@ -103,4 +110,109 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
     Ok(Operator::from_config(cfg)?.finish())
+}
+
+/// GCS storage implementation using OpenDAL
+///
+/// Stores configuration and creates operators on-demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenDALGcsStorage {
+    config: Arc<GcsConfig>,
+}
+
+impl OpenDALGcsStorage {
+    /// Creates operator from path.
+    fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
+        let operator = gcs_config_build(&self.config, path)?;
+        let prefix = format!("gs://{}/", operator.info().name());
+
+        if path.starts_with(&prefix) {
+            let op = operator.layer(opendal::layers::RetryLayer::new());
+            Ok((op, &path[prefix.len()..]))
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid gcs url: {}, should start with {}", path, prefix),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+#[typetag::serde]
+impl Storage for OpenDALGcsStorage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let meta = op.stat(relative_path).await?;
+        Ok(FileMetadata {
+            size: meta.content_length(),
+        })
+    }
+
+    async fn read(&self, path: &str) -> Result<Bytes> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.read(relative_path).await?.to_bytes())
+    }
+
+    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(Box::new(op.reader(relative_path).await?))
+    }
+
+    async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
+        let mut writer = self.writer(path).await?;
+        writer.write(bs).await?;
+        writer.close().await
+    }
+
+    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(Box::new(op.writer(relative_path).await?))
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn delete_prefix(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFile> {
+        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFile> {
+        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+    }
+}
+
+/// Factory for OpenDAL GCS storage
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OpenDALGcsStorageFactory;
+
+#[typetag::serde]
+impl StorageFactory for OpenDALGcsStorageFactory {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
+        let cfg = gcs_config_parse(props)?;
+        Ok(Arc::new(OpenDALGcsStorage {
+            config: Arc::new(cfg),
+        }))
+    }
 }

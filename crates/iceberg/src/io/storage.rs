@@ -15,228 +15,306 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(any(
-    feature = "storage-s3",
-    feature = "storage-gcs",
-    feature = "storage-oss",
-    feature = "storage-azdls",
-))]
+//! Storage traits and implementations for Iceberg.
+//!
+//! This module provides the core storage abstraction used throughout Iceberg Rust.
+//! Storage implementations handle reading and writing files across different backends
+//! (S3, GCS, Azure, local filesystem, etc.).
+
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
-use opendal::layers::RetryLayer;
-#[cfg(feature = "storage-azdls")]
-use opendal::services::AzdlsConfig;
-#[cfg(feature = "storage-gcs")]
-use opendal::services::GcsConfig;
-#[cfg(feature = "storage-oss")]
-use opendal::services::OssConfig;
-#[cfg(feature = "storage-s3")]
-use opendal::services::S3Config;
-use opendal::{Operator, Scheme};
+use async_trait::async_trait;
+use bytes::Bytes;
 
-#[cfg(feature = "storage-azdls")]
-use super::AzureStorageScheme;
-use super::FileIOBuilder;
-#[cfg(feature = "storage-s3")]
-use crate::io::CustomAwsCredentialLoader;
-use crate::{Error, ErrorKind};
+use super::{Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
+use crate::Result;
 
-/// The storage carries all supported storage services in iceberg
-#[derive(Debug)]
-pub(crate) enum Storage {
-    #[cfg(feature = "storage-memory")]
-    Memory(Operator),
-    #[cfg(feature = "storage-fs")]
-    LocalFs,
-    /// Expects paths of the form `s3[a]://<bucket>/<path>`.
-    #[cfg(feature = "storage-s3")]
-    S3 {
-        /// s3 storage could have `s3://` and `s3a://`.
-        /// Storing the scheme string here to return the correct path.
-        configured_scheme: String,
-        config: Arc<S3Config>,
-        customized_credential_load: Option<CustomAwsCredentialLoader>,
-    },
-    #[cfg(feature = "storage-gcs")]
-    Gcs { config: Arc<GcsConfig> },
-    #[cfg(feature = "storage-oss")]
-    Oss { config: Arc<OssConfig> },
-    /// Expects paths of the form
-    /// `abfs[s]://<filesystem>@<account>.dfs.<endpoint-suffix>/<path>` or
-    /// `wasb[s]://<container>@<account>.blob.<endpoint-suffix>/<path>`.
-    #[cfg(feature = "storage-azdls")]
-    Azdls {
-        /// Because Azdls accepts multiple possible schemes, we store the full
-        /// passed scheme here to later validate schemes passed via paths.
-        configured_scheme: AzureStorageScheme,
-        config: Arc<AzdlsConfig>,
-    },
+/// Trait for storage operations in Iceberg.
+///
+/// This trait defines the interface for all storage backends. Implementations
+/// provide access to different storage systems like S3, GCS, Azure, local filesystem, etc.
+///
+/// The trait supports serialization via `typetag`, allowing storage instances to be
+/// serialized and deserialized across process boundaries.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use iceberg::io::Storage;
+///
+/// async fn example(storage: Arc<dyn Storage>) -> Result<()> {
+///     // Check if file exists
+///     if storage.exists("s3://bucket/path/file.parquet").await? {
+///         // Read file
+///         let data = storage.read("s3://bucket/path/file.parquet").await?;
+///     }
+///     Ok(())
+/// }
+/// ```
+#[async_trait]
+#[typetag::serde(tag = "type")]
+pub trait Storage: Debug + Send + Sync {
+    /// Check if a file exists at the given path
+    async fn exists(&self, path: &str) -> Result<bool>;
+
+    /// Get metadata from an input path
+    async fn metadata(&self, path: &str) -> Result<FileMetadata>;
+
+    /// Read bytes from a path
+    async fn read(&self, path: &str) -> Result<Bytes>;
+
+    /// Get FileRead from a path
+    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>>;
+
+    /// Write bytes to an output path
+    async fn write(&self, path: &str, bs: Bytes) -> Result<()>;
+
+    /// Get FileWrite from a path
+    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>>;
+
+    /// Delete a file at the given path
+    async fn delete(&self, path: &str) -> Result<()>;
+
+    /// Delete all files with the given prefix
+    async fn delete_prefix(&self, path: &str) -> Result<()>;
+
+    /// Create a new input file for reading
+    fn new_input(&self, path: &str) -> Result<InputFile>;
+
+    /// Create a new output file for writing
+    fn new_output(&self, path: &str) -> Result<OutputFile>;
 }
 
-impl Storage {
-    /// Convert iceberg config to opendal config.
-    pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
-        let (scheme_str, props, extensions) = file_io_builder.into_parts();
-        let _ = (&props, &extensions);
-        let scheme = Self::parse_scheme(&scheme_str)?;
-
-        match scheme {
-            #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory(super::memory_config_build()?)),
-            #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(Self::LocalFs),
-            #[cfg(feature = "storage-s3")]
-            Scheme::S3 => Ok(Self::S3 {
-                configured_scheme: scheme_str,
-                config: super::s3_config_parse(props)?.into(),
-                customized_credential_load: extensions
-                    .get::<CustomAwsCredentialLoader>()
-                    .map(Arc::unwrap_or_clone),
-            }),
-            #[cfg(feature = "storage-gcs")]
-            Scheme::Gcs => Ok(Self::Gcs {
-                config: super::gcs_config_parse(props)?.into(),
-            }),
-            #[cfg(feature = "storage-oss")]
-            Scheme::Oss => Ok(Self::Oss {
-                config: super::oss_config_parse(props)?.into(),
-            }),
-            #[cfg(feature = "storage-azdls")]
-            Scheme::Azdls => {
-                let scheme = scheme_str.parse::<AzureStorageScheme>()?;
-                Ok(Self::Azdls {
-                    config: super::azdls_config_parse(props)?.into(),
-                    configured_scheme: scheme,
-                })
-            }
-            // Update doc on [`FileIO`] when adding new schemes.
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now",),
-            )),
-        }
-    }
-
-    /// Creates operator from path.
+/// Common interface for all storage factories.
+///
+/// Storage factories are responsible for creating storage instances from configuration
+/// properties and extensions. Each storage backend (S3, GCS, etc.) provides its own
+/// factory implementation.
+///
+/// The trait supports serialization via `typetag`, allowing factory instances to be
+/// serialized and deserialized across process boundaries.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use iceberg::io::{StorageFactory, Extensions};
+/// use std::collections::HashMap;
+///
+/// #[derive(Debug, Serialize, Deserialize)]
+/// struct MyStorageFactory;
+///
+/// #[typetag::serde]
+/// impl StorageFactory for MyStorageFactory {
+///     fn build(
+///         &self,
+///         props: HashMap<String, String>,
+///         extensions: Extensions,
+///     ) -> Result<Arc<dyn Storage>> {
+///         // Parse configuration and create storage
+///         Ok(Arc::new(MyStorage::new(props)?))
+///     }
+/// }
+/// ```
+#[typetag::serde(tag = "type")]
+pub trait StorageFactory: Debug + Send + Sync {
+    /// Create a new storage instance with the given properties and extensions.
     ///
     /// # Arguments
     ///
-    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    /// * `props` - Configuration properties for the storage backend
+    /// * `extensions` - Additional extensions (e.g., custom credential loaders)
     ///
     /// # Returns
     ///
-    /// The return value consists of two parts:
-    ///
-    /// * An [`opendal::Operator`] instance used to operate on file.
-    /// * Relative path to the root uri of [`opendal::Operator`].
-    pub(crate) fn create_operator<'a>(
+    /// An `Arc<dyn Storage>` that can be used for file operations.
+    fn build(
         &self,
-        path: &'a impl AsRef<str>,
-    ) -> crate::Result<(Operator, &'a str)> {
-        let path = path.as_ref();
-        let _ = path;
-        let (operator, relative_path): (Operator, &str) = match self {
-            #[cfg(feature = "storage-memory")]
-            Storage::Memory(op) => {
-                if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok::<_, crate::Error>((op.clone(), stripped))
-                } else {
-                    Ok::<_, crate::Error>((op.clone(), &path[1..]))
-                }
-            }
-            #[cfg(feature = "storage-fs")]
-            Storage::LocalFs => {
-                let op = super::fs_config_build()?;
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>>;
+}
 
-                if let Some(stripped) = path.strip_prefix("file:/") {
-                    Ok::<_, crate::Error>((op, stripped))
-                } else {
-                    Ok::<_, crate::Error>((op, &path[1..]))
-                }
-            }
-            #[cfg(feature = "storage-s3")]
-            Storage::S3 {
-                configured_scheme,
-                config,
-                customized_credential_load,
-            } => {
-                let op = super::s3_config_build(config, customized_credential_load, path)?;
-                let op_info = op.info();
+/// A registry of storage factories.
+///
+/// The registry allows you to register custom storage factories for different URI schemes.
+/// By default, it includes factories for all enabled storage features.
+///
+/// # Example
+///
+/// ```rust
+/// use iceberg::io::StorageRegistry;
+///
+/// // Create a new registry with default factories
+/// let registry = StorageRegistry::new();
+///
+/// // Get supported storage types
+/// let types = registry.supported_types();
+/// println!("Supported storage types: {:?}", types);
+///
+/// // Get a factory for a specific scheme
+/// # #[cfg(feature = "storage-memory")]
+/// # {
+/// let factory = registry.get_factory("memory").unwrap();
+/// # }
+/// ```
+///
+/// You can also register custom storage factories:
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use iceberg::io::{StorageRegistry, StorageFactory};
+///
+/// let mut registry = StorageRegistry::new();
+///
+/// // Register a custom storage factory
+/// registry.register("custom", Arc::new(MyCustomStorageFactory));
+/// ```
+#[derive(Debug, Clone)]
+pub struct StorageRegistry {
+    factories: HashMap<String, Arc<dyn StorageFactory>>,
+}
 
-                // Check prefix of s3 path.
-                let prefix = format!("{}://{}/", configured_scheme, op_info.name());
-                if path.starts_with(&prefix) {
-                    Ok((op, &path[prefix.len()..]))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid s3 url: {path}, should start with {prefix}"),
-                    ))
-                }
-            }
-            #[cfg(feature = "storage-gcs")]
-            Storage::Gcs { config } => {
-                let operator = super::gcs_config_build(config, path)?;
-                let prefix = format!("gs://{}/", operator.info().name());
-                if path.starts_with(&prefix) {
-                    Ok((operator, &path[prefix.len()..]))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}, should start with {prefix}"),
-                    ))
-                }
-            }
-            #[cfg(feature = "storage-oss")]
-            Storage::Oss { config } => {
-                let op = super::oss_config_build(config, path)?;
+impl StorageRegistry {
+    /// Create a new storage registry with default factories based on enabled features.
+    pub fn new() -> Self {
+        let mut factories: HashMap<String, Arc<dyn StorageFactory>> = HashMap::new();
 
-                // Check prefix of oss path.
-                let prefix = format!("oss://{}/", op.info().name());
-                if path.starts_with(&prefix) {
-                    Ok((op, &path[prefix.len()..]))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid oss url: {path}, should start with {prefix}"),
-                    ))
-                }
-            }
-            #[cfg(feature = "storage-azdls")]
-            Storage::Azdls {
-                configured_scheme,
-                config,
-            } => super::azdls_create_operator(path, config, configured_scheme),
-            #[cfg(all(
-                not(feature = "storage-s3"),
-                not(feature = "storage-fs"),
-                not(feature = "storage-gcs"),
-                not(feature = "storage-oss"),
-                not(feature = "storage-azdls"),
-            ))]
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "No storage service has been enabled",
-            )),
-        }?;
+        #[cfg(feature = "storage-memory")]
+        {
+            use crate::io::storage_memory::OpenDALMemoryStorageFactory;
+            let factory = Arc::new(OpenDALMemoryStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("memory".to_string(), factory);
+        }
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        #[cfg(feature = "storage-fs")]
+        {
+            use crate::io::storage_fs::OpenDALFsStorageFactory;
+            let factory = Arc::new(OpenDALFsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("file".to_string(), factory.clone());
+            factories.insert("".to_string(), factory);
+        }
 
-        Ok((operator, relative_path))
+        #[cfg(feature = "storage-s3")]
+        {
+            use crate::io::storage_s3::OpenDALS3StorageFactory;
+            let factory = Arc::new(OpenDALS3StorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("s3".to_string(), factory.clone());
+            factories.insert("s3a".to_string(), factory);
+        }
+
+        #[cfg(feature = "storage-gcs")]
+        {
+            use crate::io::storage_gcs::OpenDALGcsStorageFactory;
+            let factory = Arc::new(OpenDALGcsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("gs".to_string(), factory.clone());
+            factories.insert("gcs".to_string(), factory);
+        }
+
+        #[cfg(feature = "storage-oss")]
+        {
+            use crate::io::storage_oss::OpenDALOssStorageFactory;
+            let factory = Arc::new(OpenDALOssStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("oss".to_string(), factory);
+        }
+
+        #[cfg(feature = "storage-azdls")]
+        {
+            use crate::io::storage_azdls::OpenDALAzdlsStorageFactory;
+            let factory = Arc::new(OpenDALAzdlsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("abfs".to_string(), factory.clone());
+            factories.insert("abfss".to_string(), factory.clone());
+            factories.insert("wasb".to_string(), factory.clone());
+            factories.insert("wasbs".to_string(), factory);
+        }
+
+        Self { factories }
     }
 
-    /// Parse scheme.
-    fn parse_scheme(scheme: &str) -> crate::Result<Scheme> {
-        match scheme {
-            "memory" => Ok(Scheme::Memory),
-            "file" | "" => Ok(Scheme::Fs),
-            "s3" | "s3a" => Ok(Scheme::S3),
-            "gs" | "gcs" => Ok(Scheme::Gcs),
-            "oss" => Ok(Scheme::Oss),
-            "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
-            s => Ok(s.parse::<Scheme>()?),
-        }
+    /// Register a custom storage factory for a given scheme.
+    pub fn register(&mut self, scheme: impl Into<String>, factory: Arc<dyn StorageFactory>) {
+        self.factories.insert(scheme.into(), factory);
+    }
+
+    /// Get a storage factory by scheme.
+    pub fn get_factory(&self, scheme: &str) -> Result<Arc<dyn StorageFactory>> {
+        let key = scheme.trim();
+        self.factories
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, factory)| factory.clone())
+            .ok_or_else(|| {
+                use crate::{Error, ErrorKind};
+                Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported storage type: {}. Supported types: {}",
+                        scheme,
+                        self.supported_types().join(", ")
+                    ),
+                )
+            })
+    }
+
+    /// Return the list of supported storage types.
+    pub fn supported_types(&self) -> Vec<String> {
+        self.factories.keys().cloned().collect()
+    }
+}
+
+impl Default for StorageRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_storage_registry_new() {
+        let registry = StorageRegistry::new();
+        let types = registry.supported_types();
+
+        // At least one storage type should be available
+        assert!(!types.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "storage-memory")]
+    fn test_storage_registry_get_factory() {
+        let registry = StorageRegistry::new();
+
+        // Should be able to get memory storage factory
+        let factory = registry.get_factory("memory");
+        assert!(factory.is_ok());
+
+        // Should be case-insensitive
+        let factory = registry.get_factory("MEMORY");
+        assert!(factory.is_ok());
+    }
+
+    #[test]
+    fn test_storage_registry_unsupported_type() {
+        let registry = StorageRegistry::new();
+
+        // Should return error for unsupported type
+        let result = registry.get_factory("unsupported");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "storage-memory")]
+    fn test_storage_registry_clone() {
+        let registry = StorageRegistry::new();
+        let cloned = registry.clone();
+
+        // Both should have the same factories
+        assert_eq!(
+            registry.supported_types().len(),
+            cloned.supported_types().len()
+        );
     }
 }
