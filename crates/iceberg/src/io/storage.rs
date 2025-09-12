@@ -16,7 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
-
+use bytes::Bytes;
 use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
@@ -30,14 +30,14 @@ use opendal::{Operator, Scheme};
 
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
-use super::FileIOBuilder;
+use super::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
 use crate::{Error, ErrorKind};
 
 /// The storage carries all supported storage services in iceberg
-#[derive(Debug)]
-pub(crate) enum Storage {
+#[derive(Debug, Clone)]
+pub(crate) enum OpenDALStorage {
     #[cfg(feature = "storage-memory")]
     Memory(Operator),
     #[cfg(feature = "storage-fs")]
@@ -67,7 +67,80 @@ pub(crate) enum Storage {
     },
 }
 
-impl Storage {
+#[async_trait::async_trait]
+impl Storage for OpenDALStorage {
+    async fn exists(&self, path: &str) -> crate::Result<bool> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn metadata(&self, path: &str) -> crate::Result<FileMetadata> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        let meta = op.stat(relative_path).await?;
+        
+        Ok(FileMetadata {
+            size: meta.content_length(),
+        })
+    }
+
+    async fn read(&self, path: &str) -> crate::Result<Bytes> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        Ok(op.read(relative_path).await?.to_bytes())
+    }
+
+    async fn reader(&self, path: &str) -> crate::Result<Box<dyn FileRead>> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        Ok(Box::new(op.reader(relative_path).await?))
+    }
+
+    async fn write(&self, path: &str, bs: Bytes) -> crate::Result<()> {
+        let mut writer = self.writer(path).await?;
+        writer.write(bs).await?;
+        writer.close().await
+    }
+
+    async fn writer(&self, path: &str) -> crate::Result<Box<dyn FileWrite>> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        Ok(Box::new(
+            op.writer(relative_path).await?,
+        ))
+    }
+
+    async fn delete(&self, path: &str) -> crate::Result<()> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> crate::Result<()> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> crate::Result<InputFile> {
+        let storage = Arc::new(self.clone());
+        let path = path.to_string();
+        Ok(InputFile {
+            storage,
+            path,
+        })
+    }
+
+    fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
+        let storage = Arc::new(self.clone());
+        let path = path.to_string();
+        Ok(OutputFile {
+            storage,
+            path,
+        })
+    }
+}
+
+impl OpenDALStorage {
     /// Convert iceberg config to opendal config.
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
@@ -129,7 +202,7 @@ impl Storage {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
-            Storage::Memory(op) => {
+            OpenDALStorage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     Ok::<_, crate::Error>((op.clone(), stripped))
                 } else {
@@ -137,7 +210,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-fs")]
-            Storage::LocalFs => {
+            OpenDALStorage::LocalFs => {
                 let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
@@ -147,7 +220,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-s3")]
-            Storage::S3 {
+            OpenDALStorage::S3 {
                 configured_scheme,
                 config,
                 customized_credential_load,
@@ -167,7 +240,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-gcs")]
-            Storage::Gcs { config } => {
+            OpenDALStorage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
@@ -180,7 +253,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-oss")]
-            Storage::Oss { config } => {
+            OpenDALStorage::Oss { config } => {
                 let op = super::oss_config_build(config, path)?;
 
                 // Check prefix of oss path.
@@ -195,7 +268,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-azdls")]
-            Storage::Azdls {
+            OpenDALStorage::Azdls {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
