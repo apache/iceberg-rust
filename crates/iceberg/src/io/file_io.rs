@@ -26,8 +26,8 @@ use bytes::Bytes;
 use opendal::Operator;
 use url::Url;
 
-use super::storage::OpenDALStorage;
 use crate::{Error, ErrorKind, Result};
+use crate::io::loader::StorageLoader;
 
 /// todo doc
 pub type InputFileRef = Arc<dyn InputFile>;
@@ -55,6 +55,17 @@ pub trait Storage: Debug + Send + Sync {
 
     /// Create a new output file for writing
     fn new_output(&self, path: &str) -> Result<OutputFileRef>;
+}
+
+/// Common interface for all storage builders.
+pub trait StorageBuilder: Default + Debug {
+    /// The storage type that this builder creates.
+    type S: Storage;
+    /// Create a new storage instance.
+    fn build(
+        self,
+        file_io_builder: FileIOBuilder,
+    ) -> Result<Self::S>;
 }
 
 /// Trait for reading files
@@ -322,11 +333,11 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        // todo need to have a storage loader
-        let storage = OpenDALStorage::build(self.clone())?;
+        // todo storage type need to be configurable
+        let storage = StorageLoader::from("opendal").load(self.clone())?;
         Ok(FileIO {
             builder: self,
-            inner: Arc::new(storage),
+            inner: storage,
         })
     }
 }

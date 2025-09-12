@@ -67,7 +67,6 @@
 //! - `new_output`: Create output file for writing.
 
 mod file_io;
-mod storage;
 
 pub use file_io::*;
 pub(crate) mod object_cache;
@@ -84,6 +83,8 @@ mod storage_memory;
 mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
+mod loader;
+mod storage;
 
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;

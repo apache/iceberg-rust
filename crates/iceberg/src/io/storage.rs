@@ -31,16 +31,36 @@ use opendal::{Operator, Scheme};
 
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
-use super::{
-    FileIOBuilder, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
-};
+use super::{FileIOBuilder, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage, StorageBuilder};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
 use crate::{Error, ErrorKind, Result};
 
+
+/// Builder for [`OpenDALStorage`].
+#[derive(Debug)]
+pub struct OpenDALStorageBuilder;
+
+impl Default for OpenDALStorageBuilder {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl StorageBuilder for OpenDALStorageBuilder {
+    type S = OpenDALStorage;
+
+    fn build(
+        self,
+        file_io_builder: FileIOBuilder,
+    ) -> Result<Self::S> {
+        OpenDALStorage::build(file_io_builder)
+    }
+}
+
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]
-pub(crate) enum OpenDALStorage {
+pub enum OpenDALStorage {
     #[cfg(feature = "storage-memory")]
     Memory(Operator),
     #[cfg(feature = "storage-fs")]
@@ -117,7 +137,7 @@ impl Storage for OpenDALStorage {
 
 impl OpenDALStorage {
     /// Convert iceberg config to opendal config.
-    pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
+    pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let scheme = Self::parse_scheme(&scheme_str)?;
 
