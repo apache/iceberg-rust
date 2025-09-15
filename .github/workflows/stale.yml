@@ -31,7 +31,7 @@ jobs:
     if: github.repository_owner == 'apache'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/stale@v9.1.0
+      - uses: actions/stale@v10.0.0
         with:
           stale-issue-label: 'stale'
           exempt-issue-labels: 'not-stale'
