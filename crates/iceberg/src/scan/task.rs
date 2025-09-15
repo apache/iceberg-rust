@@ -54,6 +54,9 @@ pub struct FileScanTask {
 
     /// The list of delete files that may need to be applied to this data file
     pub deletes: Vec<FileScanTaskDeleteFile>,
+
+    /// Maximum number of records to return, None means no limit
+    pub limit: Option<usize>,
 }
 
 impl FileScanTask {

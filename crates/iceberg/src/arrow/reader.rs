@@ -310,6 +310,10 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
+        }
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let record_batch_stream =
@@ -1745,6 +1749,7 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
