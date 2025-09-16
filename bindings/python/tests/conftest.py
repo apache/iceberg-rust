@@ -587,9 +587,9 @@ def test_partition_spec() -> Schema:
 
 @pytest.fixture(scope="session")
 def generated_manifest_entry_file(
-        avro_schema_manifest_entry: Dict[str, Any],
-        test_schema: Schema,
-        test_partition_spec: PartitionSpec,
+    avro_schema_manifest_entry: Dict[str, Any],
+    test_schema: Schema,
+    test_partition_spec: PartitionSpec,
 ) -> Generator[str, None, None]:
     from fastavro import parse_schema, writer
 
