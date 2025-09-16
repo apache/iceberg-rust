@@ -41,6 +41,11 @@ fix-toml: install-taplo-cli
 check-toml: install-taplo-cli
 	taplo check
 
+check-msrv:
+	cargo generate-lockfile -Z direct-minimal-versions
+	cargo check --locked --workspace
+	git checkout -- Cargo.lock
+
 check: check-fmt check-clippy check-toml cargo-machete
 
 doc-test:
