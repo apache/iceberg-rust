@@ -67,6 +67,15 @@ impl DefaultLocationGenerator {
         };
         Ok(Self { data_location })
     }
+
+    /// Create a new `DefaultLocationGenerator` with a specified data location.
+    ///
+    /// # Arguments
+    ///
+    /// * `data_location` - The data location to use for generating file locations.
+    pub fn with_data_location(data_location: String) -> Self {
+        Self { data_location }
+    }
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
@@ -144,34 +153,9 @@ pub(crate) mod test {
         Struct, StructType, TableMetadata, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
-        FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
+        DefaultLocationGenerator, FileNameGenerator, WRITE_DATA_LOCATION,
+        WRITE_FOLDER_STORAGE_LOCATION,
     };
-
-    #[derive(Clone)]
-    pub(crate) struct MockLocationGenerator {
-        root: String,
-    }
-
-    impl MockLocationGenerator {
-        pub(crate) fn new(root: String) -> Self {
-            Self { root }
-        }
-    }
-
-    impl LocationGenerator for MockLocationGenerator {
-        fn generate_location(&self, partition: Option<&PartitionKey>, file_name: &str) -> String {
-            if PartitionKey::is_effectively_none(partition) {
-                format!("{}/{}", self.root, file_name)
-            } else {
-                format!(
-                    "{}/{}/{}",
-                    self.root,
-                    partition.unwrap().to_path(),
-                    file_name
-                )
-            }
-        }
-    }
 
     #[test]
     fn test_default_location_generate() {
@@ -283,10 +267,9 @@ pub(crate) mod test {
         // Create a partition key
         let partition_key = PartitionKey::new(partition_spec, schema, partition_data);
 
-        // Test with MockLocationGenerator
-        let mock_location_gen = MockLocationGenerator::new("/base/path".to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location("/base/path".to_string());
         let file_name = "data-00000.parquet";
-        let location = mock_location_gen.generate_location(Some(&partition_key), file_name);
+        let location = location_gen.generate_location(Some(&partition_key), file_name);
         assert_eq!(location, "/base/path/id=42/name=alice/data-00000.parquet");
 
         // Create a table metadata for DefaultLocationGenerator
