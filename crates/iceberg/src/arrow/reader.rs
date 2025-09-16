@@ -177,7 +177,7 @@ impl ArrowReader {
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
-            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty() || task.limit.is_some();
 
         let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
 
@@ -345,7 +345,7 @@ impl ArrowReader {
         // Create the record batch stream builder, which wraps the parquet file reader
         let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new(),
+            ArrowReaderOptions::new().with_page_index(should_load_page_index),
         )
         .await?;
         Ok(record_batch_stream_builder)
