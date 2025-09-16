@@ -138,7 +138,7 @@ pub struct ArrowReader {
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    pub async fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
+    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
         let batch_size = self.batch_size;
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
@@ -1751,7 +1751,6 @@ message schema {
 
         let result = reader
             .read(tasks)
-            .await
             .unwrap()
             .try_collect::<Vec<RecordBatch>>()
             .await

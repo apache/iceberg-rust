@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 env:
-  rust_msrv: "1.85"
+  rust_msrv: "1.87"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}-${{ github.event_name }}
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -128,7 +128,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -144,7 +144,7 @@ jobs:
           rm Cargo.toml
           mv Cargo.toml.tmp Cargo.toml
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.9
       - name: Setup Rust toolchain

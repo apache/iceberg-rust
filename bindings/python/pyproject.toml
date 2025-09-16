@@ -34,17 +34,22 @@ name = "pyiceberg-core"
 readme = "project-description.md"
 requires-python = "~=3.9"
 dynamic = ["version"]
+license = { file = "LICENSE" }
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 python-source = "python"
+include = [
+    { path = "LICENSE", format = ["sdist", "wheel"] },
+    { path = "NOTICE", format = ["sdist", "wheel"] }
+]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
 
 [tool.hatch.envs.dev]
-dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0", "datafusion>=45", "pyiceberg[sql-sqlite]>=0.9.1"]
+dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "datafusion==45.*", "pyiceberg[sql-sqlite,pyarrow]>=0.9.1"]
 
 [tool.hatch.envs.dev.scripts]
 build = "maturin build --out dist --sdist"

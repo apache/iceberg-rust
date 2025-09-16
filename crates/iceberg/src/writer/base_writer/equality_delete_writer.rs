@@ -198,8 +198,9 @@ mod test {
         EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
     };
     use crate::writer::file_writer::ParquetWriterBuilder;
-    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
-    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
     async fn check_parquet_data_file_with_equality_delete_write(
@@ -282,8 +283,9 @@ mod test {
     async fn test_equality_delete_writer() -> Result<(), anyhow::Error> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -404,6 +406,7 @@ mod test {
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(delete_schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -517,8 +520,9 @@ mod test {
     async fn test_equality_delete_with_primitive_type() -> Result<(), anyhow::Error> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let location_gen =
-            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
@@ -569,6 +573,7 @@ mod test {
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(delete_schema),
+            None,
             file_io.clone(),
             location_gen,
             file_name_gen,

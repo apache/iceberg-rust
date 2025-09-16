@@ -24,8 +24,22 @@
 * Create and list namespaces.
 * Create, load, and drop tables
 
-Currently only rest catalog has been implemented, and other catalogs are under active development. Here is an 
-example of how to create a `RestCatalog`:
+There is support for the following catalogs:
+
+| Catalog | Description |
+|---------|------------|
+| `Rest`   | the Iceberg REST catalog              |
+| `Glue`          | the AWS Glue Data Catalog             |
+| `Memory` | a memory-based Catalog                |
+| `HMS`           | Apache Iceberg HiveMetaStore catalog  |
+| `S3Tables`      | AWS S3 Tables                         |
+| `SQL`           | SQL-based catalog                     |
+
+Not all catalog implementations are complete.
+
+## `RestCatalog` 
+
+Here is an example of how to create a `RestCatalog`:
 
 ```rust,no_run,noplayground
 {{#rustdoc_include ../../crates/examples/src/rest_catalog_namespace.rs:create_catalog}}
