@@ -88,7 +88,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="../introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="../install.html">Install</a></li><li class="chapter-item expanded "><a href="../download.html">Download</a></li><li class="chapter-item expanded "><a href="../api.html">API</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="../CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="../release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/podman.html" class="active">Using Podman instead of Docker</a></li><li class="chapter-item expanded "><a href="../reference/setup_gpg.html">Setup GPG key</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="../introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="../install.html">Install</a></li><li class="chapter-item expanded "><a href="../download.html">Download</a></li><li class="chapter-item expanded "><a href="../api.html">API</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="../CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="../release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/podman.html" class="active">Using Podman instead of Docker</a></li><li class="chapter-item expanded "><a href="../reference/orbstack.html">OrbStack as a docker alternative</a></li><li class="chapter-item expanded "><a href="../reference/setup_gpg.html">Setup GPG key</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -179,7 +179,110 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="using-podman-instead-of-docker"><a class="header" href="#using-podman-instead-of-docker">Using Podman instead of Docker</a></h1>
+                        <!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+<h1 id="using-podman-instead-of-docker"><a class="header" href="#using-podman-instead-of-docker">Using Podman instead of Docker</a></h1>
+<p>Iceberg-rust does not require containerization, except for integration tests, where &quot;docker&quot; and &quot;docker-compose&quot; are used to start containers for minio and various catalogs. Below instructions setup &quot;rootful podman&quot; and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack.</p>
+<ol>
+<li>Have podman v4 or newer.
+<pre><code class="language-shell">$ podman --version
+podman version 4.9.4-rhel
+</code></pre>
+</li>
+<li>Create a docker wrapper script:</li>
+</ol>
+<ul>
+<li>
+<p>Create a fresh <code>/usr/bin/docker</code> file and add the below contents:</p>
+<pre><code class="language-bash">#!/bin/sh
+[ -e /etc/containers/nodocker ] || \
+echo &quot;Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg.&quot; &gt;&amp;2
+exec sudo /usr/bin/podman &quot;$@&quot;
+</code></pre>
+</li>
+<li>
+<p>Set new <code>/usr/bin/docker</code> file to executable.</p>
+<pre><code class="language-shell">sudo chmod +x /usr/bin/docker
+</code></pre>
+</li>
+</ul>
+<ol start="3">
+<li>
+<p>Install the <a href="https://docs.docker.com/compose/install/linux">docker compose plugin</a>. Check for successful installation.</p>
+<pre><code class="language-shell">$ docker compose version
+Docker Compose version v2.28.1
+</code></pre>
+</li>
+<li>
+<p>Append the below to <code>~/.bashrc</code> or equivalent shell config:</p>
+<pre><code class="language-bash">export DOCKER_HOST=unix:///run/podman/podman.sock
+</code></pre>
+</li>
+<li>
+<p>Start the &quot;rootful&quot; podman socket.</p>
+<pre><code class="language-shell">sudo systemctl start podman.socket
+sudo systemctl status podman.socket
+</code></pre>
+</li>
+<li>
+<p>Check that the following symlink exists.</p>
+<pre><code class="language-shell">$ ls -al /var/run/docker.sock
+lrwxrwxrwx 1 root root 27 Jul 24 12:18 /var/run/docker.sock -&gt; /var/run/podman/podman.sock
+</code></pre>
+<p>If the symlink does not exist, create it.</p>
+<pre><code class="language-shell">sudo ln -s /var/run/podman/podman.sock /var/run/docker.sock
+</code></pre>
+</li>
+<li>
+<p>Check that the docker socket is working.</p>
+<pre><code class="language-shell">sudo curl -H &quot;Content-Type: application/json&quot; --unix-socket /var/run/docker.sock http://localhost/_ping
+</code></pre>
+</li>
+<li>
+<p>Try some integration tests!</p>
+<pre><code class="language-shell">cargo test -p iceberg --test file_io_s3_test
+</code></pre>
+</li>
+</ol>
+<h1 id="references"><a class="header" href="#references">References</a></h1>
+<ul>
+<li><a href="https://docs.docker.com/compose/install/linux">https://docs.docker.com/compose/install/linux</a></li>
+<li><a href="https://www.redhat.com/sysadmin/podman-docker-compose">https://www.redhat.com/sysadmin/podman-docker-compose</a></li>
+</ul>
+<h1 id="note-on-rootless-containers"><a class="header" href="#note-on-rootless-containers">Note on rootless containers</a></h1>
+<p>As of podman v4, <a href="https://www.redhat.com/sysadmin/container-ip-address-podman">&quot;To be succinct and simple, when running rootless containers, the container itself does not have an IP address&quot;</a> This causes issues with iceberg-rust's integration tests, which rely upon ip-addressable containers via docker-compose. As a result, podman &quot;rootful&quot; containers are required throughout to ensure containers have IP addresses. Perhaps as a future work or with updates to default podman networking, the need for &quot;rootful&quot; podman containers can be eliminated.</p>
+<ul>
+<li><a href="https://www.redhat.com/sysadmin/container-ip-address-podman">https://www.redhat.com/sysadmin/container-ip-address-podman</a></li>
+<li><a href="https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md">https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md</a></li>
+</ul>
+<h1 id="debugging-note"><a class="header" href="#debugging-note">Debugging Note:</a></h1>
+<ul>
+<li>Fix for error: <code>Error: short-name &quot;apache/iceberg-rest-fixture&quot; did not resolve to an alias and no unqualified-search registries are defined in &quot;/etc/containers/registries.conf&quot;</code>
+<ul>
+<li>Add or modify the <code>/etc/containers/registries.conf</code> file:</li>
+</ul>
+<pre><code class="language-toml">[[registry]]
+prefix = &quot;docker.io&quot;
+location = &quot;docker.io&quot;
+</code></pre>
+</li>
+</ul>
 
                     </main>
 
@@ -189,7 +292,7 @@
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../reference/setup_gpg.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../reference/orbstack.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -203,7 +306,7 @@
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../reference/setup_gpg.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../reference/orbstack.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
