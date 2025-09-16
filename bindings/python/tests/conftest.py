@@ -340,11 +340,11 @@ manifest_entry_records = [
             ],
             "nan_value_counts": [],
             "lower_bounds": [
-                {"key": 1, "value": b"\x00\x00\x00\x00\x00\x00\x00\x00"},
+                {"key": 1, "value": b"\x00\x00\x00\x00"},
                 {"key": 2, "value": b"\x00\x00\x00\x00\x00\x00\x00\x00"},
             ],
             "upper_bounds": [
-                {"key": 1, "value": b"\x00\x00\x00\x00\x00\x00\xe0\xbf"},
+                {"key": 1, "value": b"\x00\x00\xe0\xbf"},
                 {"key": 2, "value": b"\x00\x00\x00\x00\x00\x00\xe0\xbf"},
             ],
             "key_metadata": None,
@@ -376,12 +376,12 @@ manifest_entry_records = [
             ],
             "nan_value_counts": [],
             "lower_bounds": [
-                {"key": 1, "value": b"\x01\x00\x00\x00\x00\x00\x00\x00"},
-                {"key": 2, "value": b"\x01\x00\x00\x00\x00\x00\x00\x00"},
+                {"key": 1, "value": b"\x00\x00\x00\x00"},
+                {"key": 2, "value": b"\x00\x00\x00\x00\x00\x00\x00\x00"},
             ],
             "upper_bounds": [
-                {"key": 1, "value": b"\x06\x00\x00\x00\x00\x00\x00\x00"},
-                {"key": 2, "value": b"\x06\x00\x00\x00\x00\x00\x00\x00"},
+                {"key": 1, "value": b"\x00\x00\xe0\xbf"},
+                {"key": 2, "value": b"\x00\x00\x00\x00\x00\x00\xe0\xbf"},
             ],
             "key_metadata": None,
             "split_offsets": [4],
