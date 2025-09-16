@@ -225,7 +225,7 @@ impl Display for NamespaceIdent {
 }
 
 /// TableIdent represents the identifier of a table in the catalog.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TableIdent {
     /// Namespace of the table.
     pub namespace: NamespaceIdent,
