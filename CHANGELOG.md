@@ -24,6 +24,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.7.0] - 2025-09-16
+
+### Breaking Changes
+
+* **API Changes:**
+  * feat(writer): Make LocationGenerator partition-aware by @CTTY in https://github.com/apache/iceberg-rust/pull/1625
+  * feat(catalog): Implement catalog loader for in memory by @lliangyu-lin in https://github.com/apache/iceberg-rust/pull/1623
+
+### All Changes
+
+* feat: bump datafusion to 48 by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1501
+* refactor(test): remove MockLocationGenerator and its usages by @CTTY in https://github.com/apache/iceberg-rust/pull/1663
+* Remove rustversion pin by @xxchan in https://github.com/apache/iceberg-rust/pull/1664
+* Scan Delete Support Part 6: Equality Delete Parsing by @sdd in https://github.com/apache/iceberg-rust/pull/1017
+* Bump Avro to 0.20 by @Fokko in https://github.com/apache/iceberg-rust/pull/1644
+* ci: only use `-Z direct-minimal-versions` for MSRV check by @xxchan in https://github.com/apache/iceberg-rust/pull/1656
+* upgrade MSRV from `1.85` to `1.87` by @xxchan in https://github.com/apache/iceberg-rust/pull/1655
+* docs: add instructions to check license header in "How to verify a release" by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1662
+* Add LICENSE and NOTICE files for pyiceberg-core source distribution and wheel by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1653
+* infra: no need to manually install crates in CI by @xxchan in https://github.com/apache/iceberg-rust/pull/1654
+* test: pyiceberg-core, pin datafusion and unpin pyarrow by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1648
+* Partition Writer Support Part 1: add partition splitter by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1040
+* fix: Add support for unsigned Arrow datatypes in schema conversion by @phillipleblanc in https://github.com/apache/iceberg-rust/pull/1617
+* feat(sqllogictest): Add sqllogictest schedule definition and parsing by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1630
+* feat(writer): Make LocationGenerator partition-aware by @CTTY in https://github.com/apache/iceberg-rust/pull/1625
+* Allow V2 reader to read v1 manifests by @Fokko in https://github.com/apache/iceberg-rust/pull/1634
+* chore: Replace async-std with smol by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1640
+* fix: await get catalog in datafusion integration test by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1635
+* feat(datafusion): Implement `insert_into` for `IcebergTableProvider` by @CTTY in https://github.com/apache/iceberg-rust/pull/1600
+* feat(catalog): Implement catalog loader for in memory by @lliangyu-lin in https://github.com/apache/iceberg-rust/pull/1623
+* feat(catalog): Implement register_table for glue catalog by @geruh in https://github.com/apache/iceberg-rust/pull/1568
+* fix(schema): check if new schema field names conflict with existing partition field names by @CTTY in https://github.com/apache/iceberg-rust/pull/1619
+* feat(catalog): Implement update_table for GlueCatalog by @geruh in https://github.com/apache/iceberg-rust/pull/1584
+* feat(catalog): Implement catalog loader for hms by @marvinlanhenke in https://github.com/apache/iceberg-rust/pull/1612
+* feat(catalog): implement catalog loader for s3tables by @flaneur2020 in https://github.com/apache/iceberg-rust/pull/1598
+* docs: tidying; update version refs; describe various catalogues by @jdockerty in https://github.com/apache/iceberg-rust/pull/1616
+* Include license and notice files in published crates by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1601
+* feat(catalog): implement catalog loader for glue by @geruh in https://github.com/apache/iceberg-rust/pull/1603
+* Refactor: remove unnecessary async for ArrowReader::read by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1608
+* fix(tests): resolve flaky catalog tests by waiting for S3 bucket creation by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1599
+* feat(arrow): Allow ArrowArrayAccessor to use field.name to match fields by @CTTY in https://github.com/apache/iceberg-rust/pull/1561
+* feat(datafusion): Implement IcebergWriteExec for DataFusion write support by @CTTY in https://github.com/apache/iceberg-rust/pull/1585
+* feat(catalog): Add catalog loader and builder implementation for rest catalog by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1580
+* feat(datafusion): Add IcebergCommitExec to commit the written data files by @CTTY in https://github.com/apache/iceberg-rust/pull/1588
+* Try infer file io scheme from metadata location ahead of warehouse path by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1590
+* feat: add bulk insertion to deletion vector by @dentiny in https://github.com/apache/iceberg-rust/pull/1578
+* Add Default Implementations for V1→V2 by @Fokko in https://github.com/apache/iceberg-rust/pull/1579
+* feat(spec): Expose DataFile serde functions by @CTTY in https://github.com/apache/iceberg-rust/pull/1563
+* refactor: remove TrackWriter by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1575
+* chore: upgrade roaring to 0.11 by @xxchan in https://github.com/apache/iceberg-rust/pull/1577
+* feat(datafusion): make IcebergTableScan public by @xxchan in https://github.com/apache/iceberg-rust/pull/1570
+* Rest: Implement register table by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1521
+* Updates Podman Instructions, Docker-Compose, & Spark Script by @Fokko in https://github.com/apache/iceberg-rust/pull/1553
+* Refactor: use metadatalocaiton:new_with_table_location in catalog create_table by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1558
+* feat(core): Implement `RollingFileWriter` to help split data into multiple files by @CTTY in https://github.com/apache/iceberg-rust/pull/1547
+* feat(catalog): Implement `update_table` for `MemoryCatalog` by @CTTY in https://github.com/apache/iceberg-rust/pull/1549
+* feat: append action allows snapshot properties by @dentiny in https://github.com/apache/iceberg-rust/pull/1534
+* Add `uv` instructions to `bindings/python/README.md` by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1514
+* refactor: Add `read_from()` and `write_to()` to `TableMetadata` by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1523
+* fix: retain metadata_location from StaticTable::into_table by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1536
+* fix: Use CatalogCommitConflicts for TableRequirement by @CTTY in https://github.com/apache/iceberg-rust/pull/1532
+* docs: fix release process docs by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1538
+* infra: use `toml-cli` to manually set version in github action by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1537
+* feat: Add support for custom credential loader for S3 FileIO by @c-thiel in https://github.com/apache/iceberg-rust/pull/1528
+* chore: expose default schema id by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1526
+* feat(catalog): Add register_table to Catalog trait by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1509
+* fix: Fix mock dependency by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1507
+* feat(transaction): Add retry logic to transaction by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1484
+* refine: refine the interface of SnapshotProducer by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1490
+* Read ManifestList V1 with V2 projection by @Fokko in https://github.com/apache/iceberg-rust/pull/1482
+* chore: expose field id mapping from schema by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1498
+* chore: Bump opendal to 0.54 by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1524
+* chore: Bump python version for release by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1522
+* fix(parquet_writer): correctly update upper bound by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1520
+* fix(writer): Fix current_written_size for ParquetWriter by @ZENOTME in https://github.com/apache/iceberg-rust/pull/1556
+
 ## [v0.6.0] - 2025-07-14
 
 ### Breaking Changes
@@ -796,6 +872,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * feat: Add cargo machete by @vaibhawvipul in https://github.com/apache/iceberg-rust/pull/448
 * chore: Use nightly toolchain for check by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/445
 * reuse docker container to save compute resources by @thexiay in https://github.com/apache/iceberg-rust/pull/428
+* feat: Add macos runner for ci by @QuakeWang in https://github.com/apache/iceberg-rust/pull/441
+* chore: remove compose obsolete version (#452) by @yinheli in https://github.com/apache/iceberg-rust/pull/454
+* Refactor file_io_s3_test.rs by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/455
+* chore(deps): Bump crate-ci/typos from 1.23.1 to 1.23.2 by @dependabot in https://github.com/apache/iceberg-rust/pull/457
+* refine: move binary serialize in literal to datum by @ZENOTME in https://github.com/apache/iceberg-rust/pull/456
+* fix: Hms test on macos should use correct arch by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/461
+* Fix ManifestFile length calculation by @nooberfsh in https://github.com/apache/iceberg-rust/pull/466
+* chore(deps): Update typed-builder requirement from ^0.18 to ^0.19 by @dependabot in https://github.com/apache/iceberg-rust/pull/473
+* fix: use avro fixed to represent decimal by @xxchan in https://github.com/apache/iceberg-rust/pull/472
+* feat(catalog!): Deprecate rest.authorization-url in favor of oauth2-server-uri by @ndrluis in https://github.com/apache/iceberg-rust/pull/480
+* Alter `Transform::Day` to map partition types to `Date` rather than `Int` for consistency with reference implementation by @sdd in https://github.com/apache/iceberg-rust/pull/479
+* feat(iceberg): Add memory file IO support by @Xuanwo in https://github.com/apache/iceberg-rust/pull/481
+* Add memory catalog implementation by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/475
+* chore: Enable new rust code format settings by @Xuanwo in https://github.com/apache/iceberg-rust/pull/483
+* docs: Generate rust API docs by @Xuanwo in https://github.com/apache/iceberg-rust/pull/486
+* chore: Fix format of recent PRs by @Xuanwo in https://github.com/apache/iceberg-rust/pull/487
+* Rename folder to memory by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/490
+* chore(deps): Bump crate-ci/typos from 1.23.2 to 1.23.5 by @dependabot in https://github.com/apache/iceberg-rust/pull/493
+* View Spec implementation by @c-thiel in https://github.com/apache/iceberg-rust/pull/331
+* fix: Return error on reader task by @ndrluis in https://github.com/apache/iceberg-rust/pull/498
+* chore: Bump OpenDAL to 0.48 by @Xuanwo in https://github.com/apache/iceberg-rust/pull/500
+* feat: add check compatible func for primitive type by @ZENOTME in https://github.com/apache/iceberg-rust/pull/492
+* refactor(iceberg): Remove an extra config parse logic by @Xuanwo in https://github.com/apache/iceberg-rust/pull/499
+* feat: permit Datum Date<->Int type conversion by @sdd in https://github.com/apache/iceberg-rust/pull/496
+* Add additional S3 FileIO Attributes by @c-thiel in https://github.com/apache/iceberg-rust/pull/505
+* docs: Add links to dev docs by @Xuanwo in https://github.com/apache/iceberg-rust/pull/508
+* chore: Remove typo in README by @Xuanwo in https://github.com/apache/iceberg-rust/pull/509
+* feat: podman support by @alexyin1 in https://github.com/apache/iceberg-rust/pull/489
+* feat(table): Add debug and clone trait to static table struct by @ndrluis in https://github.com/apache/iceberg-rust/pull/510
+* Use namespace location or warehouse location if table location is missing by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/511
+* chore(deps): Bump crate-ci/typos from 1.23.5 to 1.23.6 by @dependabot in https://github.com/apache/iceberg-rust/pull/521
+* Concurrent table scans by @sdd in https://github.com/apache/iceberg-rust/pull/373
+* refactor: replace num_cpus with thread::available_parallelism by @SteveLauC in https://github.com/apache/iceberg-rust/pull/526
+* Fix: MappedLocalTime should not be exposed by @c-thiel in https://github.com/apache/iceberg-rust/pull/529
+* feat: Establish subproject pyiceberg_core by @Xuanwo in https://github.com/apache/iceberg-rust/pull/518
+* fix: complete miss attribute for map && list in avro schema by @ZENOTME in https://github.com/apache/iceberg-rust/pull/411
+* arrow/schema.rs: refactor tests by @AndreMouche in https://github.com/apache/iceberg-rust/pull/531
+* feat: initialise SQL Catalog by @callum-ryan in https://github.com/apache/iceberg-rust/pull/524
+* chore(deps): Bump actions/setup-python from 4 to 5 by @dependabot in https://github.com/apache/iceberg-rust/pull/536
+* feat(storage): support aws session token by @twuebi in https://github.com/apache/iceberg-rust/pull/530
+* Simplify PrimitiveLiteral by @ZENOTME in https://github.com/apache/iceberg-rust/pull/502
+* chore: bump opendal to 0.49 by @jdockerty in https://github.com/apache/iceberg-rust/pull/540
+* feat: support timestamp columns in row filters by @sdd in https://github.com/apache/iceberg-rust/pull/533
+* fix: don't silently drop errors encountered in table scan file planning by @sdd in https://github.com/apache/iceberg-rust/pull/535
+* chore(deps): Update sqlx requirement from 0.7.4 to 0.8.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/537
+* Fix main branch building break by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/541
+* feat: support for gcs storage by @jdockerty in https://github.com/apache/iceberg-rust/pull/520
+* feat: Allow FileIO to reuse http client by @Xuanwo in https://github.com/apache/iceberg-rust/pull/544
+* docs: Add an example to scan an iceberg table by @Xuanwo in https://github.com/apache/iceberg-rust/pull/545
+* Concurrent data file fetching and parallel RecordBatch processing by @sdd in https://github.com/apache/iceberg-rust/pull/515
+* doc: Add statement for contributors to avoid force push as much as possible by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/546
+* feat: Partition Binding and safe PartitionSpecBuilder by @c-thiel in https://github.com/apache/iceberg-rust/pull/491
+
+## v0.2.0 - 2024-02-20
+
+* chore: Setup project layout by @Xuanwo in https://github.com/apache/iceberg-rust/pull/1
+* ci: Fix version for apache/skywalking-eyes/header by @Xuanwo in https://github.com/apache/iceberg-rust/pull/4
+* feat: Implement serialize/deserialize for datatypes by @JanKaul in https://github.com/apache/iceberg-rust/pull/6
+* docs: Add CONTRIBUTING and finish project setup by @Xuanwo in https://github.com/apache/iceberg-rust/pull/7
+* feat: Add lookup tables to StructType by @JanKaul in https://github.com/apache/iceberg-rust/pull/12
+* feat: Implement error handling by @Xuanwo in https://github.com/apache/iceberg-rust/pull/13
+* chore: Use HashMap instead of BTreeMap for storing fields by id in StructType by @amogh-jahagirdar in https://github.com/apache/iceberg-rust/pull/14
+* chore: Change iceberg into workspace by @Xuanwo in https://github.com/apache/iceberg-rust/pull/15
+* feat: Use macro to define from error. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/17
+* feat: Introduce schema definition. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/19
+* refactor: Align data type with other implementation. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/21
+* chore: Ignore .idea by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/27
+* feat: Implement Iceberg values by @JanKaul in https://github.com/apache/iceberg-rust/pull/20
+* feat: Define schema post order visitor. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/25
+* feat: Add transform by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/26
+* fix: Fix build break in main branch by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/30
+* fix: Update github configuration to avoid conflicting merge by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/31
+* chore(deps): Bump apache/skywalking-eyes from 0.4.0 to 0.5.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/35
+* feat: Table metadata by @JanKaul in https://github.com/apache/iceberg-rust/pull/29
+* feat: Add utility methods to help conversion between literals. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/38
+* [comment] should be IEEE 754 rather than 753 by @zhjwpku in https://github.com/apache/iceberg-rust/pull/39
+* fix: Add doc test action by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/44
+* chore: Ping toolchain version by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/48
+* feat: Introduce conversion between iceberg schema and avro schema by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/40
+* feat: Allow Schema Serialization/deserialization by @y0psolo in https://github.com/apache/iceberg-rust/pull/46
+* chore: Add cargo sort check by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/51
+* chore(deps): Bump actions/checkout from 3 to 4 by @dependabot in https://github.com/apache/iceberg-rust/pull/58
+* Metadata integration tests by @JanKaul in https://github.com/apache/iceberg-rust/pull/57
+* feat: Introduce FileIO by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/53
+* feat: Add Catalog API by @Xuanwo in https://github.com/apache/iceberg-rust/pull/54
+* feat: support transform function by @ZENOTME in https://github.com/apache/iceberg-rust/pull/42
+* chore(deps): Update ordered-float requirement from 3.7.0 to 4.0.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/64
+* feat: Add public methods for catalog related structs by @Xuanwo in https://github.com/apache/iceberg-rust/pull/63
+* minor: Upgrade to latest toolchain by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/68
+* chore(deps): Update opendal requirement from 0.39 to 0.40 by @dependabot in https://github.com/apache/iceberg-rust/pull/65
+* refactor: Make directory for catalog by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/69
+* feat: support read Manifest List by @ZENOTME in https://github.com/apache/iceberg-rust/pull/56
+* chore(deps): Update apache-avro requirement from 0.15 to 0.16 by @dependabot in https://github.com/apache/iceberg-rust/pull/71
+* fix: avro bytes test for Literal by @JanKaul in https://github.com/apache/iceberg-rust/pull/80
+* chore(deps): Update opendal requirement from 0.40 to 0.41 by @dependabot in https://github.com/apache/iceberg-rust/pull/84
+* feat: manifest list writer by @barronw in https://github.com/apache/iceberg-rust/pull/76
+* feat: First version of rest catalog. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/78
+* chore(deps): Update typed-builder requirement from ^0.17 to ^0.18 by @dependabot in https://github.com/apache/iceberg-rust/pull/87
+* feat: Implement load table api. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/89
+* chroes:Manage dependencies using workspace. by @my-vegetable-has-exploded in https://github.com/apache/iceberg-rust/pull/93
+* minor: Provide Debug impl for pub structs #73 by @DeaconDesperado in https://github.com/apache/iceberg-rust/pull/92
+* feat: support ser/deser of value  by @ZENOTME in https://github.com/apache/iceberg-rust/pull/82
+* fix: Migrate from tempdir to tempfile crate by @cdaudt in https://github.com/apache/iceberg-rust/pull/91
+* chore(deps): Update opendal requirement from 0.41 to 0.42 by @dependabot in https://github.com/apache/iceberg-rust/pull/101
+* chore(deps): Update itertools requirement from 0.11 to 0.12 by @dependabot in https://github.com/apache/iceberg-rust/pull/102
+* Replace i64 with DateTime by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/94
+* feat: Implement create table and update table api for rest catalog. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/97
+* Fix compile failures by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/105
+* feat: replace 'Builder' with 'TypedBuilder' for 'Snapshot' by @xiaoyang-sde in https://github.com/apache/iceberg-rust/pull/110
+* chore: Upgrade uuid manually and remove pinned version by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/108
+* chore: Add cargo build and build guide by @manuzhang in https://github.com/apache/iceberg-rust/pull/111
+* feat: Add hms catalog layout by @Xuanwo in https://github.com/apache/iceberg-rust/pull/112
+* feat: support UnboundPartitionSpec by @my-vegetable-has-exploded in https://github.com/apache/iceberg-rust/pull/106
+* test: Add integration tests for rest catalog. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/109
+* chore(deps): Update opendal requirement from 0.42 to 0.43 by @dependabot in https://github.com/apache/iceberg-rust/pull/116
+* feat: support read/write Manifest by @ZENOTME in https://github.com/apache/iceberg-rust/pull/79
+* test: Remove binary manifest list avro file by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/118
+* refactor: Conversion between literal and json should depends on type. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/120
+* fix: fix parse partitions in manifest_list by @ZENOTME in https://github.com/apache/iceberg-rust/pull/122
+* feat: Add website layout by @Xuanwo in https://github.com/apache/iceberg-rust/pull/130
+* feat: Expression system. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/132
+* website: Fix typo in book.toml by @Xuanwo in https://github.com/apache/iceberg-rust/pull/136
+* Set `ghp_{pages,path}` properties by @Fokko in https://github.com/apache/iceberg-rust/pull/138
+* chore: Upgrade toolchain to 1.75.0 by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/140
+* feat: Add roadmap and features status in README.md by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/134
+* Remove `publish:` section from `.asf.yaml` by @Fokko in https://github.com/apache/iceberg-rust/pull/141
+* chore(deps): Bump peaceiris/actions-gh-pages from 3.9.2 to 3.9.3 by @dependabot in https://github.com/apache/iceberg-rust/pull/143
+* chore(deps): Update opendal requirement from 0.43 to 0.44 by @dependabot in https://github.com/apache/iceberg-rust/pull/142
+* docs: Change homepage to rust.i.a.o by @Xuanwo in https://github.com/apache/iceberg-rust/pull/146
+* feat: Introduce basic file scan planning. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/129
+* chore: Update contributing guide. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/163
+* chore: Update reader api status by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/162
+* #154 : Add homepage to Cargo.toml by @hiirrxnn in https://github.com/apache/iceberg-rust/pull/160
+* Add formatting for toml files by @Tyler-Sch in https://github.com/apache/iceberg-rust/pull/167
+* chore(deps): Update env_logger requirement from 0.10.0 to 0.11.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/170
+* feat: init file writer interface by @ZENOTME in https://github.com/apache/iceberg-rust/pull/168
+* fix: Manifest parsing should consider schema evolution. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/171
+* docs: Add release guide for iceberg-rust by @Xuanwo in https://github.com/apache/iceberg-rust/pull/147
+* fix: Ignore negative statistics value by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/173
+* feat: Add user guide for website. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/178
+* chore(deps): Update derive_builder requirement from 0.12.0 to 0.13.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/175
+* refactor: Replace unwrap by @odysa in https://github.com/apache/iceberg-rust/pull/183
+* feat: add handwritten serialize by @odysa in https://github.com/apache/iceberg-rust/pull/185
+* Fix: avro schema names for manifest and manifest_list by @JanKaul in https://github.com/apache/iceberg-rust/pull/182
+* feat: Bump hive_metastore to use pure rust thrift impl `volo` by @Xuanwo in https://github.com/apache/iceberg-rust/pull/174
+* feat: Bump version 0.2.0 to prepare for release. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/181
+* fix: default_partition_spec using the partition_spec_id set by @odysa in https://github.com/apache/iceberg-rust/pull/190
+* Docs: Add required Cargo version to install guide by @manuzhang in https://github.com/apache/iceberg-rust/pull/191
+* chore(deps): Update opendal requirement from 0.44 to 0.45 by @dependabot in https://github.com/apache/iceberg-rust/pull/195
+
+[v0.6.0]: https://github.com/apache/iceberg-rust/compare/v0.5.1...v0.6.0
+[v0.3.0]: https://github.com/apache/iceberg-rust/compare/v0.2.0...v0.3.0
 * feat: Add macos runner for ci by @QuakeWang in https://github.com/apache/iceberg-rust/pull/441
 * chore: remove compose obsolete version (#452) by @yinheli in https://github.com/apache/iceberg-rust/pull/454
 * Refactor file_io_s3_test.rs by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/455
