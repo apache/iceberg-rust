@@ -28,10 +28,11 @@ from pydantic_core import to_json
 
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
-from pyiceberg.transforms import IdentityTransform
+from pyiceberg.transforms import IdentityTransform, DayTransform
 from pyiceberg.types import (
     IntegerType,
     NestedField,
+    TimestampType,
 )
 
 
@@ -572,7 +573,7 @@ manifest_entry_records = [
 def test_schema() -> Schema:
     return Schema(
         NestedField(1, "VendorID", IntegerType(), False),
-        NestedField(2, "tpep_pickup_datetime", IntegerType(), False),
+        NestedField(2, "tpep_pickup_datetime", TimestampType(), False),
     )
 
 
@@ -580,15 +581,15 @@ def test_schema() -> Schema:
 def test_partition_spec() -> Schema:
     return PartitionSpec(
         PartitionField(1, 1000, IdentityTransform(), "VendorID"),
-        PartitionField(2, 1001, IdentityTransform(), "tpep_pickup_datetime"),
+        PartitionField(2, 1001, DayTransform(), "tpep_pickup_datetime"),
     )
 
 
 @pytest.fixture(scope="session")
 def generated_manifest_entry_file(
-    avro_schema_manifest_entry: Dict[str, Any],
-    test_schema: Schema,
-    test_partition_spec: PartitionSpec,
+        avro_schema_manifest_entry: Dict[str, Any],
+        test_schema: Schema,
+        test_partition_spec: PartitionSpec,
 ) -> Generator[str, None, None]:
     from fastavro import parse_schema, writer
 
