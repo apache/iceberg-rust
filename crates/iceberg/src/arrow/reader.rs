@@ -176,8 +176,9 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty() || task.limit.is_some();
+        let should_load_page_index = (row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
 
         let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
 
