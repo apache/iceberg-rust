@@ -166,11 +166,14 @@ impl DisplayAs for IcebergTableScan {
     ) -> std::fmt::Result {
         write!(
             f,
-            "IcebergTableScan projection:[{}] predicate:[{}]",
+            "IcebergTableScan projection:[{}] predicate:[{}] limit:[{}]",
             self.projection
                 .clone()
                 .map_or(String::new(), |v| v.join(",")),
             self.predicates
+                .clone()
+                .map_or(String::from(""), |p| format!("{}", p)),
+            self.limit
                 .clone()
                 .map_or(String::from(""), |p| format!("{}", p))
         )
