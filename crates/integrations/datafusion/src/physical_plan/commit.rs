@@ -271,12 +271,12 @@ mod tests {
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
     use futures::StreamExt;
-    use iceberg::io::FileIOBuilder;
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
         Struct, Type,
     };
-    use iceberg::{Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 
     use super::*;
     use crate::physical_plan::DATA_FILES_COL_NAME;
@@ -374,11 +374,18 @@ mod tests {
     #[tokio::test]
     async fn test_iceberg_commit_exec() -> Result<(), Box<dyn std::error::Error>> {
         // Create a memory catalog with in-memory file IO
-        let file_io = FileIOBuilder::new("memory").build()?;
-        let catalog = Arc::new(MemoryCatalog::new(
-            file_io,
-            Some("memory://root".to_string()),
-        ));
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    HashMap::from([(
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory://root".to_string(),
+                    )]),
+                )
+                .await
+                .unwrap(),
+        );
 
         // Create a namespace
         let namespace = NamespaceIdent::new("test_namespace".to_string());

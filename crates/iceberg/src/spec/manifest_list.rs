@@ -796,8 +796,11 @@ pub(super) mod _serde {
         pub manifest_path: String,
         pub manifest_length: i64,
         pub partition_spec_id: i32,
+        #[serde(default = "v2_default_content_for_v1")]
         pub content: i32,
+        #[serde(default = "v2_default_sequence_number_for_v1")]
         pub sequence_number: i64,
+        #[serde(default = "v2_default_min_sequence_number_for_v1")]
         pub min_sequence_number: i64,
         pub added_snapshot_id: i64,
         #[serde(alias = "added_data_files_count", alias = "added_files_count")]
@@ -834,6 +837,18 @@ pub(super) mod _serde {
                 key_metadata: self.key_metadata.map(|b| b.into_vec()),
             })
         }
+    }
+
+    fn v2_default_content_for_v1() -> i32 {
+        super::ManifestContentType::Data as i32
+    }
+
+    fn v2_default_sequence_number_for_v1() -> i64 {
+        0
+    }
+
+    fn v2_default_min_sequence_number_for_v1() -> i64 {
+        0
     }
 
     impl ManifestFileV1 {
@@ -1304,7 +1319,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, Some(0), 1);
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

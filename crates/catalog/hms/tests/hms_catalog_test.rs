@@ -24,8 +24,11 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
+use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_catalog_hms::{
+    HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
+    HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
+};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -80,6 +83,18 @@ async fn get_catalog() -> HmsCatalog {
 
     let props = HashMap::from([
         (
+            HMS_CATALOG_PROP_URI.to_string(),
+            hms_socket_addr.to_string(),
+        ),
+        (
+            HMS_CATALOG_PROP_THRIFT_TRANSPORT.to_string(),
+            THRIFT_TRANSPORT_BUFFERED.to_string(),
+        ),
+        (
+            HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+            "s3a://warehouse/hive".to_string(),
+        ),
+        (
             S3_ENDPOINT.to_string(),
             format!("http://{}", minio_socket_addr),
         ),
@@ -106,14 +121,10 @@ async fn get_catalog() -> HmsCatalog {
         retries += 1;
     }
 
-    let config = HmsCatalogConfig::builder()
-        .address(hms_socket_addr.to_string())
-        .thrift_transport(HmsThriftTransport::Buffered)
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(props)
-        .build();
-
-    HmsCatalog::new(config).unwrap()
+    HmsCatalogBuilder::default()
+        .load("hms", props)
+        .await
+        .unwrap()
 }
 
 async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) -> Result<()> {

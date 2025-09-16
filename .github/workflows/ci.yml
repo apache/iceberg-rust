@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  rust_msrv: "1.85.0"
+  rust_msrv: "1.87"
 
 jobs:
   check:
@@ -41,7 +41,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -49,12 +49,13 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.7.0
 
-      - name: Install taplo-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: taplo-cli@0.9.3
       - name: Check toml format
         run: make check-toml
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cargo format
         run: make check-fmt
@@ -65,12 +66,8 @@ jobs:
       - name: Cargo clippy
         run: make check-clippy
 
-      - name: Install cargo-machete
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-machete
       - name: Cargo Machete
-        run: cargo machete
+        run: make cargo-machete
 
   build:
     runs-on: ${{ matrix.os }}
@@ -81,13 +78,18 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         run: make build
@@ -101,7 +103,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -126,10 +128,15 @@ jobs:
           root-reserve-mb: 10240
           temp-reserve-mb: 10240
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -137,8 +144,8 @@ jobs:
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
 
-      - name: Async-std Test
-        run: cargo test --no-fail-fast --all-targets --no-default-features  --features "async-std" --features "storage-all" --workspace
+      - name: Smol Test
+        run: cargo test --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
@@ -147,12 +154,16 @@ jobs:
     name: Verify MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate minimal versions lockfile
         run: |
-          cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
+          cargo generate-lockfile -Z direct-minimal-versions
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
