@@ -174,7 +174,6 @@ impl DisplayAs for IcebergTableScan {
                 .clone()
                 .map_or(String::from(""), |p| format!("{}", p)),
             self.limit
-                .clone()
                 .map_or(String::from(""), |p| format!("{}", p))
         )
     }
