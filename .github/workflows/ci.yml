@@ -166,4 +166,6 @@ jobs:
         with:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
+        env:
+          rust_msrv: ${{ env.rust_msrv }}
         run: make check-msrv
