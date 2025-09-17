@@ -42,9 +42,9 @@ check-toml: install-taplo-cli
 	taplo check
 
 check-msrv:
-	cargo generate-lockfile -Z direct-minimal-versions # uses the nightly version specified in rust-toolchain.toml
-	cargo +1.87 check --locked --workspace 			   # keep in sync with MSRV in Cargo.toml
-	git restore Cargo.lock 							   # prevent checking in Cargo.lock changes
+	trap 'git restore Cargo.lock; exit 1' ERR	# prevent checking in Cargo.lock changes
+	cargo generate-lockfile -Z direct-minimal-versions					# uses the nightly version specified in rust-toolchain.toml
+	cargo +1.87 check --locked --workspace								# keep in sync with MSRV in Cargo.toml
 
 check: check-fmt check-clippy check-toml cargo-machete
 
