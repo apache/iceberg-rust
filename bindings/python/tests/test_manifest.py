@@ -95,7 +95,7 @@ def test_read_manifest_entry(generated_manifest_entry_file: str) -> None:
     # )
     # manifest_entries = manifest.fetch_manifest_entry(PyArrowFileIO())
     manifest_entries = fetch_manifest_entry(
-        generated_manifest_entry_file, PyArrowFileIO()
+        f"file://{generated_manifest_entry_file}", PyArrowFileIO()
     )
     manifest_entry = manifest_entries[0]
 
