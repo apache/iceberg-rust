@@ -161,13 +161,9 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Generate minimal versions lockfile
-        run: |
-          cargo generate-lockfile -Z direct-minimal-versions
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
-        run: |
-          cargo +${{ env.rust_msrv }} check --locked --workspace
+        run: make check-msrv
