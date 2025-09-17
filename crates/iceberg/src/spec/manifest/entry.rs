@@ -568,8 +568,9 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         EQUALITY_IDS.clone(),
         SORT_ORDER_ID.clone(),
         FIRST_ROW_ID.clone(),
-        // Why are these three here - shouldn't they be v3 only?
         REFERENCE_DATA_FILE.clone(),
+        // Why are the following two fields here in the existing v2 schema?
+        // In the spec, they are not even listed as optional for v2.
         CONTENT_OFFSET.clone(),
         CONTENT_SIZE_IN_BYTES.clone(),
     ]

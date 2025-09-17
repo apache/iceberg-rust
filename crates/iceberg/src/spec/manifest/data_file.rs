@@ -24,9 +24,10 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use super::_serde::DataFileSerde;
-use super::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
+use super::{
+    Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
+};
 use crate::error::Result;
-use crate::spec::manifest::data_file_schema_v3;
 use crate::spec::{Struct, StructType};
 use crate::{Error, ErrorKind};
 
@@ -294,7 +295,6 @@ pub fn write_data_files_to_avro<W: Write>(
     let avro_schema = match version {
         FormatVersion::V1 => data_file_schema_v1(partition_type).unwrap(),
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
-        // Todo: Why unwrap here and not return the error?
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
@@ -323,7 +323,6 @@ pub fn read_data_files_from_avro<R: Read>(
     let avro_schema = match version {
         FormatVersion::V1 => data_file_schema_v1(partition_type).unwrap(),
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
-        // Todo: Why unwrap here and not return the error?
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
 
