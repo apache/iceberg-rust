@@ -183,6 +183,7 @@ pub(crate) mod test {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: 0,
         };
 
         let file_name_generator = super::DefaultFileNameGenerator::new(
@@ -297,6 +298,7 @@ pub(crate) mod test {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: 0,
         };
 
         // Test with DefaultLocationGenerator

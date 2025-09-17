@@ -39,9 +39,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
-    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder, UnboundPartitionSpec,
-    ViewFormatVersion, ViewRepresentations, ViewVersion,
+    EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
+    SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
+    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -291,6 +291,9 @@ pub struct TableCreation {
         props.into_iter().collect()
     }))]
     pub properties: HashMap<String, String>,
+    /// Format version of the table. Defaults to V2.
+    #[builder(default = FormatVersion::V2)]
+    pub format_version: FormatVersion,
 }
 
 /// TableCommit represents the commit of a table in the catalog.
@@ -554,6 +557,18 @@ pub enum TableUpdate {
         /// Schema IDs to remove.
         schema_ids: Vec<i32>,
     },
+    /// Add an encryption key
+    #[serde(rename_all = "kebab-case")]
+    AddEncryptionKey {
+        /// The encryption key to add.
+        encryption_key: EncryptedKey,
+    },
+    /// Remove an encryption key
+    #[serde(rename_all = "kebab-case")]
+    RemoveEncryptionKey {
+        /// The id of the encryption key to remove.
+        key_id: String,
+    },
 }
 
 impl TableUpdate {
@@ -598,6 +613,12 @@ impl TableUpdate {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
             TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
+            TableUpdate::AddEncryptionKey { encryption_key } => {
+                Ok(builder.add_encryption_key(encryption_key))
+            }
+            TableUpdate::RemoveEncryptionKey { key_id } => {
+                Ok(builder.remove_encryption_key(&key_id))
+            }
         }
     }
 }

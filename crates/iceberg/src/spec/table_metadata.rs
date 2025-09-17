@@ -38,6 +38,7 @@ use super::{
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
+use crate::spec::EncryptedKey;
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -131,6 +132,11 @@ pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-
 /// Default target file size
 pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+/// Initial row id for row lineage for new v3 tables and older tables upgrading to v3.
+pub const INITIAL_ROW_ID: u64 = 0;
+/// Minimum format version that supports row lineage (v3).
+pub const MIN_FORMAT_VERSION_ROW_LINEAGE: FormatVersion = FormatVersion::V3;
+
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
@@ -208,8 +214,10 @@ pub struct TableMetadata {
     pub(crate) statistics: HashMap<i64, StatisticsFile>,
     /// Mapping of snapshot ids to partition statistics files.
     pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
-    /// Encryption Keys
-    pub(crate) encryption_keys: HashMap<String, String>,
+    /// Encryption Keys - map of key id to the actual key
+    pub(crate) encryption_keys: HashMap<String, EncryptedKey>,
+    /// Next row id to be assigned for Row Lineage (v3)
+    pub(crate) next_row_id: u64,
 }
 
 impl TableMetadata {
@@ -483,14 +491,20 @@ impl TableMetadata {
 
     /// Iterate over all encryption keys
     #[inline]
-    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = (&String, &String)> {
+    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = (&String, &EncryptedKey)> {
         self.encryption_keys.iter()
     }
 
     /// Get the encryption key for a given key id
     #[inline]
-    pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
+    pub fn encryption_key(&self, key_id: &str) -> Option<&EncryptedKey> {
         self.encryption_keys.get(key_id)
+    }
+
+    /// Get the next row id to be assigned
+    #[inline]
+    pub fn next_row_id(&self) -> u64 {
+        self.next_row_id
     }
 
     /// Read table metadata from the given location.
@@ -761,14 +775,16 @@ pub(super) mod _serde {
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
     use crate::spec::{
-        PartitionField, PartitionSpec, PartitionSpecRef, PartitionStatisticsFile, Schema,
-        SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SortOrder, StatisticsFile,
+        EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
+        PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+        SortOrder, StatisticsFile,
     };
     use crate::{Error, ErrorKind};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
     pub(super) enum TableMetadataEnum {
+        V3(TableMetadataV3),
         V2(TableMetadataV2),
         V1(TableMetadataV1),
     }
@@ -776,8 +792,19 @@ pub(super) mod _serde {
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
     /// Defines the structure of a v2 table metadata for serialization/deserialization
-    pub(super) struct TableMetadataV2 {
-        pub format_version: VersionNumber<2>,
+    pub(super) struct TableMetadataV3 {
+        pub format_version: VersionNumber<3>,
+        #[serde(flatten)]
+        pub shared: TableMetadataV2V3Shared,
+        pub next_row_id: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub encryption_keys: Option<Vec<EncryptedKey>>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 table metadata for serialization/deserialization
+    pub(super) struct TableMetadataV2V3Shared {
         pub table_uuid: Uuid,
         pub location: String,
         pub last_sequence_number: i64,
@@ -806,6 +833,15 @@ pub(super) mod _serde {
         pub statistics: Vec<StatisticsFile>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub partition_statistics: Vec<PartitionStatisticsFile>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 table metadata for serialization/deserialization
+    pub(super) struct TableMetadataV2 {
+        pub format_version: VersionNumber<2>,
+        #[serde(flatten)]
+        pub shared: TableMetadataV2V3Shared,
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -888,6 +924,7 @@ pub(super) mod _serde {
         type Error = Error;
         fn try_from(value: TableMetadataEnum) -> Result<Self, Error> {
             match value {
+                TableMetadataEnum::V3(value) => value.try_into(),
                 TableMetadataEnum::V2(value) => value.try_into(),
                 TableMetadataEnum::V1(value) => value.try_into(),
             }
@@ -898,15 +935,44 @@ pub(super) mod _serde {
         type Error = Error;
         fn try_from(value: TableMetadata) -> Result<Self, Error> {
             Ok(match value.format_version {
+                FormatVersion::V3 => TableMetadataEnum::V3(value.into()),
                 FormatVersion::V2 => TableMetadataEnum::V2(value.into()),
                 FormatVersion::V1 => TableMetadataEnum::V1(value.try_into()?),
             })
         }
     }
 
+    impl TryFrom<TableMetadataV3> for TableMetadata {
+        type Error = Error;
+        fn try_from(value: TableMetadataV3) -> Result<Self, self::Error> {
+            let TableMetadataV3 {
+                shared,
+                format_version: _,
+                next_row_id,
+                encryption_keys,
+            } = value;
+
+            let mut metadata: TableMetadata = TableMetadataV2 {
+                shared,
+                format_version: VersionNumber::<2>,
+            }
+            .try_into()?;
+            metadata.format_version = FormatVersion::V3;
+            metadata.next_row_id = next_row_id;
+            metadata.encryption_keys = encryption_keys
+                .unwrap_or_default()
+                .into_iter()
+                .map(|k| (k.key_id().to_string(), k))
+                .collect();
+
+            Ok(metadata)
+        }
+    }
+
     impl TryFrom<TableMetadataV2> for TableMetadata {
         type Error = Error;
         fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
+            let value = value.shared;
             let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
                 None
             } else {
@@ -1004,6 +1070,7 @@ pub(super) mod _serde {
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
                 encryption_keys: HashMap::new(),
+                next_row_id: INITIAL_ROW_ID,
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1161,6 +1228,7 @@ pub(super) mod _serde {
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
                 encryption_keys: HashMap::new(),
+                next_row_id: INITIAL_ROW_ID, // v1 has no row lineage
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1168,10 +1236,39 @@ pub(super) mod _serde {
         }
     }
 
+    impl From<TableMetadata> for TableMetadataV3 {
+        fn from(mut v: TableMetadata) -> Self {
+            let next_row_id = v.next_row_id;
+            let encryption_keys = std::mem::take(&mut v.encryption_keys);
+            let shared = v.into();
+
+            TableMetadataV3 {
+                format_version: VersionNumber::<3>,
+                shared,
+                next_row_id,
+                encryption_keys: if encryption_keys.is_empty() {
+                    None
+                } else {
+                    Some(encryption_keys.into_values().collect())
+                },
+            }
+        }
+    }
+
     impl From<TableMetadata> for TableMetadataV2 {
         fn from(v: TableMetadata) -> Self {
+            let shared = v.into();
+
             TableMetadataV2 {
                 format_version: VersionNumber::<2>,
+                shared,
+            }
+        }
+    }
+
+    impl From<TableMetadata> for TableMetadataV2V3Shared {
+        fn from(v: TableMetadata) -> Self {
+            TableMetadataV2V3Shared {
                 table_uuid: v.table_uuid,
                 location: v.location,
                 last_sequence_number: v.last_sequence_number,
@@ -1343,6 +1440,8 @@ pub enum FormatVersion {
     V1 = 1u8,
     /// Iceberg spec version 2
     V2 = 2u8,
+    /// Iceberg spec version 3
+    V3 = 3u8,
 }
 
 impl PartialOrd for FormatVersion {
@@ -1362,6 +1461,7 @@ impl Display for FormatVersion {
         match self {
             FormatVersion::V1 => write!(f, "v1"),
             FormatVersion::V2 => write!(f, "v2"),
+            FormatVersion::V3 => write!(f, "v3"),
         }
     }
 }
@@ -1415,9 +1515,10 @@ mod tests {
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
-        BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, StatisticsFile, Summary, Transform, Type, UnboundPartitionField,
+        BlobMetadata, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation, PartitionSpec,
+        PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
+        Summary, Transform, Type, UnboundPartitionField,
     };
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
@@ -1563,6 +1664,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1739,6 +1841,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(data, expected);
@@ -1837,6 +1940,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -2372,6 +2476,7 @@ mod tests {
                 },
             })]),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(data, expected);
@@ -2507,6 +2612,7 @@ mod tests {
                 },
             })]),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(data, expected);
@@ -2533,6 +2639,95 @@ mod tests {
         "#;
         assert!(serde_json::from_str::<TableMetadata>(data).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn test_table_metadata_v3_valid_minimal() {
+        let metadata_str =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV3ValidMinimal.json").unwrap();
+
+        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_str).unwrap();
+        assert_eq!(table_metadata.format_version, FormatVersion::V3);
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(
+                    NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long))
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(1)))
+                        .with_write_default(Literal::Primitive(PrimitiveLiteral::Long(1))),
+                ),
+                Arc::new(
+                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                        .with_doc("comment"),
+                ),
+                Arc::new(NestedField::required(
+                    3,
+                    "z",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_unbound_field(UnboundPartitionField {
+                name: "x".to_string(),
+                transform: Transform::Identity,
+                source_id: 1,
+                field_id: Some(1000),
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = SortOrder::builder()
+            .with_order_id(3)
+            .with_sort_field(SortField {
+                source_id: 2,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            })
+            .with_sort_field(SortField {
+                source_id: 3,
+                transform: Transform::Bucket(4),
+                direction: SortDirection::Descending,
+                null_order: NullOrder::Last,
+            })
+            .build_unbound()
+            .unwrap();
+
+        let default_partition_type = partition_spec.partition_type(&schema).unwrap();
+        let expected = TableMetadata {
+            format_version: FormatVersion::V3,
+            table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
+            location: "s3://bucket/test/location".to_string(),
+            last_updated_ms: 1602638573590,
+            last_column_id: 3,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.clone().into())]),
+            default_spec: Arc::new(partition_spec),
+            default_partition_type,
+            last_partition_id: 1000,
+            default_sort_order_id: 3,
+            sort_orders: HashMap::from_iter(vec![(3, sort_order.into())]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 34,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: Vec::new(),
+            refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
+            next_row_id: 0, // V3 specific field from the JSON
+        };
+
+        check_table_metadata_serde(&metadata_str, expected);
     }
 
     #[test]
@@ -2669,6 +2864,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2754,6 +2950,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2823,6 +3020,7 @@ mod tests {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: INITIAL_ROW_ID,
         };
 
         check_table_metadata_serde(&metadata, expected);

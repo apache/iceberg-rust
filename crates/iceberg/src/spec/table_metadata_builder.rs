@@ -29,6 +29,7 @@ use super::{
     TableMetadata, UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
 const FIRST_FIELD_ID: u32 = 1;
@@ -121,6 +122,7 @@ impl TableMetadataBuilder {
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
                 encryption_keys: HashMap::new(),
+                next_row_id: INITIAL_ROW_ID,
             },
             last_updated_ms: None,
             changes: vec![],
@@ -171,6 +173,7 @@ impl TableMetadataBuilder {
             partition_spec,
             sort_order,
             properties,
+            format_version,
         } = table_creation;
 
         let location = location.ok_or_else(|| {
@@ -189,7 +192,7 @@ impl TableMetadataBuilder {
             partition_spec,
             sort_order.unwrap_or(SortOrder::unsorted_order()),
             location,
-            FormatVersion::V2,
+            format_version,
             properties,
         )
     }
@@ -225,6 +228,11 @@ impl TableMetadataBuilder {
                     // No changes needed for V1
                 }
                 FormatVersion::V2 => {
+                    self.metadata.format_version = format_version;
+                    self.changes
+                        .push(TableUpdate::UpgradeFormatVersion { format_version });
+                }
+                FormatVersion::V3 => {
                     self.metadata.format_version = format_version;
                     self.changes
                         .push(TableUpdate::UpgradeFormatVersion { format_version });
@@ -330,6 +338,9 @@ impl TableMetadataBuilder {
     /// # Errors
     /// - Snapshot id already exists.
     /// - For format version > 1: the sequence number of the snapshot is lower than the highest sequence number specified so far.
+    /// - For format version >= 3: the first-row-id of the snapshot is lower than the next-row-id of the table.
+    /// - For format version >= 3: added-rows is null or first-row-id is null.
+    /// - For format version >= 3: next-row-id would overflow when adding added-rows.
     pub fn add_snapshot(mut self, snapshot: Snapshot) -> Result<Self> {
         if self
             .metadata
@@ -384,6 +395,43 @@ impl TableMetadataBuilder {
                     max_last_updated
                 ),
             ));
+        }
+
+        let mut added_rows = None;
+        if self.metadata.format_version >= MIN_FORMAT_VERSION_ROW_LINEAGE {
+            if let Some((first_row_id, added_rows_count)) = snapshot.row_range() {
+                if first_row_id < self.metadata.next_row_id {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
+                            self.metadata.next_row_id
+                        ),
+                    ));
+                }
+
+                added_rows = Some(added_rows_count);
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
+                    ),
+                ));
+            }
+        }
+
+        if let Some(added_rows) = added_rows {
+            self.metadata.next_row_id = self
+                .metadata
+                .next_row_id
+                .checked_add(added_rows)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Cannot add snapshot: next-row-id overflowed when adding added-rows",
+                    )
+                })?;
         }
 
         // Mutation happens in next line - must be infallible from here
@@ -1017,6 +1065,31 @@ impl TableMetadataBuilder {
     fn add_default_sort_order(self, sort_order: SortOrder) -> Result<Self> {
         self.add_sort_order(sort_order)?
             .set_default_sort_order(Self::LAST_ADDED as i64)
+    }
+
+    /// Add an encryption key to the table metadata.
+    pub fn add_encryption_key(mut self, key: EncryptedKey) -> Self {
+        let key_id = key.key_id().to_string();
+        if self.metadata.encryption_keys.contains_key(&key_id) {
+            // already exists
+            return self;
+        }
+
+        self.metadata.encryption_keys.insert(key_id, key.clone());
+        self.changes.push(TableUpdate::AddEncryptionKey {
+            encryption_key: key,
+        });
+        self
+    }
+
+    /// Remove an encryption key from the table metadata.
+    pub fn remove_encryption_key(mut self, key_id: &str) -> Self {
+        if self.metadata.encryption_keys.remove(key_id).is_some() {
+            self.changes.push(TableUpdate::RemoveEncryptionKey {
+                key_id: key_id.to_string(),
+            });
+        }
+        self
     }
 
     /// Build the table metadata.
@@ -2993,5 +3066,117 @@ mod tests {
         let result = builder.add_partition_spec(non_conflicting_partition_spec);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_row_lineage_addition() {
+        let new_rows = 30;
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+        let add_rows = Snapshot::builder()
+            .with_snapshot_id(0)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), new_rows)
+            .build();
+
+        let first_addition = base
+            .into_builder(None)
+            .add_snapshot(add_rows.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(first_addition.next_row_id(), new_rows);
+
+        let add_more_rows = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(first_addition.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(Some(0))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(first_addition.next_row_id(), new_rows)
+            .build();
+
+        let second_addition = first_addition
+            .into_builder(None)
+            .add_snapshot(add_more_rows)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(second_addition.next_row_id(), new_rows * 2);
+    }
+
+    #[test]
+    fn test_row_lineage_invalid_snapshot() {
+        let new_rows = 30;
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+
+        // add rows to check TableMetadata validation; Snapshot rejects negative next-row-id
+        let add_rows = Snapshot::builder()
+            .with_snapshot_id(0)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), new_rows)
+            .build();
+
+        let added = base
+            .into_builder(None)
+            .add_snapshot(add_rows)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let invalid_new_rows = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(added.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(Some(0))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            // first_row_id is behind table next_row_id
+            .with_row_range(added.next_row_id() - 1, 10)
+            .build();
+
+        let err = added
+            .into_builder(None)
+            .add_snapshot(invalid_new_rows)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Cannot add a snapshot, first-row-id is behind table next-row-id: 29 < 30"
+            )
+        );
     }
 }

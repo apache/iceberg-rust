@@ -207,13 +207,16 @@ impl<'a> SnapshotProducer<'a> {
                 .as_ref()
                 .clone(),
         );
-        if self.table.metadata().format_version() == FormatVersion::V1 {
-            Ok(builder.build_v1())
-        } else {
-            match content {
+        match self.table.metadata().format_version() {
+            FormatVersion::V1 => Ok(builder.build_v1()),
+            FormatVersion::V2 => match content {
                 ManifestContentType::Data => Ok(builder.build_v2_data()),
                 ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
-            }
+            },
+            FormatVersion::V3 => match content {
+                ManifestContentType::Data => Ok(builder.build_v3_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v3_deletes()),
+            },
         }
     }
 
@@ -385,6 +388,7 @@ impl<'a> SnapshotProducer<'a> {
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
         let next_seq_num = self.table.metadata().next_sequence_number();
+        let first_row_id = self.table.metadata().next_row_id();
 
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
@@ -408,8 +412,18 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
+            FormatVersion::V3 => ManifestListWriter::v3(
+                self.table
+                    .file_io()
+                    .new_output(manifest_list_path.clone())?,
+                self.snapshot_id,
+                self.table.metadata().current_snapshot_id(),
+                next_seq_num,
+                Some(first_row_id),
+            ),
         };
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
+        let writer_next_row_id = manifest_list_writer.next_row_id();
         manifest_list_writer.close().await?;
 
         let commit_ts = chrono::Utc::now().timestamp_millis();
@@ -420,8 +434,16 @@ impl<'a> SnapshotProducer<'a> {
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.table.metadata().current_schema_id())
-            .with_timestamp_ms(commit_ts)
-            .build();
+            .with_timestamp_ms(commit_ts);
+
+        let new_snapshot = if let Some(writer_next_row_id) = writer_next_row_id {
+            let assigned_rows = writer_next_row_id - self.table.metadata().next_row_id();
+            new_snapshot
+                .with_row_range(first_row_id, assigned_rows)
+                .build()
+        } else {
+            new_snapshot.build()
+        };
 
         let updates = vec![
             TableUpdate::AddSnapshot {
