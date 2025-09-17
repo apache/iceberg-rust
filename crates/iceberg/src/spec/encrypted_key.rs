@@ -26,16 +26,16 @@ use serde::{Deserialize, Serialize};
 pub struct EncryptedKey {
     /// Unique identifier for the key
     #[builder(setter(into))]
-    key_id: String,
+    pub(crate) key_id: String,
     /// Encrypted key metadata as binary data
     #[builder(setter(into))]
-    encrypted_key_metadata: Vec<u8>,
+    pub(crate) encrypted_key_metadata: Vec<u8>,
     /// Identifier of the entity that encrypted this key
     #[builder(setter(into))]
-    encrypted_by_id: String,
+    pub(crate) encrypted_by_id: String,
     /// Additional properties associated with the key
     #[builder(default)]
-    properties: HashMap<String, String>,
+    pub(crate) properties: HashMap<String, String>,
 }
 
 impl EncryptedKey {

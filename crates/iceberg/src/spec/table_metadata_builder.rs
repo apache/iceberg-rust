@@ -3179,4 +3179,143 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn test_encryption_keys() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        // Create test encryption keys
+        let encryption_key_1 = EncryptedKey::builder()
+            .key_id("key-1")
+            .encrypted_key_metadata(vec![1, 2, 3, 4])
+            .encrypted_by_id("encryption-service-1")
+            .properties(HashMap::from_iter(vec![(
+                "algorithm".to_string(),
+                "AES-256".to_string(),
+            )]))
+            .build();
+
+        let encryption_key_2 = EncryptedKey::builder()
+            .key_id("key-2")
+            .encrypted_key_metadata(vec![5, 6, 7, 8])
+            .encrypted_by_id("encryption-service-2")
+            .properties(HashMap::new())
+            .build();
+
+        // Add first encryption key
+        let build_result = builder
+            .add_encryption_key(encryption_key_1.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-1"),
+            Some(&encryption_key_1)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
+            encryption_key: encryption_key_1.clone()
+        });
+
+        // Add second encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
+            .add_encryption_key(encryption_key_2.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 2);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-1"),
+            Some(&encryption_key_1)
+        );
+        assert_eq!(
+            build_result.metadata.encryption_key("key-2"),
+            Some(&encryption_key_2)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
+            encryption_key: encryption_key_2.clone()
+        });
+
+        // Try to add duplicate key - should not create a change
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .add_encryption_key(encryption_key_1.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 0);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 2);
+
+        // Remove first encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata3.json".to_string(),
+            ))
+            .remove_encryption_key("key-1")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+        assert_eq!(build_result.metadata.encryption_key("key-1"), None);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-2"),
+            Some(&encryption_key_2)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
+            key_id: "key-1".to_string()
+        });
+
+        // Try to remove non-existent key - should not create a change
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata4.json".to_string(),
+            ))
+            .remove_encryption_key("non-existent-key")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 0);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+
+        // Test encryption_keys_iter()
+        let keys: Vec<(&String, &EncryptedKey)> =
+            build_result.metadata.encryption_keys_iter().collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].0, "key-2");
+        assert_eq!(keys[0].1, &encryption_key_2);
+
+        // Remove last encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata5.json".to_string(),
+            ))
+            .remove_encryption_key("key-2")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 0);
+        assert_eq!(build_result.metadata.encryption_key("key-2"), None);
+        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
+            key_id: "key-2".to_string()
+        });
+
+        // Verify empty encryption_keys_iter()
+        let keys: Vec<(&String, &EncryptedKey)> =
+            build_result.metadata.encryption_keys_iter().collect();
+        assert_eq!(keys.len(), 0);
+    }
 }
