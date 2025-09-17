@@ -44,7 +44,7 @@ check-toml: install-taplo-cli
 check-msrv:
 	cargo +nightly generate-lockfile -Z direct-minimal-versions
 	cargo +1.87 check --locked --workspace
-	git restore Cargo.lock
+	git restore Cargo.lock # prevent checking in Cargo.lock changes
 
 check: check-fmt check-clippy check-toml cargo-machete
 
