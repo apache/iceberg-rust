@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -288,9 +287,9 @@ impl FileMetadata {
 
         let input_file_length = input_file.metadata().await?.size;
         let footer_payload_length =
-            FileMetadata::read_footer_payload_length(&file_read, input_file_length).await?;
+            FileMetadata::read_footer_payload_length(file_read.as_ref(), input_file_length).await?;
         let footer_bytes =
-            FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length)
+            FileMetadata::read_footer_bytes(file_read.as_ref(), input_file_length, footer_payload_length)
                 .await?;
 
         let magic_length = FileMetadata::MAGIC_LENGTH as usize;

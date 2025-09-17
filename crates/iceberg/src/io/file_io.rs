@@ -27,6 +27,7 @@ use url::Url;
 use super::storage::OpenDALStorage;
 use crate::{Error, ErrorKind, Result};
 
+/// todo doc
 #[async_trait]
 pub trait Storage: Debug + Send + Sync {
     /// Check if a file exists at the given path
@@ -326,8 +327,10 @@ impl FileRead for opendal::Reader {
 /// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
+    /// todo doc
     pub storage: Arc<dyn Storage>,
     // Absolution path of file.
+    /// todo doc
     pub path: String,
     // todo should remove this? Should always pass down a full path
     // // Relative path of file to uri, starts at [`relative_path_pos`]
@@ -353,7 +356,7 @@ impl InputFile {
     /// Read and returns whole content of file.
     ///
     /// For continuous reading, use [`Self::reader`] instead.
-    pub async fn read(&self) -> crate::Result<Bytes> {
+    pub async fn read(&self) -> Result<Bytes> {
         self
             .storage
             .read(&self.path)
@@ -363,7 +366,7 @@ impl InputFile {
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    pub async fn reader(&self) -> crate::Result<Box<dyn FileRead>> {
+    pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
         self.storage.reader(&self.path).await
     }
 }
@@ -374,17 +377,17 @@ impl InputFile {
 ///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
-#[async_trait::async_trait]
-pub trait FileWrite: Send + Unpin + 'static {
+#[async_trait]
+pub trait FileWrite: Send + Sync + Unpin + 'static {
     /// Write bytes to file.
     ///
     /// TODO: we can support writing non-contiguous bytes in the future.
-    async fn write(&mut self, bs: Bytes) -> crate::Result<()>;
+    async fn write(&mut self, bs: Bytes) -> Result<()>;
 
     /// Close file.
     ///
     /// Calling close on closed file will generate an error.
-    async fn close(&mut self) -> crate::Result<()>;
+    async fn close(&mut self) -> Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -413,8 +416,10 @@ impl FileWrite for Box<dyn FileWrite> {
 /// Output file is used for writing to files..
 #[derive(Debug)]
 pub struct OutputFile {
+    /// todo fix pub qualifier
     pub storage: Arc<dyn Storage>,
     // Absolution path of file.
+    /// todo fix pub qualifier
     pub path: String,
     // todo should always pass down a full path
     // // Relative path of file to uri, starts at [`relative_path_pos`]

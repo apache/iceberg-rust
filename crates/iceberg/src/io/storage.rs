@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::Result;
 use std::sync::Arc;
+use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-azdls")]
@@ -67,14 +69,14 @@ pub(crate) enum OpenDALStorage {
     },
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Storage for OpenDALStorage {
-    async fn exists(&self, path: &str) -> crate::Result<bool> {
+    async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(op.exists(relative_path).await?)
     }
 
-    async fn metadata(&self, path: &str) -> crate::Result<FileMetadata> {
+    async fn metadata(&self, path: &str) -> Result<FileMetadata> {
         let (op, relative_path) = self.create_operator(&path)?;
         let meta = op.stat(relative_path).await?;
         
@@ -83,35 +85,35 @@ impl Storage for OpenDALStorage {
         })
     }
 
-    async fn read(&self, path: &str) -> crate::Result<Bytes> {
+    async fn read(&self, path: &str) -> Result<Bytes> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(op.read(relative_path).await?.to_bytes())
     }
 
-    async fn reader(&self, path: &str) -> crate::Result<Box<dyn FileRead>> {
+    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(Box::new(op.reader(relative_path).await?))
     }
 
-    async fn write(&self, path: &str, bs: Bytes) -> crate::Result<()> {
+    async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let mut writer = self.writer(path).await?;
         writer.write(bs).await?;
         writer.close().await
     }
 
-    async fn writer(&self, path: &str) -> crate::Result<Box<dyn FileWrite>> {
+    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(Box::new(
             op.writer(relative_path).await?,
         ))
     }
 
-    async fn delete(&self, path: &str) -> crate::Result<()> {
+    async fn delete(&self, path: &str) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(op.delete(relative_path).await?)
     }
 
-    async fn remove_dir_all(&self, path: &str) -> crate::Result<()> {
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
         let path = if relative_path.ends_with('/') {
             relative_path.to_string()
@@ -121,7 +123,7 @@ impl Storage for OpenDALStorage {
         Ok(op.remove_all(&path).await?)
     }
 
-    fn new_input(&self, path: &str) -> crate::Result<InputFile> {
+    fn new_input(&self, path: &str) -> Result<InputFile> {
         let storage = Arc::new(self.clone());
         let path = path.to_string();
         Ok(InputFile {
@@ -130,7 +132,7 @@ impl Storage for OpenDALStorage {
         })
     }
 
-    fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
+    fn new_output(&self, path: &str) -> Result<OutputFile> {
         let storage = Arc::new(self.clone());
         let path = path.to_string();
         Ok(OutputFile {
@@ -142,7 +144,7 @@ impl Storage for OpenDALStorage {
 
 impl OpenDALStorage {
     /// Convert iceberg config to opendal config.
-    pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
+    pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let scheme = Self::parse_scheme(&scheme_str)?;
 
