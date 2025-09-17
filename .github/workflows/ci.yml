@@ -155,12 +155,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Setup Nightly Rust toolchain
-        uses: ./.github/actions/setup-builder
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Nightly Rust toolchain
+        uses: ./.github/actions/setup-builder
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:

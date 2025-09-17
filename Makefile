@@ -42,13 +42,9 @@ check-toml: install-taplo-cli
 	taplo check
 
 check-msrv:
-	cargo generate-lockfile -Z direct-minimal-versions
-	if [ -n "$$rust_msrv" ]; then \
-	  cargo +$$rust_msrv check --locked --workspace; \
-	else \
-	  cargo check --locked --workspace; \
-	fi
-	git checkout -- Cargo.lock
+	cargo +nightly generate-lockfile -Z direct-minimal-versions
+	cargo +1.87 check --locked --workspace
+	git restore Cargo.lock
 
 check: check-fmt check-clippy check-toml cargo-machete
 
