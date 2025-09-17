@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
 use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::layers::RetryLayer;
@@ -35,7 +35,7 @@ use super::AzureStorageScheme;
 use super::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, Result};
 
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ impl Storage for OpenDALStorage {
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
         let (op, relative_path) = self.create_operator(&path)?;
         let meta = op.stat(relative_path).await?;
-        
+
         Ok(FileMetadata {
             size: meta.content_length(),
         })
@@ -103,9 +103,7 @@ impl Storage for OpenDALStorage {
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(Box::new(
-            op.writer(relative_path).await?,
-        ))
+        Ok(Box::new(op.writer(relative_path).await?))
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
@@ -126,19 +124,13 @@ impl Storage for OpenDALStorage {
     fn new_input(&self, path: &str) -> Result<InputFile> {
         let storage = Arc::new(self.clone());
         let path = path.to_string();
-        Ok(InputFile {
-            storage,
-            path,
-        })
+        Ok(InputFile { storage, path })
     }
 
     fn new_output(&self, path: &str) -> Result<OutputFile> {
         let storage = Arc::new(self.clone());
         let path = path.to_string();
-        Ok(OutputFile {
-            storage,
-            path,
-        })
+        Ok(OutputFile { storage, path })
     }
 }
 

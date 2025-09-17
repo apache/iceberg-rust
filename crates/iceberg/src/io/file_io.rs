@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use url::Url;
@@ -32,16 +33,16 @@ use crate::{Error, ErrorKind, Result};
 pub trait Storage: Debug + Send + Sync {
     /// Check if a file exists at the given path
     async fn exists(&self, path: &str) -> Result<bool>;
-    
+
     /// Get metadata from an input path
     async fn metadata(&self, path: &str) -> Result<FileMetadata>;
-    
+
     /// Read bytes from a path
     async fn read(&self, path: &str) -> Result<Bytes>;
-    
+
     /// Get FileRead from a path
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>>;
-    
+
     /// Write bytes to an output path
     async fn write(&self, path: &str, bs: Bytes) -> Result<()>;
 
@@ -319,7 +320,7 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
 
 #[async_trait::async_trait]
 impl FileRead for opendal::Reader {
-    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
+    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         Ok(opendal::Reader::read(self, range).await?.to_bytes())
     }
 }
@@ -344,12 +345,12 @@ impl InputFile {
     }
 
     /// Check if file exists.
-    pub async fn exists(&self) -> crate::Result<bool> {
+    pub async fn exists(&self) -> Result<bool> {
         self.storage.exists(&self.path).await
     }
 
     /// Fetch and returns metadata of file.
-    pub async fn metadata(&self) -> crate::Result<FileMetadata> {
+    pub async fn metadata(&self) -> Result<FileMetadata> {
         self.storage.metadata(&self.path).await
     }
 
@@ -357,10 +358,7 @@ impl InputFile {
     ///
     /// For continuous reading, use [`Self::reader`] instead.
     pub async fn read(&self) -> Result<Bytes> {
-        self
-            .storage
-            .read(&self.path)
-            .await
+        self.storage.read(&self.path).await
     }
 
     /// Creates [`FileRead`] for continuous reading.
@@ -468,9 +466,7 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        Ok(Box::new(
-            self.storage.writer(&self.path).await?
-        ))
+        Ok(Box::new(self.storage.writer(&self.path).await?))
     }
 }
 
