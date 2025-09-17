@@ -52,8 +52,7 @@ runs:
         import os
         config = toml.load('bindings/python/pyproject.toml')
         new_version = os.environ['NEW_VERSION']
-        if 'version' in config['project']:
-            config['project']['version'] = new_version
+        config['project']['version'] = new_version
         if 'dynamic' in config['project']:
           config['project']['dynamic'] = [v for v in config['project']['dynamic'] if v != 'version']
         with open('bindings/python/pyproject.toml', 'w') as f:
