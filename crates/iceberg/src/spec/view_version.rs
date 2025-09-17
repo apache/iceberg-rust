@@ -122,7 +122,7 @@ impl ViewVersion {
                     format!("Schema with id {} not found", self.schema_id()),
                 )
             })
-            .cloned();
+            .cloned()
     }
 
     /// Retrieve the history log entry for this view version.
