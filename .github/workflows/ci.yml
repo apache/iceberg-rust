@@ -22,7 +22,7 @@ on:
     branches:
       - main
   pull_request:
-    branches:
+    paths:
       - '**'                              # Include all files and directories in the repository by default.
       - '!.github/workflows/**'           # Exclude all workflow files
       - '.github/workflows/ci.yml'        # except the current file.
