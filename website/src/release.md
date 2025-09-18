@@ -235,7 +235,7 @@ https://downloads.apache.org/iceberg/KEYS
 
 Git tag for the release:
 
-https://github.com/apache/iceberg-rust/releases/tag/v${iceberg_version}
+https://github.com/apache/iceberg-rust/releases/tag/v${release_version}
 
 Please download, verify, and test.
 
