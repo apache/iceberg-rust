@@ -40,7 +40,7 @@ rust-version = "1.87"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = "0.20"
+apache-avro = { version = "0.20", features = ["zstandard"] }
 array-init = "2"
 arrow-arith = { version = "55.1" }
 arrow-array = { version = "55.1" }
@@ -125,4 +125,4 @@ url = "2.5.4"
 uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
-zstd = "0.13.2"
+zstd = "0.13.3"
