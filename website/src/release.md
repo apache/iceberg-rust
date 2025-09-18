@@ -325,16 +325,13 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   gpg --verify apache-iceberg-rust-*.tar.gz.asc
   ```
+  Expects: `"apache-iceberg-rust-0.7.0-src.tar.gz: OK"`
 * Verify the checksums: 
   
   ```bash
   shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
   ```
-* Verify license headers: 
-  
-  ```bash
-  docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
-  ```
+  Expects: `gpg: Good signature from ...`
 * Verify build and test:
   
   ```bash
@@ -342,6 +339,12 @@ After downloading them, here are the instructions on how to verify them.
   cd apache-iceberg-rust-*/
   make build && make test
   ```
+* Verify license headers: 
+  
+  ```bash
+  docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
+  ```
+  Expects: `INFO Totally checked _ files, valid: _, invalid: 0, ignored: _, fixed: 0 `
 
 ## Official Release
 
