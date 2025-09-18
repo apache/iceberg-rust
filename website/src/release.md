@@ -316,19 +316,32 @@ After downloading them, here are the instructions on how to verify them.
 
 * Import keys:
 
-```bash
-curl https://downloads.apache.org/iceberg/KEYS -o KEYS
-gpg --import KEYS
-```
-* Verify the `.asc` file: ```gpg --verify apache-iceberg-rust-*.tar.gz.asc```
-* Verify the checksums: ```shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512```
-* Verify license headers: ```docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check```
+  ```bash
+  curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+  gpg --import KEYS
+  ```
+* Verify the `.asc` file:
+  
+  ```bash
+  gpg --verify apache-iceberg-rust-*.tar.gz.asc
+  ```
+* Verify the checksums: 
+  
+  ```bash
+  shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
+  ```
+* Verify license headers: 
+  
+  ```bash
+  docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
+  ```
 * Verify build and test:
-```bash
-tar -xzf apache-iceberg-rust-*.tar.gz
-cd apache-iceberg-rust-*/
-make build && make test
-```
+  
+  ```bash
+  tar -xzf apache-iceberg-rust-*.tar.gz
+  cd apache-iceberg-rust-*/
+  make build && make test
+  ```
 
 ## Official Release
 
