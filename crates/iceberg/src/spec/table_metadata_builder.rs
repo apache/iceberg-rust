@@ -3181,6 +3181,133 @@ mod tests {
     }
 
     #[test]
+    fn test_row_lineage_append_branch() {
+        // Appends to a branch should still change last-row-id even if not on main, these changes
+        // should also affect commits to main
+
+        let branch = "some_branch";
+
+        // Start with V3 metadata to support row lineage
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Initial next_row_id should be 0
+        assert_eq!(base.next_row_id(), 0);
+
+        // Write to Branch - append 30 rows
+        let branch_snapshot_1 = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), 30)
+            .build();
+
+        let table_after_branch_1 = base
+            .into_builder(None)
+            .set_branch_snapshot(branch_snapshot_1.clone(), branch)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Current snapshot should be null (no main branch snapshot yet)
+        assert!(table_after_branch_1.current_snapshot().is_none());
+
+        // Branch snapshot should have first_row_id = 0
+        let branch_ref = table_after_branch_1.refs.get(branch).unwrap();
+        let branch_snap_1 = table_after_branch_1
+            .snapshots
+            .get(&branch_ref.snapshot_id)
+            .unwrap();
+        assert_eq!(branch_snap_1.first_row_id(), Some(0));
+
+        // Next row id should be 30
+        assert_eq!(table_after_branch_1.next_row_id(), 30);
+
+        // Write to Main - append 28 rows
+        let main_snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(table_after_branch_1.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("bar")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(table_after_branch_1.next_row_id(), 28)
+            .build();
+
+        let table_after_main = table_after_branch_1
+            .into_builder(None)
+            .add_snapshot(main_snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: main_snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Main snapshot should have first_row_id = 30
+        let current_snapshot = table_after_main.current_snapshot().unwrap();
+        assert_eq!(current_snapshot.first_row_id(), Some(30));
+
+        // Next row id should be 58 (30 + 28)
+        assert_eq!(table_after_main.next_row_id(), 58);
+
+        // Write again to branch - append 21 rows
+        let branch_snapshot_2 = Snapshot::builder()
+            .with_snapshot_id(3)
+            .with_timestamp_ms(table_after_main.last_updated_ms + 1)
+            .with_sequence_number(2)
+            .with_schema_id(0)
+            .with_manifest_list("baz")
+            .with_parent_snapshot_id(Some(branch_snapshot_1.snapshot_id()))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(table_after_main.next_row_id(), 21)
+            .build();
+
+        let table_after_branch_2 = table_after_main
+            .into_builder(None)
+            .set_branch_snapshot(branch_snapshot_2.clone(), branch)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Branch snapshot should have first_row_id = 58 (30 + 28)
+        let branch_ref_2 = table_after_branch_2.refs.get(branch).unwrap();
+        let branch_snap_2 = table_after_branch_2
+            .snapshots
+            .get(&branch_ref_2.snapshot_id)
+            .unwrap();
+        assert_eq!(branch_snap_2.first_row_id(), Some(58));
+
+        // Next row id should be 79 (30 + 28 + 21)
+        assert_eq!(table_after_branch_2.next_row_id(), 79);
+    }
+
+    #[test]
     fn test_encryption_keys() {
         let builder = builder_without_changes(FormatVersion::V2);
 
