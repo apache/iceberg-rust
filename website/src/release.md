@@ -119,7 +119,7 @@ Download and setup `cargo-deny`. You can refer to [cargo-deny](https://embarkstu
 
 Run `python3 ./scripts/dependencies.py generate` to update the dependencies list of every package.
 
-Run `python3 ./scripts/dependencies.py check` to verify the dependencies' license.
+Run `python3 ./scripts/dependencies.py check` to verify the updated dependencies' license.
 
 ### Push release candidate tag
 
