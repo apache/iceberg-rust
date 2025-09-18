@@ -336,7 +336,7 @@ make build && make test
 
 ```shell
 # Checkout the tags that passed VOTE
-git checkout ${release_version}
+git checkout "v${release_version}"
 # Tag with the iceberg version
 git tag -s "v${iceberg_version}"
 # Push tags to github to trigger releases
