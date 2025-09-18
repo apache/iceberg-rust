@@ -180,16 +180,19 @@ Then, upload the artifacts:
 ```shell
 # create a directory named by version
 mkdir /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
+
 # copy source code and signature package to the versioned directory
 cp ./dist/* /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
+
 # change dir to the svn folder
 cd /tmp/iceberg-dist-dev/
+
 # check svn status
 svn status
+
 # add to svn
 svn add apache-iceberg-rust-${release_version}
-# check svn status
-svn status
+
 # commit to SVN remote server
 svn commit -m "Prepare for iceberg-rust ${release_version}"
 ```
