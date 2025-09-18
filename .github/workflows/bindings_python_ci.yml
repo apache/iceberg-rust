@@ -22,8 +22,11 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
+    paths:
+      - ".github/workflows/bindings_python_ci.yml"
+      - "bindings/python/**"
+      - "crates/iceberg/**"
+      - "crates/integrations/datafusion/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
