@@ -117,7 +117,8 @@ Please note that this version is the exact version of the release, not the relea
 
 Download and setup `cargo-deny`. You can refer to [cargo-deny](https://embarkstudios.github.io/cargo-deny/cli/index.html).
 
-Running `python3 ./scripts/dependencies.py generate` to update the dependencies list of every package.
+Run `python3 ./scripts/dependencies.py generate` to update the dependencies list of every package.
+Run `python3 ./scripts/dependencies.py check` to verify the dependencies' license.
 
 ### Push release candidate tag
 
