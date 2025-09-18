@@ -146,7 +146,6 @@ After GitHub Release has been created, we can start to create ASF Release.
             - `apache-iceberg-rust-${release_version}-src.tar.gz.asc`
             - `apache-iceberg-rust-${release_version}-src.tar.gz.sha512`
         - Check the header of the source code. This step needs docker to run.
-- Push the newly created branch to GitHub
 
 This script will create a new release under `dist`.
 
