@@ -163,7 +163,7 @@ dist
 
 SVN is required for this step.
 
-The svn repository of the dev branch is: <https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust>
+The svn repository of the dev branch is: <https://dist.apache.org/repos/dist/dev/iceberg/>
 
 First, checkout Iceberg to local directory:
 
