@@ -266,12 +266,12 @@ impl<T> SetExpression<T> {
     /// ```rust
     /// use fnv::FnvHashSet;
     /// use iceberg::expr::{PredicateOperator, Reference};
-    /// use iceberg::spec::{Datum};
+    /// use iceberg::spec::Datum;
     ///
     /// SetExpression::new(
     ///     PredicateOperator::In,
     ///     Reference::new("a"),
-    ///     FnvHashSet::from_iter(vec![Datum::int(1)])
+    ///     FnvHashSet::from_iter(vec![Datum::int(1)]),
     /// );
     /// ```
     pub fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
