@@ -264,13 +264,14 @@ impl<T> SetExpression<T> {
     /// # Example
     ///
     /// ```rust
-    /// use iceberg::expr::{BinaryExpression, PredicateOperator, Reference};
-    /// use iceberg::spec::Datum;
+    /// use fnv::FnvHashSet;
+    /// use iceberg::expr::{PredicateOperator, Reference};
+    /// use iceberg::spec::{Datum};
     ///
-    /// BinaryExpression::new(
-    ///     PredicateOperator::LessThanOrEq,
+    /// SetExpression::new(
+    ///     PredicateOperator::In,
     ///     Reference::new("a"),
-    ///     Datum::int(10),
+    ///     FnvHashSet::from_iter(vec![Datum::int(1)])
     /// );
     /// ```
     pub fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
