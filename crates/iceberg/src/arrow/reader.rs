@@ -1756,14 +1756,12 @@ message schema {
             .await
             .unwrap();
 
-        let result_data = result[0].columns()[0]
+        result[0].columns()[0]
             .as_string_opt::<i32>()
             .unwrap()
             .iter()
             .map(|v| v.map(ToOwned::to_owned))
-            .collect::<Vec<_>>();
-
-        result_data
+            .collect::<Vec<_>>()
     }
 
     fn setup_kleene_logic(
