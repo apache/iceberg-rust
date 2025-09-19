@@ -38,8 +38,7 @@ use futures::StreamExt;
 use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
 use iceberg::spec::{
     DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
-    PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-    serialize_data_file_to_json,
+    PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, serialize_data_file_to_json,
 };
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -47,7 +46,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
@@ -235,13 +234,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
-            None,
             FieldMatchMode::Name,
-            self.table.file_io().clone(),
-            DefaultLocationGenerator::new(self.table.metadata().clone())
-                .map_err(to_datafusion_error)?,
-            // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format),
         );
         let target_file_size = match self
             .table
@@ -261,10 +254,21 @@ impl ExecutionPlan for IcebergWriteExec {
                 .map_err(to_datafusion_error)?,
             None => PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         };
-        let rolling_writer_builder =
-            RollingFileWriterBuilder::new(parquet_file_writer_builder, target_file_size);
-        let data_file_writer_builder =
-            DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
+
+        let file_io = self.table.file_io().clone();
+        let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
+            .map_err(to_datafusion_error)?;
+        // todo filename prefix/suffix should be configurable
+        let file_name_generator =
+            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format);
+        let rolling_writer = RollingFileWriter::new(
+            parquet_file_writer_builder,
+            target_file_size,
+            file_io,
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer, None);
 
         // Get input data
         let data = execute_input_stream(

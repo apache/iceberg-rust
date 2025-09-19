@@ -194,6 +194,15 @@ impl PartitionKey {
         Self { spec, schema, data }
     }
 
+    /// todo do we need this?
+    pub fn unpartition_key() -> Self {
+        Self {
+            spec: PartitionSpec::unpartition_spec(),
+            schema: Arc::new(Schema::builder().build().unwrap()),
+            data: Struct::empty(),
+        }
+    }
+
     /// Generates a partition path based on the partition values.
     pub fn to_path(&self) -> String {
         self.spec.partition_to_path(&self.data, self.schema.clone())
@@ -206,6 +215,21 @@ impl PartitionKey {
             None => true,
             Some(pk) => pk.spec.is_unpartitioned(),
         }
+    }
+
+    /// todo doc
+    pub fn spec(&self) -> &PartitionSpec {
+        &self.spec
+    }
+
+    /// todo doc
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// todo doc
+    pub fn data(&self) -> &Struct {
+        &self.data
     }
 }
 
