@@ -703,6 +703,7 @@ mod test {
             deleted_rows_count: None,
             partitions: Some(partitions),
             key_metadata: None,
+            first_row_id: None,
         }
     }
 

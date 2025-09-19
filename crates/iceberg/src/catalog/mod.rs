@@ -39,9 +39,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
-    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder, UnboundPartitionSpec,
-    ViewFormatVersion, ViewRepresentations, ViewVersion,
+    EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
+    SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
+    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -291,6 +291,9 @@ pub struct TableCreation {
         props.into_iter().collect()
     }))]
     pub properties: HashMap<String, String>,
+    /// Format version of the table. Defaults to V2.
+    #[builder(default = FormatVersion::V2)]
+    pub format_version: FormatVersion,
 }
 
 /// TableCommit represents the commit of a table in the catalog.
@@ -554,6 +557,18 @@ pub enum TableUpdate {
         /// Schema IDs to remove.
         schema_ids: Vec<i32>,
     },
+    /// Add an encryption key
+    #[serde(rename_all = "kebab-case")]
+    AddEncryptionKey {
+        /// The encryption key to add.
+        encryption_key: EncryptedKey,
+    },
+    /// Remove an encryption key
+    #[serde(rename_all = "kebab-case")]
+    RemoveEncryptionKey {
+        /// The id of the encryption key to remove.
+        key_id: String,
+    },
 }
 
 impl TableUpdate {
@@ -598,6 +613,12 @@ impl TableUpdate {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
             TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
+            TableUpdate::AddEncryptionKey { encryption_key } => {
+                Ok(builder.add_encryption_key(encryption_key))
+            }
+            TableUpdate::RemoveEncryptionKey { key_id } => {
+                Ok(builder.remove_encryption_key(&key_id))
+            }
         }
     }
 }
@@ -942,6 +963,7 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
+    use base64::Engine as _;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use uuid::uuid;
@@ -949,7 +971,7 @@ mod tests {
     use super::ViewUpdate;
     use crate::io::FileIOBuilder;
     use crate::spec::{
-        BlobMetadata, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
+        BlobMetadata, EncryptedKey, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
         StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
@@ -2169,6 +2191,49 @@ mod tests {
             "#,
             TableUpdate::RemoveSchemas {
                 schema_ids: vec![1, 2],
+            },
+        );
+    }
+
+    #[test]
+    fn test_add_encryption_key() {
+        let key_bytes = "key".as_bytes();
+        let encoded_key = base64::engine::general_purpose::STANDARD.encode(key_bytes);
+        test_serde_json(
+            format!(
+                r#"
+                {{
+                    "action": "add-encryption-key",
+                    "encryption-key": {{
+                        "key-id": "a",
+                        "encrypted-key-metadata": "{encoded_key}",
+                        "encrypted-by-id": "b"
+                    }}
+                }}        
+            "#
+            ),
+            TableUpdate::AddEncryptionKey {
+                encryption_key: EncryptedKey {
+                    key_id: "a".to_string(),
+                    encrypted_key_metadata: key_bytes.to_vec(),
+                    encrypted_by_id: "b".to_string(),
+                    properties: HashMap::new(),
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn test_remove_encryption_key() {
+        test_serde_json(
+            r#"
+                {
+                    "action": "remove-encryption-key",
+                    "key-id": "a"
+                }        
+            "#,
+            TableUpdate::RemoveEncryptionKey {
+                key_id: "a".to_string(),
             },
         );
     }

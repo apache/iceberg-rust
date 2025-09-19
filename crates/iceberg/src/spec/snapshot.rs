@@ -82,6 +82,13 @@ impl Default for Operation {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+/// Row range of a snapshot, contains first_row_id and added_rows_count.
+pub struct SnapshotRowRange {
+    first_row_id: u64,
+    added_rows_count: u64,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypedBuilder)]
 #[serde(from = "SnapshotV2", into = "SnapshotV2")]
 #[builder(field_defaults(setter(prefix = "with_")))]
@@ -109,6 +116,17 @@ pub struct Snapshot {
     /// ID of the table’s current schema when the snapshot was created.
     #[builder(setter(strip_option(fallback = schema_id_opt)), default = None)]
     schema_id: Option<SchemaId>,
+    /// Encryption Key ID
+    #[builder(default)]
+    encryption_key_id: Option<String>,
+    /// Row range of this snapshot, required when the table version supports row lineage.
+    /// Specify as a tuple of (first_row_id, added_rows_count)
+    #[builder(default, setter(!strip_option, transform = |first_row_id: u64, added_rows_count: u64| Some(SnapshotRowRange { first_row_id, added_rows_count })))]
+    // This is specified as a struct instead of two separate fields to ensure that both fields are either set or not set.
+    // The java implementations uses two separate fields, then sets `added_row_counts` to Null if `first_row_id` is set to Null.
+    // It throws an error if `added_row_counts` is set but `first_row_id` is not set, or if either of the two is negative.
+    // We handle all cases infallible using the rust type system.
+    row_range: Option<SnapshotRowRange>,
 }
 
 impl Snapshot {
@@ -205,6 +223,32 @@ impl Snapshot {
             snapshot_id: self.snapshot_id,
         }
     }
+
+    /// The row-id of the first newly added row in this snapshot. All rows added in this snapshot will
+    /// have a row-id assigned to them greater than this value. All rows with a row-id less than this
+    /// value were created in a snapshot that was added to the table (but not necessarily committed to
+    /// this branch) in the past.
+    ///
+    /// This field is optional but is required when the table version supports row lineage.
+    pub fn first_row_id(&self) -> Option<u64> {
+        self.row_range.as_ref().map(|r| r.first_row_id)
+    }
+
+    /// The total number of newly added rows in this snapshot. It should be the summation of {@link
+    /// ManifestFile#ADDED_ROWS_COUNT} for every manifest added in this snapshot.
+    ///
+    /// This field is optional but is required when the table version supports row lineage.
+    pub fn added_rows_count(&self) -> Option<u64> {
+        self.row_range.as_ref().map(|r| r.added_rows_count)
+    }
+
+    /// Returns the row range of this snapshot, if available.
+    /// This is a tuple containing (first_row_id, added_rows_count).
+    pub fn row_range(&self) -> Option<(u64, u64)> {
+        self.row_range
+            .as_ref()
+            .map(|r| (r.first_row_id, r.added_rows_count))
+    }
 }
 
 pub(super) mod _serde {
@@ -263,6 +307,8 @@ pub(super) mod _serde {
                 manifest_list: v2.manifest_list,
                 summary: v2.summary,
                 schema_id: v2.schema_id,
+                encryption_key_id: None,
+                row_range: None,
             }
         }
     }
@@ -300,6 +346,8 @@ pub(super) mod _serde {
                     additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
+                encryption_key_id: None,
+                row_range: None,
             })
         }
     }
