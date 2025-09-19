@@ -176,8 +176,9 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
 
         let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
 
@@ -310,6 +311,10 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
+        }
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let record_batch_stream =
@@ -341,7 +346,7 @@ impl ArrowReader {
         // Create the record batch stream builder, which wraps the parquet file reader
         let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new(),
+            ArrowReaderOptions::new().with_page_index(should_load_page_index),
         )
         .await?;
         Ok(record_batch_stream_builder)
@@ -1745,6 +1750,7 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                limit: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
