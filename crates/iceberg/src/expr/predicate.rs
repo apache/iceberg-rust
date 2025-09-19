@@ -265,7 +265,7 @@ impl<T> SetExpression<T> {
     ///
     /// ```rust
     /// use fnv::FnvHashSet;
-    /// use iceberg::expr::{PredicateOperator, Reference};
+    /// use iceberg::expr::{PredicateOperator, Reference, SetExpression};
     /// use iceberg::spec::Datum;
     ///
     /// SetExpression::new(
