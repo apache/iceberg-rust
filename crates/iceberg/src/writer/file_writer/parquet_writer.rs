@@ -34,7 +34,6 @@ use parquet::format::FileMetaData;
 use parquet::thrift::{TCompactOutputProtocol, TSerializable};
 use thrift::protocol::TOutputProtocol;
 
-use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
@@ -43,8 +42,8 @@ use crate::arrow::{
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionKey, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
-    Struct, StructType, TableMetadata, Type, visit_schema,
+    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
+    StructType, TableMetadata, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -52,78 +51,43 @@ use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
-pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
+pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
-    partition_key: Option<PartitionKey>,
     match_mode: FieldMatchMode,
-
-    file_io: FileIO,
-    location_generator: T,
-    file_name_generator: F,
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
+impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    pub fn new(
-        props: WriterProperties,
-        schema: SchemaRef,
-        partition_key: Option<PartitionKey>,
-        file_io: FileIO,
-        location_generator: T,
-        file_name_generator: F,
-    ) -> Self {
-        Self::new_with_match_mode(
-            props,
-            schema,
-            partition_key,
-            FieldMatchMode::Id,
-            file_io,
-            location_generator,
-            file_name_generator,
-        )
+    pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
+        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
     /// Create a new `ParquetWriterBuilder` with custom match mode
     pub fn new_with_match_mode(
         props: WriterProperties,
         schema: SchemaRef,
-        partition_key: Option<PartitionKey>,
         match_mode: FieldMatchMode,
-        file_io: FileIO,
-        location_generator: T,
-        file_name_generator: F,
     ) -> Self {
         Self {
             props,
             schema,
-            partition_key,
             match_mode,
-            file_io,
-            location_generator,
-            file_name_generator,
         }
     }
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
+impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self) -> Result<Self::R> {
-        let out_file = self
-            .file_io
-            .new_output(self.location_generator.generate_location(
-                self.partition_key.as_ref(),
-                &self.file_name_generator.generate_file_name(),
-            ))?;
-
+    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props,
             current_row_num: 0,
-            out_file,
+            output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
         })
     }
@@ -250,7 +214,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
-    out_file: OutputFile,
+    output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
@@ -555,7 +519,7 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer = self.out_file.writer().await?;
+            let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
@@ -594,7 +558,7 @@ impl FileWriter for ParquetWriter {
         let written_size = writer.bytes_written();
 
         if self.current_row_num == 0 {
-            self.out_file.delete().await.map_err(|err| {
+            self.output_file.delete().await.map_err(|err| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to delete empty parquet file.",
@@ -616,7 +580,7 @@ impl FileWriter for ParquetWriter {
                 self.schema,
                 parquet_metadata,
                 written_size,
-                self.out_file.location().to_string(),
+                self.output_file.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
             )?])
         }
@@ -625,7 +589,7 @@ impl FileWriter for ParquetWriter {
 
 impl CurrentFileStatus for ParquetWriter {
     fn current_file_path(&self) -> String {
-        self.out_file.location().to_string()
+        self.output_file.location().to_string()
     }
 
     fn current_row_num(&self) -> usize {
@@ -1687,7 +1651,7 @@ mod tests {
         .build()
         .await?;
         pw.write(&to_write).await?;
-        let file_path = pw.out_file.location().to_string();
+        let file_path = pw.output_file.location().to_string();
         pw.close().await.unwrap();
         assert!(file_io.exists(file_path).await.unwrap());
 
@@ -1704,7 +1668,7 @@ mod tests {
         )
         .build()
         .await?;
-        let file_path = pw.out_file.location().to_string();
+        let file_path = pw.output_file.location().to_string();
         pw.close().await.unwrap();
         assert!(!file_io.exists(file_path).await.unwrap());
 

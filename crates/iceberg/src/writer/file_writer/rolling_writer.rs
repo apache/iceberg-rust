@@ -17,65 +17,80 @@
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFileBuilder;
-use crate::writer::CurrentFileStatus;
-use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::io::FileIO;
+use crate::spec::PartitionKey;
+use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
+use crate::writer::{
+    CurrentFileStatus, DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder,
+};
 use crate::{Error, ErrorKind, Result};
-
-/// Builder for creating a `RollingFileWriter` that rolls over to a new file
-/// when the data size exceeds a target threshold.
-#[derive(Clone)]
-pub struct RollingFileWriterBuilder<B: FileWriterBuilder> {
-    inner_builder: B,
-    target_file_size: usize,
-}
-
-impl<B: FileWriterBuilder> RollingFileWriterBuilder<B> {
-    /// Creates a new `RollingFileWriterBuilder` with the specified inner builder and target size.
-    ///
-    /// # Arguments
-    ///
-    /// * `inner_builder` - The builder for the underlying file writer
-    /// * `target_file_size` - The target size in bytes before rolling over to a new file
-    ///
-    /// NOTE: The `target_file_size` does not exactly reflect the final size on physical storage.
-    /// This is because the input size is based on the Arrow in-memory format and cannot precisely control rollover behavior.
-    /// The actual file size on disk is expected to be slightly larger than `target_file_size`.
-    pub fn new(inner_builder: B, target_file_size: usize) -> Self {
-        Self {
-            inner_builder,
-            target_file_size,
-        }
-    }
-}
-
-impl<B: FileWriterBuilder> FileWriterBuilder for RollingFileWriterBuilder<B> {
-    type R = RollingFileWriter<B>;
-
-    async fn build(self) -> Result<Self::R> {
-        Ok(RollingFileWriter {
-            inner: None,
-            inner_builder: self.inner_builder,
-            target_file_size: self.target_file_size,
-            data_file_builders: vec![],
-        })
-    }
-}
 
 /// A writer that automatically rolls over to a new file when the data size
 /// exceeds a target threshold.
 ///
-/// This writer wraps another file writer that tracks the amount of data written.
+/// This writer wraps another writer that tracks the amount of data written.
 /// When the data size exceeds the target size, it closes the current file and
 /// starts writing to a new one.
-pub struct RollingFileWriter<B: FileWriterBuilder> {
+pub struct RollingWriter<B, L, F, I = DefaultInput, O = DefaultOutput>
+where
+    B: IcebergWriterBuilder<I, O>,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+    O: IntoIterator,
+{
     inner: Option<B::R>,
     inner_builder: B,
     target_file_size: usize,
-    data_file_builders: Vec<DataFileBuilder>,
+    location_generator: L,
+    file_name_generator: F,
+    file_io: FileIO,
+    partition_key: Option<PartitionKey>,
+    data_files: Vec<O::Item>,
 }
 
-impl<B: FileWriterBuilder> RollingFileWriter<B> {
+impl<B, L, F, I, O> RollingWriter<B, L, F, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    B::R: CurrentFileStatus,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+    O: IntoIterator,
+    O::Item: Clone,
+{
+    /// Creates a new `RollingWriter` with the specified inner builder and target size.
+    ///
+    /// # Arguments
+    ///
+    /// * `inner_builder` - The builder for the underlying writer
+    /// * `target_file_size` - The target size in bytes before rolling over to a new file
+    /// * `location_generator` - The location generator to use for generating file paths
+    /// * `file_name_generator` - The file name generator to use for generating file names
+    /// * `file_io` - The file IO to use for creating new files
+    /// * `partition_key` - The partition key for the files
+    ///
+    /// NOTE: The `target_file_size` does not exactly reflect the final size on physical storage.
+    /// This is because the input size is based on the Arrow in-memory format and cannot precisely control rollover behavior.
+    /// The actual file size on disk is expected to be slightly larger than `target_file_size`.
+    pub fn new(
+        inner_builder: B,
+        target_file_size: usize,
+        location_generator: L,
+        file_name_generator: F,
+        file_io: FileIO,
+        partition_key: Option<PartitionKey>,
+    ) -> Self {
+        Self {
+            inner: None,
+            inner_builder,
+            target_file_size,
+            location_generator,
+            file_name_generator,
+            file_io,
+            partition_key,
+            data_files: Vec::new(),
+        }
+    }
+
     /// Determines if the writer should roll over to a new file.
     ///
     /// # Returns
@@ -84,28 +99,44 @@ impl<B: FileWriterBuilder> RollingFileWriter<B> {
     fn should_roll(&self) -> bool {
         self.current_written_size() > self.target_file_size
     }
-}
 
-impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
-    async fn write(&mut self, input: &RecordBatch) -> Result<()> {
+    /// Create a new writer for the current partition.
+    async fn create_new_writer(&mut self) -> Result<B::R> {
+        let file_path = self.location_generator.generate_location(
+            self.partition_key.as_ref(),
+            &self.file_name_generator.generate_file_name(),
+        );
+
+        let output_file = self.file_io.new_output(file_path)?;
+        let writer = self.inner_builder.clone().build(output_file).await?;
+
+        Ok(writer)
+    }
+
+    /// Write input data to the current file, rolling over to a new file if necessary.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The input data to write
+    pub async fn write(&mut self, input: I) -> Result<()> {
         if self.inner.is_none() {
             // initialize inner writer
-            self.inner = Some(self.inner_builder.clone().build().await?);
+            self.inner = Some(self.create_new_writer().await?);
         }
 
         if self.should_roll() {
-            if let Some(inner) = self.inner.take() {
+            if let Some(mut inner) = self.inner.take() {
                 // close the current writer, roll to a new file
-                self.data_file_builders.extend(inner.close().await?);
+                self.data_files.extend(inner.close().await?);
 
                 // start a new writer
-                self.inner = Some(self.inner_builder.clone().build().await?);
+                self.inner = Some(self.create_new_writer().await?);
             }
         }
 
         // write the input
-        if let Some(writer) = self.inner.as_mut() {
-            Ok(writer.write(input).await?)
+        if let Some(writer) = &mut self.inner {
+            writer.write(input).await
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
@@ -114,28 +145,47 @@ impl<B: FileWriterBuilder> FileWriter for RollingFileWriter<B> {
         }
     }
 
-    async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
+    /// Close the writer and return the output items for all files.
+    pub async fn close(&mut self) -> Result<Vec<O::Item>> {
         // close the current writer and merge the output
-        if let Some(current_writer) = self.inner {
-            self.data_file_builders
-                .extend(current_writer.close().await?);
+        if let Some(mut current_writer) = self.inner.take() {
+            self.data_files.extend(current_writer.close().await?);
         }
 
-        Ok(self.data_file_builders)
+        Ok(std::mem::take(&mut self.data_files))
     }
 }
 
-impl<B: FileWriterBuilder> CurrentFileStatus for RollingFileWriter<B> {
+impl<B, L, F, I, O> CurrentFileStatus for RollingWriter<B, L, F, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    B::R: IcebergWriter<I, O> + CurrentFileStatus,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+    O: IntoIterator,
+{
     fn current_file_path(&self) -> String {
-        self.inner.as_ref().unwrap().current_file_path()
+        if let Some(inner) = &self.inner {
+            inner.current_file_path()
+        } else {
+            "".to_string()
+        }
     }
 
     fn current_row_num(&self) -> usize {
-        self.inner.as_ref().unwrap().current_row_num()
+        if let Some(inner) = &self.inner {
+            inner.current_row_num()
+        } else {
+            0
+        }
     }
 
     fn current_written_size(&self) -> usize {
-        self.inner.as_ref().unwrap().current_written_size()
+        if let Some(inner) = &self.inner {
+            inner.current_written_size()
+        } else {
+            0
+        }
     }
 }
 

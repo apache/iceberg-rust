@@ -229,10 +229,20 @@ pub mod file_writer;
 use arrow_array::RecordBatch;
 
 use crate::Result;
-use crate::spec::DataFile;
+use crate::io::OutputFile;
+use crate::spec::{DataFile, PartitionKey};
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
+
+/// The partitioning writer used to write data to multiple partitions.
+pub trait PartitioningWriter {
+    /// Write a record batch, all rows from this record batch should come from one partition
+    fn write(&mut self, partition_key: PartitionKey, batch: RecordBatch) -> Result<()>;
+
+    /// Close all writers and return the data files.
+    fn close(&mut self) -> Result<Vec<DataFile>>;
+}
 
 /// The builder for iceberg writer.
 #[async_trait::async_trait]
@@ -241,8 +251,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    /// Build the iceberg writer with the provided output file.
+    async fn build(self, output_file: OutputFile) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.
