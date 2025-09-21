@@ -26,21 +26,27 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
-use crate::spec::{DataFile, PartitionKey, SchemaRef, Struct, DEFAULT_PARTITION_SPEC_ID};
-use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
-use crate::{Error, ErrorKind, Result};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, DataFile, PartitionKey, SchemaRef, Struct};
+use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::RollingFileWriter;
+use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
 #[derive(Clone, Debug)]
-pub struct EqualityDeleteFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
+pub struct EqualityDeleteFileWriterBuilder<
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+> {
     inner: RollingFileWriter<B, L, F>,
     config: EqualityDeleteWriterConfig,
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> EqualityDeleteFileWriterBuilder<B, L, F> {
+impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator>
+    EqualityDeleteFileWriterBuilder<B, L, F>
+{
     /// Create a new `EqualityDeleteFileWriterBuilder` using a `FileWriterBuilder`.
     pub fn new(inner: RollingFileWriter<B, L, F>, config: EqualityDeleteWriterConfig) -> Self {
         Self { inner, config }
@@ -62,7 +68,7 @@ impl EqualityDeleteWriterConfig {
     pub fn new(
         equality_ids: Vec<i32>,
         original_schema: SchemaRef,
-        partition_key: Option<PartitionKey>
+        partition_key: Option<PartitionKey>,
     ) -> Result<Self> {
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
@@ -109,7 +115,9 @@ impl EqualityDeleteWriterConfig {
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B, L, F> {
+impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriterBuilder
+    for EqualityDeleteFileWriterBuilder<B, L, F>
+{
     type R = EqualityDeleteFileWriter<B, L, F>;
 
     async fn build(self) -> Result<Self::R> {
@@ -124,7 +132,11 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
 
 /// Writer used to write equality delete files.
 #[derive(Debug)]
-pub struct EqualityDeleteFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
+pub struct EqualityDeleteFileWriter<
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+> {
     inner_writer: Option<RollingFileWriter<B, L, F>>,
     projector: RecordBatchProjector,
     equality_ids: Vec<i32>,
@@ -132,7 +144,9 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder, L: LocationGenerator, 
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriter for EqualityDeleteFileWriter<B, L, F> {
+impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriter
+    for EqualityDeleteFileWriter<B, L, F>
+{
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.projector.project_batch(batch)?;
         if let Some(writer) = self.inner_writer.as_mut() {
@@ -154,12 +168,16 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
                 .map(|mut res| {
                     res.content(crate::spec::DataContentType::EqualityDeletes);
                     res.equality_ids(Some(self.equality_ids.iter().copied().collect_vec()));
-                    res.partition(self.partition_key
-                        .as_ref()
-                        .map_or(Struct::empty(), |pk| pk.data().clone()));
-                    res.partition_spec_id(self.partition_key
-                                              .as_ref()
-                                              .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()));
+                    res.partition(
+                        self.partition_key
+                            .as_ref()
+                            .map_or(Struct::empty(), |pk| pk.data().clone()),
+                    );
+                    res.partition_spec_id(
+                        self.partition_key
+                            .as_ref()
+                            .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()),
+                    );
                     res.build().expect("msg")
                 })
                 .collect_vec())

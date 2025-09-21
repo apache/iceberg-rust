@@ -22,9 +22,9 @@ use itertools::Itertools;
 
 use crate::Result;
 use crate::spec::{DEFAULT_PARTITION_SPEC_ID, DataContentType, DataFile, PartitionKey, Struct};
+use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::RollingFileWriter;
-use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 
 /// Builder for `DataFileWriter`.

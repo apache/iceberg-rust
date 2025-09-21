@@ -60,10 +60,7 @@ pub struct ParquetWriterBuilder {
 impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    pub fn new(
-        props: WriterProperties,
-        schema: SchemaRef,
-    ) -> Self {
+    pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
