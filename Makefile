@@ -41,6 +41,15 @@ fix-toml: install-taplo-cli
 check-toml: install-taplo-cli
 	taplo check
 
+NIGHTLY_VERSION := $(shell awk -F'"' '/^channel/ {print $$2}' rust-toolchain.toml)
+MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
+
+check-msrv:
+	@set -e; \
+	trap 'git restore Cargo.lock' EXIT; \
+	cargo +$(NIGHTLY_VERSION) generate-lockfile -Z direct-minimal-versions; \
+	cargo +$(MSRV_VERSION) check --locked --workspace
+
 check: check-fmt check-clippy check-toml cargo-machete
 
 doc-test:
