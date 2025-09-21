@@ -215,7 +215,7 @@ impl Table {
     }
 
     /// Returns this table's object cache
-    pub(crate) fn object_cache(&self) -> Arc<ObjectCache> {
+    pub fn object_cache(&self) -> Arc<ObjectCache> {
         self.object_cache.clone()
     }
 
