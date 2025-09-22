@@ -143,7 +143,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
 /// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
 /// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
 #[derive(Debug)]
-pub struct SqlCatalogConfig {
+struct SqlCatalogConfig {
     uri: String,
     name: String,
     warehouse_location: String,
