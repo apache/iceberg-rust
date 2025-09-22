@@ -83,12 +83,6 @@ impl SqlCatalogBuilder {
         self
     }
 
-    /// Configure the FileIO
-    pub fn file_io(mut self, file_io: FileIO) -> Self {
-        self.0.file_io = file_io;
-        self
-    }
-
     /// Configure the bound SQL Statement
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
         self.0.sql_bind_style = sql_bind_style;
@@ -866,7 +860,6 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::hash::Hash;
 
-    use iceberg::io::FileIOBuilder;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
     use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
@@ -900,7 +893,6 @@ mod tests {
         let builder = SqlCatalogBuilder::default()
             .uri(sql_lite_uri.to_string())
             .warehouse_location(warehouse_location)
-            .file_io(FileIOBuilder::new_fs_io().build().unwrap())
             .sql_bind_style(SqlBindStyle::QMark);
 
         builder.load("iceberg", HashMap::new()).await.unwrap()
