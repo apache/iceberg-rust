@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,6 +33,13 @@ use sqlx::{Any, AnyPool, Row, Transaction};
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
 };
+
+/// catalog URI
+pub const SQL_CATALOG_PROP_URI: &str = "uri";
+/// catalog warehouse location
+pub const SQL_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// catalog sql bind style
+pub const SQL_CATALOG_PROP_BIND_STYLE: &str = "sql_bind_style";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
 static CATALOG_FIELD_CATALOG_NAME: &str = "catalog_name";
@@ -110,9 +118,26 @@ impl CatalogBuilder for SqlCatalogBuilder {
     fn load(
         mut self,
         name: impl Into<String>,
-        props: HashMap<String, String>,
+        mut props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let name = name.into();
+
+        if let Some(uri) = props.remove(SQL_CATALOG_PROP_URI) {
+            self.0.uri = uri;
+        }
+        if let Some(warehouse_location) = props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
+            self.0.warehouse_location = warehouse_location;
+        }
+
+        let mut valid_sql_bind_style = true;
+        if let Some(sql_bind_style) = props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+            if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
+                self.0.sql_bind_style = sql_bind_style;
+            } else {
+                valid_sql_bind_style = false;
+            }
+        }
+
         self.0.props = props;
 
         async move {
@@ -120,6 +145,16 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
+                ))
+            } else if !valid_sql_bind_style {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "`{}` values are valid only if they're `{}` or `{}`",
+                        SQL_CATALOG_PROP_BIND_STYLE,
+                        SqlBindStyle::DollarNumeric,
+                        SqlBindStyle::QMark
+                    ),
                 ))
             } else {
                 SqlCatalog::new(self.0).await
@@ -156,7 +191,7 @@ pub struct SqlCatalog {
     sql_bind_style: SqlBindStyle,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, strum::EnumString, strum::Display, PartialOrd, Eq)]
 /// Set the SQL parameter bind style to either $1..$N (Postgres style) or ? (SQLite/MySQL/MariaDB)
 pub enum SqlBindStyle {
     /// DollarNumeric uses parameters of the form `$1..$N``, which is the Postgres style
@@ -868,7 +903,10 @@ mod tests {
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
-    use crate::catalog::NAMESPACE_LOCATION_PROPERTY_KEY;
+    use crate::catalog::{
+        NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI,
+        SQL_CATALOG_PROP_WAREHOUSE,
+    };
     use crate::{SqlBindStyle, SqlCatalogBuilder};
 
     const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -890,12 +928,18 @@ mod tests {
         let sql_lite_uri = format!("sqlite:{}", temp_path());
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
 
-        let builder = SqlCatalogBuilder::default()
-            .uri(sql_lite_uri.to_string())
-            .warehouse_location(warehouse_location)
-            .sql_bind_style(SqlBindStyle::QMark);
-
-        builder.load("iceberg", HashMap::new()).await.unwrap()
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.to_string()),
+            (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::DollarNumeric.to_string(),
+            ),
+        ]);
+        SqlCatalogBuilder::default()
+            .load("iceberg", props)
+            .await
+            .unwrap()
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -992,6 +1036,121 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone()).await;
         new_sql_catalog(warehouse_loc.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_builder_method() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri.to_string())
+            .warehouse_location(warehouse_location.clone())
+            .sql_bind_style(SqlBindStyle::QMark)
+            .load("iceberg", HashMap::default())
+            .await;
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// Overwriting an sqlite database with a non-existent path causes
+    /// catalog generation to fail
+    #[tokio::test]
+    async fn test_builder_props_non_existent_path_fails() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri)
+            .warehouse_location(warehouse_location)
+            .load(
+                "iceberg",
+                HashMap::from_iter([(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri2)]),
+            )
+            .await;
+        assert!(catalog.is_err());
+    }
+
+    /// Even when an invalid URI is specified in a builder method,
+    /// it can be successfully overridden with a valid URI in props
+    /// for catalog generation to succeed.
+    #[tokio::test]
+    async fn test_builder_props_set_valid_uri() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri2)
+            .warehouse_location(warehouse_location)
+            .load(
+                "iceberg",
+                HashMap::from_iter([(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.clone())]),
+            )
+            .await;
+        assert!(catalog.is_ok());
+    }
+
+    /// values assigned via props take precedence
+    #[tokio::test]
+    async fn test_builder_props_take_precedence() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+        let warehouse_location2 = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .warehouse_location(warehouse_location2)
+            .sql_bind_style(SqlBindStyle::DollarNumeric)
+            .load(
+                "iceberg",
+                HashMap::from_iter([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (
+                        SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                        warehouse_location.clone(),
+                    ),
+                    (
+                        SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                        SqlBindStyle::QMark.to_string(),
+                    ),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// invalid value for `SqlBindStyle` causes catalog creation to fail
+    #[tokio::test]
+    async fn test_builder_props_invalid_bind_style_fails() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .load(
+                "iceberg",
+                HashMap::from_iter([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
+                    (SQL_CATALOG_PROP_BIND_STYLE.to_string(), "AAA".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_err());
     }
 
     #[tokio::test]

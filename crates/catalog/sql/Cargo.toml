@@ -32,6 +32,7 @@ repository = { workspace = true }
 async-trait = { workspace = true }
 iceberg = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
+strum = { workspace = true }
 
 [dev-dependencies]
 itertools = { workspace = true }
