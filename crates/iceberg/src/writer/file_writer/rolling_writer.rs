@@ -25,64 +25,6 @@ use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::{Error, ErrorKind, Result};
-//
-// /// Builder for creating a `RollingFileWriter` that rolls over to a new file
-// /// when the data size exceeds a target threshold.
-// #[derive(Clone)]
-// pub struct RollingFileWriterBuilder<
-//     B: FileWriterBuilder,
-//     L: LocationGenerator,
-//     F: FileNameGenerator,
-// > {
-//     inner_builder: B,
-//     target_file_size: usize,
-//     file_io: FileIO,
-//     location_generator: L,
-//     file_name_generator: F,
-// }
-//
-// impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator>
-//     RollingFileWriterBuilder<B, L, F>
-// {
-//     /// Creates a new `RollingFileWriterBuilder` with the specified inner builder and target size.
-//     ///
-//     /// # Arguments
-//     ///
-//     /// * `inner_builder` - The builder for the underlying file writer
-//     /// * `target_file_size` - The target size in bytes before rolling over to a new file
-//     ///
-//     /// NOTE: The `target_file_size` does not exactly reflect the final size on physical storage.
-//     /// This is because the input size is based on the Arrow in-memory format and cannot precisely control rollover behavior.
-//     /// The actual file size on disk is expected to be slightly larger than `target_file_size`.
-//     pub fn new(
-//         inner_builder: B,
-//         target_file_size: usize,
-//         file_io: FileIO,
-//         location_generator: L,
-//         file_name_generator: F,
-//     ) -> Self {
-//         Self {
-//             inner_builder,
-//             target_file_size,
-//             file_io,
-//             location_generator,
-//             file_name_generator,
-//         }
-//     }
-// }
-
-// impl<B: FileWriterBuilder> FileWriterBuilder for RollingFileWriterBuilder<B> {
-//     type R = RollingFileWriter<B>;
-//
-//     async fn build(self) -> Result<Self::R> {
-//         Ok(RollingFileWriter {
-//             inner: None,
-//             inner_builder: self.inner_builder,
-//             target_file_size: self.target_file_size,
-//             data_file_builders: vec![],
-//         })
-//     }
-// }
 
 /// A writer that automatically rolls over to a new file when the data size
 /// exceeds a target threshold.

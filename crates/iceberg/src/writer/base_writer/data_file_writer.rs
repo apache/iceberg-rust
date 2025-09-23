@@ -20,12 +20,12 @@
 use arrow_array::RecordBatch;
 use itertools::Itertools;
 
-use crate::Result;
 use crate::spec::{DEFAULT_PARTITION_SPEC_ID, DataContentType, DataFile, PartitionKey, Struct};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::RollingFileWriter;
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
 #[derive(Clone, Debug)]
@@ -83,26 +83,32 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
-        let writer = self.inner_writer.take().unwrap();
-        Ok(writer
-            .close()
-            .await?
-            .into_iter()
-            .map(|mut res| {
-                res.content(DataContentType::Data);
-                res.partition(
-                    self.partition_key
-                        .as_ref()
-                        .map_or(Struct::empty(), |pk| pk.data().clone()),
-                );
-                res.partition_spec_id(
-                    self.partition_key
-                        .as_ref()
-                        .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()),
-                );
-                res.build().expect("Guaranteed to be valid")
-            })
-            .collect_vec())
+        if let Some(writer) = self.inner_writer.take() {
+            Ok(writer
+                .close()
+                .await?
+                .into_iter()
+                .map(|mut res| {
+                    res.content(DataContentType::Data);
+                    res.partition(
+                        self.partition_key
+                            .as_ref()
+                            .map_or(Struct::empty(), |pk| pk.data().clone()),
+                    );
+                    res.partition_spec_id(
+                        self.partition_key
+                            .as_ref()
+                            .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()),
+                    );
+                    res.build().expect("Guaranteed to be valid")
+                })
+                .collect_vec())
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "Data file writer has been closed.",
+            ))
+        }
     }
 }
 

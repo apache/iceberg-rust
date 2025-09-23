@@ -22,16 +22,6 @@ use crate::spec::PartitionKey;
 use crate::writer::{DefaultInput, DefaultOutput};
 
 #[async_trait::async_trait]
-pub trait PartitioningWriterBuilder<I = DefaultInput, O = DefaultOutput>:
-    Send + Clone + 'static
-{
-    /// todo doc
-    type R: PartitioningWriter<I, O>;
-    /// todo doc
-    async fn build(self) -> Result<Self::R>;
-}
-
-#[async_trait::async_trait]
 pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// todo doc
     async fn write(&mut self, partition_key: Option<PartitionKey>, input: I) -> Result<()>;
