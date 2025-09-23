@@ -138,5 +138,5 @@ def test_read_manifest_entry(generated_manifest_entry_file: str) -> None:
     }
     assert data_file.key_metadata is None
     assert data_file.split_offsets == [4]
-    assert data_file.equality_ids == []
+    assert data_file.equality_ids is None
     assert data_file.sort_order_id == 0

@@ -156,7 +156,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
                 .into_iter()
                 .map(|mut res| {
                     res.content(crate::spec::DataContentType::EqualityDeletes);
-                    res.equality_ids(self.equality_ids.iter().copied().collect_vec());
+                    res.equality_ids(Some(self.equality_ids.iter().copied().collect_vec()));
                     res.partition(self.partition_value.clone());
                     res.partition_spec_id(self.partition_spec_id);
                     res.build().expect("msg")
