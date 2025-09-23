@@ -311,21 +311,21 @@
 <a href=#311 id=311 data-nosnippet>311</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-1.parquet"</span>, table_location.to_str().unwrap()),
 <a href=#312 id=312 data-nosnippet>312</a>            file_type: DataContentType::PositionDeletes,
 <a href=#313 id=313 data-nosnippet>313</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#314 id=314 data-nosnippet>314</a>            equality_ids: <span class="macro">vec!</span>[],
+<a href=#314 id=314 data-nosnippet>314</a>            equality_ids: <span class="prelude-val">None</span>,
 <a href=#315 id=315 data-nosnippet>315</a>        };
 <a href=#316 id=316 data-nosnippet>316</a>
 <a href=#317 id=317 data-nosnippet>317</a>        <span class="kw">let </span>pos_del_2 = FileScanTaskDeleteFile {
 <a href=#318 id=318 data-nosnippet>318</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-2.parquet"</span>, table_location.to_str().unwrap()),
 <a href=#319 id=319 data-nosnippet>319</a>            file_type: DataContentType::PositionDeletes,
 <a href=#320 id=320 data-nosnippet>320</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#321 id=321 data-nosnippet>321</a>            equality_ids: <span class="macro">vec!</span>[],
+<a href=#321 id=321 data-nosnippet>321</a>            equality_ids: <span class="prelude-val">None</span>,
 <a href=#322 id=322 data-nosnippet>322</a>        };
 <a href=#323 id=323 data-nosnippet>323</a>
 <a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>pos_del_3 = FileScanTaskDeleteFile {
 <a href=#325 id=325 data-nosnippet>325</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-3.parquet"</span>, table_location.to_str().unwrap()),
 <a href=#326 id=326 data-nosnippet>326</a>            file_type: DataContentType::PositionDeletes,
 <a href=#327 id=327 data-nosnippet>327</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#328 id=328 data-nosnippet>328</a>            equality_ids: <span class="macro">vec!</span>[],
+<a href=#328 id=328 data-nosnippet>328</a>            equality_ids: <span class="prelude-val">None</span>,
 <a href=#329 id=329 data-nosnippet>329</a>        };
 <a href=#330 id=330 data-nosnippet>330</a>
 <a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>file_scan_tasks = <span class="macro">vec!</span>[

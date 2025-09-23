@@ -58,7 +58,7 @@ values in the column for the file.</p>
 element field id: 133</p>
 <p>Split offsets for the data file. For example, all row group offsets
 in a Parquet file. Must be sorted ascending</p>
-</div></details><details class="toggle method-toggle" open><summary><section id="method.equality_ids" class="method"><a class="src rightside" href="../../src/iceberg/spec/manifest/data_file.rs.html#33">Source</a><h4 class="code-header">pub fn <a href="#method.equality_ids" class="fn">equality_ids</a>(&amp;mut self, value: <a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.i32.html">i32</a>&gt;) -&gt; &amp;mut Self</h4></section></summary><div class="docblock"><p>field id: 135
+</div></details><details class="toggle method-toggle" open><summary><section id="method.equality_ids" class="method"><a class="src rightside" href="../../src/iceberg/spec/manifest/data_file.rs.html#33">Source</a><h4 class="code-header">pub fn <a href="#method.equality_ids" class="fn">equality_ids</a>(&amp;mut self, value: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.i32.html">i32</a>&gt;&gt;) -&gt; &amp;mut Self</h4></section></summary><div class="docblock"><p>field id: 135
 element field id: 136</p>
 <p>Field ids used to determine row equality in equality delete files.
 Required when content is EqualityDeletes and should be null

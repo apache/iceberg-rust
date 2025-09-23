@@ -112,6 +112,6 @@
 <a href=#112 id=112 data-nosnippet>112</a>    <span class="doccomment">/// partition id
 <a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">pub </span>partition_spec_id: i32,
 <a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a>    <span class="doccomment">/// equality ids for equality deletes (empty for positional deletes)
-<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="kw">pub </span>equality_ids: Vec&lt;i32&gt;,
+<a href=#115 id=115 data-nosnippet>115</a>    <span class="doccomment">/// equality ids for equality deletes (null for anything other than equality-deletes)
+<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="kw">pub </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
 <a href=#117 id=117 data-nosnippet>117</a>}</code></pre></div></section></main></body></html>

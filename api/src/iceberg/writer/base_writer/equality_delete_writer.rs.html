@@ -156,7 +156,7 @@
 <a href=#156 id=156 data-nosnippet>156</a>                </span>.into_iter()
 <a href=#157 id=157 data-nosnippet>157</a>                .map(|<span class="kw-2">mut </span>res| {
 <a href=#158 id=158 data-nosnippet>158</a>                    res.content(<span class="kw">crate</span>::spec::DataContentType::EqualityDeletes);
-<a href=#159 id=159 data-nosnippet>159</a>                    res.equality_ids(<span class="self">self</span>.equality_ids.iter().copied().collect_vec());
+<a href=#159 id=159 data-nosnippet>159</a>                    res.equality_ids(<span class="prelude-val">Some</span>(<span class="self">self</span>.equality_ids.iter().copied().collect_vec()));
 <a href=#160 id=160 data-nosnippet>160</a>                    res.partition(<span class="self">self</span>.partition_value.clone());
 <a href=#161 id=161 data-nosnippet>161</a>                    res.partition_spec_id(<span class="self">self</span>.partition_spec_id);
 <a href=#162 id=162 data-nosnippet>162</a>                    res.build().expect(<span class="string">"msg"</span>)
