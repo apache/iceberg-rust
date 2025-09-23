@@ -796,6 +796,10 @@ pub(super) mod _serde {
         summary: Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
         schema_id: Option<SchemaId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        first_row_id: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        added_rows: Option<u64>,
     }
 
     impl From<CatalogSnapshot> for Snapshot {
@@ -808,6 +812,8 @@ pub(super) mod _serde {
                 manifest_list,
                 schema_id,
                 summary,
+                first_row_id,
+                added_rows,
             } = snapshot;
             let builder = Snapshot::builder()
                 .with_snapshot_id(snapshot_id)
@@ -816,10 +822,17 @@ pub(super) mod _serde {
                 .with_timestamp_ms(timestamp_ms)
                 .with_manifest_list(manifest_list)
                 .with_summary(summary);
-            if let Some(schema_id) = schema_id {
-                builder.with_schema_id(schema_id).build()
-            } else {
-                builder.build()
+            let row_range = first_row_id.zip(added_rows);
+            match (schema_id, row_range) {
+                (None, None) => builder.build(),
+                (Some(schema_id), None) => builder.with_schema_id(schema_id).build(),
+                (None, Some((first_row_id, last_row_id))) => {
+                    builder.with_row_range(first_row_id, last_row_id).build()
+                }
+                (Some(schema_id), Some((first_row_id, last_row_id))) => builder
+                    .with_schema_id(schema_id)
+                    .with_row_range(first_row_id, last_row_id)
+                    .build(),
             }
         }
     }
@@ -1681,6 +1694,44 @@ mod tests {
                 .with_timestamp_ms(1555100955770)
                 .with_sequence_number(0)
                 .with_manifest_list("s3://a/b/2.avro")
+                .with_summary(Summary {
+                    operation: Operation::Append,
+                    additional_properties: HashMap::default(),
+                })
+                .build(),
+        };
+
+        let actual: TableUpdate = serde_json::from_str(json).expect("Failed to parse from json");
+        assert_eq!(actual, update, "Parsed value is not equal to expected");
+    }
+
+    #[test]
+    fn test_add_snapshot_with_row_lineage() {
+        let json = r#"
+{
+    "action": "add-snapshot",
+    "snapshot": {
+        "snapshot-id": 3055729675574597000,
+        "parent-snapshot-id": 3051729675574597000,
+        "timestamp-ms": 1555100955770,
+        "first-row-id":0,
+        "added-rows":2,
+        "summary": {
+            "operation": "append"
+        },
+        "manifest-list": "s3://a/b/2.avro"
+    }
+}
+    "#;
+
+        let update = TableUpdate::AddSnapshot {
+            snapshot: Snapshot::builder()
+                .with_snapshot_id(3055729675574597000)
+                .with_parent_snapshot_id(Some(3051729675574597000))
+                .with_timestamp_ms(1555100955770)
+                .with_sequence_number(0)
+                .with_manifest_list("s3://a/b/2.avro")
+                .with_row_range(0, 2)
                 .with_summary(Summary {
                     operation: Operation::Append,
                     additional_properties: HashMap::default(),
