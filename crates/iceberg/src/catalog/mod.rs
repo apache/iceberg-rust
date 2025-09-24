@@ -2316,12 +2316,11 @@ mod tests {
             "#
             ),
             TableUpdate::AddEncryptionKey {
-                encryption_key: EncryptedKey {
-                    key_id: "a".to_string(),
-                    encrypted_key_metadata: key_bytes.to_vec(),
-                    encrypted_by_id: "b".to_string(),
-                    properties: HashMap::new(),
-                },
+                encryption_key: EncryptedKey::builder()
+                    .key_id("a")
+                    .encrypted_key_metadata(key_bytes.to_vec())
+                    .encrypted_by_id("b")
+                    .build(),
             },
         );
     }
