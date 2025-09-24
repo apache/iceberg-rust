@@ -491,8 +491,8 @@ impl TableMetadata {
 
     /// Iterate over all encryption keys
     #[inline]
-    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = (&String, &EncryptedKey)> {
-        self.encryption_keys.iter()
+    pub fn encryption_keys_iter(&self) -> impl ExactSizeIterator<Item = &EncryptedKey> {
+        self.encryption_keys.values()
     }
 
     /// Get the encryption key for a given key id
