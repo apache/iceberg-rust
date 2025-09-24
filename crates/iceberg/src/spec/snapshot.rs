@@ -249,6 +249,11 @@ impl Snapshot {
             .as_ref()
             .map(|r| (r.first_row_id, r.added_rows_count))
     }
+
+    /// Get encryption key id, if available.
+    pub fn encryption_key_id(&self) -> Option<&str> {
+        self.encryption_key_id.as_deref()
+    }
 }
 
 pub(super) mod _serde {
