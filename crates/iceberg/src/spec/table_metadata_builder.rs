@@ -3417,11 +3417,12 @@ mod tests {
         assert_eq!(build_result.metadata.encryption_keys.len(), 1);
 
         // Test encryption_keys_iter()
-        let keys: Vec<(&String, &EncryptedKey)> =
-            build_result.metadata.encryption_keys_iter().collect();
+        let keys = build_result
+            .metadata
+            .encryption_keys_iter()
+            .collect::<Vec<_>>();
         assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].0, "key-2");
-        assert_eq!(keys[0].1, &encryption_key_2);
+        assert_eq!(keys[0], &encryption_key_2);
 
         // Remove last encryption key
         let build_result = build_result
@@ -3441,8 +3442,7 @@ mod tests {
         });
 
         // Verify empty encryption_keys_iter()
-        let keys: Vec<(&String, &EncryptedKey)> =
-            build_result.metadata.encryption_keys_iter().collect();
+        let keys = build_result.metadata.encryption_keys_iter();
         assert_eq!(keys.len(), 0);
     }
 }
