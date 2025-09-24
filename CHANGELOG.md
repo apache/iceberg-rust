@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.7.0] - 2025-09-17
+## [v0.7.0] - 2025-09-23
 
 ### Breaking Changes
 
@@ -125,6 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * docs: Fix Podman and Orbstack pages not found by @manuzhang in https://github.com/apache/iceberg-rust/pull/1678
 * Update bug report template with the latest version, 0.6.0 by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1679
 * Expose Avro reader to PyIceberg by @Fokko in https://github.com/apache/iceberg-rust/pull/1328
+* refactor: Move equality-ids closer to the spec by @Fokko in https://github.com/apache/iceberg-rust/pull/1705
 
 ## [v0.6.0] - 2025-07-14
 
