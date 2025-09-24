@@ -24,9 +24,6 @@ on:
   pull_request:
     paths:
       - '**'                              # Include all files and directories in the repository by default.
-      - '!.github/workflows/**'           # Exclude all workflow files
-      - '.github/workflows/ci.yml'        # except the current file.
-      - '!.github/actions/**'             # Exclude custom actions
       - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
       - '!scripts/**'
       - '!website/**'
