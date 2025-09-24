@@ -425,8 +425,12 @@ mod test {
         // prepare writer
         let pb =
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema));
-        let rolling_writer =
-            RollingFileWriter::new_with_default_file_size(pb, file_io, location_gen, file_name_gen);
+        let rolling_writer = RollingFileWriter::new_with_default_file_size(
+            pb,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
         let mut equality_delete_writer =
             EqualityDeleteFileWriterBuilder::new(rolling_writer, equality_config)
                 .build()

@@ -143,9 +143,8 @@ mod test {
     use crate::Result;
     use crate::io::FileIOBuilder;
     use crate::spec::{
-        DataContentType, DataFileFormat, Literal, NestedField,
-        PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, PartitionKey, PartitionSpec, PrimitiveType,
-        Schema, Struct, Type,
+        DataContentType, DataFileFormat, Literal, NestedField, PartitionKey, PartitionSpec,
+        PrimitiveType, Schema, Struct, Type,
     };
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
@@ -255,7 +254,7 @@ mod test {
         let partition_key = PartitionKey::new(
             PartitionSpec::builder(schema_ref.clone()).build()?,
             schema_ref.clone(),
-            partition_value,
+            partition_value.clone(),
         );
 
         let parquet_writer_builder =

@@ -1624,9 +1624,8 @@ mod tests {
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
         let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
-        let output_file = file_io.new_output(
-            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
-        )?;
+        let file_path = location_gen.generate_location(None, &file_name_gen.generate_file_name());
+        let output_file = file_io.new_output(&file_path)?;
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
@@ -1634,25 +1633,22 @@ mod tests {
         .build(output_file)
         .await?;
         pw.write(&to_write).await?;
-        let file_path = output_file.location().to_string();
         pw.close().await.unwrap();
-        assert!(file_io.exists(file_path).await.unwrap());
+        assert!(file_io.exists(&file_path).await.unwrap());
 
         // Test that file will not create if no data to write
         let file_name_gen =
             DefaultFileNameGenerator::new("test_empty".to_string(), None, DataFileFormat::Parquet);
-        let output_file = file_io.new_output(
-            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
-        )?;
+        let file_path = location_gen.generate_location(None, &file_name_gen.generate_file_name());
+        let output_file = file_io.new_output(&file_path)?;
         let pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
         )
         .build(output_file)
         .await?;
-        let file_path = output_file.location().to_string();
         pw.close().await.unwrap();
-        assert!(!file_io.exists(file_path).await.unwrap());
+        assert!(!file_io.exists(&file_path).await.unwrap());
 
         Ok(())
     }
