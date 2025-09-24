@@ -208,7 +208,6 @@ impl ExecutionPlan for IcebergWriteExec {
             ));
         }
 
-        let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -269,6 +268,7 @@ impl ExecutionPlan for IcebergWriteExec {
             location_generator,
             file_name_generator,
         );
+        // todo specify partition key when partitioning writer is supported
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer, None);
 
         // Get input data

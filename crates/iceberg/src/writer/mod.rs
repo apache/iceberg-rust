@@ -60,6 +60,7 @@
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
 //!     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+//!     use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
@@ -86,15 +87,20 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
-//!         None,
+//!     );
+//!
+//!     // Create a rolling file writer using parquet file writer builder.
+//!     let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+//!         parquet_writer_builder,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
+//!
 //!     // Create a data file writer using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer, None);
 //!     // Build the data file writer
-//!     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+//!     let mut data_file_writer = data_file_writer_builder.build().await?;
 //!
 //!     // Write the data using data_file_writer...
 //!
@@ -174,6 +180,7 @@
 //!     // Connect to a catalog.
 //!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 //!     use iceberg::spec::{Literal, PartitionKey, Struct};
+//!     use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
 //!
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
@@ -207,13 +214,20 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
-//!         Some(partition_key),
+//!     );
+//!
+//!     // Create a rolling file writer
+//!     let rolling_file_writer = RollingFileWriter::new(
+//!         parquet_writer_builder,
+//!         512 * 1024 * 1024,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
-//!     // Create a data file writer builder using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!
+//!     // Create a data file writer builder using rolling file writer.
+//!     let data_file_writer_builder =
+//!         DataFileWriterBuilder::new(rolling_file_writer, Some(partition_key));
 //!     // Create latency record writer using data file writer builder.
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer
@@ -225,7 +239,6 @@
 
 pub mod base_writer;
 pub mod file_writer;
-pub mod partitioning;
 
 use arrow_array::RecordBatch;
 

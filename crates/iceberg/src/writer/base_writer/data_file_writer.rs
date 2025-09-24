@@ -57,7 +57,7 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
 
     async fn build(self) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner_writer: Some(self.inner_writer), // todo revisit this, probably still need a builder for rolling writer
+            inner_writer: Some(self.inner_writer),
             partition_key: self.partition_key,
         })
     }
@@ -143,13 +143,16 @@ mod test {
     use crate::Result;
     use crate::io::FileIOBuilder;
     use crate::spec::{
-        DataContentType, DataFileFormat, Literal, NestedField, PrimitiveType, Schema, Struct, Type,
+        DataContentType, DataFileFormat, Literal, NestedField,
+        PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, PartitionKey, PartitionSpec, PrimitiveType,
+        Schema, Struct, Type,
     };
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
+    use crate::writer::file_writer::rolling_writer::RollingFileWriter;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
 
     #[tokio::test]
@@ -170,16 +173,16 @@ mod test {
             ])
             .build()?;
 
-        let pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema),
-            None,
+        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+
+        let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+            pw,
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(pw, None, 0)
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer, None)
             .build()
             .await
             .unwrap();
@@ -246,20 +249,27 @@ mod test {
                 NestedField::required(6, "name", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
+        let schema_ref = Arc::new(schema);
 
         let partition_value = Struct::from_iter([Some(Literal::int(1))]);
+        let partition_key = PartitionKey::new(
+            PartitionSpec::builder(schema_ref.clone()).build()?,
+            schema_ref.clone(),
+            partition_value,
+        );
 
-        let parquet_writer_builder = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema.clone()),
-            None,
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema_ref.clone());
+
+        let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+            parquet_writer_builder,
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
 
         let mut data_file_writer =
-            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()), 0)
+            DataFileWriterBuilder::new(rolling_file_writer, Some(partition_key))
                 .build()
                 .await?;
 
