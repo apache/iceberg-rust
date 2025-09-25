@@ -115,6 +115,6 @@ pub struct FileScanTaskDeleteFile {
     /// partition id
     pub partition_spec_id: i32,
 
-    /// equality ids for equality deletes (empty for positional deletes)
-    pub equality_ids: Vec<i32>,
+    /// equality ids for equality deletes (null for anything other than equality-deletes)
+    pub equality_ids: Option<Vec<i32>>,
 }
