@@ -17,7 +17,7 @@
 
 //! Partition value projection for Iceberg tables.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::array::{ArrayRef, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
@@ -27,6 +27,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
+use iceberg::arrow::record_batch_projector::RecordBatchProjector;
 use iceberg::spec::{PartitionSpec, Schema};
 use iceberg::table::Table;
 
@@ -48,15 +49,12 @@ const PARTITION_VALUES_COLUMN: &str = "_partition";
 /// # Returns
 /// * `Ok(Arc<dyn ExecutionPlan>)` - Extended plan with partition values column
 /// * `Err` - If partition spec is not found or transformation fails
-#[allow(dead_code)]
 pub fn project_with_partition(
     input: Arc<dyn ExecutionPlan>,
     table: &Table,
 ) -> DFResult<Arc<dyn ExecutionPlan>> {
     let metadata = table.metadata();
-    let partition_spec = metadata
-        .partition_spec_by_id(metadata.default_partition_spec_id())
-        .ok_or_else(|| DataFusionError::Internal("Default partition spec not found".to_string()))?;
+    let partition_spec = metadata.default_partition_spec();
     let table_schema = metadata.current_schema();
 
     if partition_spec.is_unpartitioned() {
@@ -69,9 +67,10 @@ pub fn project_with_partition(
         partition_spec.as_ref().clone(),
         table_schema.as_ref().clone(),
         partition_type,
-    );
+    )?;
 
-    let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(input_schema.fields().len() + 1);
 
     for (index, field) in input_schema.fields().iter().enumerate() {
         let column_expr = Arc::new(Column::new(field.name(), index));
@@ -86,16 +85,28 @@ pub fn project_with_partition(
 }
 
 /// PhysicalExpr implementation for partition value calculation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct PartitionExpr {
-    calculator: PartitionValueCalculator,
+    calculator: Arc<Mutex<PartitionValueCalculator>>,
 }
 
 impl PartitionExpr {
     fn new(calculator: PartitionValueCalculator) -> Self {
-        Self { calculator }
+        Self {
+            calculator: Arc::new(Mutex::new(calculator)),
+        }
     }
 }
+
+// Manual PartialEq/Eq implementations for pointer-based equality
+// (two PartitionExpr are equal if they share the same calculator instance)
+impl PartialEq for PartitionExpr {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.calculator, &other.calculator)
+    }
+}
+
+impl Eq for PartitionExpr {}
 
 impl PhysicalExpr for PartitionExpr {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -103,7 +114,11 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn data_type(&self, _input_schema: &ArrowSchema) -> DFResult<DataType> {
-        Ok(self.calculator.partition_type.clone())
+        let calculator = self
+            .calculator
+            .lock()
+            .map_err(|e| DataFusionError::Internal(format!("Failed to lock calculator: {}", e)))?;
+        Ok(calculator.partition_type.clone())
     }
 
     fn nullable(&self, _input_schema: &ArrowSchema) -> DFResult<bool> {
@@ -111,7 +126,11 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> DFResult<ColumnarValue> {
-        let array = self.calculator.calculate(batch)?;
+        let mut calculator = self
+            .calculator
+            .lock()
+            .map_err(|e| DataFusionError::Internal(format!("Failed to lock calculator: {}", e)))?;
+        let array = calculator.calculate(batch)?;
         Ok(ColumnarValue::Array(array))
     }
 
@@ -127,13 +146,33 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "partition_values")
+        if let Ok(calculator) = self.calculator.lock() {
+            let field_names: Vec<String> = calculator
+                .partition_spec
+                .fields()
+                .iter()
+                .map(|pf| format!("{}({})", pf.transform, pf.name))
+                .collect();
+            write!(f, "iceberg_partition_values[{}]", field_names.join(", "))
+        } else {
+            write!(f, "iceberg_partition_values")
+        }
     }
 }
 
 impl std::fmt::Display for PartitionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "partition_values")
+        if let Ok(calculator) = self.calculator.lock() {
+            let field_names: Vec<&str> = calculator
+                .partition_spec
+                .fields()
+                .iter()
+                .map(|pf| pf.name.as_str())
+                .collect();
+            write!(f, "iceberg_partition_values({})", field_names.join(", "))
+        } else {
+            write!(f, "iceberg_partition_values")
+        }
     }
 }
 
@@ -144,31 +183,57 @@ impl std::hash::Hash for PartitionExpr {
 }
 
 /// Calculator for partition values in Iceberg tables
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct PartitionValueCalculator {
     partition_spec: PartitionSpec,
     table_schema: Schema,
     partition_type: DataType,
+    projector: Option<RecordBatchProjector>,
 }
 
 impl PartitionValueCalculator {
-    fn new(partition_spec: PartitionSpec, table_schema: Schema, partition_type: DataType) -> Self {
-        Self {
-            partition_spec,
-            table_schema,
-            partition_type,
-        }
-    }
-
-    fn calculate(&self, batch: &RecordBatch) -> DFResult<ArrayRef> {
-        if self.partition_spec.is_unpartitioned() {
+    fn new(
+        partition_spec: PartitionSpec,
+        table_schema: Schema,
+        partition_type: DataType,
+    ) -> DFResult<Self> {
+        if partition_spec.is_unpartitioned() {
             return Err(DataFusionError::Internal(
-                "Cannot calculate partition values for unpartitioned table".to_string(),
+                "Cannot create partition calculator for unpartitioned table".to_string(),
             ));
         }
 
-        let batch_schema = batch.schema();
-        let mut partition_values = Vec::with_capacity(self.partition_spec.fields().len());
+        Ok(Self {
+            partition_spec,
+            table_schema,
+            partition_type,
+            projector: None,
+        })
+    }
+
+    fn calculate(&mut self, batch: &RecordBatch) -> DFResult<ArrayRef> {
+        if self.projector.is_none() {
+            let source_field_ids: Vec<i32> = self
+                .partition_spec
+                .fields()
+                .iter()
+                .map(|pf| pf.source_id)
+                .collect();
+
+            let projector = RecordBatchProjector::from_iceberg_schema_mapping(
+                batch.schema(),
+                Arc::new(self.table_schema.clone()),
+                &source_field_ids,
+            )
+            .map_err(to_datafusion_error)?;
+
+            self.projector = Some(projector);
+        }
+
+        let projector = self.projector.as_ref().unwrap();
+        let source_columns = projector
+            .project_column(batch.columns())
+            .map_err(to_datafusion_error)?;
 
         let expected_struct_fields = match &self.partition_type {
             DataType::Struct(fields) => fields.clone(),
@@ -179,156 +244,24 @@ impl PartitionValueCalculator {
             }
         };
 
-        for pf in self.partition_spec.fields() {
-            let source_field = self.table_schema.field_by_id(pf.source_id).ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Source field not found with id {} when calculating partition values",
-                    pf.source_id
-                ))
-            })?;
+        let mut partition_values = Vec::with_capacity(self.partition_spec.fields().len());
 
-            let field_path = find_field_path(&self.table_schema, source_field.id)?;
-            let index_path = resolve_arrow_index_path(batch_schema.as_ref(), &field_path)?;
-
-            let source_column = extract_column_by_index_path(batch, &index_path)?;
-
+        for (source_column, pf) in source_columns.iter().zip(self.partition_spec.fields()) {
             let transform_fn = iceberg::transform::create_transform_function(&pf.transform)
                 .map_err(to_datafusion_error)?;
+
             let partition_value = transform_fn
-                .transform(source_column)
+                .transform(source_column.clone())
                 .map_err(to_datafusion_error)?;
 
             partition_values.push(partition_value);
         }
 
-        let struct_array = StructArray::try_new(
-            expected_struct_fields,
-            partition_values,
-            None, // No null buffer for the struct array itself
-        )
-        .map_err(|e| DataFusionError::ArrowError(e, None))?;
+        let struct_array = StructArray::try_new(expected_struct_fields, partition_values, None)
+            .map_err(|e| DataFusionError::ArrowError(e, None))?;
 
         Ok(Arc::new(struct_array))
     }
-}
-
-fn extract_column_by_index_path(batch: &RecordBatch, index_path: &[usize]) -> DFResult<ArrayRef> {
-    if index_path.is_empty() {
-        return Err(DataFusionError::Internal(
-            "Empty index path when extracting partition column".to_string(),
-        ));
-    }
-
-    let mut current_column = batch.column(*index_path.first().unwrap()).clone();
-    for child_index in &index_path[1..] {
-        let dt = current_column.data_type();
-        match dt {
-            datafusion::arrow::datatypes::DataType::Struct(_) => {
-                let struct_array = current_column
-                        .as_any()
-                        .downcast_ref::<datafusion::arrow::array::StructArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
-                                "Failed to downcast to StructArray while traversing index path {:?} for partition column extraction",
-                                index_path
-                            ))
-                        })?;
-                current_column = struct_array.column(*child_index).clone();
-            }
-            datafusion::arrow::datatypes::DataType::List(_)
-            | datafusion::arrow::datatypes::DataType::LargeList(_)
-            | datafusion::arrow::datatypes::DataType::FixedSizeList(_, _)
-            | datafusion::arrow::datatypes::DataType::Map(_, _) => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Partitioning on nested list/map types is not supported (encountered {:?}) while traversing index path {:?}",
-                    dt, index_path
-                )));
-            }
-            other => {
-                return Err(DataFusionError::Internal(format!(
-                    "Expected struct array while traversing index path {:?} for partition column, got {:?}",
-                    index_path, other
-                )));
-            }
-        }
-    }
-    Ok(current_column)
-}
-
-fn find_field_path(table_schema: &Schema, field_id: i32) -> DFResult<Vec<String>> {
-    let dotted = table_schema.name_by_field_id(field_id).ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Field with ID {} not found in schema when building field path for partition column",
-            field_id
-        ))
-    })?;
-    Ok(dotted.split('.').map(|s| s.to_string()).collect())
-}
-
-fn resolve_arrow_index_path(
-    input_schema: &ArrowSchema,
-    field_path: &[String],
-) -> DFResult<Vec<usize>> {
-    if field_path.is_empty() {
-        return Err(DataFusionError::Internal(
-            "Empty field path when resolving arrow index path for partition column".to_string(),
-        ));
-    }
-
-    let mut indices = Vec::with_capacity(field_path.len());
-    let mut current_field = input_schema.field_with_name(&field_path[0]).map_err(|_| {
-        DataFusionError::Internal(format!(
-            "Top-level column '{}' not found in schema when resolving partition column path",
-            field_path[0]
-        ))
-    })?;
-    let top_index = input_schema.index_of(&field_path[0]).map_err(|_| {
-        DataFusionError::Internal(format!(
-            "Failed to get index of top-level column '{}' when resolving partition column path",
-            field_path[0]
-        ))
-    })?;
-    indices.push(top_index);
-
-    for name in &field_path[1..] {
-        let dt = current_field.data_type();
-        let struct_fields = match dt {
-            datafusion::arrow::datatypes::DataType::Struct(fields) => fields,
-            datafusion::arrow::datatypes::DataType::List(_)
-            | datafusion::arrow::datatypes::DataType::LargeList(_)
-            | datafusion::arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Partitioning on nested list types is not supported while resolving nested field '{}' for partition column",
-                    name
-                )));
-            }
-            datafusion::arrow::datatypes::DataType::Map(_, _) => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Partitioning on nested map types is not supported while resolving nested field '{}' for partition column",
-                    name
-                )));
-            }
-            other => {
-                return Err(DataFusionError::Internal(format!(
-                    "Expected struct type while resolving nested field '{}' for partition column, got {:?}",
-                    name, other
-                )));
-            }
-        };
-        let child_index = struct_fields
-            .iter()
-            .position(|f| f.name() == name)
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Field '{}' not found in struct when resolving partition column path",
-                    name
-                ))
-            })?;
-        indices.push(child_index);
-        current_field = &struct_fields[child_index];
-    }
-
-    Ok(indices)
 }
 
 fn build_partition_type(
@@ -374,7 +307,8 @@ mod tests {
             partition_spec.clone(),
             table_schema,
             partition_type.clone(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(calculator.partition_type, partition_type);
     }
@@ -405,9 +339,10 @@ mod tests {
 
         let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
         let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type);
+            PartitionValueCalculator::new(partition_spec, table_schema, partition_type).unwrap();
 
-        let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+        let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            Vec::with_capacity(arrow_schema.fields().len() + 1);
         for (i, field) in arrow_schema.fields().iter().enumerate() {
             let column_expr = Arc::new(Column::new(field.name(), i));
             projection_exprs.push((column_expr, field.name().clone()));
@@ -457,7 +392,8 @@ mod tests {
 
         let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
         let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type.clone());
+            PartitionValueCalculator::new(partition_spec, table_schema, partition_type.clone())
+                .unwrap();
         let expr = PartitionExpr::new(calculator);
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
@@ -540,8 +476,8 @@ mod tests {
         .unwrap();
 
         let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
-        let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type);
+        let mut calculator =
+            PartitionValueCalculator::new(partition_spec, table_schema, partition_type).unwrap();
         let array = calculator.calculate(&batch).unwrap();
 
         let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
