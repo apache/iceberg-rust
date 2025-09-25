@@ -24,13 +24,6 @@ on:
   pull_request:
     paths:
       - '**'                                       # Include all files and directories in the repository by default.
-      - '!.github/workflows/**'                    # Exclude all workflow files
-      - '.github/workflows/bindings_python_ci.yml' # except the current file.
-      - '!.github/actions/**'                      # Exclude custom actions
-      - 'bindings/python/**'                       # Include source codes and its dependencies
-      - '!crates/**'
-      - 'crates/iceberg/**'
-      - 'crates/integrations/datafusion/**'
       - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
       - '!scripts/**'
       - '!website/**'
