@@ -70,7 +70,19 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> Debug
 }
 
 impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> RollingFileWriter<B, L, F> {
-    /// todo doc
+    /// Creates a new `RollingFileWriter` with the specified target file size.
+    ///
+    /// # Parameters
+    ///
+    /// * `inner_builder` - The builder for the underlying file writer
+    /// * `target_file_size` - The target file size in bytes that triggers rollover
+    /// * `file_io` - The file IO interface for creating output files
+    /// * `location_generator` - Generator for file locations
+    /// * `file_name_generator` - Generator for file names
+    ///
+    /// # Returns
+    ///
+    /// A new `RollingFileWriter` instance
     pub fn new(
         inner_builder: B,
         target_file_size: usize,
@@ -89,7 +101,18 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> RollingFi
         }
     }
 
-    /// todo doc
+    /// Creates a new `RollingFileWriter` with the default target file size.
+    ///
+    /// # Parameters
+    ///
+    /// * `inner_builder` - The builder for the underlying file writer
+    /// * `file_io` - The file IO interface for creating output files
+    /// * `location_generator` - Generator for file locations
+    /// * `file_name_generator` - Generator for file names
+    ///
+    /// # Returns
+    ///
+    /// A new `RollingFileWriter` instance with default target file size
     pub fn new_with_default_file_size(
         inner_builder: B,
         file_io: FileIO,
@@ -124,7 +147,20 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> RollingFi
             ))
     }
 
-    /// todo doc
+    /// Writes a record batch to the current file, rolling over to a new file if necessary.
+    ///
+    /// # Parameters
+    ///
+    /// * `partition_key` - Optional partition key for the data
+    /// * `input` - The record batch to write
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer is not initialized or if writing fails
     pub async fn write(
         &mut self,
         partition_key: &Option<PartitionKey>,
@@ -166,7 +202,12 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> RollingFi
         }
     }
 
-    /// todo doc
+    /// Closes the writer and returns all data file builders.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a vector of `DataFileBuilder` instances representing
+    /// all files that were written, including any that were created due to rollover
     pub async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
         // close the current writer and merge the output
         if let Some(current_writer) = self.inner {
