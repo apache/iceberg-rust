@@ -89,6 +89,7 @@ smol = { workspace = true, optional = true }
 strum = { workspace = true, features = ["derive"] }
 thrift = { workspace = true }
 tokio = { workspace = true, optional = false, features = ["sync"] }
+tracing = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

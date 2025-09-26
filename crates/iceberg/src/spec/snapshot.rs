@@ -193,7 +193,6 @@ impl Snapshot {
     }
 
     /// Get parent snapshot.
-    #[cfg(test)]
     pub(crate) fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
         match self.parent_snapshot_id {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
@@ -508,6 +507,33 @@ impl SnapshotRetention {
             max_snapshot_age_ms,
             max_ref_age_ms,
         }
+    }
+}
+
+/// An iterator over the ancestors of a snapshot.
+pub struct AncestorIterator<'a> {
+    current: Option<SnapshotRef>,
+    table_metadata: &'a TableMetadata,
+}
+
+impl Iterator for AncestorIterator<'_> {
+    type Item = SnapshotRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current.take()?;
+
+        let next = current.parent_snapshot(self.table_metadata);
+        self.current = next;
+
+        Some(current)
+    }
+}
+
+/// Returns an iterator over the ancestors of a snapshot.
+pub fn ancestors_of(snapshot: SnapshotRef, table_metadata: &TableMetadata) -> AncestorIterator<'_> {
+    AncestorIterator {
+        current: Some(snapshot),
+        table_metadata,
     }
 }
 

@@ -3548,6 +3548,7 @@ dependencies = [
  "tempfile",
  "thrift",
  "tokio",
+ "tracing",
  "typed-builder",
  "url",
  "uuid",
@@ -3702,6 +3703,7 @@ version = "0.7.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "chrono",
  "ctor",
  "datafusion",
  "futures",
