@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+pub mod remove_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -71,6 +72,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::remove_snapshots::RemoveSnapshotAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -149,6 +151,11 @@ impl Transaction {
     /// Set the location of table
     pub fn update_location(&self) -> UpdateLocationAction {
         UpdateLocationAction::new()
+    }
+
+    /// Creates remove snapshot action.
+    pub fn expire_snapshot(&self) -> RemoveSnapshotAction {
+        RemoveSnapshotAction::new()
     }
 
     /// Update the statistics of table
