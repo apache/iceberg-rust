@@ -24,7 +24,7 @@ use arrow_array::builder::{
 };
 use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::{DataType, Field, Fields};
-use futures::{StreamExt, stream};
+use futures::stream;
 
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
@@ -212,7 +212,7 @@ impl<'a> ManifestsTable<'a> {
             Arc::new(deleted_delete_files_count.finish()),
             Arc::new(partition_summaries.finish()),
         ])?;
-        Ok(stream::iter(vec![Ok(batch)]).boxed())
+        Ok(Box::pin(stream::iter(vec![Ok(batch)])))
     }
 
     fn partition_summary_builder(&self) -> Result<GenericListBuilder<i32, StructBuilder>> {

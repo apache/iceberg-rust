@@ -59,7 +59,8 @@ impl Default for UpdateLocationAction {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TransactionAction for UpdateLocationAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;

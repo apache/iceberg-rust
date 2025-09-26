@@ -60,7 +60,7 @@ impl DeleteFileIndex {
         let state = Arc::new(RwLock::new(DeleteFileIndexState::Populating(
             notify.clone(),
         )));
-        let delete_file_stream = rx.boxed();
+        let delete_file_stream = Box::pin(rx);
 
         spawn({
             let state = state.clone();

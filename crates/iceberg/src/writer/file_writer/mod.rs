@@ -19,6 +19,7 @@
 
 use arrow_array::RecordBatch;
 use futures::Future;
+use opendal::raw::MaybeSend;
 
 use super::CurrentFileStatus;
 use crate::Result;
@@ -44,7 +45,7 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
 pub trait FileWriter<O = DefaultOutput>: Send + CurrentFileStatus + 'static {
     /// Write record batch to file.
-    fn write(&mut self, batch: &RecordBatch) -> impl Future<Output = Result<()>> + Send;
+    fn write(&mut self, batch: &RecordBatch) -> impl Future<Output = Result<()>> + MaybeSend;
     /// Close file writer.
-    fn close(self) -> impl Future<Output = Result<O>> + Send;
+    fn close(self) -> impl Future<Output = Result<O>> + MaybeSend;
 }

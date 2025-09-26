@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::expr::BoundPredicate;
+use crate::future_util::BoxedStream;
 use crate::spec::{DataContentType, DataFileFormat, ManifestEntryRef, Schema, SchemaRef};
 
 /// A stream of [`FileScanTask`].
-pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
+pub type FileScanTaskStream = BoxedStream<'static, Result<FileScanTask>>;
 
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

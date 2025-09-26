@@ -295,7 +295,8 @@ pub struct FileMetadata {
 ///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait FileRead: Send + Sync + Unpin + 'static {
     /// Read file content with given range.
     ///
@@ -303,7 +304,8 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes>;
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl FileRead for opendal::Reader {
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
         Ok(opendal::Reader::read(self, range).await?.to_bytes())
@@ -365,7 +367,8 @@ impl InputFile {
 ///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait FileWrite: Send + Unpin + 'static {
     /// Write bytes to file.
     ///
@@ -378,7 +381,8 @@ pub trait FileWrite: Send + Unpin + 'static {
     async fn close(&mut self) -> crate::Result<()>;
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl FileWrite for opendal::Writer {
     async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
         Ok(opendal::Writer::write(self, bs).await?)
@@ -390,7 +394,8 @@ impl FileWrite for opendal::Writer {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl FileWrite for Box<dyn FileWrite> {
     async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
         self.as_mut().write(bs).await
