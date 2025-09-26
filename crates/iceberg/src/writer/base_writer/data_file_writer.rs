@@ -75,11 +75,14 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
     for DataFileWriter<B, L, F>
 {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        self.inner_writer
-            .as_mut()
-            .unwrap()
-            .write(&self.partition_key, &batch)
-            .await
+        if let Some(writer) = self.inner_writer.as_mut() {
+            writer.write(&self.partition_key, &batch).await
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "Writer is not initialized!",
+            ))
+        }
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
