@@ -21,6 +21,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use opendal::raw::MaybeSend;
+
 pub enum JoinHandle<T> {
     #[cfg(feature = "tokio")]
     Tokio(tokio::task::JoinHandle<T>),
@@ -50,14 +52,23 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 #[allow(dead_code)]
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
+    F: Future + MaybeSend + 'static,
+    F::Output: MaybeSend + 'static,
 {
-    #[cfg(feature = "tokio")]
-    return JoinHandle::Tokio(tokio::task::spawn(f));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        #[cfg(feature = "tokio")]
+        return JoinHandle::Tokio(tokio::task::spawn(f));
 
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    return JoinHandle::Smol(smol::spawn(f));
+        #[cfg(all(feature = "smol", not(feature = "tokio")))]
+        return JoinHandle::Smol(smol::spawn(f));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[cfg(feature = "tokio")]
+        return JoinHandle::Tokio(tokio::task::spawn_local(f));
+    }
 
     #[cfg(all(not(feature = "smol"), not(feature = "tokio")))]
     unimplemented!("no runtime has been enabled")

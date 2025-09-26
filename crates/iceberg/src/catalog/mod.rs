@@ -47,7 +47,8 @@ use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(test, automock)]
 pub trait Catalog: Debug + Sync + Send {
     /// List namespaces inside the catalog.

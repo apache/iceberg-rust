@@ -136,7 +136,8 @@
 //!     }
 //! }
 //!
-//! #[async_trait::async_trait]
+//! #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+//! #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 //! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
@@ -150,7 +151,8 @@
 //!     inner_writer: W,
 //! }
 //!
-//! #[async_trait::async_trait]
+//! #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+//! #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 //! impl<W: IcebergWriter> IcebergWriter for LatencyRecordWriter<W> {
 //!     async fn write(&mut self, input: RecordBatch) -> Result<()> {
 //!         let start = Instant::now();
@@ -235,7 +237,8 @@ type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
 
 /// The builder for iceberg writer.
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
     Send + Clone + 'static
 {
@@ -246,7 +249,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 }
 
 /// The iceberg writer used to write data to iceberg table.
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Write data to iceberg table.
     async fn write(&mut self, input: I) -> Result<()>;

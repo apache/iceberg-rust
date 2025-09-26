@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use itertools::Itertools;
+use opendal::raw::BoxedFuture;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
@@ -659,7 +659,7 @@ impl<W: FileWrite> AsyncFileWriter<W> {
 }
 
 impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+    fn write(&mut self, bs: Bytes) -> BoxedFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
             self.0
                 .write(bs)
@@ -668,7 +668,7 @@ impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
         })
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+    fn complete(&mut self) -> BoxedFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
             self.0
                 .close()

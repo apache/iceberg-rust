@@ -28,7 +28,8 @@ use crate::{Error, ErrorKind, Result};
 
 /// Delete File Loader
 #[allow(unused)]
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait DeleteFileLoader {
     /// Read the delete file referred to in the task
     ///
@@ -96,7 +97,8 @@ impl BasicDeleteFileLoader {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl DeleteFileLoader for BasicDeleteFileLoader {
     async fn read_delete_file(
         &self,

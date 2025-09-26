@@ -109,7 +109,8 @@ impl EqualityDeleteWriterConfig {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
 
@@ -134,7 +135,8 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     partition_spec_id: i32,
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.projector.project_batch(batch)?;

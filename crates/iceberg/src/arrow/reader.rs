@@ -32,8 +32,8 @@ use arrow_schema::{
 use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
+use futures::{StreamExt, TryFutureExt, TryStreamExt, try_join};
+use opendal::raw::BoxedFuture;
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
@@ -1373,7 +1373,7 @@ impl<R: FileRead> ArrowFileReader<R> {
 }
 
 impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r
                 .read(range.start..range.end)
@@ -1386,8 +1386,8 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
     fn get_metadata(
         &mut self,
         _options: Option<&'_ ArrowReaderOptions>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        async move {
+    ) -> BoxedFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 .with_column_indexes(self.preload_column_index)
@@ -1397,8 +1397,7 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
             let meta = reader.load_and_finish(self, size).await?;
 
             Ok(Arc::new(meta))
-        }
-        .boxed()
+        })
     }
 }
 

@@ -27,7 +27,6 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
-use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
@@ -35,6 +34,7 @@ use crate::arrow::ArrowReaderBuilder;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::future_util::BoxedStream;
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
@@ -43,7 +43,7 @@ use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
-pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+pub type ArrowRecordBatchStream = BoxedStream<'static, Result<RecordBatch>>;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -423,7 +423,7 @@ impl TableScan {
             }
         });
 
-        Ok(file_scan_task_rx.boxed())
+        Ok(Box::pin(file_scan_task_rx))
     }
 
     /// Returns an [`ArrowRecordBatchStream`].

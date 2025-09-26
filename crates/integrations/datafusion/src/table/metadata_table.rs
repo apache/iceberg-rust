@@ -27,8 +27,8 @@ use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use futures::stream::BoxStream;
 use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::future_util::BoxedStream;
 use iceberg::inspect::MetadataTableType;
 use iceberg::table::Table;
 
@@ -74,7 +74,7 @@ impl TableProvider for IcebergMetadataTableProvider {
 }
 
 impl IcebergMetadataTableProvider {
-    pub async fn scan(self) -> DFResult<BoxStream<'static, DFResult<RecordBatch>>> {
+    pub async fn scan(self) -> DFResult<BoxedStream<'static, DFResult<RecordBatch>>> {
         let metadata_table = self.table.inspect();
         let stream = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().scan().await,

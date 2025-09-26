@@ -33,7 +33,8 @@ pub(crate) type BoxedTransactionAction = Arc<dyn TransactionAction>;
 /// Implementors of this trait define how a specific action is committed to a table.
 /// Each action is responsible for generating the updates and requirements needed
 /// to modify the table metadata.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub(crate) trait TransactionAction: AsAny + Sync + Send {
     /// Commits this action against the provided table and returns the resulting updates.
     /// NOTE: This function is intended for internal use only and should not be called directly by users.
@@ -120,7 +121,8 @@ mod tests {
 
     struct TestAction;
 
-    #[async_trait]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
     impl TransactionAction for TestAction {
         async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
             Ok(ActionCommit::new(

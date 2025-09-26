@@ -44,7 +44,8 @@ impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
 
@@ -65,7 +66,8 @@ pub struct DataFileWriter<B: FileWriterBuilder> {
     partition_spec_id: i32,
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         self.inner_writer.as_mut().unwrap().write(&batch).await
