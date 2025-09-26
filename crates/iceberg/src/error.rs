@@ -311,7 +311,7 @@ define_from_err!(
 define_from_err!(
     std::array::TryFromSliceError,
     ErrorKind::DataInvalid,
-    "failed to convert byte slive to array"
+    "failed to convert byte slice to array"
 );
 
 define_from_err!(

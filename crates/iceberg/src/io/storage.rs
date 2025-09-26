@@ -22,6 +22,8 @@ use opendal::layers::{RetryLayer, TimeoutLayer};
 use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
+#[cfg(feature = "storage-oss")]
+use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
@@ -47,6 +49,8 @@ pub(crate) enum Storage {
         client: reqwest::Client,
         config: Arc<S3Config>,
     },
+    #[cfg(feature = "storage-oss")]
+    Oss { config: Arc<OssConfig> },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
 
@@ -78,6 +82,10 @@ impl Storage {
             #[cfg(feature = "storage-azblob")]
             Scheme::Azblob => Ok(Self::Azblob {
                 config: super::azblob_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-oss")]
+            Scheme::Oss => Ok(Self::Oss {
+                config: super::oss_config_parse(props)?.into(),
             }),
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
@@ -143,6 +151,7 @@ impl Storage {
                     ))
                 }
             }
+
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
@@ -169,11 +178,27 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-oss")]
+            Storage::Oss { config } => {
+                let op = super::oss_config_build(config, path)?;
+
+                // Check prefix of oss path.
+                let prefix = format!("oss://{}/", op.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid oss url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
-                not(feature = "storage-azblob")
+                not(feature = "storage-azblob"),
+                not(feature = "storage-oss")
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -195,6 +220,7 @@ impl Storage {
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
             "gs" | "gcs" => Ok(Scheme::Gcs),
+            "oss" => Ok(Scheme::Oss),
             s => Ok(s.parse::<Scheme>()?),
         }
     }

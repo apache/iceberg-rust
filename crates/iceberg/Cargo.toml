@@ -37,6 +37,7 @@ storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
 storage-gcs = ["opendal/services-gcs"]
 storage-azblob = ["opendal/services-azblob"]
+storage-oss = ["opendal/services-oss"]
 
 async-std = ["dep:async-std"]
 tokio = []
