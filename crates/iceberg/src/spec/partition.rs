@@ -194,6 +194,15 @@ impl PartitionKey {
         Self { spec, schema, data }
     }
 
+    /// Creates a new partition key from another partition key, with a new data field.
+    pub fn copy_with_data(&self, data: Struct) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            schema: self.schema.clone(),
+            data,
+        }
+    }
+
     /// Generates a partition path based on the partition values.
     pub fn to_path(&self) -> String {
         self.spec.partition_to_path(&self.data, self.schema.clone())
@@ -206,6 +215,21 @@ impl PartitionKey {
             None => true,
             Some(pk) => pk.spec.is_unpartitioned(),
         }
+    }
+
+    /// Returns the associated [`PartitionSpec`].
+    pub fn spec(&self) -> &PartitionSpec {
+        &self.spec
+    }
+
+    /// Returns the associated [`SchemaRef`].
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Returns the associated [`Struct`].
+    pub fn data(&self) -> &Struct {
+        &self.data
     }
 }
 
