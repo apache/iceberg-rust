@@ -193,15 +193,17 @@ impl HttpClient {
         Ok(())
     }
 
-    /// Authenticate the request by filling token.
+    /// Authenticates the request by adding a bearer token to the authorization header.
     ///
-    /// - If neither token nor credential is provided, this method will do nothing.
-    /// - If only credential is provided, this method will try to fetch token from the server.
-    /// - If token is provided, this method will use the token directly.
+    /// This method supports three authentication modes:
     ///
-    /// # TODO
+    /// 1. **No authentication** - Skip authentication when both `credential` and `token` are missing.
+    /// 2. **Token authentication** - Use the provided `token` directly for authentication.
+    /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it for authentication.
     ///
-    /// Support refreshing token while needed.
+    /// When both `credential` and `token` are present, `token` takes precedence.
+    ///
+    /// # TODO: Support automatic token refreshing.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
         // Clone the token from lock without holding the lock for entire function.
         let token = self.token.lock().await.clone();
@@ -210,24 +212,18 @@ impl HttpClient {
             return Ok(());
         }
 
-        // Use token if provided.
-        if let Some(token) = &token {
-            req.headers_mut().insert(
-                http::header::AUTHORIZATION,
-                format!("Bearer {token}").parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Invalid token received from catalog server!",
-                    )
-                    .with_source(e)
-                })?,
-            );
-            return Ok(());
-        }
+        // Either use the provided token or exchange credential for token, cache and use that
+        let token = match token {
+            Some(token) => token,
+            None => {
+                let token = self.exchange_credential_for_token().await?;
+                // Update token so that we use it for next request instead of
+                // exchanging credential for token from the server again
+                *self.token.lock().await = Some(token.clone());
+                token
+            }
+        };
 
-        let token = self.exchange_credential_for_token().await?;
-        // Update token.
-        *self.token.lock().await = Some(token.clone());
         // Insert token in request.
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
