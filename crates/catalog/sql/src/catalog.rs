@@ -111,7 +111,9 @@ impl SqlCatalogBuilder {
     /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
     /// those values will take precedence.
     pub fn props(mut self, props: HashMap<String, String>) -> Self {
-        self.0.props = props;
+        for (k, v) in props {
+            self.0.props.insert(k, v);
+        }
         self
     }
 
