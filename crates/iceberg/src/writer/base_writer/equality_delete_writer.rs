@@ -26,7 +26,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
-use crate::spec::{DEFAULT_PARTITION_SPEC_ID, DataFile, PartitionKey, SchemaRef, Struct};
+use crate::spec::{DataFile, PartitionKey, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::RollingFileWriter;
