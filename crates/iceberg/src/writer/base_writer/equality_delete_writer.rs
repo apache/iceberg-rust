@@ -168,17 +168,12 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
                 .map(|mut res| {
                     res.content(crate::spec::DataContentType::EqualityDeletes);
                     res.equality_ids(Some(self.equality_ids.iter().copied().collect_vec()));
-                    res.partition(
-                        self.partition_key
-                            .as_ref()
-                            .map_or(Struct::empty(), |pk| pk.data().clone()),
-                    );
-                    res.partition_spec_id(
-                        self.partition_key
-                            .as_ref()
-                            .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()),
-                    );
-                    res.build().expect("msg")
+                    if let Some(pk) = self.partition_key.as_ref() {
+                        res.partition(pk.data().clone());
+                        res.partition_spec_id(pk.spec().spec_id());
+                    }
+                    res.build()
+                        .expect("DataFileBuilder is guaranteed to be valid")
                 })
                 .collect_vec())
         } else {

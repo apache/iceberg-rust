@@ -20,7 +20,7 @@
 use arrow_array::RecordBatch;
 use itertools::Itertools;
 
-use crate::spec::{DEFAULT_PARTITION_SPEC_ID, DataContentType, DataFile, PartitionKey, Struct};
+use crate::spec::{DataContentType, DataFile, PartitionKey};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::RollingFileWriter;
@@ -93,17 +93,12 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
                 .into_iter()
                 .map(|mut res| {
                     res.content(DataContentType::Data);
-                    res.partition(
-                        self.partition_key
-                            .as_ref()
-                            .map_or(Struct::empty(), |pk| pk.data().clone()),
-                    );
-                    res.partition_spec_id(
-                        self.partition_key
-                            .as_ref()
-                            .map_or(DEFAULT_PARTITION_SPEC_ID, |pk| pk.spec().spec_id()),
-                    );
-                    res.build().expect("Guaranteed to be valid")
+                    if let Some(pk) = self.partition_key.as_ref() {
+                        res.partition(pk.data().clone());
+                        res.partition_spec_id(pk.spec().spec_id());
+                    }
+                    res.build()
+                        .expect("DataFileBuilder is guaranteed to be valid")
                 })
                 .collect_vec())
         } else {
