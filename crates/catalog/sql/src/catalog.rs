@@ -208,7 +208,7 @@ pub struct SqlCatalog {
     sql_bind_style: SqlBindStyle,
 }
 
-#[derive(Debug, PartialEq, strum::EnumString, strum::Display, PartialOrd, Eq)]
+#[derive(Debug, PartialEq, strum::EnumString, strum::Display)]
 /// Set the SQL parameter bind style to either $1..$N (Postgres style) or ? (SQLite/MySQL/MariaDB)
 pub enum SqlBindStyle {
     /// DollarNumeric uses parameters of the form `$1..$N``, which is the Postgres style
