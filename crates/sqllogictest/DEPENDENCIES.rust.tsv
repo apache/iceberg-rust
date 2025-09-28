@@ -256,7 +256,7 @@ regex-lite@0.1.7		X							X
 regex-syntax@0.8.6		X							X				
 regress@0.10.4		X							X				
 rle-decode-fast@1.0.3		X							X				
-rust_decimal@1.37.2									X				
+rust_decimal@1.38.0									X				
 rustc-demangle@0.1.26		X							X				
 rustc_version@0.4.1		X							X				
 rustix@1.0.8		X	X						X				
