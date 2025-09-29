@@ -62,17 +62,18 @@ async fn main() -> Result<()> {
 
 Iceberg Rust provides various storage backends through feature flags. Here are the currently supported storage backends:
 
-| Storage Backend | Feature Flag | Status | Description |
-|----------------|--------------|--------|-------------|
-| Memory | `storage-memory` | ✅ Stable | In-memory storage for testing and development |
-| Local Filesystem | `storage-fs` | ✅ Stable | Local filesystem storage |
-| Amazon S3 | `storage-s3` | ✅ Stable | Amazon S3 storage |
-| Google Cloud Storage | `storage-gcs` | ✅ Stable | Google Cloud Storage |
-| Alibaba Cloud OSS | `storage-oss` | 🧪 Experimental | Alibaba Cloud Object Storage Service |
+| Storage Backend      | Feature Flag     | Status         | Description                                   |
+| -------------------- | ---------------- | -------------- | --------------------------------------------- |
+| Memory               | `storage-memory` | ✅ Stable       | In-memory storage for testing and development |
+| Local Filesystem     | `storage-fs`     | ✅ Stable       | Local filesystem storage                      |
+| Amazon S3            | `storage-s3`     | ✅ Stable       | Amazon S3 storage                             |
+| Google Cloud Storage | `storage-gcs`    | ✅ Stable       | Google Cloud Storage                          |
+| Alibaba Cloud OSS    | `storage-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
+| Azure Datalake       | `storage-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
 
 You can enable all stable storage backends at once using the `storage-all` feature flag. 
 
-> Note that `storage-oss` is currently experimental and not included in `storage-all`.
+> Note that `storage-oss` and `storage-azdls` are currently experimental and not included in `storage-all`.
 
 Example usage in `Cargo.toml`:
 

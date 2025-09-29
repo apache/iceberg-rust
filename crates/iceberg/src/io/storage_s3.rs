@@ -169,9 +169,11 @@ pub(crate) fn s3_config_build(
         .clone()
         .into_builder()
         // Set bucket name.
-        .bucket(bucket)
-        // Set http client we want to use.
-        .http_client(HttpClient::with(client.clone()));
+        .bucket(bucket);
 
-    Ok(Operator::new(builder)?.finish())
+    // Set http client we want to use.
+    let op = Operator::new(builder)?.finish();
+    op.update_http_client(|_| HttpClient::with(client.clone()));
+
+    Ok(op)
 }

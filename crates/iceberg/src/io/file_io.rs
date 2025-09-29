@@ -42,13 +42,15 @@ pub const IO_CHUNK_SIZE: &str = "io.write.chunk-size";
 ///
 /// Supported storages:
 ///
-/// | Storage            | Feature Flag     | Schemes    |
-/// |--------------------|-------------------|------------|
-/// | Local file system  | `storage-fs`      | `file`     |
-/// | Memory             | `storage-memory`  | `memory`   |
-/// | S3                 | `storage-s3`      | `s3`, `s3a`|
-/// | GCS                | `storage-gcs`     | `gs`, `gcs`|
-/// | AZBLOB             | `storage-azblob`  | `azblob`   |
+/// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
+/// |--------------------|-------------------|----------------------------------| ------------------------------|
+/// | Local file system  | `storage-fs`      | `file`                           | `file://path/to/file`         |
+/// | Memory             | `storage-memory`  | `memory`                         | `memory://path/to/file`       |
+/// | S3                 | `storage-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
+/// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
+/// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
+/// | AZBLOB             | `storage-azblob`  | `azblob`                         | |
+/// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
@@ -336,7 +338,8 @@ impl FileWrite for opendal::Writer {
     }
 
     async fn close(&mut self) -> crate::Result<()> {
-        Ok(opendal::Writer::close(self).await?)
+        let _ = opendal::Writer::close(self).await?;
+        Ok(())
     }
 }
 
