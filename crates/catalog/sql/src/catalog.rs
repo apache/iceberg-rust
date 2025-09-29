@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -71,7 +71,6 @@ impl Default for SqlCatalogBuilder {
             uri: "".to_string(),
             name: "".to_string(),
             warehouse_location: "".to_string(),
-            file_io: FileIOBuilder::new_fs_io().build().unwrap(),
             sql_bind_style: SqlBindStyle::DollarNumeric,
             props: HashMap::new(),
         })
@@ -195,7 +194,6 @@ struct SqlCatalogConfig {
     uri: String,
     name: String,
     warehouse_location: String,
-    file_io: FileIO,
     sql_bind_style: SqlBindStyle,
     props: HashMap<String, String>,
 }
@@ -222,6 +220,7 @@ pub enum SqlBindStyle {
 impl SqlCatalog {
     /// Create new sql catalog instance
     async fn new(config: SqlCatalogConfig) -> Result<Self> {
+        let fileio = FileIO::from_path(&config.warehouse_location)?.build()?;
         install_default_drivers();
         let max_connections: u32 = config
             .props
@@ -277,7 +276,7 @@ impl SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
             warehouse_location: config.warehouse_location,
-            fileio: config.file_io,
+            fileio,
             sql_bind_style: config.sql_bind_style,
         })
     }
