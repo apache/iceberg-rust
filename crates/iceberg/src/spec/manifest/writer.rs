@@ -137,7 +137,7 @@ impl ManifestWriterBuilder {
         )
     }
 
-    /// Build a [`ManifestWriter`] for format version 2, deletes content.
+    /// Build a [`ManifestWriter`] for format version 3, deletes content.
     pub fn build_v3_deletes(self) -> ManifestWriter {
         let metadata = ManifestMetadata::builder()
             .schema_id(self.schema.schema_id())
