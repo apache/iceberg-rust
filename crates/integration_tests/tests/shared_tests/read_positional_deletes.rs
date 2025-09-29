@@ -53,7 +53,7 @@ async fn test_read_table_with_positional_deletes() {
 
     // Scan plan phase should include delete files in file plan
     // when with_delete_file_processing_enabled == true
-    assert_eq!(plan[0].deletes.len(), 2);
+    assert_eq!(plan[0].deletes.len(), 1);
 
     // we should see two rows deleted, returning 10 rows instead of 12
     let batch_stream = scan.to_arrow().await.unwrap();

@@ -114,7 +114,7 @@ impl ViewVersion {
 
     /// Get the schema of this snapshot.
     pub fn schema(&self, view_metadata: &ViewMetadata) -> Result<SchemaRef> {
-        let r = view_metadata
+        view_metadata
             .schema_by_id(self.schema_id())
             .ok_or_else(|| {
                 Error::new(
@@ -122,8 +122,7 @@ impl ViewVersion {
                     format!("Schema with id {} not found", self.schema_id()),
                 )
             })
-            .cloned();
-        r
+            .cloned()
     }
 
     /// Retrieve the history log entry for this view version.

@@ -718,7 +718,7 @@ pub(super) mod _serde {
         },
         Struct {
             r#type: String,
-            fields: Cow<'a, Vec<NestedFieldRef>>,
+            fields: Cow<'a, [NestedFieldRef]>,
         },
         #[serde(rename_all = "kebab-case")]
         Map {
