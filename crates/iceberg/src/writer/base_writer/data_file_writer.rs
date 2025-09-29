@@ -18,7 +18,6 @@
 //! This module provide `DataFileWriter`.
 
 use arrow_array::RecordBatch;
-use itertools::Itertools;
 
 use crate::spec::{DataContentType, DataFile, PartitionKey};
 use crate::writer::file_writer::FileWriterBuilder;
@@ -87,7 +86,7 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
         if let Some(writer) = self.inner_writer.take() {
-            Ok(writer
+            writer
                 .close()
                 .await?
                 .into_iter()
@@ -97,10 +96,14 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
                     }
-                    res.build()
-                        .expect("DataFileBuilder is guaranteed to be valid")
+                    res.build().map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Failed to build data file: {}", e),
+                        )
+                    })
                 })
-                .collect_vec())
+                .collect()
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
