@@ -34,5 +34,14 @@ iceberg-catalog-rest = { workspace = true }
 iceberg-catalog-glue = { workspace = true }
 iceberg-catalog-s3tables = { workspace = true }
 iceberg-catalog-hms = { workspace = true }
+iceberg-catalog-sql = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+
+[dev-dependencies]
+sqlx = { version = "0.8.1", features = [
+  "runtime-tokio",
+  "sqlite",
+  "migrate",
+], default-features = false }
+tempfile = { workspace = true }
