@@ -60,7 +60,9 @@
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
 //!     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-//!     use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
@@ -90,7 +92,7 @@
 //!     );
 //!
 //!     // Create a rolling file writer using parquet file writer builder.
-//!     let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
 //!         parquet_writer_builder,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
@@ -98,7 +100,8 @@
 //!     );
 //!
 //!     // Create a data file writer using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer, None);
+//!     let data_file_writer_builder =
+//!         DataFileWriterBuilder::new(rolling_file_writer_builder, None);
 //!     // Build the data file writer
 //!     let mut data_file_writer = data_file_writer_builder.build().await?;
 //!
@@ -180,7 +183,9 @@
 //!     // Connect to a catalog.
 //!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 //!     use iceberg::spec::{Literal, PartitionKey, Struct};
-//!     use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
 //!
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
@@ -217,7 +222,7 @@
 //!     );
 //!
 //!     // Create a rolling file writer
-//!     let rolling_file_writer = RollingFileWriter::new(
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new(
 //!         parquet_writer_builder,
 //!         512 * 1024 * 1024,
 //!         table.file_io().clone(),
@@ -227,7 +232,7 @@
 //!
 //!     // Create a data file writer builder using rolling file writer.
 //!     let data_file_writer_builder =
-//!         DataFileWriterBuilder::new(rolling_file_writer, Some(partition_key));
+//!         DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key));
 //!     // Create latency record writer using data file writer builder.
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer

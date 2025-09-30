@@ -29,7 +29,7 @@ use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{DataFile, PartitionKey, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
-use crate::writer::file_writer::rolling_writer::RollingFileWriter;
+use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
@@ -40,15 +40,21 @@ pub struct EqualityDeleteFileWriterBuilder<
     L: LocationGenerator,
     F: FileNameGenerator,
 > {
-    inner: RollingFileWriter<B, L, F>,
+    inner: RollingFileWriterBuilder<B, L, F>,
     config: EqualityDeleteWriterConfig,
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator>
-    EqualityDeleteFileWriterBuilder<B, L, F>
+impl<B, L, F> EqualityDeleteFileWriterBuilder<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
-    /// Create a new `EqualityDeleteFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: RollingFileWriter<B, L, F>, config: EqualityDeleteWriterConfig) -> Self {
+    /// Create a new `EqualityDeleteFileWriterBuilder` using a `RollingFileWriterBuilder`.
+    pub fn new(
+        inner: RollingFileWriterBuilder<B, L, F>,
+        config: EqualityDeleteWriterConfig,
+    ) -> Self {
         Self { inner, config }
     }
 }
@@ -115,14 +121,17 @@ impl EqualityDeleteWriterConfig {
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriterBuilder
-    for EqualityDeleteFileWriterBuilder<B, L, F>
+impl<B, L, F> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     type R = EqualityDeleteFileWriter<B, L, F>;
 
     async fn build(self) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
-            inner_writer: Some(self.inner), // todo revisit this, probably still need a builder for rolling writer
+            inner: Some(self.inner.clone().build()), // todo revisit this, probably still need a builder for rolling writer
             projector: self.config.projector,
             equality_ids: self.config.equality_ids,
             partition_key: self.config.partition_key,
@@ -137,19 +146,22 @@ pub struct EqualityDeleteFileWriter<
     L: LocationGenerator,
     F: FileNameGenerator,
 > {
-    inner_writer: Option<RollingFileWriter<B, L, F>>,
+    inner: Option<RollingFileWriter<B, L, F>>,
     projector: RecordBatchProjector,
     equality_ids: Vec<i32>,
     partition_key: Option<PartitionKey>,
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriter
-    for EqualityDeleteFileWriter<B, L, F>
+impl<B, L, F> IcebergWriter for EqualityDeleteFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.projector.project_batch(batch)?;
-        if let Some(writer) = self.inner_writer.as_mut() {
+        if let Some(writer) = self.inner.as_mut() {
             writer.write(&self.partition_key, &batch).await
         } else {
             Err(Error::new(
@@ -160,7 +172,7 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
-        if let Some(writer) = self.inner_writer.take() {
+        if let Some(writer) = self.inner.take() {
             writer
                 .close()
                 .await?
@@ -219,7 +231,7 @@ mod test {
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
-    use crate::writer::file_writer::rolling_writer::RollingFileWriter;
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
     async fn check_parquet_data_file_with_equality_delete_write(
@@ -424,14 +436,14 @@ mod test {
         // prepare writer
         let pb =
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema));
-        let rolling_writer = RollingFileWriter::new_with_default_file_size(
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pb,
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
         let mut equality_delete_writer =
-            EqualityDeleteFileWriterBuilder::new(rolling_writer, equality_config)
+            EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, equality_config)
                 .build()
                 .await?;
 
@@ -591,14 +603,14 @@ mod test {
 
         let pb =
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema));
-        let rolling_writer = RollingFileWriter::new_with_default_file_size(
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pb,
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
         let mut equality_delete_writer =
-            EqualityDeleteFileWriterBuilder::new(rolling_writer, config)
+            EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, config)
                 .build()
                 .await?;
 

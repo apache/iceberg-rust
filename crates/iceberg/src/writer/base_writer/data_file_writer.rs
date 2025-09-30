@@ -22,41 +22,47 @@ use arrow_array::RecordBatch;
 use crate::spec::{DataContentType, DataFile, PartitionKey};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
-use crate::writer::file_writer::rolling_writer::RollingFileWriter;
+use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
 #[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
-    inner_writer: RollingFileWriter<B, L, F>,
+    inner: RollingFileWriterBuilder<B, L, F>,
     partition_key: Option<PartitionKey>,
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator>
-    DataFileWriterBuilder<B, L, F>
+impl<B, L, F> DataFileWriterBuilder<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
-    /// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
+    /// Create a new `DataFileWriterBuilder` using a `RollingFileWriterBuilder`.
     pub fn new(
-        inner_writer: RollingFileWriter<B, L, F>,
+        inner_builder: RollingFileWriterBuilder<B, L, F>,
         partition_key: Option<PartitionKey>,
     ) -> Self {
         Self {
-            inner_writer,
+            inner: inner_builder,
             partition_key,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriterBuilder
-    for DataFileWriterBuilder<B, L, F>
+impl<B, L, F> IcebergWriterBuilder for DataFileWriterBuilder<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     type R = DataFileWriter<B, L, F>;
 
     async fn build(self) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner_writer: Some(self.inner_writer),
+            inner: Some(self.inner.clone().build()),
             partition_key: self.partition_key,
         })
     }
@@ -65,16 +71,19 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
 /// A writer write data is within one spec/partition.
 #[derive(Debug)]
 pub struct DataFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
-    inner_writer: Option<RollingFileWriter<B, L, F>>,
+    inner: Option<RollingFileWriter<B, L, F>>,
     partition_key: Option<PartitionKey>,
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWriter
-    for DataFileWriter<B, L, F>
+impl<B, L, F> IcebergWriter for DataFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        if let Some(writer) = self.inner_writer.as_mut() {
+        if let Some(writer) = self.inner.as_mut() {
             writer.write(&self.partition_key, &batch).await
         } else {
             Err(Error::new(
@@ -85,7 +94,7 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
-        if let Some(writer) = self.inner_writer.take() {
+        if let Some(writer) = self.inner.take() {
             writer
                 .close()
                 .await?
@@ -113,19 +122,22 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> IcebergWr
     }
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFileStatus
-    for DataFileWriter<B, L, F>
+impl<B, L, F> CurrentFileStatus for DataFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     fn current_file_path(&self) -> String {
-        self.inner_writer.as_ref().unwrap().current_file_path()
+        self.inner.as_ref().unwrap().current_file_path()
     }
 
     fn current_row_num(&self) -> usize {
-        self.inner_writer.as_ref().unwrap().current_row_num()
+        self.inner.as_ref().unwrap().current_row_num()
     }
 
     fn current_written_size(&self) -> usize {
-        self.inner_writer.as_ref().unwrap().current_written_size()
+        self.inner.as_ref().unwrap().current_written_size()
     }
 }
 
@@ -152,7 +164,7 @@ mod test {
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
-    use crate::writer::file_writer::rolling_writer::RollingFileWriter;
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
 
     #[tokio::test]
@@ -175,14 +187,14 @@ mod test {
 
         let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
 
-        let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+        let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pw,
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer, None)
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer_builder, None)
             .build()
             .await
             .unwrap();
@@ -261,7 +273,7 @@ mod test {
         let parquet_writer_builder =
             ParquetWriterBuilder::new(WriterProperties::builder().build(), schema_ref.clone());
 
-        let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+        let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
             location_gen,
@@ -269,7 +281,7 @@ mod test {
         );
 
         let mut data_file_writer =
-            DataFileWriterBuilder::new(rolling_file_writer, Some(partition_key))
+            DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
                 .build()
                 .await?;
 

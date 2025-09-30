@@ -47,7 +47,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
@@ -261,7 +261,7 @@ impl ExecutionPlan for IcebergWriteExec {
         // todo filename prefix/suffix should be configurable
         let file_name_generator =
             DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format);
-        let rolling_writer = RollingFileWriter::new(
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
             parquet_file_writer_builder,
             target_file_size,
             file_io,
@@ -269,7 +269,7 @@ impl ExecutionPlan for IcebergWriteExec {
             file_name_generator,
         );
         // todo specify partition key when partitioning writer is supported
-        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer, None);
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder, None);
 
         // Get input data
         let data = execute_input_stream(

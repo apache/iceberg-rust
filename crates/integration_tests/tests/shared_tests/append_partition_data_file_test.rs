@@ -31,7 +31,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -99,18 +99,20 @@ async fn test_append_partition_data_file() {
         table.metadata().current_schema().clone(),
     );
 
-    let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
         parquet_writer_builder.clone(),
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
     );
 
-    let mut data_file_writer_valid =
-        DataFileWriterBuilder::new(rolling_file_writer.clone(), Some(partition_key.clone()))
-            .build()
-            .await
-            .unwrap();
+    let mut data_file_writer_valid = DataFileWriterBuilder::new(
+        rolling_file_writer_builder.clone(),
+        Some(partition_key.clone()),
+    )
+    .build()
+    .await
+    .unwrap();
 
     let col1 = StringArray::from(vec![Some("foo1"), Some("foo2")]);
     let col2 = Int32Array::from(vec![
@@ -151,7 +153,7 @@ async fn test_append_partition_data_file() {
         Literal::Primitive(PrimitiveLiteral::Boolean(true)),
     )]));
     test_schema_incompatible_partition_type(
-        rolling_file_writer.clone(),
+        rolling_file_writer_builder.clone(),
         batch.clone(),
         partition_key.clone(),
         table.clone(),
@@ -168,7 +170,7 @@ async fn test_append_partition_data_file() {
         ))),
     ]));
     test_schema_incompatible_partition_fields(
-        rolling_file_writer.clone(),
+        rolling_file_writer_builder.clone(),
         batch,
         partition_key,
         table,
@@ -178,7 +180,7 @@ async fn test_append_partition_data_file() {
 }
 
 async fn test_schema_incompatible_partition_type(
-    rolling_file_writer: RollingFileWriter<
+    rolling_file_writer_builder: RollingFileWriterBuilder<
         ParquetWriterBuilder,
         DefaultLocationGenerator,
         DefaultFileNameGenerator,
@@ -190,7 +192,7 @@ async fn test_schema_incompatible_partition_type(
 ) {
     // test writing different "type" of partition than mentioned in schema
     let mut data_file_writer_invalid =
-        DataFileWriterBuilder::new(rolling_file_writer.clone(), Some(partition_key))
+        DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
             .build()
             .await
             .unwrap();
@@ -208,7 +210,7 @@ async fn test_schema_incompatible_partition_type(
 }
 
 async fn test_schema_incompatible_partition_fields(
-    rolling_file_writer: RollingFileWriter<
+    rolling_file_writer_builder: RollingFileWriterBuilder<
         ParquetWriterBuilder,
         DefaultLocationGenerator,
         DefaultFileNameGenerator,
@@ -220,7 +222,7 @@ async fn test_schema_incompatible_partition_fields(
 ) {
     // test writing different number of partition fields than mentioned in schema
     let mut data_file_writer_invalid =
-        DataFileWriterBuilder::new(rolling_file_writer, Some(partition_key))
+        DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
             .build()
             .await
             .unwrap();

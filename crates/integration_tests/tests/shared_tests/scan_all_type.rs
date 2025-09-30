@@ -39,7 +39,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::rolling_writer::RollingFileWriter;
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -157,13 +157,13 @@ async fn test_scan_all_type() {
         WriterProperties::default(),
         table.metadata().current_schema().clone(),
     );
-    let rolling_file_writer = RollingFileWriter::new_with_default_file_size(
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
         parquet_writer_builder,
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer, None);
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder, None);
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
 
     // Prepare data

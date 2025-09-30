@@ -26,6 +26,96 @@ use crate::writer::file_writer::location_generator::{FileNameGenerator, Location
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
+/// Builder for [`RollingFileWriter`].
+#[derive(Clone, Debug)]
+pub struct RollingFileWriterBuilder<
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+> {
+    inner_builder: B,
+    target_file_size: usize,
+    file_io: FileIO,
+    location_generator: L,
+    file_name_generator: F,
+}
+
+impl<B, L, F> RollingFileWriterBuilder<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+{
+    /// Creates a new `RollingFileWriterBuilder` with the specified target file size.
+    ///
+    /// # Parameters
+    ///
+    /// * `inner_builder` - The builder for the underlying file writer
+    /// * `target_file_size` - The target file size in bytes that triggers rollover
+    /// * `file_io` - The file IO interface for creating output files
+    /// * `location_generator` - Generator for file locations
+    /// * `file_name_generator` - Generator for file names
+    ///
+    /// # Returns
+    ///
+    /// A new `RollingFileWriterBuilder` instance
+    pub fn new(
+        inner_builder: B,
+        target_file_size: usize,
+        file_io: FileIO,
+        location_generator: L,
+        file_name_generator: F,
+    ) -> Self {
+        Self {
+            inner_builder,
+            target_file_size,
+            file_io,
+            location_generator,
+            file_name_generator,
+        }
+    }
+
+    /// Creates a new `RollingFileWriterBuilder` with the default target file size.
+    ///
+    /// # Parameters
+    ///
+    /// * `inner_builder` - The builder for the underlying file writer
+    /// * `file_io` - The file IO interface for creating output files
+    /// * `location_generator` - Generator for file locations
+    /// * `file_name_generator` - Generator for file names
+    ///
+    /// # Returns
+    ///
+    /// A new `RollingFileWriterBuilder` instance with default target file size
+    pub fn new_with_default_file_size(
+        inner_builder: B,
+        file_io: FileIO,
+        location_generator: L,
+        file_name_generator: F,
+    ) -> Self {
+        Self {
+            inner_builder,
+            target_file_size: PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            file_io,
+            location_generator,
+            file_name_generator,
+        }
+    }
+
+    /// Build a new [`RollingFileWriter`].
+    pub fn build(self) -> RollingFileWriter<B, L, F> {
+        RollingFileWriter {
+            inner: None,
+            inner_builder: self.inner_builder,
+            target_file_size: self.target_file_size,
+            data_file_builders: vec![],
+            file_io: self.file_io,
+            location_generator: self.location_generator,
+            file_name_generator: self.file_name_generator,
+        }
+    }
+}
+
 /// A writer that automatically rolls over to a new file when the data size
 /// exceeds a target threshold.
 ///
@@ -42,24 +132,11 @@ pub struct RollingFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: File
     file_name_generator: F,
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> Clone
-    for RollingFileWriter<B, L, F>
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: None,
-            inner_builder: self.inner_builder.clone(),
-            target_file_size: self.target_file_size,
-            data_file_builders: vec![],
-            file_io: self.file_io.clone(),
-            location_generator: self.location_generator.clone(),
-            file_name_generator: self.file_name_generator.clone(),
-        }
-    }
-}
-
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> Debug
-    for RollingFileWriter<B, L, F>
+impl<B, L, F> Debug for RollingFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RollingFileWriter")
@@ -69,67 +146,12 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> Debug
     }
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> RollingFileWriter<B, L, F> {
-    /// Creates a new `RollingFileWriter` with the specified target file size.
-    ///
-    /// # Parameters
-    ///
-    /// * `inner_builder` - The builder for the underlying file writer
-    /// * `target_file_size` - The target file size in bytes that triggers rollover
-    /// * `file_io` - The file IO interface for creating output files
-    /// * `location_generator` - Generator for file locations
-    /// * `file_name_generator` - Generator for file names
-    ///
-    /// # Returns
-    ///
-    /// A new `RollingFileWriter` instance
-    pub fn new(
-        inner_builder: B,
-        target_file_size: usize,
-        file_io: FileIO,
-        location_generator: L,
-        file_name_generator: F,
-    ) -> Self {
-        Self {
-            inner: None,
-            inner_builder,
-            target_file_size,
-            data_file_builders: vec![],
-            file_io,
-            location_generator,
-            file_name_generator,
-        }
-    }
-
-    /// Creates a new `RollingFileWriter` with the default target file size.
-    ///
-    /// # Parameters
-    ///
-    /// * `inner_builder` - The builder for the underlying file writer
-    /// * `file_io` - The file IO interface for creating output files
-    /// * `location_generator` - Generator for file locations
-    /// * `file_name_generator` - Generator for file names
-    ///
-    /// # Returns
-    ///
-    /// A new `RollingFileWriter` instance with default target file size
-    pub fn new_with_default_file_size(
-        inner_builder: B,
-        file_io: FileIO,
-        location_generator: L,
-        file_name_generator: F,
-    ) -> Self {
-        Self {
-            inner: None,
-            inner_builder,
-            target_file_size: PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-            data_file_builders: vec![],
-            file_io,
-            location_generator,
-            file_name_generator,
-        }
-    }
-
+impl<B, L, F> RollingFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+{
     /// Determines if the writer should roll over to a new file.
     ///
     /// # Returns
@@ -299,7 +321,7 @@ mod tests {
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
 
         // Set a large target size so no rolling occurs
-        let rolling_file_writer = RollingFileWriter::new(
+        let rolling_file_writer_builder = RollingFileWriterBuilder::new(
             parquet_writer_builder,
             1024 * 1024,
             file_io.clone(),
@@ -307,7 +329,8 @@ mod tests {
             file_name_gen,
         );
 
-        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer, None);
+        let data_file_writer_builder =
+            DataFileWriterBuilder::new(rolling_file_writer_builder, None);
 
         // Create writer
         let mut writer = data_file_writer_builder.build().await?;
@@ -357,7 +380,7 @@ mod tests {
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
 
         // Set a very small target size to trigger rolling
-        let rolling_writer_builder = RollingFileWriter::new(
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
             parquet_writer_builder,
             1024,
             file_io,
