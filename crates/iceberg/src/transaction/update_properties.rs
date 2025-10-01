@@ -80,7 +80,8 @@ impl Default for UpdatePropertiesAction {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TransactionAction for UpdatePropertiesAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))

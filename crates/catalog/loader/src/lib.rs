@@ -41,7 +41,8 @@ pub fn supported_types() -> Vec<&'static str> {
     CATALOG_REGISTRY.iter().map(|(k, _)| *k).collect()
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait BoxedCatalogBuilder {
     async fn load(
         self: Box<Self>,
@@ -50,7 +51,8 @@ pub trait BoxedCatalogBuilder {
     ) -> Result<Arc<dyn Catalog>>;
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
     async fn load(
         self: Box<Self>,

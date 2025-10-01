@@ -33,7 +33,8 @@ pub struct DataFusionEngine {
     datafusion: DataFusion,
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl EngineRunner for DataFusionEngine {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()> {
         let content = std::fs::read_to_string(path)

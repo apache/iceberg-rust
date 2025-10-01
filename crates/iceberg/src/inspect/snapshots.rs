@@ -22,7 +22,7 @@ use arrow_array::RecordBatch;
 use arrow_array::builder::{MapBuilder, MapFieldNames, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMicrosecondType};
 use arrow_schema::{DataType, Field};
-use futures::{StreamExt, stream};
+use futures::stream;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::Result;
@@ -130,7 +130,7 @@ impl<'a> SnapshotsTable<'a> {
             Arc::new(summary.finish()),
         ])?;
 
-        Ok(stream::iter(vec![Ok(batch)]).boxed())
+        Ok(Box::pin(stream::iter(vec![Ok(batch)])))
     }
 }
 

@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::ops::RangeFrom;
 
 use uuid::Uuid;
@@ -38,14 +37,14 @@ const META_ROOT_PATH: &str = "metadata";
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
     #[allow(unused)]
-    fn delete_entries(
+    async fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
-    ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
-    fn existing_manifest(
+    ) -> Result<Vec<ManifestEntry>>;
+    async fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
-    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
+    ) -> Result<Vec<ManifestFile>>;
 }
 
 pub(crate) struct DefaultManifestProcess;

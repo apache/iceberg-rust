@@ -63,7 +63,8 @@ impl Default for UpgradeFormatVersionAction {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TransactionAction for UpgradeFormatVersionAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {

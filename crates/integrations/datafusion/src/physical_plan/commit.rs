@@ -180,7 +180,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let catalog = Arc::clone(&self.catalog);
 
         // Process the input streams from all partitions and commit the data files
-        let stream = futures::stream::once(async move {
+        let stream = Box::pin(futures::stream::once(async move {
             let mut data_files: Vec<DataFile> = Vec::new();
             let mut total_record_count: u64 = 0;
 
@@ -246,8 +246,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(to_datafusion_error)?;
 
             Self::make_count_batch(total_record_count)
-        })
-        .boxed();
+        }));
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.count_schema),
@@ -270,7 +269,6 @@ mod tests {
     use datafusion::physical_plan::execution_plan::Boundedness;
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-    use futures::StreamExt;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
@@ -350,7 +348,7 @@ mod tests {
             let batch = RecordBatch::try_new(self.schema.clone(), vec![array])?;
 
             // Create a stream that returns this batch
-            let stream = futures::stream::once(async move { Ok(batch) }).boxed();
+            let stream = Box::pin(futures::stream::once(async move { Ok(batch) }));
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 self.schema(),
                 stream,

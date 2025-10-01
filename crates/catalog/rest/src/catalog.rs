@@ -435,7 +435,8 @@ impl RestCatalog {
 
 /// All requests and expected responses are derived from the REST catalog API spec:
 /// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Catalog for RestCatalog {
     async fn list_namespaces(
         &self,

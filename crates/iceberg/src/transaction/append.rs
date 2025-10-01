@@ -81,7 +81,8 @@ impl FastAppendAction {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let snapshot_producer = SnapshotProducer::new(

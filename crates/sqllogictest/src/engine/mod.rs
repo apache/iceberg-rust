@@ -27,7 +27,8 @@ use crate::error::Result;
 const KEY_TYPE: &str = "type";
 const TYPE_DATAFUSION: &str = "datafusion";
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait EngineRunner: Sized {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }

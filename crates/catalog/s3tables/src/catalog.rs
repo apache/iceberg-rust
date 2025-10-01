@@ -191,7 +191,8 @@ impl S3TablesCatalog {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Catalog for S3TablesCatalog {
     /// List namespaces from s3tables catalog.
     ///

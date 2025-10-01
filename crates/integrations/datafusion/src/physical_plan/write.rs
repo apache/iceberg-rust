@@ -278,7 +278,7 @@ impl ExecutionPlan for IcebergWriteExec {
         )?;
 
         // Create write stream
-        let stream = futures::stream::once(async move {
+        let stream = Box::pin(futures::stream::once(async move {
             let mut writer = data_file_writer_builder
                 .build()
                 .await
@@ -301,8 +301,7 @@ impl ExecutionPlan for IcebergWriteExec {
                 .collect::<DFResult<Vec<String>>>()?;
 
             Self::make_result_batch(data_files_strs)
-        })
-        .boxed();
+        }));
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.result_schema),
@@ -414,7 +413,7 @@ mod tests {
             let stream = stream::iter(batches.into_iter().map(Ok));
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 self.schema.clone(),
-                stream.boxed(),
+                Box::pin(stream),
             )))
         }
     }
