@@ -191,7 +191,7 @@ impl ManifestListWriter {
         if self.cache.is_some() {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("Cannot repeatedly assign object cache to manifest list writer."),
+                "Cannot repeatedly assign object cache to manifest list writer.".to_string(),
             ));
         }
         self.cache = Some((key, cache));
