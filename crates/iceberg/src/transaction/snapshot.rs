@@ -22,6 +22,7 @@ use std::ops::RangeFrom;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::io::object_cache::CachedObjectKey;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
@@ -409,6 +410,20 @@ impl<'a> SnapshotProducer<'a> {
                 next_seq_num,
             ),
         };
+
+        let object_cache = self.table.object_cache();
+        if object_cache.enabled() {
+            let format_version = self.table.metadata().format_version();
+            let schema_id = self.table.metadata().current_schema_id();
+            let cache_key = CachedObjectKey::ManifestList((
+                manifest_list_path.clone(),
+                format_version,
+                schema_id,
+            ));
+            let cache = self.table.object_cache();
+            manifest_list_writer.set_cache(cache_key, cache)?;
+        }
+
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         manifest_list_writer.close().await?;
 
