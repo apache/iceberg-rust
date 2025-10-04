@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -31,7 +33,7 @@ use opendal::{Operator, Scheme};
 
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
-use super::{FileIOBuilder, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage, StorageBuilder};
+use super::{Extensions, FileIOBuilder, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage, StorageBuilder};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
 use crate::{Error, ErrorKind, Result};
@@ -39,7 +41,9 @@ use crate::{Error, ErrorKind, Result};
 
 /// Builder for [`OpenDALStorage`].
 #[derive(Debug)]
-pub struct OpenDALStorageBuilder;
+pub struct OpenDALStorageBuilder {
+    extensions: Extensions,
+}
 
 impl Default for OpenDALStorageBuilder {
     fn default() -> Self {
@@ -50,11 +54,29 @@ impl Default for OpenDALStorageBuilder {
 impl StorageBuilder for OpenDALStorageBuilder {
     type S = OpenDALStorage;
 
+    // todo this should only takes a property map
     fn build(
         self,
-        file_io_builder: FileIOBuilder,
+        props: HashMap<String, String>,
     ) -> Result<Self::S> {
-        OpenDALStorage::build(file_io_builder)
+        OpenDALStorage::build(props, self.extensions)
+    }
+
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.add(ext);
+        self
+    }
+
+    fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where
+        T: 'static + Send + Sync + Clone
+    {
+        self.extensions.get::<T>()
     }
 }
 
@@ -137,8 +159,10 @@ impl Storage for OpenDALStorage {
 
 impl OpenDALStorage {
     /// Convert iceberg config to opendal config.
-    pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
-        let (scheme_str, props, extensions) = file_io_builder.into_parts();
+    pub(crate) fn build(props: HashMap<String, String>, extensions: Extensions) -> Result<Self> {
+        // todo fix this, after splitting up storages and having OpenDALS3Storage, the scheme should be hardcoded
+        let scheme_str = "temp".to_string();
+        // let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {

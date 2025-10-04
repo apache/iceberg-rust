@@ -64,8 +64,18 @@ pub trait StorageBuilder: Default + Debug {
     /// Create a new storage instance.
     fn build(
         self,
-        file_io_builder: FileIOBuilder,
+        props: HashMap<String, String>,
     ) -> Result<Self::S>;
+
+    /// Add an extension to the file IO builder.
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self;
+
+    /// Adds multiple extensions to the file IO builder.
+    fn with_extensions(mut self, extensions: Extensions) -> Self;
+
+    /// Fetch an extension from the file IO builder.
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone;
 }
 
 /// Trait for reading files
@@ -262,8 +272,6 @@ pub struct FileIOBuilder {
     scheme_str: Option<String>,
     /// Arguments for operator.
     props: HashMap<String, String>,
-    /// Optional extensions to configure the underlying FileIO behavior.
-    extensions: Extensions,
 }
 
 impl FileIOBuilder {
@@ -273,7 +281,6 @@ impl FileIOBuilder {
         Self {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
-            extensions: Extensions::default(),
         }
     }
 
@@ -282,18 +289,16 @@ impl FileIOBuilder {
         Self {
             scheme_str: None,
             props: HashMap::default(),
-            extensions: Extensions::default(),
         }
     }
 
     /// Fetch the scheme string.
     ///
     /// The scheme_str will be empty if it's None.
-    pub fn into_parts(self) -> (String, HashMap<String, String>, Extensions) {
+    pub fn into_parts(self) -> (String, HashMap<String, String>) {
         (
             self.scheme_str.unwrap_or_default(),
             self.props,
-            self.extensions,
         )
     }
 
@@ -311,24 +316,6 @@ impl FileIOBuilder {
         self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
         self
-    }
-
-    /// Add an extension to the file IO builder.
-    pub fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    /// Adds multiple extensions to the file IO builder.
-    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    /// Fetch an extension from the file IO builder.
-    pub fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
     }
 
     /// Builds [`FileIO`].

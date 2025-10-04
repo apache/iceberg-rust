@@ -49,10 +49,10 @@ pub trait BoxedStorageBuilder {
 impl<T: StorageBuilder + 'static> BoxedStorageBuilder for T {
     fn build(
         self: Box<Self>,
-        file_io_builder: FileIOBuilder
+        props: HashMap<String, String>,
     ) -> Result<Arc<dyn Storage>> {
         let builder = *self;
-        Ok(Arc::new(builder.build(file_io_builder)?) as Arc<dyn Storage>)
+        Ok(Arc::new(builder.build(props)?) as Arc<dyn Storage>)
     }
 }
 
