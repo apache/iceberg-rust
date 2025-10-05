@@ -216,6 +216,11 @@ impl SqlCatalog {
             }
         }
     }
+
+    /// Get the catalogs `FileIO`
+    pub fn file_io(&self) -> FileIO {
+        self.fileio.clone()
+    }
 }
 
 #[async_trait]
@@ -765,13 +770,30 @@ impl Catalog for SqlCatalog {
 
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table_ident: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        if !self.table_exists(table_ident).await? {
+            return no_such_table_err(table_ident);
+        }
+
+        let metadata = TableMetadata::read_from(&self.fileio, metadata_location.clone()).await?;
+
+        let namespace = table_ident.namespace();
+        let tbl_name = table_ident.name().to_string();
+
+        self.execute(&format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
+             VALUES (?, ?, ?, ?, ?)
+            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
+
+        Ok(Table::builder()
+            .identifier(table_ident.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .file_io(self.file_io())
+            .build()?)
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
