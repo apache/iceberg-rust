@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,7 +26,10 @@ pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
 use url::Url;
 
-use crate::io::is_truthy;
+use crate::io::{
+    Extensions, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
+    StorageBuilder, is_truthy,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -212,5 +216,142 @@ impl CustomAwsCredentialLoader {
 impl AwsCredentialLoad for CustomAwsCredentialLoader {
     async fn load_credential(&self, client: Client) -> anyhow::Result<Option<AwsCredential>> {
         self.0.load_credential(client).await
+    }
+}
+
+/// S3 storage implementation using OpenDAL
+#[derive(Debug)]
+pub struct OpenDALS3Storage {
+    /// s3 storage could have `s3://` and `s3a://`.
+    /// Storing the scheme string here to return the correct path.
+    configured_scheme: String,
+    config: Arc<S3Config>,
+    customized_credential_load: Option<CustomAwsCredentialLoader>,
+}
+
+#[async_trait]
+impl Storage for OpenDALS3Storage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALInputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALOutputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+}
+
+impl OpenDALS3Storage {
+    /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
+    pub(crate) fn create_operator<'a>(
+        &self,
+        path: &'a (impl AsRef<str> + ?Sized),
+    ) -> Result<(Operator, &'a str)> {
+        let path = path.as_ref();
+        let op = s3_config_build(&self.config, &self.customized_credential_load, path)?;
+        let op_info = op.info();
+
+        // Check prefix of s3 path.
+        let prefix = format!("{}://{}/", self.configured_scheme, op_info.name());
+        if path.starts_with(&prefix) {
+            Ok((op, &path[prefix.len()..]))
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid s3 url: {}, should start with {}", path, prefix),
+            ))
+        }
+    }
+}
+
+/// Builder for S3 storage
+#[derive(Debug, Default)]
+pub struct OpenDALS3StorageBuilder {
+    extensions: Extensions,
+}
+
+impl StorageBuilder for OpenDALS3StorageBuilder {
+    type S = OpenDALS3Storage;
+
+    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+        // Get the scheme string from the props or use "s3" as default
+        let scheme_str = props
+            .get("scheme_str")
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "s3".to_string());
+
+        // Parse S3 config from props
+        let config = s3_config_parse(props.clone())?;
+
+        // Get customized credential loader from extensions if available
+        let customized_credential_load = self
+            .extensions
+            .get::<CustomAwsCredentialLoader>()
+            .map(Arc::unwrap_or_clone);
+
+        Ok(OpenDALS3Storage {
+            configured_scheme: scheme_str,
+            config: Arc::new(config),
+            customized_credential_load,
+        })
+    }
+
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.add(ext);
+        self
+    }
+
+    fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        self.extensions.get::<T>()
     }
 }

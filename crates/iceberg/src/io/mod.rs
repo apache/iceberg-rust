@@ -71,6 +71,8 @@ mod file_io;
 pub use file_io::*;
 pub(crate) mod object_cache;
 
+mod loader;
+mod storage;
 #[cfg(feature = "storage-azdls")]
 mod storage_azdls;
 #[cfg(feature = "storage-fs")]
@@ -83,21 +85,21 @@ mod storage_memory;
 mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
-mod loader;
-mod storage;
 
 #[cfg(feature = "storage-azdls")]
-pub use storage_azdls::*;
+pub use storage_azdls::{OpenDALAzdlsStorage, OpenDALAzdlsStorageBuilder};
 #[cfg(feature = "storage-fs")]
-use storage_fs::*;
+pub use storage_fs::{OpenDALFsStorage, OpenDALFsStorageBuilder};
 #[cfg(feature = "storage-gcs")]
-pub use storage_gcs::*;
+pub use storage_gcs::{OpenDALGcsStorage, OpenDALGcsStorageBuilder};
 #[cfg(feature = "storage-memory")]
-use storage_memory::*;
+// Each storage implementation now exports its own specific types
+pub use storage_memory::OpenDALMemoryStorage;
+pub use storage_memory::OpenDALMemoryStorageBuilder;
 #[cfg(feature = "storage-oss")]
-pub use storage_oss::*;
+pub use storage_oss::{OpenDALOssStorage, OpenDALOssStorageBuilder};
 #[cfg(feature = "storage-s3")]
-pub use storage_s3::*;
+pub use storage_s3::{CustomAwsCredentialLoader, OpenDALS3Storage, OpenDALS3StorageBuilder};
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

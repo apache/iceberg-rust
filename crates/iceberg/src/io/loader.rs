@@ -17,19 +17,56 @@
 
 // todo move this to a new crate
 /// todo doc: mimic storage builder
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+
+#[cfg(feature = "storage-azdls")]
+use crate::io::storage_azdls::OpenDALAzdlsStorageBuilder;
+#[cfg(feature = "storage-fs")]
+use crate::io::storage_fs::OpenDALFsStorageBuilder;
+#[cfg(feature = "storage-gcs")]
+use crate::io::storage_gcs::OpenDALGcsStorageBuilder;
+#[cfg(feature = "storage-memory")]
+use crate::io::storage_memory::OpenDALMemoryStorageBuilder;
+#[cfg(feature = "storage-oss")]
+use crate::io::storage_oss::OpenDALOssStorageBuilder;
+#[cfg(feature = "storage-s3")]
+use crate::io::storage_s3::OpenDALS3StorageBuilder;
+use crate::io::{Storage, StorageBuilder};
 use crate::{Error, ErrorKind, Result};
-use crate::io::{FileIOBuilder, Storage, StorageBuilder};
-use crate::io::storage::OpenDALStorageBuilder;
 
 /// A StorageBuilderFactory creating a new storage builder.
 type StorageBuilderFactory = fn() -> Box<dyn BoxedStorageBuilder>;
 
 /// A registry of storage builders.
 static STORAGE_REGISTRY: &[(&str, StorageBuilderFactory)] = &[
-    ("opendal", || Box::new(OpenDALStorageBuilder::default())),
+    #[cfg(feature = "storage-memory")]
+    (
+        "memory",
+        || Box::new(OpenDALMemoryStorageBuilder::default()),
+    ),
+    #[cfg(feature = "storage-fs")]
+    ("file", || Box::new(OpenDALFsStorageBuilder::default())),
+    #[cfg(feature = "storage-s3")]
+    ("s3", || Box::new(OpenDALS3StorageBuilder::default())),
+    #[cfg(feature = "storage-s3")]
+    ("s3a", || Box::new(OpenDALS3StorageBuilder::default())),
+    #[cfg(feature = "storage-gcs")]
+    ("gs", || Box::new(OpenDALGcsStorageBuilder::default())),
+    #[cfg(feature = "storage-gcs")]
+    ("gcs", || Box::new(OpenDALGcsStorageBuilder::default())),
+    #[cfg(feature = "storage-oss")]
+    ("oss", || Box::new(OpenDALOssStorageBuilder::default())),
+    #[cfg(feature = "storage-azdls")]
+    ("abfs", || Box::new(OpenDALAzdlsStorageBuilder::default())),
+    #[cfg(feature = "storage-azdls")]
+    ("abfss", || Box::new(OpenDALAzdlsStorageBuilder::default())),
+    #[cfg(feature = "storage-azdls")]
+    ("wasb", || Box::new(OpenDALAzdlsStorageBuilder::default())),
+    #[cfg(feature = "storage-azdls")]
+    ("wasbs", || Box::new(OpenDALAzdlsStorageBuilder::default())),
 ];
 
 /// Return the list of supported storage types.
@@ -39,18 +76,12 @@ pub fn supported_types() -> Vec<&'static str> {
 
 #[async_trait]
 pub trait BoxedStorageBuilder {
-    fn build(
-        self: Box<Self>,
-        file_io_builder: FileIOBuilder
-    ) -> Result<Arc<dyn Storage>>;
+    fn build(self: Box<Self>, props: HashMap<String, String>) -> Result<Arc<dyn Storage>>;
 }
 
 #[async_trait]
 impl<T: StorageBuilder + 'static> BoxedStorageBuilder for T {
-    fn build(
-        self: Box<Self>,
-        props: HashMap<String, String>,
-    ) -> Result<Arc<dyn Storage>> {
+    fn build(self: Box<Self>, props: HashMap<String, String>) -> Result<Arc<dyn Storage>> {
         let builder = *self;
         Ok(Arc::new(builder.build(props)?) as Arc<dyn Storage>)
     }
@@ -88,11 +119,8 @@ impl<'a> From<&'a str> for StorageLoader<'a> {
 }
 
 impl StorageLoader<'_> {
-    pub fn load(
-        self,
-        file_io_builder: FileIOBuilder
-    ) -> Result<Arc<dyn Storage>> {
+    pub fn load(self, props: HashMap<String, String>) -> Result<Arc<dyn Storage>> {
         let builder = load(self.storage_type)?;
-        builder.build(file_io_builder)
+        builder.build(props)
     }
 }

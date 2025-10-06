@@ -15,12 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
 
+use crate::io::{
+    Extensions, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
+    StorageBuilder,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Required configuration arguments for creating an Aliyun OSS Operator with OpenDAL:
@@ -63,4 +70,120 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
     let builder = cfg.clone().into_builder().bucket(bucket);
 
     Ok(Operator::new(builder)?.finish())
+}
+
+/// OSS storage implementation using OpenDAL
+#[derive(Debug)]
+pub struct OpenDALOssStorage {
+    config: Arc<OssConfig>,
+}
+
+impl OpenDALOssStorage {
+    /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
+    pub(crate) fn create_operator<'a>(
+        &self,
+        path: &'a (impl AsRef<str> + ?Sized),
+    ) -> Result<(Operator, &'a str)> {
+        let path = path.as_ref();
+        let op = oss_config_build(&self.config, path)?;
+
+        // Check prefix of oss path.
+        let prefix = format!("oss://{}/", op.info().name());
+        if path.starts_with(&prefix) {
+            Ok((op, &path[prefix.len()..]))
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid oss url: {}, should start with {}", path, prefix),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl Storage for OpenDALOssStorage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALInputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALOutputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+}
+
+/// Builder for OpenDAL OSS storage
+#[derive(Debug, Default)]
+pub struct OpenDALOssStorageBuilder {
+    extensions: Extensions,
+}
+
+impl StorageBuilder for OpenDALOssStorageBuilder {
+    type S = OpenDALOssStorage;
+
+    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+        let cfg = oss_config_parse(props)?;
+        Ok(OpenDALOssStorage {
+            config: Arc::new(cfg),
+        })
+    }
+
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.add(ext);
+        self
+    }
+
+    fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        self.extensions.get::<T>()
+    }
 }

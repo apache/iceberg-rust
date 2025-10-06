@@ -26,8 +26,8 @@ use bytes::Bytes;
 use opendal::Operator;
 use url::Url;
 
-use crate::{Error, ErrorKind, Result};
 use crate::io::loader::StorageLoader;
+use crate::{Error, ErrorKind, Result};
 
 /// todo doc
 pub type InputFileRef = Arc<dyn InputFile>;
@@ -62,16 +62,13 @@ pub trait StorageBuilder: Default + Debug {
     /// The storage type that this builder creates.
     type S: Storage;
     /// Create a new storage instance.
-    fn build(
-        self,
-        props: HashMap<String, String>,
-    ) -> Result<Self::S>;
+    fn build(self, props: HashMap<String, String>) -> Result<Self::S>;
 
     /// Add an extension to the file IO builder.
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self;
+    fn with_extension<T: Any + Send + Sync>(self, ext: T) -> Self;
 
     /// Adds multiple extensions to the file IO builder.
-    fn with_extensions(mut self, extensions: Extensions) -> Self;
+    fn with_extensions(self, extensions: Extensions) -> Self;
 
     /// Fetch an extension from the file IO builder.
     fn extension<T>(&self) -> Option<Arc<T>>
@@ -296,10 +293,7 @@ impl FileIOBuilder {
     ///
     /// The scheme_str will be empty if it's None.
     pub fn into_parts(self) -> (String, HashMap<String, String>) {
-        (
-            self.scheme_str.unwrap_or_default(),
-            self.props,
-        )
+        (self.scheme_str.unwrap_or_default(), self.props)
     }
 
     /// Add argument for operator.
@@ -320,8 +314,9 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        // todo storage type need to be configurable
-        let storage = StorageLoader::from("opendal").load(self.clone())?;
+        // Use the scheme to determine the storage type
+        let scheme = self.scheme_str.clone().unwrap_or_default();
+        let storage = StorageLoader::from(scheme.as_str()).load(self.props.clone())?;
         Ok(FileIO {
             builder: self,
             inner: storage,

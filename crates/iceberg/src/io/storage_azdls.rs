@@ -15,14 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
+use std::sync::Arc;
 
-use opendal::Configurator;
+use async_trait::async_trait;
 use opendal::services::AzdlsConfig;
+use opendal::{Configurator, Operator};
 use url::Url;
 
+use crate::io::{
+    Extensions, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
+    StorageBuilder,
+};
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
 /// A connection string.
@@ -594,6 +601,114 @@ mod tests {
         for (name, path, expected) in test_cases {
             let endpoint = path.as_endpoint();
             assert_eq!(endpoint, expected, "Test case: {}", name);
+        }
+    }
+
+    /// Azure Data Lake Storage implementation using OpenDAL
+    #[derive(Debug)]
+    pub struct OpenDALAzdlsStorage {
+        /// Because Azdls accepts multiple possible schemes, we store the full
+        /// passed scheme here to later validate schemes passed via paths.
+        configured_scheme: AzureStorageScheme,
+        config: Arc<AzdlsConfig>,
+    }
+
+    #[async_trait]
+    impl Storage for OpenDALAzdlsStorage {
+        async fn exists(&self, path: &str) -> Result<bool> {
+            let (op, relative_path) = self.create_operator(path)?;
+            Ok(op.exists(relative_path).await?)
+        }
+
+        async fn delete(&self, path: &str) -> Result<()> {
+            let (op, relative_path) = self.create_operator(path)?;
+            Ok(op.delete(relative_path).await?)
+        }
+
+        async fn remove_dir_all(&self, path: &str) -> Result<()> {
+            let (op, relative_path) = self.create_operator(path)?;
+            let path = if relative_path.ends_with('/') {
+                relative_path.to_string()
+            } else {
+                format!("{relative_path}/")
+            };
+            Ok(op.remove_all(&path).await?)
+        }
+
+        fn new_input(&self, path: &str) -> Result<InputFileRef> {
+            let (op, relative_path) = self.create_operator(path)?;
+            let path = path.to_string();
+            let relative_path_pos = path.len() - relative_path.len();
+            Ok(Arc::new(OpenDALInputFile {
+                op,
+                path,
+                relative_path_pos,
+            }))
+        }
+
+        fn new_output(&self, path: &str) -> Result<OutputFileRef> {
+            let (op, relative_path) = self.create_operator(path)?;
+            let path = path.to_string();
+            let relative_path_pos = path.len() - relative_path.len();
+            Ok(Arc::new(OpenDALOutputFile {
+                op,
+                path,
+                relative_path_pos,
+            }))
+        }
+    }
+
+    impl OpenDALAzdlsStorage {
+        /// Create a new Azure Data Lake Storage operator.
+        pub(crate) fn create_operator<'a>(
+            &self,
+            path: &'a (impl AsRef<str> + ?Sized),
+        ) -> Result<(Operator, &'a str)> {
+            azdls_create_operator(path, &self.config, self.configured_scheme)
+        }
+    }
+
+    /// Builder for Azure Data Lake Storage
+    #[derive(Debug, Default)]
+    pub struct OpenDALAzdlsStorageBuilder {
+        extensions: Extensions,
+    }
+
+    impl StorageBuilder for OpenDALAzdlsStorageBuilder {
+        type S = OpenDALAzdlsStorage;
+
+        fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+            // Get the scheme string from the props or use default
+            let scheme_str = props
+                .get("scheme_str")
+                .map(|s| s.clone())
+                .unwrap_or_else(|| "abfs".to_string());
+
+            // Parse the scheme
+            let scheme = scheme_str.parse::<AzureStorageScheme>()?;
+
+            // Parse Azdls config from props
+            let config = azdls_config_parse(props)?;
+
+            Ok(OpenDALAzdlsStorage {
+                configured_scheme: scheme,
+                config: Arc::new(config),
+            })
+        }
+
+        fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+            self.extensions.add(ext);
+            self
+        }
+
+        fn with_extensions(mut self, extensions: Extensions) -> Self {
+            self.extensions.extend(extensions);
+            self
+        }
+
+        fn extension<T>(&self) -> Option<Arc<T>>
+        where T: 'static + Send + Sync + Clone {
+            self.extensions.get::<T>()
         }
     }
 }

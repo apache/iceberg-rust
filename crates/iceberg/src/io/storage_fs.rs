@@ -15,10 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use opendal::Operator;
 use opendal::services::FsConfig;
 
 use crate::Result;
+use crate::io::{
+    Extensions, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
+    StorageBuilder,
+};
 
 /// Build new opendal operator from give path.
 pub(crate) fn fs_config_build() -> Result<Operator> {
@@ -26,4 +35,98 @@ pub(crate) fn fs_config_build() -> Result<Operator> {
     cfg.root = Some("/".to_string());
 
     Ok(Operator::from_config(cfg)?.finish())
+}
+
+/// Filesystem storage implementation using OpenDAL
+#[derive(Debug)]
+pub struct OpenDALFsStorage;
+
+impl OpenDALFsStorage {
+    /// Extract relative path from file:// URLs
+    fn extract_relative_path<'a>(&self, path: &'a str) -> Result<&'a str> {
+        if let Some(stripped) = path.strip_prefix("file:/") {
+            Ok(stripped)
+        } else {
+            Ok(&path[1..])
+        }
+    }
+}
+
+#[async_trait]
+impl Storage for OpenDALFsStorage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let relative_path = self.extract_relative_path(path)?;
+        let op = fs_config_build()?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let relative_path = self.extract_relative_path(path)?;
+        let op = fs_config_build()?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let relative_path = self.extract_relative_path(path)?;
+        let op = fs_config_build()?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFileRef> {
+        let relative_path = self.extract_relative_path(path)?;
+        let op = fs_config_build()?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALInputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFileRef> {
+        let relative_path = self.extract_relative_path(path)?;
+        let op = fs_config_build()?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALOutputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+}
+
+/// Builder for OpenDAL Filesystem storage
+#[derive(Debug, Default)]
+pub struct OpenDALFsStorageBuilder {
+    extensions: Extensions,
+}
+
+impl StorageBuilder for OpenDALFsStorageBuilder {
+    type S = OpenDALFsStorage;
+
+    fn build(self, _props: HashMap<String, String>) -> Result<Self::S> {
+        Ok(OpenDALFsStorage)
+    }
+
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.add(ext);
+        self
+    }
+
+    fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        self.extensions.get::<T>()
+    }
 }

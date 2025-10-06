@@ -16,13 +16,19 @@
 // under the License.
 //! Google Cloud Storage properties
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use opendal::Operator;
 use opendal::services::GcsConfig;
 use url::Url;
 
-use crate::io::is_truthy;
+use crate::io::{
+    Extensions, InputFileRef, OpenDALInputFile, OpenDALOutputFile, OutputFileRef, Storage,
+    StorageBuilder, is_truthy,
+};
 use crate::{Error, ErrorKind, Result};
 
 // Reference: https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java
@@ -103,4 +109,120 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
     Ok(Operator::from_config(cfg)?.finish())
+}
+
+/// GCS storage implementation using OpenDAL
+#[derive(Debug)]
+pub struct OpenDALGcsStorage {
+    config: Arc<GcsConfig>,
+}
+
+impl OpenDALGcsStorage {
+    /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
+    pub(crate) fn create_operator<'a>(
+        &self,
+        path: &'a (impl AsRef<str> + ?Sized),
+    ) -> Result<(Operator, &'a str)> {
+        let path = path.as_ref();
+        let op = gcs_config_build(&self.config, path)?;
+
+        // Check prefix of gcs path.
+        let prefix = format!("gs://{}/", op.info().name());
+        if path.starts_with(&prefix) {
+            Ok((op, &path[prefix.len()..]))
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid gcs url: {}, should start with {}", path, prefix),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl Storage for OpenDALGcsStorage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALInputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFileRef> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = path.to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(Arc::new(OpenDALOutputFile {
+            op,
+            path,
+            relative_path_pos,
+        }))
+    }
+}
+
+/// Builder for OpenDAL GCS storage
+#[derive(Debug, Default)]
+pub struct OpenDALGcsStorageBuilder {
+    extensions: Extensions,
+}
+
+impl StorageBuilder for OpenDALGcsStorageBuilder {
+    type S = OpenDALGcsStorage;
+
+    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+        let cfg = gcs_config_parse(props)?;
+        Ok(OpenDALGcsStorage {
+            config: Arc::new(cfg),
+        })
+    }
+
+    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        self.extensions.add(ext);
+        self
+    }
+
+    fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
+    fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        self.extensions.get::<T>()
+    }
 }
