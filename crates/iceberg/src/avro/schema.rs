@@ -36,10 +36,7 @@ const ELEMENT_ID: &str = "element-id";
 const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
-const UUID_BYTES: usize = 16;
-const UUID_LOGICAL_TYPE: &str = "uuid";
 const MAP_LOGICAL_TYPE: &str = "map";
-// # TODO: https://github.com/apache/iceberg-rust/issues/86
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
@@ -237,8 +234,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::TimestampNs => AvroSchema::TimestampNanos,
             PrimitiveType::TimestamptzNs => AvroSchema::TimestampNanos,
             PrimitiveType::String => AvroSchema::String,
-            PrimitiveType::Uuid => avro_fixed_schema(UUID_BYTES, Some(UUID_LOGICAL_TYPE))?,
-            PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize, None)?,
+            PrimitiveType::Uuid => AvroSchema::Uuid,
+            PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize)?,
             PrimitiveType::Binary => AvroSchema::Bytes,
             PrimitiveType::Decimal { precision, scale } => {
                 avro_decimal_schema(*precision as usize, *scale as usize)?
@@ -274,21 +271,13 @@ fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSc
     }))
 }
 
-pub(crate) fn avro_fixed_schema(len: usize, logical_type: Option<&str>) -> Result<AvroSchema> {
-    let attributes = if let Some(logical_type) = logical_type {
-        BTreeMap::from([(
-            LOGICAL_TYPE.to_string(),
-            Value::String(logical_type.to_string()),
-        )])
-    } else {
-        Default::default()
-    };
+pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
     Ok(AvroSchema::Fixed(FixedSchema {
         name: Name::new(format!("fixed_{len}").as_str())?,
         aliases: None,
         doc: None,
         size: len,
-        attributes,
+        attributes: Default::default(),
         default: None,
     }))
 }
@@ -533,30 +522,9 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             AvroSchema::Long => Type::Primitive(PrimitiveType::Long),
             AvroSchema::Float => Type::Primitive(PrimitiveType::Float),
             AvroSchema::Double => Type::Primitive(PrimitiveType::Double),
+            AvroSchema::Uuid => Type::Primitive(PrimitiveType::Uuid),
             AvroSchema::String | AvroSchema::Enum(_) => Type::Primitive(PrimitiveType::String),
-            AvroSchema::Fixed(fixed) => {
-                if let Some(logical_type) = fixed.attributes.get(LOGICAL_TYPE) {
-                    let logical_type = logical_type.as_str().ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "logicalType in attributes of avro schema is not a string type",
-                        )
-                    })?;
-                    match logical_type {
-                        UUID_LOGICAL_TYPE => Type::Primitive(PrimitiveType::Uuid),
-                        ty => {
-                            return Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                format!(
-                                    "Logical type {ty} is not support in iceberg primitive type.",
-                                ),
-                            ));
-                        }
-                    }
-                } else {
-                    Type::Primitive(PrimitiveType::Fixed(fixed.size as u64))
-                }
-            }
+            AvroSchema::Fixed(fixed) => Type::Primitive(PrimitiveType::Fixed(fixed.size as u64)),
             AvroSchema::Bytes => Type::Primitive(PrimitiveType::Binary),
             AvroSchema::Null => return Ok(None),
             _ => {
@@ -1221,6 +1189,27 @@ mod tests {
         assert_eq!(
             Type::from(PrimitiveType::Date),
             converter.primitive(&AvroSchema::Date).unwrap().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_uuid_type() {
+        let avro_schema = {
+            AvroSchema::parse_str(
+                r#"
+            {"name": "test", "type": "fixed", "size": 16, "logicalType": "uuid"}
+            "#,
+            )
+            .unwrap()
+        };
+
+        let mut converter = AvroSchemaToSchema;
+
+        let iceberg_type = Type::from(PrimitiveType::Uuid);
+
+        assert_eq!(
+            iceberg_type,
+            converter.primitive(&avro_schema).unwrap().unwrap()
         );
     }
 }

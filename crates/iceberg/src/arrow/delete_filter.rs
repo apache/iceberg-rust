@@ -311,21 +311,21 @@ pub(crate) mod tests {
             file_path: format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
-            equality_ids: vec![],
+            equality_ids: None,
         };
 
         let pos_del_2 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
-            equality_ids: vec![],
+            equality_ids: None,
         };
 
         let pos_del_3 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
-            equality_ids: vec![],
+            equality_ids: None,
         };
 
         let file_scan_tasks = vec![
