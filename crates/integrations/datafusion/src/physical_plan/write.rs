@@ -235,6 +235,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
+            None,
             FieldMatchMode::Name,
             self.table.file_io().clone(),
             DefaultLocationGenerator::new(self.table.metadata().clone())

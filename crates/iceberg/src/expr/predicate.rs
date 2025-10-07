@@ -259,7 +259,22 @@ impl<T: Debug> Debug for SetExpression<T> {
 }
 
 impl<T> SetExpression<T> {
-    pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
+    /// Creates a set expression with the given operator, term and literal.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use fnv::FnvHashSet;
+    /// use iceberg::expr::{PredicateOperator, Reference, SetExpression};
+    /// use iceberg::spec::Datum;
+    ///
+    /// SetExpression::new(
+    ///     PredicateOperator::In,
+    ///     Reference::new("a"),
+    ///     FnvHashSet::from_iter(vec![Datum::int(1)]),
+    /// );
+    /// ```
+    pub fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
         Self { op, term, literals }
     }

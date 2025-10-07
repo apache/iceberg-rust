@@ -79,7 +79,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             }
         }
         Expr::Column(column) => TransformedResult::Column(Reference::new(column.name())),
-        Expr::Literal(literal) => match scalar_value_to_datum(literal) {
+        Expr::Literal(literal, _) => match scalar_value_to_datum(literal) {
             Some(data) => TransformedResult::Literal(data),
             None => TransformedResult::NotTransformed,
         },

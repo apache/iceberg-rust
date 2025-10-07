@@ -22,3 +22,5 @@
 mod engine;
 #[allow(dead_code)]
 mod error;
+#[allow(dead_code)]
+mod schedule;

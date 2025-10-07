@@ -135,7 +135,7 @@ pub struct DataFile {
     /// otherwise. Fields with ids listed in this column must be present
     /// in the delete file
     #[builder(default)]
-    pub(crate) equality_ids: Vec<i32>,
+    pub(crate) equality_ids: Option<Vec<i32>>,
     /// field id: 140
     ///
     /// ID representing sort order for this file.
@@ -249,8 +249,8 @@ impl DataFile {
     /// Get the equality ids of the data file.
     /// Field ids used to determine row equality in equality delete files.
     /// null when content is not EqualityDeletes.
-    pub fn equality_ids(&self) -> &[i32] {
-        &self.equality_ids
+    pub fn equality_ids(&self) -> Option<Vec<i32>> {
+        self.equality_ids.clone()
     }
     /// Get the first row id in the data file.
     pub fn first_row_id(&self) -> Option<i64> {

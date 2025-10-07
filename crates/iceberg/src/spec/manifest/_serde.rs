@@ -116,7 +116,6 @@ pub(super) struct DataFileSerde {
     upper_bounds: Option<Vec<BytesEntry>>,
     key_metadata: Option<serde_bytes::ByteBuf>,
     split_offsets: Option<Vec<i64>>,
-    #[serde(default)]
     equality_ids: Option<Vec<i32>>,
     sort_order_id: Option<i32>,
     first_row_id: Option<i64>,
@@ -155,7 +154,7 @@ impl DataFileSerde {
             upper_bounds: Some(to_bytes_entry(value.upper_bounds)?),
             key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
             split_offsets: Some(value.split_offsets),
-            equality_ids: Some(value.equality_ids),
+            equality_ids: value.equality_ids,
             sort_order_id: value.sort_order_id,
             first_row_id: value.first_row_id,
             referenced_data_file: value.referenced_data_file,
@@ -224,7 +223,7 @@ impl DataFileSerde {
                 .unwrap_or_default(),
             key_metadata: self.key_metadata.map(|v| v.to_vec()),
             split_offsets: self.split_offsets.unwrap_or_default(),
-            equality_ids: self.equality_ids.unwrap_or_default(),
+            equality_ids: self.equality_ids,
             sort_order_id: self.sort_order_id,
             partition_spec_id,
             first_row_id: self.first_row_id,
@@ -382,7 +381,7 @@ mod tests {
             upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
             key_metadata: None,
             split_offsets: vec![4],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: Some(0),
             partition_spec_id: 0,
             first_row_id: None,
@@ -517,9 +516,8 @@ mod tests {
             "DataFileSerde should convert content 0 to DataContentType::Data"
         );
         assert_eq!(
-            v2_entry.data_file.equality_ids,
-            Vec::<i32>::new(),
-            "DataFileSerde should convert None equality_ids to empty vec"
+            v2_entry.data_file.equality_ids, None,
+            "DataFileSerde should preserve None equality_ids as None"
         );
 
         // Verify other fields are preserved during conversion
@@ -581,9 +579,8 @@ mod tests {
             "content 0 should convert to DataContentType::Data"
         );
         assert_eq!(
-            data_file.equality_ids,
-            Vec::<i32>::new(),
-            "None equality_ids should convert to empty vec via unwrap_or_default()"
+            data_file.equality_ids, None,
+            "None equality_ids should remain as None"
         );
 
         // Verify other fields are handled correctly during conversion

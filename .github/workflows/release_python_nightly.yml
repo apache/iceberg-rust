@@ -23,7 +23,7 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 env:
-  rust_msrv: "1.85"
+  rust_msrv: "1.87"
 
 permissions:
   contents: read
@@ -84,7 +84,7 @@ jobs:
         with:
           timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.9
 
