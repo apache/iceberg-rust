@@ -55,62 +55,6 @@ pub const GCS_DISABLE_VM_METADATA: &str = "gcs.disable-vm-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const GCS_DISABLE_CONFIG_LOAD: &str = "gcs.disable-config-load";
 
-/// Parse iceberg properties to [`GcsConfig`].
-pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
-    let mut cfg = GcsConfig::default();
-
-    if let Some(cred) = m.remove(GCS_CREDENTIALS_JSON) {
-        cfg.credential = Some(cred);
-    }
-
-    if let Some(token) = m.remove(GCS_TOKEN) {
-        cfg.token = Some(token);
-    }
-
-    if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
-        cfg.endpoint = Some(endpoint);
-    }
-
-    if m.remove(GCS_NO_AUTH).is_some() {
-        cfg.allow_anonymous = true;
-        cfg.disable_vm_metadata = true;
-        cfg.disable_config_load = true;
-    }
-
-    if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS) {
-        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
-            cfg.allow_anonymous = true;
-        }
-    }
-    if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA) {
-        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
-            cfg.disable_vm_metadata = true;
-        }
-    };
-    if let Some(disable_config_load) = m.remove(GCS_DISABLE_CONFIG_LOAD) {
-        if is_truthy(disable_config_load.to_lowercase().as_str()) {
-            cfg.disable_config_load = true;
-        }
-    };
-
-    Ok(cfg)
-}
-
-/// Build a new OpenDAL [`Operator`] based on a provided [`GcsConfig`].
-pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> {
-    let url = Url::parse(path)?;
-    let bucket = url.host_str().ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid gcs url: {}, bucket is required", path),
-        )
-    })?;
-
-    let mut cfg = cfg.clone();
-    cfg.bucket = bucket.to_string();
-    Ok(Operator::from_config(cfg)?.finish())
-}
-
 /// GCS storage implementation using OpenDAL
 #[derive(Debug)]
 pub struct OpenDALGcsStorage {
@@ -225,4 +169,60 @@ impl StorageBuilder for OpenDALGcsStorageBuilder {
     where T: 'static + Send + Sync + Clone {
         self.extensions.get::<T>()
     }
+}
+
+/// Parse iceberg properties to [`GcsConfig`].
+pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
+    let mut cfg = GcsConfig::default();
+
+    if let Some(cred) = m.remove(GCS_CREDENTIALS_JSON) {
+        cfg.credential = Some(cred);
+    }
+
+    if let Some(token) = m.remove(GCS_TOKEN) {
+        cfg.token = Some(token);
+    }
+
+    if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
+        cfg.endpoint = Some(endpoint);
+    }
+
+    if m.remove(GCS_NO_AUTH).is_some() {
+        cfg.allow_anonymous = true;
+        cfg.disable_vm_metadata = true;
+        cfg.disable_config_load = true;
+    }
+
+    if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS) {
+        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
+            cfg.allow_anonymous = true;
+        }
+    }
+    if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA) {
+        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
+            cfg.disable_vm_metadata = true;
+        }
+    };
+    if let Some(disable_config_load) = m.remove(GCS_DISABLE_CONFIG_LOAD) {
+        if is_truthy(disable_config_load.to_lowercase().as_str()) {
+            cfg.disable_config_load = true;
+        }
+    };
+
+    Ok(cfg)
+}
+
+/// Build a new OpenDAL [`Operator`] based on a provided [`GcsConfig`].
+pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> {
+    let url = Url::parse(path)?;
+    let bucket = url.host_str().ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid gcs url: {}, bucket is required", path),
+        )
+    })?;
+
+    let mut cfg = cfg.clone();
+    cfg.bucket = bucket.to_string();
+    Ok(Operator::from_config(cfg)?.finish())
 }

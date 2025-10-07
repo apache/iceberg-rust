@@ -87,19 +87,17 @@ mod storage_oss;
 mod storage_s3;
 
 #[cfg(feature = "storage-azdls")]
-pub use storage_azdls::{OpenDALAzdlsStorage, OpenDALAzdlsStorageBuilder};
+pub use storage_azdls::*;
 #[cfg(feature = "storage-fs")]
-pub use storage_fs::{OpenDALFsStorage, OpenDALFsStorageBuilder};
+pub use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
-pub use storage_gcs::{OpenDALGcsStorage, OpenDALGcsStorageBuilder};
+pub use storage_gcs::*;
 #[cfg(feature = "storage-memory")]
-// Each storage implementation now exports its own specific types
-pub use storage_memory::OpenDALMemoryStorage;
-pub use storage_memory::OpenDALMemoryStorageBuilder;
+pub use storage_memory::*;
 #[cfg(feature = "storage-oss")]
-pub use storage_oss::{OpenDALOssStorage, OpenDALOssStorageBuilder};
+pub use storage_oss::*;
 #[cfg(feature = "storage-s3")]
-pub use storage_s3::{CustomAwsCredentialLoader, OpenDALS3Storage, OpenDALS3StorageBuilder};
+pub use storage_s3::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

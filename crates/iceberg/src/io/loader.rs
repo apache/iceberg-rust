@@ -34,7 +34,7 @@ use crate::io::storage_memory::OpenDALMemoryStorageBuilder;
 use crate::io::storage_oss::OpenDALOssStorageBuilder;
 #[cfg(feature = "storage-s3")]
 use crate::io::storage_s3::OpenDALS3StorageBuilder;
-use crate::io::{Storage, StorageBuilder};
+use crate::io::{Extensions, Storage, StorageBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// A StorageBuilderFactory creating a new storage builder.
@@ -76,14 +76,22 @@ pub fn supported_types() -> Vec<&'static str> {
 
 #[async_trait]
 pub trait BoxedStorageBuilder {
-    fn build(self: Box<Self>, props: HashMap<String, String>) -> Result<Arc<dyn Storage>>;
+    fn build(
+        self: Box<Self>,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>>;
 }
 
 #[async_trait]
 impl<T: StorageBuilder + 'static> BoxedStorageBuilder for T {
-    fn build(self: Box<Self>, props: HashMap<String, String>) -> Result<Arc<dyn Storage>> {
+    fn build(
+        self: Box<Self>,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         let builder = *self;
-        Ok(Arc::new(builder.build(props)?) as Arc<dyn Storage>)
+        Ok(Arc::new(builder.with_extensions(extensions).build(props)?) as Arc<dyn Storage>)
     }
 }
 
@@ -119,8 +127,12 @@ impl<'a> From<&'a str> for StorageLoader<'a> {
 }
 
 impl StorageLoader<'_> {
-    pub fn load(self, props: HashMap<String, String>) -> Result<Arc<dyn Storage>> {
+    pub fn load(
+        self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         let builder = load(self.storage_type)?;
-        builder.build(props)
+        builder.build(props, extensions)
     }
 }

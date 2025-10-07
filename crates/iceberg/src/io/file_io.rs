@@ -269,6 +269,8 @@ pub struct FileIOBuilder {
     scheme_str: Option<String>,
     /// Arguments for operator.
     props: HashMap<String, String>,
+    /// Optional extensions to configure the underlying Storage behavior.
+    extensions: Extensions,
 }
 
 impl FileIOBuilder {
@@ -278,6 +280,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
+            extensions: Extensions::default(),
         }
     }
 
@@ -286,6 +289,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: None,
             props: HashMap::default(),
+            extensions: Extensions::default(),
         }
     }
 
@@ -312,11 +316,18 @@ impl FileIOBuilder {
         self
     }
 
+    /// Add extensions to the builder.
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
         // Use the scheme to determine the storage type
         let scheme = self.scheme_str.clone().unwrap_or_default();
-        let storage = StorageLoader::from(scheme.as_str()).load(self.props.clone())?;
+        let storage = StorageLoader::from(scheme.as_str())
+            .load(self.props.clone(), self.extensions.clone())?;
         Ok(FileIO {
             builder: self,
             inner: storage,
