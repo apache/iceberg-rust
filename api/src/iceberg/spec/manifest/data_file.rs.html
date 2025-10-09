@@ -26,7 +26,7 @@
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">super</span>::_serde::DataFileSerde;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use super</span>::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::error::Result;
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::spec::{Struct, StructType};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use crate</span>::{Error, ErrorKind};
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Data file carries data file path, partition tuple, metrics, …
@@ -49,372 +49,374 @@
 <a href=#49 id=49 data-nosnippet>49</a>    ///
 <a href=#50 id=50 data-nosnippet>50</a>    /// Partition data tuple, schema based on the partition spec output using
 <a href=#51 id=51 data-nosnippet>51</a>    /// partition field ids for the struct field ids
-<a href=#52 id=52 data-nosnippet>52</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition: Struct,
-<a href=#53 id=53 data-nosnippet>53</a>    <span class="doccomment">/// field id: 103
-<a href=#54 id=54 data-nosnippet>54</a>    ///
-<a href=#55 id=55 data-nosnippet>55</a>    /// Number of records in this file, or the cardinality of a deletion vector
-<a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) record_count: u64,
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="doccomment">/// field id: 104
-<a href=#58 id=58 data-nosnippet>58</a>    ///
-<a href=#59 id=59 data-nosnippet>59</a>    /// Total file size in bytes
-<a href=#60 id=60 data-nosnippet>60</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) file_size_in_bytes: u64,
-<a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// field id: 108
-<a href=#62 id=62 data-nosnippet>62</a>    /// key field id: 117
-<a href=#63 id=63 data-nosnippet>63</a>    /// value field id: 118
-<a href=#64 id=64 data-nosnippet>64</a>    ///
-<a href=#65 id=65 data-nosnippet>65</a>    /// Map from column id to the total size on disk of all regions that
-<a href=#66 id=66 data-nosnippet>66</a>    /// store the column. Does not include bytes necessary to read other
-<a href=#67 id=67 data-nosnippet>67</a>    /// columns, like footers. Leave null for row-oriented formats (Avro)
-<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="attr">#[builder(default)]
-<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) column_sizes: HashMap&lt;i32, u64&gt;,
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// field id: 109
-<a href=#71 id=71 data-nosnippet>71</a>    /// key field id: 119
-<a href=#72 id=72 data-nosnippet>72</a>    /// value field id: 120
-<a href=#73 id=73 data-nosnippet>73</a>    ///
-<a href=#74 id=74 data-nosnippet>74</a>    /// Map from column id to number of values in the column (including null
-<a href=#75 id=75 data-nosnippet>75</a>    /// and NaN values)
-<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="attr">#[builder(default)]
-<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) value_counts: HashMap&lt;i32, u64&gt;,
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// field id: 110
-<a href=#79 id=79 data-nosnippet>79</a>    /// key field id: 121
-<a href=#80 id=80 data-nosnippet>80</a>    /// value field id: 122
-<a href=#81 id=81 data-nosnippet>81</a>    ///
-<a href=#82 id=82 data-nosnippet>82</a>    /// Map from column id to number of null values in the column
-<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="attr">#[builder(default)]
-<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) null_value_counts: HashMap&lt;i32, u64&gt;,
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="doccomment">/// field id: 137
-<a href=#86 id=86 data-nosnippet>86</a>    /// key field id: 138
-<a href=#87 id=87 data-nosnippet>87</a>    /// value field id: 139
-<a href=#88 id=88 data-nosnippet>88</a>    ///
-<a href=#89 id=89 data-nosnippet>89</a>    /// Map from column id to number of NaN values in the column
-<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="attr">#[builder(default)]
-<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) nan_value_counts: HashMap&lt;i32, u64&gt;,
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="doccomment">/// field id: 125
-<a href=#93 id=93 data-nosnippet>93</a>    /// key field id: 126
-<a href=#94 id=94 data-nosnippet>94</a>    /// value field id: 127
-<a href=#95 id=95 data-nosnippet>95</a>    ///
-<a href=#96 id=96 data-nosnippet>96</a>    /// Map from column id to lower bound in the column serialized as binary.
-<a href=#97 id=97 data-nosnippet>97</a>    /// Each value must be less than or equal to all non-null, non-NaN values
-<a href=#98 id=98 data-nosnippet>98</a>    /// in the column for the file.
-<a href=#99 id=99 data-nosnippet>99</a>    ///
-<a href=#100 id=100 data-nosnippet>100</a>    /// Reference:
-<a href=#101 id=101 data-nosnippet>101</a>    ///
-<a href=#102 id=102 data-nosnippet>102</a>    /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
-<a href=#103 id=103 data-nosnippet>103</a>    </span><span class="attr">#[builder(default)]
-<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) lower_bounds: HashMap&lt;i32, Datum&gt;,
-<a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// field id: 128
-<a href=#106 id=106 data-nosnippet>106</a>    /// key field id: 129
-<a href=#107 id=107 data-nosnippet>107</a>    /// value field id: 130
-<a href=#108 id=108 data-nosnippet>108</a>    ///
-<a href=#109 id=109 data-nosnippet>109</a>    /// Map from column id to upper bound in the column serialized as binary.
-<a href=#110 id=110 data-nosnippet>110</a>    /// Each value must be greater than or equal to all non-null, non-Nan
-<a href=#111 id=111 data-nosnippet>111</a>    /// values in the column for the file.
-<a href=#112 id=112 data-nosnippet>112</a>    ///
-<a href=#113 id=113 data-nosnippet>113</a>    /// Reference:
-<a href=#114 id=114 data-nosnippet>114</a>    ///
-<a href=#115 id=115 data-nosnippet>115</a>    /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
-<a href=#116 id=116 data-nosnippet>116</a>    </span><span class="attr">#[builder(default)]
-<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) upper_bounds: HashMap&lt;i32, Datum&gt;,
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="doccomment">/// field id: 131
-<a href=#119 id=119 data-nosnippet>119</a>    ///
-<a href=#120 id=120 data-nosnippet>120</a>    /// Implementation-specific key metadata for encryption
-<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="attr">#[builder(default)]
-<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="doccomment">/// field id: 132
-<a href=#124 id=124 data-nosnippet>124</a>    /// element field id: 133
-<a href=#125 id=125 data-nosnippet>125</a>    ///
-<a href=#126 id=126 data-nosnippet>126</a>    /// Split offsets for the data file. For example, all row group offsets
-<a href=#127 id=127 data-nosnippet>127</a>    /// in a Parquet file. Must be sorted ascending
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="attr">#[builder(default)]
-<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) split_offsets: Vec&lt;i64&gt;,
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="doccomment">/// field id: 135
-<a href=#131 id=131 data-nosnippet>131</a>    /// element field id: 136
-<a href=#132 id=132 data-nosnippet>132</a>    ///
-<a href=#133 id=133 data-nosnippet>133</a>    /// Field ids used to determine row equality in equality delete files.
-<a href=#134 id=134 data-nosnippet>134</a>    /// Required when content is EqualityDeletes and should be null
-<a href=#135 id=135 data-nosnippet>135</a>    /// otherwise. Fields with ids listed in this column must be present
-<a href=#136 id=136 data-nosnippet>136</a>    /// in the delete file
-<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="attr">#[builder(default)]
-<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
-<a href=#139 id=139 data-nosnippet>139</a>    <span class="doccomment">/// field id: 140
-<a href=#140 id=140 data-nosnippet>140</a>    ///
-<a href=#141 id=141 data-nosnippet>141</a>    /// ID representing sort order for this file.
-<a href=#142 id=142 data-nosnippet>142</a>    ///
-<a href=#143 id=143 data-nosnippet>143</a>    /// If sort order ID is missing or unknown, then the order is assumed to
-<a href=#144 id=144 data-nosnippet>144</a>    /// be unsorted. Only data files and equality delete files should be
-<a href=#145 id=145 data-nosnippet>145</a>    /// written with a non-null order id. Position deletes are required to be
-<a href=#146 id=146 data-nosnippet>146</a>    /// sorted by file and position, not a table order, and should set sort
-<a href=#147 id=147 data-nosnippet>147</a>    /// order id to null. Readers must ignore sort order id for position
-<a href=#148 id=148 data-nosnippet>148</a>    /// delete files.
-<a href=#149 id=149 data-nosnippet>149</a>    </span><span class="attr">#[builder(default, setter(strip_option))]
-<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sort_order_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="doccomment">/// field id: 142
-<a href=#152 id=152 data-nosnippet>152</a>    ///
-<a href=#153 id=153 data-nosnippet>153</a>    /// The _row_id for the first row in the data file.
-<a href=#154 id=154 data-nosnippet>154</a>    /// For more details, refer to https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance
-<a href=#155 id=155 data-nosnippet>155</a>    </span><span class="attr">#[builder(default)]
-<a href=#156 id=156 data-nosnippet>156</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) first_row_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#157 id=157 data-nosnippet>157</a>    <span class="doccomment">/// This field is not included in spec. It is just store in memory representation used
-<a href=#158 id=158 data-nosnippet>158</a>    /// in process.
-<a href=#159 id=159 data-nosnippet>159</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_spec_id: i32,
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="doccomment">/// field id: 143
-<a href=#161 id=161 data-nosnippet>161</a>    ///
-<a href=#162 id=162 data-nosnippet>162</a>    /// Fully qualified location (URI with FS scheme) of a data file that all deletes reference.
-<a href=#163 id=163 data-nosnippet>163</a>    /// Position delete metadata can use `referenced_data_file` when all deletes tracked by the
-<a href=#164 id=164 data-nosnippet>164</a>    /// entry are in a single data file. Setting the referenced file is required for deletion vectors.
-<a href=#165 id=165 data-nosnippet>165</a>    </span><span class="attr">#[builder(default)]
-<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) referenced_data_file: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#167 id=167 data-nosnippet>167</a>    <span class="doccomment">/// field: 144
-<a href=#168 id=168 data-nosnippet>168</a>    ///
-<a href=#169 id=169 data-nosnippet>169</a>    /// The offset in the file where the content starts.
-<a href=#170 id=170 data-nosnippet>170</a>    /// The `content_offset` and `content_size_in_bytes` fields are used to reference a specific blob
-<a href=#171 id=171 data-nosnippet>171</a>    /// for direct access to a deletion vector. For deletion vectors, these values are required and must
-<a href=#172 id=172 data-nosnippet>172</a>    /// exactly match the `offset` and `length` stored in the Puffin footer for the deletion vector blob.
-<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="attr">#[builder(default)]
-<a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) content_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// field: 145
-<a href=#176 id=176 data-nosnippet>176</a>    ///
-<a href=#177 id=177 data-nosnippet>177</a>    /// The length of a referenced content stored in the file; required if `content_offset` is present
-<a href=#178 id=178 data-nosnippet>178</a>    </span><span class="attr">#[builder(default)]
-<a href=#179 id=179 data-nosnippet>179</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) content_size_in_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#180 id=180 data-nosnippet>180</a>}
-<a href=#181 id=181 data-nosnippet>181</a>
-<a href=#182 id=182 data-nosnippet>182</a><span class="kw">impl </span>DataFile {
-<a href=#183 id=183 data-nosnippet>183</a>    <span class="doccomment">/// Get the content type of the data file (data, equality deletes, or position deletes)
-<a href=#184 id=184 data-nosnippet>184</a>    </span><span class="kw">pub fn </span>content_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataContentType {
-<a href=#185 id=185 data-nosnippet>185</a>        <span class="self">self</span>.content
-<a href=#186 id=186 data-nosnippet>186</a>    }
-<a href=#187 id=187 data-nosnippet>187</a>    <span class="doccomment">/// Get the file path as full URI with FS scheme
-<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">pub fn </span>file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.file_path
-<a href=#190 id=190 data-nosnippet>190</a>    }
-<a href=#191 id=191 data-nosnippet>191</a>    <span class="doccomment">/// Get the file format of the file (avro, orc or parquet).
-<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="kw">pub fn </span>file_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataFileFormat {
-<a href=#193 id=193 data-nosnippet>193</a>        <span class="self">self</span>.file_format
-<a href=#194 id=194 data-nosnippet>194</a>    }
-<a href=#195 id=195 data-nosnippet>195</a>    <span class="doccomment">/// Get the partition values of the file.
-<a href=#196 id=196 data-nosnippet>196</a>    </span><span class="kw">pub fn </span>partition(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Struct {
-<a href=#197 id=197 data-nosnippet>197</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.partition
-<a href=#198 id=198 data-nosnippet>198</a>    }
-<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Get the record count in the data file.
-<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">pub fn </span>record_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="self">self</span>.record_count
-<a href=#202 id=202 data-nosnippet>202</a>    }
-<a href=#203 id=203 data-nosnippet>203</a>    <span class="doccomment">/// Get the file size in bytes.
-<a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">pub fn </span>file_size_in_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#205 id=205 data-nosnippet>205</a>        <span class="self">self</span>.file_size_in_bytes
-<a href=#206 id=206 data-nosnippet>206</a>    }
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="doccomment">/// Get the column sizes.
-<a href=#208 id=208 data-nosnippet>208</a>    /// Map from column id to the total size on disk of all regions that
-<a href=#209 id=209 data-nosnippet>209</a>    /// store the column. Does not include bytes necessary to read other
-<a href=#210 id=210 data-nosnippet>210</a>    /// columns, like footers. Null for row-oriented formats (Avro)
-<a href=#211 id=211 data-nosnippet>211</a>    </span><span class="kw">pub fn </span>column_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
-<a href=#212 id=212 data-nosnippet>212</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.column_sizes
-<a href=#213 id=213 data-nosnippet>213</a>    }
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// Get the columns value counts for the data file.
-<a href=#215 id=215 data-nosnippet>215</a>    /// Map from column id to number of values in the column (including null
-<a href=#216 id=216 data-nosnippet>216</a>    /// and NaN values)
-<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="kw">pub fn </span>value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
-<a href=#218 id=218 data-nosnippet>218</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.value_counts
-<a href=#219 id=219 data-nosnippet>219</a>    }
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="doccomment">/// Get the null value counts of the data file.
-<a href=#221 id=221 data-nosnippet>221</a>    /// Map from column id to number of null values in the column
-<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">pub fn </span>null_value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
-<a href=#223 id=223 data-nosnippet>223</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.null_value_counts
-<a href=#224 id=224 data-nosnippet>224</a>    }
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Get the nan value counts of the data file.
-<a href=#226 id=226 data-nosnippet>226</a>    /// Map from column id to number of NaN values in the column
-<a href=#227 id=227 data-nosnippet>227</a>    </span><span class="kw">pub fn </span>nan_value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.nan_value_counts
-<a href=#229 id=229 data-nosnippet>229</a>    }
-<a href=#230 id=230 data-nosnippet>230</a>    <span class="doccomment">/// Get the lower bounds of the data file values per column.
-<a href=#231 id=231 data-nosnippet>231</a>    /// Map from column id to lower bound in the column serialized as binary.
-<a href=#232 id=232 data-nosnippet>232</a>    </span><span class="kw">pub fn </span>lower_bounds(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt; {
-<a href=#233 id=233 data-nosnippet>233</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.lower_bounds
-<a href=#234 id=234 data-nosnippet>234</a>    }
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="doccomment">/// Get the upper bounds of the data file values per column.
-<a href=#236 id=236 data-nosnippet>236</a>    /// Map from column id to upper bound in the column serialized as binary.
-<a href=#237 id=237 data-nosnippet>237</a>    </span><span class="kw">pub fn </span>upper_bounds(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt; {
-<a href=#238 id=238 data-nosnippet>238</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.upper_bounds
-<a href=#239 id=239 data-nosnippet>239</a>    }
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="doccomment">/// Get the Implementation-specific key metadata for the data file.
-<a href=#241 id=241 data-nosnippet>241</a>    </span><span class="kw">pub fn </span>key_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt; {
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="self">self</span>.key_metadata.as_deref()
-<a href=#243 id=243 data-nosnippet>243</a>    }
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="doccomment">/// Get the split offsets of the data file.
-<a href=#245 id=245 data-nosnippet>245</a>    /// For example, all row group offsets in a Parquet file.
-<a href=#246 id=246 data-nosnippet>246</a>    </span><span class="kw">pub fn </span>split_offsets(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i64] {
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.split_offsets
-<a href=#248 id=248 data-nosnippet>248</a>    }
-<a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// Get the equality ids of the data file.
-<a href=#250 id=250 data-nosnippet>250</a>    /// Field ids used to determine row equality in equality delete files.
-<a href=#251 id=251 data-nosnippet>251</a>    /// null when content is not EqualityDeletes.
-<a href=#252 id=252 data-nosnippet>252</a>    </span><span class="kw">pub fn </span>equality_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt; {
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="self">self</span>.equality_ids.clone()
-<a href=#254 id=254 data-nosnippet>254</a>    }
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="doccomment">/// Get the first row id in the data file.
-<a href=#256 id=256 data-nosnippet>256</a>    </span><span class="kw">pub fn </span>first_row_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="self">self</span>.first_row_id
-<a href=#258 id=258 data-nosnippet>258</a>    }
-<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Get the sort order id of the data file.
-<a href=#260 id=260 data-nosnippet>260</a>    /// Only data files and equality delete files should be
-<a href=#261 id=261 data-nosnippet>261</a>    /// written with a non-null order id. Position deletes are required to be
-<a href=#262 id=262 data-nosnippet>262</a>    /// sorted by file and position, not a table order, and should set sort
-<a href=#263 id=263 data-nosnippet>263</a>    /// order id to null. Readers must ignore sort order id for position
-<a href=#264 id=264 data-nosnippet>264</a>    /// delete files.
-<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="kw">pub fn </span>sort_order_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i32&gt; {
-<a href=#266 id=266 data-nosnippet>266</a>        <span class="self">self</span>.sort_order_id
-<a href=#267 id=267 data-nosnippet>267</a>    }
-<a href=#268 id=268 data-nosnippet>268</a>    <span class="doccomment">/// Get the fully qualified referenced location for the corresponding data file.
-<a href=#269 id=269 data-nosnippet>269</a>    /// Positional delete files could have the field set, and deletion vectors must the field set.
-<a href=#270 id=270 data-nosnippet>270</a>    </span><span class="kw">pub fn </span>referenced_data_file(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="self">self</span>.referenced_data_file.clone()
-<a href=#272 id=272 data-nosnippet>272</a>    }
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="doccomment">/// Get the offset in the file where the blob content starts.
-<a href=#274 id=274 data-nosnippet>274</a>    /// Only meaningful for puffin blobs, and required for deletion vectors.
-<a href=#275 id=275 data-nosnippet>275</a>    </span><span class="kw">pub fn </span>content_offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="self">self</span>.content_offset
-<a href=#277 id=277 data-nosnippet>277</a>    }
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="doccomment">/// Get the length of a puffin blob.
-<a href=#279 id=279 data-nosnippet>279</a>    /// Only meaningful for puffin blobs, and required for deletion vectors.
-<a href=#280 id=280 data-nosnippet>280</a>    </span><span class="kw">pub fn </span>content_size_in_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="self">self</span>.content_size_in_bytes
-<a href=#282 id=282 data-nosnippet>282</a>    }
-<a href=#283 id=283 data-nosnippet>283</a>}
-<a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a><span class="doccomment">/// Convert data files to avro bytes and write to writer.
-<a href=#286 id=286 data-nosnippet>286</a>/// Return the bytes written.
-<a href=#287 id=287 data-nosnippet>287</a></span><span class="kw">pub fn </span>write_data_files_to_avro&lt;W: Write&gt;(
-<a href=#288 id=288 data-nosnippet>288</a>    writer: <span class="kw-2">&amp;mut </span>W,
-<a href=#289 id=289 data-nosnippet>289</a>    data_files: <span class="kw">impl </span>IntoIterator&lt;Item = DataFile&gt;,
-<a href=#290 id=290 data-nosnippet>290</a>    partition_type: <span class="kw-2">&amp;</span>StructType,
-<a href=#291 id=291 data-nosnippet>291</a>    version: FormatVersion,
-<a href=#292 id=292 data-nosnippet>292</a>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">let </span>avro_schema = <span class="kw">match </span>version {
-<a href=#294 id=294 data-nosnippet>294</a>        FormatVersion::V1 =&gt; data_file_schema_v1(partition_type).unwrap(),
-<a href=#295 id=295 data-nosnippet>295</a>        FormatVersion::V2 =&gt; data_file_schema_v2(partition_type).unwrap(),
-<a href=#296 id=296 data-nosnippet>296</a>    };
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">let </span><span class="kw-2">mut </span>writer = AvroWriter::new(<span class="kw-2">&amp;</span>avro_schema, writer);
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">for </span>data_file <span class="kw">in </span>data_files {
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>value = to_value(DataFileSerde::try_from(
-<a href=#301 id=301 data-nosnippet>301</a>            data_file,
-<a href=#302 id=302 data-nosnippet>302</a>            partition_type,
-<a href=#303 id=303 data-nosnippet>303</a>            FormatVersion::V1,
-<a href=#304 id=304 data-nosnippet>304</a>        )<span class="question-mark">?</span>)<span class="question-mark">?
-<a href=#305 id=305 data-nosnippet>305</a>        </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>;
-<a href=#306 id=306 data-nosnippet>306</a>        writer.append(value)<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>    }
-<a href=#308 id=308 data-nosnippet>308</a>
-<a href=#309 id=309 data-nosnippet>309</a>    <span class="prelude-val">Ok</span>(writer.flush()<span class="question-mark">?</span>)
-<a href=#310 id=310 data-nosnippet>310</a>}
-<a href=#311 id=311 data-nosnippet>311</a>
-<a href=#312 id=312 data-nosnippet>312</a><span class="doccomment">/// Parse data files from avro bytes.
-<a href=#313 id=313 data-nosnippet>313</a></span><span class="kw">pub fn </span>read_data_files_from_avro&lt;R: Read&gt;(
-<a href=#314 id=314 data-nosnippet>314</a>    reader: <span class="kw-2">&amp;mut </span>R,
-<a href=#315 id=315 data-nosnippet>315</a>    schema: <span class="kw-2">&amp;</span>Schema,
-<a href=#316 id=316 data-nosnippet>316</a>    partition_spec_id: i32,
-<a href=#317 id=317 data-nosnippet>317</a>    partition_type: <span class="kw-2">&amp;</span>StructType,
-<a href=#318 id=318 data-nosnippet>318</a>    version: FormatVersion,
-<a href=#319 id=319 data-nosnippet>319</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFile&gt;&gt; {
-<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">let </span>avro_schema = <span class="kw">match </span>version {
-<a href=#321 id=321 data-nosnippet>321</a>        FormatVersion::V1 =&gt; data_file_schema_v1(partition_type).unwrap(),
-<a href=#322 id=322 data-nosnippet>322</a>        FormatVersion::V2 =&gt; data_file_schema_v2(partition_type).unwrap(),
-<a href=#323 id=323 data-nosnippet>323</a>    };
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">let </span>reader = AvroReader::with_schema(<span class="kw-2">&amp;</span>avro_schema, reader)<span class="question-mark">?</span>;
-<a href=#326 id=326 data-nosnippet>326</a>    reader
-<a href=#327 id=327 data-nosnippet>327</a>        .into_iter()
-<a href=#328 id=328 data-nosnippet>328</a>        .map(|value| {
-<a href=#329 id=329 data-nosnippet>329</a>            from_value::&lt;DataFileSerde&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(
-<a href=#330 id=330 data-nosnippet>330</a>                partition_spec_id,
-<a href=#331 id=331 data-nosnippet>331</a>                partition_type,
-<a href=#332 id=332 data-nosnippet>332</a>                schema,
-<a href=#333 id=333 data-nosnippet>333</a>            )
-<a href=#334 id=334 data-nosnippet>334</a>        })
-<a href=#335 id=335 data-nosnippet>335</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
-<a href=#336 id=336 data-nosnippet>336</a>}
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a><span class="doccomment">/// Type of content stored by the data file: data, equality deletes, or
-<a href=#339 id=339 data-nosnippet>339</a>/// position deletes (all v1 files are data files)
-<a href=#340 id=340 data-nosnippet>340</a></span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
-<a href=#341 id=341 data-nosnippet>341</a></span><span class="kw">pub enum </span>DataContentType {
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="doccomment">/// value: 0
-<a href=#343 id=343 data-nosnippet>343</a>    </span><span class="attr">#[default]
-<a href=#344 id=344 data-nosnippet>344</a>    </span>Data = <span class="number">0</span>,
-<a href=#345 id=345 data-nosnippet>345</a>    <span class="doccomment">/// value: 1
-<a href=#346 id=346 data-nosnippet>346</a>    </span>PositionDeletes = <span class="number">1</span>,
-<a href=#347 id=347 data-nosnippet>347</a>    <span class="doccomment">/// value: 2
-<a href=#348 id=348 data-nosnippet>348</a>    </span>EqualityDeletes = <span class="number">2</span>,
-<a href=#349 id=349 data-nosnippet>349</a>}
-<a href=#350 id=350 data-nosnippet>350</a>
-<a href=#351 id=351 data-nosnippet>351</a><span class="kw">impl </span>TryFrom&lt;i32&gt; <span class="kw">for </span>DataContentType {
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">type </span>Error = Error;
-<a href=#353 id=353 data-nosnippet>353</a>
-<a href=#354 id=354 data-nosnippet>354</a>    <span class="kw">fn </span>try_from(v: i32) -&gt; <span class="prelude-ty">Result</span>&lt;DataContentType&gt; {
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">match </span>v {
-<a href=#356 id=356 data-nosnippet>356</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::Data),
-<a href=#357 id=357 data-nosnippet>357</a>            <span class="number">1 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::PositionDeletes),
-<a href=#358 id=358 data-nosnippet>358</a>            <span class="number">2 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::EqualityDeletes),
-<a href=#359 id=359 data-nosnippet>359</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#360 id=360 data-nosnippet>360</a>                ErrorKind::DataInvalid,
-<a href=#361 id=361 data-nosnippet>361</a>                <span class="macro">format!</span>(<span class="string">"data content type {} is invalid"</span>, v),
-<a href=#362 id=362 data-nosnippet>362</a>            )),
-<a href=#363 id=363 data-nosnippet>363</a>        }
-<a href=#364 id=364 data-nosnippet>364</a>    }
-<a href=#365 id=365 data-nosnippet>365</a>}
-<a href=#366 id=366 data-nosnippet>366</a>
-<a href=#367 id=367 data-nosnippet>367</a><span class="doccomment">/// Format of this data.
-<a href=#368 id=368 data-nosnippet>368</a></span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
-<a href=#369 id=369 data-nosnippet>369</a></span><span class="kw">pub enum </span>DataFileFormat {
-<a href=#370 id=370 data-nosnippet>370</a>    <span class="doccomment">/// Avro file format: &lt;https://avro.apache.org/&gt;
-<a href=#371 id=371 data-nosnippet>371</a>    </span>Avro,
-<a href=#372 id=372 data-nosnippet>372</a>    <span class="doccomment">/// Orc file format: &lt;https://orc.apache.org/&gt;
-<a href=#373 id=373 data-nosnippet>373</a>    </span>Orc,
-<a href=#374 id=374 data-nosnippet>374</a>    <span class="doccomment">/// Parquet file format: &lt;https://parquet.apache.org/&gt;
-<a href=#375 id=375 data-nosnippet>375</a>    </span>Parquet,
-<a href=#376 id=376 data-nosnippet>376</a>    <span class="doccomment">/// Puffin file format: &lt;https://iceberg.apache.org/puffin-spec/&gt;
-<a href=#377 id=377 data-nosnippet>377</a>    </span>Puffin,
-<a href=#378 id=378 data-nosnippet>378</a>}
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a><span class="kw">impl </span>FromStr <span class="kw">for </span>DataFileFormat {
-<a href=#381 id=381 data-nosnippet>381</a>    <span class="kw">type </span><span class="prelude-val">Err </span>= Error;
-<a href=#382 id=382 data-nosnippet>382</a>
-<a href=#383 id=383 data-nosnippet>383</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">match </span>s.to_lowercase().as_str() {
-<a href=#385 id=385 data-nosnippet>385</a>            <span class="string">"avro" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Avro),
-<a href=#386 id=386 data-nosnippet>386</a>            <span class="string">"orc" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Orc),
-<a href=#387 id=387 data-nosnippet>387</a>            <span class="string">"parquet" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Parquet),
-<a href=#388 id=388 data-nosnippet>388</a>            <span class="string">"puffin" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Puffin),
-<a href=#389 id=389 data-nosnippet>389</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#390 id=390 data-nosnippet>390</a>                ErrorKind::DataInvalid,
-<a href=#391 id=391 data-nosnippet>391</a>                <span class="macro">format!</span>(<span class="string">"Unsupported data file format: {}"</span>, s),
-<a href=#392 id=392 data-nosnippet>392</a>            )),
-<a href=#393 id=393 data-nosnippet>393</a>        }
-<a href=#394 id=394 data-nosnippet>394</a>    }
-<a href=#395 id=395 data-nosnippet>395</a>}
-<a href=#396 id=396 data-nosnippet>396</a>
-<a href=#397 id=397 data-nosnippet>397</a><span class="kw">impl </span>std::fmt::Display <span class="kw">for </span>DataFileFormat {
-<a href=#398 id=398 data-nosnippet>398</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#400 id=400 data-nosnippet>400</a>            DataFileFormat::Avro =&gt; <span class="macro">write!</span>(f, <span class="string">"avro"</span>),
-<a href=#401 id=401 data-nosnippet>401</a>            DataFileFormat::Orc =&gt; <span class="macro">write!</span>(f, <span class="string">"orc"</span>),
-<a href=#402 id=402 data-nosnippet>402</a>            DataFileFormat::Parquet =&gt; <span class="macro">write!</span>(f, <span class="string">"parquet"</span>),
-<a href=#403 id=403 data-nosnippet>403</a>            DataFileFormat::Puffin =&gt; <span class="macro">write!</span>(f, <span class="string">"puffin"</span>),
-<a href=#404 id=404 data-nosnippet>404</a>        }
-<a href=#405 id=405 data-nosnippet>405</a>    }
-<a href=#406 id=406 data-nosnippet>406</a>}
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a><span class="attr">#[cfg(test)]
-<a href=#409 id=409 data-nosnippet>409</a></span><span class="kw">mod </span>test {
-<a href=#410 id=410 data-nosnippet>410</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::DataContentType;
-<a href=#411 id=411 data-nosnippet>411</a>    <span class="attr">#[test]
-<a href=#412 id=412 data-nosnippet>412</a>    </span><span class="kw">fn </span>test_data_content_type_default() {
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="macro">assert_eq!</span>(DataContentType::default(), DataContentType::Data);
-<a href=#414 id=414 data-nosnippet>414</a>    }
-<a href=#415 id=415 data-nosnippet>415</a>
-<a href=#416 id=416 data-nosnippet>416</a>    <span class="attr">#[test]
-<a href=#417 id=417 data-nosnippet>417</a>    </span><span class="kw">fn </span>test_data_content_type_default_value() {
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="macro">assert_eq!</span>(DataContentType::default() <span class="kw">as </span>i32, <span class="number">0</span>);
-<a href=#419 id=419 data-nosnippet>419</a>    }
-<a href=#420 id=420 data-nosnippet>420</a>}</code></pre></div></section></main></body></html>
+<a href=#52 id=52 data-nosnippet>52</a>    </span><span class="attr">#[builder(default = <span class="string">"Struct::empty()"</span>)]
+<a href=#53 id=53 data-nosnippet>53</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition: Struct,
+<a href=#54 id=54 data-nosnippet>54</a>    <span class="doccomment">/// field id: 103
+<a href=#55 id=55 data-nosnippet>55</a>    ///
+<a href=#56 id=56 data-nosnippet>56</a>    /// Number of records in this file, or the cardinality of a deletion vector
+<a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) record_count: u64,
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="doccomment">/// field id: 104
+<a href=#59 id=59 data-nosnippet>59</a>    ///
+<a href=#60 id=60 data-nosnippet>60</a>    /// Total file size in bytes
+<a href=#61 id=61 data-nosnippet>61</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) file_size_in_bytes: u64,
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="doccomment">/// field id: 108
+<a href=#63 id=63 data-nosnippet>63</a>    /// key field id: 117
+<a href=#64 id=64 data-nosnippet>64</a>    /// value field id: 118
+<a href=#65 id=65 data-nosnippet>65</a>    ///
+<a href=#66 id=66 data-nosnippet>66</a>    /// Map from column id to the total size on disk of all regions that
+<a href=#67 id=67 data-nosnippet>67</a>    /// store the column. Does not include bytes necessary to read other
+<a href=#68 id=68 data-nosnippet>68</a>    /// columns, like footers. Leave null for row-oriented formats (Avro)
+<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="attr">#[builder(default)]
+<a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) column_sizes: HashMap&lt;i32, u64&gt;,
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="doccomment">/// field id: 109
+<a href=#72 id=72 data-nosnippet>72</a>    /// key field id: 119
+<a href=#73 id=73 data-nosnippet>73</a>    /// value field id: 120
+<a href=#74 id=74 data-nosnippet>74</a>    ///
+<a href=#75 id=75 data-nosnippet>75</a>    /// Map from column id to number of values in the column (including null
+<a href=#76 id=76 data-nosnippet>76</a>    /// and NaN values)
+<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="attr">#[builder(default)]
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) value_counts: HashMap&lt;i32, u64&gt;,
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// field id: 110
+<a href=#80 id=80 data-nosnippet>80</a>    /// key field id: 121
+<a href=#81 id=81 data-nosnippet>81</a>    /// value field id: 122
+<a href=#82 id=82 data-nosnippet>82</a>    ///
+<a href=#83 id=83 data-nosnippet>83</a>    /// Map from column id to number of null values in the column
+<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="attr">#[builder(default)]
+<a href=#85 id=85 data-nosnippet>85</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) null_value_counts: HashMap&lt;i32, u64&gt;,
+<a href=#86 id=86 data-nosnippet>86</a>    <span class="doccomment">/// field id: 137
+<a href=#87 id=87 data-nosnippet>87</a>    /// key field id: 138
+<a href=#88 id=88 data-nosnippet>88</a>    /// value field id: 139
+<a href=#89 id=89 data-nosnippet>89</a>    ///
+<a href=#90 id=90 data-nosnippet>90</a>    /// Map from column id to number of NaN values in the column
+<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="attr">#[builder(default)]
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) nan_value_counts: HashMap&lt;i32, u64&gt;,
+<a href=#93 id=93 data-nosnippet>93</a>    <span class="doccomment">/// field id: 125
+<a href=#94 id=94 data-nosnippet>94</a>    /// key field id: 126
+<a href=#95 id=95 data-nosnippet>95</a>    /// value field id: 127
+<a href=#96 id=96 data-nosnippet>96</a>    ///
+<a href=#97 id=97 data-nosnippet>97</a>    /// Map from column id to lower bound in the column serialized as binary.
+<a href=#98 id=98 data-nosnippet>98</a>    /// Each value must be less than or equal to all non-null, non-NaN values
+<a href=#99 id=99 data-nosnippet>99</a>    /// in the column for the file.
+<a href=#100 id=100 data-nosnippet>100</a>    ///
+<a href=#101 id=101 data-nosnippet>101</a>    /// Reference:
+<a href=#102 id=102 data-nosnippet>102</a>    ///
+<a href=#103 id=103 data-nosnippet>103</a>    /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
+<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="attr">#[builder(default)]
+<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) lower_bounds: HashMap&lt;i32, Datum&gt;,
+<a href=#106 id=106 data-nosnippet>106</a>    <span class="doccomment">/// field id: 128
+<a href=#107 id=107 data-nosnippet>107</a>    /// key field id: 129
+<a href=#108 id=108 data-nosnippet>108</a>    /// value field id: 130
+<a href=#109 id=109 data-nosnippet>109</a>    ///
+<a href=#110 id=110 data-nosnippet>110</a>    /// Map from column id to upper bound in the column serialized as binary.
+<a href=#111 id=111 data-nosnippet>111</a>    /// Each value must be greater than or equal to all non-null, non-Nan
+<a href=#112 id=112 data-nosnippet>112</a>    /// values in the column for the file.
+<a href=#113 id=113 data-nosnippet>113</a>    ///
+<a href=#114 id=114 data-nosnippet>114</a>    /// Reference:
+<a href=#115 id=115 data-nosnippet>115</a>    ///
+<a href=#116 id=116 data-nosnippet>116</a>    /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="attr">#[builder(default)]
+<a href=#118 id=118 data-nosnippet>118</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) upper_bounds: HashMap&lt;i32, Datum&gt;,
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="doccomment">/// field id: 131
+<a href=#120 id=120 data-nosnippet>120</a>    ///
+<a href=#121 id=121 data-nosnippet>121</a>    /// Implementation-specific key metadata for encryption
+<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="attr">#[builder(default)]
+<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
+<a href=#124 id=124 data-nosnippet>124</a>    <span class="doccomment">/// field id: 132
+<a href=#125 id=125 data-nosnippet>125</a>    /// element field id: 133
+<a href=#126 id=126 data-nosnippet>126</a>    ///
+<a href=#127 id=127 data-nosnippet>127</a>    /// Split offsets for the data file. For example, all row group offsets
+<a href=#128 id=128 data-nosnippet>128</a>    /// in a Parquet file. Must be sorted ascending
+<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="attr">#[builder(default)]
+<a href=#130 id=130 data-nosnippet>130</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) split_offsets: Vec&lt;i64&gt;,
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// field id: 135
+<a href=#132 id=132 data-nosnippet>132</a>    /// element field id: 136
+<a href=#133 id=133 data-nosnippet>133</a>    ///
+<a href=#134 id=134 data-nosnippet>134</a>    /// Field ids used to determine row equality in equality delete files.
+<a href=#135 id=135 data-nosnippet>135</a>    /// Required when content is EqualityDeletes and should be null
+<a href=#136 id=136 data-nosnippet>136</a>    /// otherwise. Fields with ids listed in this column must be present
+<a href=#137 id=137 data-nosnippet>137</a>    /// in the delete file
+<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="attr">#[builder(default)]
+<a href=#139 id=139 data-nosnippet>139</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="doccomment">/// field id: 140
+<a href=#141 id=141 data-nosnippet>141</a>    ///
+<a href=#142 id=142 data-nosnippet>142</a>    /// ID representing sort order for this file.
+<a href=#143 id=143 data-nosnippet>143</a>    ///
+<a href=#144 id=144 data-nosnippet>144</a>    /// If sort order ID is missing or unknown, then the order is assumed to
+<a href=#145 id=145 data-nosnippet>145</a>    /// be unsorted. Only data files and equality delete files should be
+<a href=#146 id=146 data-nosnippet>146</a>    /// written with a non-null order id. Position deletes are required to be
+<a href=#147 id=147 data-nosnippet>147</a>    /// sorted by file and position, not a table order, and should set sort
+<a href=#148 id=148 data-nosnippet>148</a>    /// order id to null. Readers must ignore sort order id for position
+<a href=#149 id=149 data-nosnippet>149</a>    /// delete files.
+<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="attr">#[builder(default, setter(strip_option))]
+<a href=#151 id=151 data-nosnippet>151</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sort_order_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="doccomment">/// field id: 142
+<a href=#153 id=153 data-nosnippet>153</a>    ///
+<a href=#154 id=154 data-nosnippet>154</a>    /// The _row_id for the first row in the data file.
+<a href=#155 id=155 data-nosnippet>155</a>    /// For more details, refer to https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance
+<a href=#156 id=156 data-nosnippet>156</a>    </span><span class="attr">#[builder(default)]
+<a href=#157 id=157 data-nosnippet>157</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) first_row_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#158 id=158 data-nosnippet>158</a>    <span class="doccomment">/// This field is not included in spec. It is just store in memory representation used
+<a href=#159 id=159 data-nosnippet>159</a>    /// in process.
+<a href=#160 id=160 data-nosnippet>160</a>    </span><span class="attr">#[builder(default = <span class="string">"DEFAULT_PARTITION_SPEC_ID"</span>)]
+<a href=#161 id=161 data-nosnippet>161</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_spec_id: i32,
+<a href=#162 id=162 data-nosnippet>162</a>    <span class="doccomment">/// field id: 143
+<a href=#163 id=163 data-nosnippet>163</a>    ///
+<a href=#164 id=164 data-nosnippet>164</a>    /// Fully qualified location (URI with FS scheme) of a data file that all deletes reference.
+<a href=#165 id=165 data-nosnippet>165</a>    /// Position delete metadata can use `referenced_data_file` when all deletes tracked by the
+<a href=#166 id=166 data-nosnippet>166</a>    /// entry are in a single data file. Setting the referenced file is required for deletion vectors.
+<a href=#167 id=167 data-nosnippet>167</a>    </span><span class="attr">#[builder(default)]
+<a href=#168 id=168 data-nosnippet>168</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) referenced_data_file: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="doccomment">/// field: 144
+<a href=#170 id=170 data-nosnippet>170</a>    ///
+<a href=#171 id=171 data-nosnippet>171</a>    /// The offset in the file where the content starts.
+<a href=#172 id=172 data-nosnippet>172</a>    /// The `content_offset` and `content_size_in_bytes` fields are used to reference a specific blob
+<a href=#173 id=173 data-nosnippet>173</a>    /// for direct access to a deletion vector. For deletion vectors, these values are required and must
+<a href=#174 id=174 data-nosnippet>174</a>    /// exactly match the `offset` and `length` stored in the Puffin footer for the deletion vector blob.
+<a href=#175 id=175 data-nosnippet>175</a>    </span><span class="attr">#[builder(default)]
+<a href=#176 id=176 data-nosnippet>176</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) content_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#177 id=177 data-nosnippet>177</a>    <span class="doccomment">/// field: 145
+<a href=#178 id=178 data-nosnippet>178</a>    ///
+<a href=#179 id=179 data-nosnippet>179</a>    /// The length of a referenced content stored in the file; required if `content_offset` is present
+<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="attr">#[builder(default)]
+<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) content_size_in_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#182 id=182 data-nosnippet>182</a>}
+<a href=#183 id=183 data-nosnippet>183</a>
+<a href=#184 id=184 data-nosnippet>184</a><span class="kw">impl </span>DataFile {
+<a href=#185 id=185 data-nosnippet>185</a>    <span class="doccomment">/// Get the content type of the data file (data, equality deletes, or position deletes)
+<a href=#186 id=186 data-nosnippet>186</a>    </span><span class="kw">pub fn </span>content_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataContentType {
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="self">self</span>.content
+<a href=#188 id=188 data-nosnippet>188</a>    }
+<a href=#189 id=189 data-nosnippet>189</a>    <span class="doccomment">/// Get the file path as full URI with FS scheme
+<a href=#190 id=190 data-nosnippet>190</a>    </span><span class="kw">pub fn </span>file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+<a href=#191 id=191 data-nosnippet>191</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.file_path
+<a href=#192 id=192 data-nosnippet>192</a>    }
+<a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Get the file format of the file (avro, orc or parquet).
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">pub fn </span>file_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataFileFormat {
+<a href=#195 id=195 data-nosnippet>195</a>        <span class="self">self</span>.file_format
+<a href=#196 id=196 data-nosnippet>196</a>    }
+<a href=#197 id=197 data-nosnippet>197</a>    <span class="doccomment">/// Get the partition values of the file.
+<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">pub fn </span>partition(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Struct {
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.partition
+<a href=#200 id=200 data-nosnippet>200</a>    }
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="doccomment">/// Get the record count in the data file.
+<a href=#202 id=202 data-nosnippet>202</a>    </span><span class="kw">pub fn </span>record_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="self">self</span>.record_count
+<a href=#204 id=204 data-nosnippet>204</a>    }
+<a href=#205 id=205 data-nosnippet>205</a>    <span class="doccomment">/// Get the file size in bytes.
+<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub fn </span>file_size_in_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#207 id=207 data-nosnippet>207</a>        <span class="self">self</span>.file_size_in_bytes
+<a href=#208 id=208 data-nosnippet>208</a>    }
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Get the column sizes.
+<a href=#210 id=210 data-nosnippet>210</a>    /// Map from column id to the total size on disk of all regions that
+<a href=#211 id=211 data-nosnippet>211</a>    /// store the column. Does not include bytes necessary to read other
+<a href=#212 id=212 data-nosnippet>212</a>    /// columns, like footers. Null for row-oriented formats (Avro)
+<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="kw">pub fn </span>column_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
+<a href=#214 id=214 data-nosnippet>214</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.column_sizes
+<a href=#215 id=215 data-nosnippet>215</a>    }
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// Get the columns value counts for the data file.
+<a href=#217 id=217 data-nosnippet>217</a>    /// Map from column id to number of values in the column (including null
+<a href=#218 id=218 data-nosnippet>218</a>    /// and NaN values)
+<a href=#219 id=219 data-nosnippet>219</a>    </span><span class="kw">pub fn </span>value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.value_counts
+<a href=#221 id=221 data-nosnippet>221</a>    }
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="doccomment">/// Get the null value counts of the data file.
+<a href=#223 id=223 data-nosnippet>223</a>    /// Map from column id to number of null values in the column
+<a href=#224 id=224 data-nosnippet>224</a>    </span><span class="kw">pub fn </span>null_value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
+<a href=#225 id=225 data-nosnippet>225</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.null_value_counts
+<a href=#226 id=226 data-nosnippet>226</a>    }
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="doccomment">/// Get the nan value counts of the data file.
+<a href=#228 id=228 data-nosnippet>228</a>    /// Map from column id to number of NaN values in the column
+<a href=#229 id=229 data-nosnippet>229</a>    </span><span class="kw">pub fn </span>nan_value_counts(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, u64&gt; {
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.nan_value_counts
+<a href=#231 id=231 data-nosnippet>231</a>    }
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="doccomment">/// Get the lower bounds of the data file values per column.
+<a href=#233 id=233 data-nosnippet>233</a>    /// Map from column id to lower bound in the column serialized as binary.
+<a href=#234 id=234 data-nosnippet>234</a>    </span><span class="kw">pub fn </span>lower_bounds(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt; {
+<a href=#235 id=235 data-nosnippet>235</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.lower_bounds
+<a href=#236 id=236 data-nosnippet>236</a>    }
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// Get the upper bounds of the data file values per column.
+<a href=#238 id=238 data-nosnippet>238</a>    /// Map from column id to upper bound in the column serialized as binary.
+<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">pub fn </span>upper_bounds(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt; {
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.upper_bounds
+<a href=#241 id=241 data-nosnippet>241</a>    }
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="doccomment">/// Get the Implementation-specific key metadata for the data file.
+<a href=#243 id=243 data-nosnippet>243</a>    </span><span class="kw">pub fn </span>key_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt; {
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="self">self</span>.key_metadata.as_deref()
+<a href=#245 id=245 data-nosnippet>245</a>    }
+<a href=#246 id=246 data-nosnippet>246</a>    <span class="doccomment">/// Get the split offsets of the data file.
+<a href=#247 id=247 data-nosnippet>247</a>    /// For example, all row group offsets in a Parquet file.
+<a href=#248 id=248 data-nosnippet>248</a>    </span><span class="kw">pub fn </span>split_offsets(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i64] {
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.split_offsets
+<a href=#250 id=250 data-nosnippet>250</a>    }
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="doccomment">/// Get the equality ids of the data file.
+<a href=#252 id=252 data-nosnippet>252</a>    /// Field ids used to determine row equality in equality delete files.
+<a href=#253 id=253 data-nosnippet>253</a>    /// null when content is not EqualityDeletes.
+<a href=#254 id=254 data-nosnippet>254</a>    </span><span class="kw">pub fn </span>equality_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt; {
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="self">self</span>.equality_ids.clone()
+<a href=#256 id=256 data-nosnippet>256</a>    }
+<a href=#257 id=257 data-nosnippet>257</a>    <span class="doccomment">/// Get the first row id in the data file.
+<a href=#258 id=258 data-nosnippet>258</a>    </span><span class="kw">pub fn </span>first_row_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="self">self</span>.first_row_id
+<a href=#260 id=260 data-nosnippet>260</a>    }
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="doccomment">/// Get the sort order id of the data file.
+<a href=#262 id=262 data-nosnippet>262</a>    /// Only data files and equality delete files should be
+<a href=#263 id=263 data-nosnippet>263</a>    /// written with a non-null order id. Position deletes are required to be
+<a href=#264 id=264 data-nosnippet>264</a>    /// sorted by file and position, not a table order, and should set sort
+<a href=#265 id=265 data-nosnippet>265</a>    /// order id to null. Readers must ignore sort order id for position
+<a href=#266 id=266 data-nosnippet>266</a>    /// delete files.
+<a href=#267 id=267 data-nosnippet>267</a>    </span><span class="kw">pub fn </span>sort_order_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i32&gt; {
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="self">self</span>.sort_order_id
+<a href=#269 id=269 data-nosnippet>269</a>    }
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="doccomment">/// Get the fully qualified referenced location for the corresponding data file.
+<a href=#271 id=271 data-nosnippet>271</a>    /// Positional delete files could have the field set, and deletion vectors must the field set.
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">pub fn </span>referenced_data_file(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="self">self</span>.referenced_data_file.clone()
+<a href=#274 id=274 data-nosnippet>274</a>    }
+<a href=#275 id=275 data-nosnippet>275</a>    <span class="doccomment">/// Get the offset in the file where the blob content starts.
+<a href=#276 id=276 data-nosnippet>276</a>    /// Only meaningful for puffin blobs, and required for deletion vectors.
+<a href=#277 id=277 data-nosnippet>277</a>    </span><span class="kw">pub fn </span>content_offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="self">self</span>.content_offset
+<a href=#279 id=279 data-nosnippet>279</a>    }
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="doccomment">/// Get the length of a puffin blob.
+<a href=#281 id=281 data-nosnippet>281</a>    /// Only meaningful for puffin blobs, and required for deletion vectors.
+<a href=#282 id=282 data-nosnippet>282</a>    </span><span class="kw">pub fn </span>content_size_in_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="self">self</span>.content_size_in_bytes
+<a href=#284 id=284 data-nosnippet>284</a>    }
+<a href=#285 id=285 data-nosnippet>285</a>}
+<a href=#286 id=286 data-nosnippet>286</a>
+<a href=#287 id=287 data-nosnippet>287</a><span class="doccomment">/// Convert data files to avro bytes and write to writer.
+<a href=#288 id=288 data-nosnippet>288</a>/// Return the bytes written.
+<a href=#289 id=289 data-nosnippet>289</a></span><span class="kw">pub fn </span>write_data_files_to_avro&lt;W: Write&gt;(
+<a href=#290 id=290 data-nosnippet>290</a>    writer: <span class="kw-2">&amp;mut </span>W,
+<a href=#291 id=291 data-nosnippet>291</a>    data_files: <span class="kw">impl </span>IntoIterator&lt;Item = DataFile&gt;,
+<a href=#292 id=292 data-nosnippet>292</a>    partition_type: <span class="kw-2">&amp;</span>StructType,
+<a href=#293 id=293 data-nosnippet>293</a>    version: FormatVersion,
+<a href=#294 id=294 data-nosnippet>294</a>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span>avro_schema = <span class="kw">match </span>version {
+<a href=#296 id=296 data-nosnippet>296</a>        FormatVersion::V1 =&gt; data_file_schema_v1(partition_type).unwrap(),
+<a href=#297 id=297 data-nosnippet>297</a>        FormatVersion::V2 =&gt; data_file_schema_v2(partition_type).unwrap(),
+<a href=#298 id=298 data-nosnippet>298</a>    };
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">let </span><span class="kw-2">mut </span>writer = AvroWriter::new(<span class="kw-2">&amp;</span>avro_schema, writer);
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">for </span>data_file <span class="kw">in </span>data_files {
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>value = to_value(DataFileSerde::try_from(
+<a href=#303 id=303 data-nosnippet>303</a>            data_file,
+<a href=#304 id=304 data-nosnippet>304</a>            partition_type,
+<a href=#305 id=305 data-nosnippet>305</a>            FormatVersion::V1,
+<a href=#306 id=306 data-nosnippet>306</a>        )<span class="question-mark">?</span>)<span class="question-mark">?
+<a href=#307 id=307 data-nosnippet>307</a>        </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>;
+<a href=#308 id=308 data-nosnippet>308</a>        writer.append(value)<span class="question-mark">?</span>;
+<a href=#309 id=309 data-nosnippet>309</a>    }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="prelude-val">Ok</span>(writer.flush()<span class="question-mark">?</span>)
+<a href=#312 id=312 data-nosnippet>312</a>}
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a><span class="doccomment">/// Parse data files from avro bytes.
+<a href=#315 id=315 data-nosnippet>315</a></span><span class="kw">pub fn </span>read_data_files_from_avro&lt;R: Read&gt;(
+<a href=#316 id=316 data-nosnippet>316</a>    reader: <span class="kw-2">&amp;mut </span>R,
+<a href=#317 id=317 data-nosnippet>317</a>    schema: <span class="kw-2">&amp;</span>Schema,
+<a href=#318 id=318 data-nosnippet>318</a>    partition_spec_id: i32,
+<a href=#319 id=319 data-nosnippet>319</a>    partition_type: <span class="kw-2">&amp;</span>StructType,
+<a href=#320 id=320 data-nosnippet>320</a>    version: FormatVersion,
+<a href=#321 id=321 data-nosnippet>321</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFile&gt;&gt; {
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="kw">let </span>avro_schema = <span class="kw">match </span>version {
+<a href=#323 id=323 data-nosnippet>323</a>        FormatVersion::V1 =&gt; data_file_schema_v1(partition_type).unwrap(),
+<a href=#324 id=324 data-nosnippet>324</a>        FormatVersion::V2 =&gt; data_file_schema_v2(partition_type).unwrap(),
+<a href=#325 id=325 data-nosnippet>325</a>    };
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">let </span>reader = AvroReader::with_schema(<span class="kw-2">&amp;</span>avro_schema, reader)<span class="question-mark">?</span>;
+<a href=#328 id=328 data-nosnippet>328</a>    reader
+<a href=#329 id=329 data-nosnippet>329</a>        .into_iter()
+<a href=#330 id=330 data-nosnippet>330</a>        .map(|value| {
+<a href=#331 id=331 data-nosnippet>331</a>            from_value::&lt;DataFileSerde&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(
+<a href=#332 id=332 data-nosnippet>332</a>                partition_spec_id,
+<a href=#333 id=333 data-nosnippet>333</a>                partition_type,
+<a href=#334 id=334 data-nosnippet>334</a>                schema,
+<a href=#335 id=335 data-nosnippet>335</a>            )
+<a href=#336 id=336 data-nosnippet>336</a>        })
+<a href=#337 id=337 data-nosnippet>337</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
+<a href=#338 id=338 data-nosnippet>338</a>}
+<a href=#339 id=339 data-nosnippet>339</a>
+<a href=#340 id=340 data-nosnippet>340</a><span class="doccomment">/// Type of content stored by the data file: data, equality deletes, or
+<a href=#341 id=341 data-nosnippet>341</a>/// position deletes (all v1 files are data files)
+<a href=#342 id=342 data-nosnippet>342</a></span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
+<a href=#343 id=343 data-nosnippet>343</a></span><span class="kw">pub enum </span>DataContentType {
+<a href=#344 id=344 data-nosnippet>344</a>    <span class="doccomment">/// value: 0
+<a href=#345 id=345 data-nosnippet>345</a>    </span><span class="attr">#[default]
+<a href=#346 id=346 data-nosnippet>346</a>    </span>Data = <span class="number">0</span>,
+<a href=#347 id=347 data-nosnippet>347</a>    <span class="doccomment">/// value: 1
+<a href=#348 id=348 data-nosnippet>348</a>    </span>PositionDeletes = <span class="number">1</span>,
+<a href=#349 id=349 data-nosnippet>349</a>    <span class="doccomment">/// value: 2
+<a href=#350 id=350 data-nosnippet>350</a>    </span>EqualityDeletes = <span class="number">2</span>,
+<a href=#351 id=351 data-nosnippet>351</a>}
+<a href=#352 id=352 data-nosnippet>352</a>
+<a href=#353 id=353 data-nosnippet>353</a><span class="kw">impl </span>TryFrom&lt;i32&gt; <span class="kw">for </span>DataContentType {
+<a href=#354 id=354 data-nosnippet>354</a>    <span class="kw">type </span>Error = Error;
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">fn </span>try_from(v: i32) -&gt; <span class="prelude-ty">Result</span>&lt;DataContentType&gt; {
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">match </span>v {
+<a href=#358 id=358 data-nosnippet>358</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::Data),
+<a href=#359 id=359 data-nosnippet>359</a>            <span class="number">1 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::PositionDeletes),
+<a href=#360 id=360 data-nosnippet>360</a>            <span class="number">2 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::EqualityDeletes),
+<a href=#361 id=361 data-nosnippet>361</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#362 id=362 data-nosnippet>362</a>                ErrorKind::DataInvalid,
+<a href=#363 id=363 data-nosnippet>363</a>                <span class="macro">format!</span>(<span class="string">"data content type {} is invalid"</span>, v),
+<a href=#364 id=364 data-nosnippet>364</a>            )),
+<a href=#365 id=365 data-nosnippet>365</a>        }
+<a href=#366 id=366 data-nosnippet>366</a>    }
+<a href=#367 id=367 data-nosnippet>367</a>}
+<a href=#368 id=368 data-nosnippet>368</a>
+<a href=#369 id=369 data-nosnippet>369</a><span class="doccomment">/// Format of this data.
+<a href=#370 id=370 data-nosnippet>370</a></span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
+<a href=#371 id=371 data-nosnippet>371</a></span><span class="kw">pub enum </span>DataFileFormat {
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="doccomment">/// Avro file format: &lt;https://avro.apache.org/&gt;
+<a href=#373 id=373 data-nosnippet>373</a>    </span>Avro,
+<a href=#374 id=374 data-nosnippet>374</a>    <span class="doccomment">/// Orc file format: &lt;https://orc.apache.org/&gt;
+<a href=#375 id=375 data-nosnippet>375</a>    </span>Orc,
+<a href=#376 id=376 data-nosnippet>376</a>    <span class="doccomment">/// Parquet file format: &lt;https://parquet.apache.org/&gt;
+<a href=#377 id=377 data-nosnippet>377</a>    </span>Parquet,
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="doccomment">/// Puffin file format: &lt;https://iceberg.apache.org/puffin-spec/&gt;
+<a href=#379 id=379 data-nosnippet>379</a>    </span>Puffin,
+<a href=#380 id=380 data-nosnippet>380</a>}
+<a href=#381 id=381 data-nosnippet>381</a>
+<a href=#382 id=382 data-nosnippet>382</a><span class="kw">impl </span>FromStr <span class="kw">for </span>DataFileFormat {
+<a href=#383 id=383 data-nosnippet>383</a>    <span class="kw">type </span><span class="prelude-val">Err </span>= Error;
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">match </span>s.to_lowercase().as_str() {
+<a href=#387 id=387 data-nosnippet>387</a>            <span class="string">"avro" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Avro),
+<a href=#388 id=388 data-nosnippet>388</a>            <span class="string">"orc" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Orc),
+<a href=#389 id=389 data-nosnippet>389</a>            <span class="string">"parquet" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Parquet),
+<a href=#390 id=390 data-nosnippet>390</a>            <span class="string">"puffin" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Puffin),
+<a href=#391 id=391 data-nosnippet>391</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#392 id=392 data-nosnippet>392</a>                ErrorKind::DataInvalid,
+<a href=#393 id=393 data-nosnippet>393</a>                <span class="macro">format!</span>(<span class="string">"Unsupported data file format: {}"</span>, s),
+<a href=#394 id=394 data-nosnippet>394</a>            )),
+<a href=#395 id=395 data-nosnippet>395</a>        }
+<a href=#396 id=396 data-nosnippet>396</a>    }
+<a href=#397 id=397 data-nosnippet>397</a>}
+<a href=#398 id=398 data-nosnippet>398</a>
+<a href=#399 id=399 data-nosnippet>399</a><span class="kw">impl </span>std::fmt::Display <span class="kw">for </span>DataFileFormat {
+<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#402 id=402 data-nosnippet>402</a>            DataFileFormat::Avro =&gt; <span class="macro">write!</span>(f, <span class="string">"avro"</span>),
+<a href=#403 id=403 data-nosnippet>403</a>            DataFileFormat::Orc =&gt; <span class="macro">write!</span>(f, <span class="string">"orc"</span>),
+<a href=#404 id=404 data-nosnippet>404</a>            DataFileFormat::Parquet =&gt; <span class="macro">write!</span>(f, <span class="string">"parquet"</span>),
+<a href=#405 id=405 data-nosnippet>405</a>            DataFileFormat::Puffin =&gt; <span class="macro">write!</span>(f, <span class="string">"puffin"</span>),
+<a href=#406 id=406 data-nosnippet>406</a>        }
+<a href=#407 id=407 data-nosnippet>407</a>    }
+<a href=#408 id=408 data-nosnippet>408</a>}
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a><span class="attr">#[cfg(test)]
+<a href=#411 id=411 data-nosnippet>411</a></span><span class="kw">mod </span>test {
+<a href=#412 id=412 data-nosnippet>412</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::DataContentType;
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="attr">#[test]
+<a href=#414 id=414 data-nosnippet>414</a>    </span><span class="kw">fn </span>test_data_content_type_default() {
+<a href=#415 id=415 data-nosnippet>415</a>        <span class="macro">assert_eq!</span>(DataContentType::default(), DataContentType::Data);
+<a href=#416 id=416 data-nosnippet>416</a>    }
+<a href=#417 id=417 data-nosnippet>417</a>
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="attr">#[test]
+<a href=#419 id=419 data-nosnippet>419</a>    </span><span class="kw">fn </span>test_data_content_type_default_value() {
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="macro">assert_eq!</span>(DataContentType::default() <span class="kw">as </span>i32, <span class="number">0</span>);
+<a href=#421 id=421 data-nosnippet>421</a>    }
+<a href=#422 id=422 data-nosnippet>422</a>}</code></pre></div></section></main></body></html>
