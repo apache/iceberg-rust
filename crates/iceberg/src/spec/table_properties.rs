@@ -162,10 +162,8 @@ define_table_properties! {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
 
     use super::*;
-    use crate::{Error, ErrorKind};
 
     #[test]
     fn test_table_properties_default() {
