@@ -71,12 +71,12 @@ murmur3 = { workspace = true }
 num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
-paste = "1.0"
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
+paste = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true }
 reqsign = { version = "0.16.3", optional = true, default-features = false }
+reqwest = { workspace = true }
 roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
