@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.7.0] - 2025-09-17
+## [v0.7.0] - 2025-09-23
 
 ### Breaking Changes
 
@@ -124,7 +124,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * docs: Update download links to 0.6.0 by @manuzhang in https://github.com/apache/iceberg-rust/pull/1677
 * docs: Fix Podman and Orbstack pages not found by @manuzhang in https://github.com/apache/iceberg-rust/pull/1678
 * Update bug report template with the latest version, 0.6.0 by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1679
+* chore: Bump version to 0.7.0 by @CTTY in https://github.com/apache/iceberg-rust/pull/1681
 * Expose Avro reader to PyIceberg by @Fokko in https://github.com/apache/iceberg-rust/pull/1328
+* CI: Fix Nightly PyPi GitHub Action by @Fokko in https://github.com/apache/iceberg-rust/pull/1683
+* chore: Update 0.7.0 change log to include avro reader by @CTTY in https://github.com/apache/iceberg-rust/pull/1687
+* chore: Bump toolchain version to rust 1.87 and update dependencies list by @CTTY in https://github.com/apache/iceberg-rust/pull/1688
+* ci: Don't run CI on unrelated changes by @manuzhang in https://github.com/apache/iceberg-rust/pull/1686
+* CI: Fix Nightly PyPi GitHub Action by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1689
+* infra: add check-msrv to Makefile by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1680
+* feat: Enable zstd by @Fokko in https://github.com/apache/iceberg-rust/pull/1692
+* docs: update "how to release" by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1691
+* ci: Fix triggering CI by @manuzhang in https://github.com/apache/iceberg-rust/pull/1693
+* feat: TableIdent derives PartialOrd by @DerGut in https://github.com/apache/iceberg-rust/pull/1670
+* chore(deps): Bump ordered-float from 2.10.1 to 4.6.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1700
+* chore(deps): Bump rust_decimal from 1.37.2 to 1.38.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/1699
+* Make SetExpression's constructor public by @thecatherinehuang in https://github.com/apache/iceberg-rust/pull/1695
+* chore: Bump the Java integration test to 1.10.0 by @Fokko in https://github.com/apache/iceberg-rust/pull/1701
+* chore: Bump Iceberg test fixtures to 1.10.0 by @Fokko in https://github.com/apache/iceberg-rust/pull/1703
+* refactor: Move equality-ids closer to the spec by @Fokko in https://github.com/apache/iceberg-rust/pull/1705
+* Add UUID support for the Avro schema by @Fokko in https://github.com/apache/iceberg-rust/pull/1706
+* chore: Update change log to include the equality id spec fix by @CTTY in https://github.com/apache/iceberg-rust/pull/1707
+* Add unit tests for UpdateStatisticsAction functionality. by @slfan1989 in https://github.com/apache/iceberg-rust/pull/1675
+* Restore workflow triggering changes. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1709
 
 ## [v0.6.0] - 2025-07-14
 

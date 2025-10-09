@@ -148,7 +148,7 @@ impl PyDataFile {
     }
 
     #[getter]
-    fn equality_ids(&self) -> &[i32] {
+    fn equality_ids(&self) -> Option<Vec<i32>> {
         self.inner.equality_ids()
     }
 

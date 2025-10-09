@@ -238,7 +238,7 @@ reqsign@0.16.5		X
 reqwest@0.12.23		X									X			
 ring@0.17.14		X							X					
 roaring@0.11.2		X									X			
-rust_decimal@1.37.2											X			
+rust_decimal@1.38.0											X			
 rustc-demangle@0.1.26		X									X			
 rustc_version@0.4.1		X									X			
 rustls@0.21.12		X							X		X			

@@ -233,7 +233,7 @@ impl CachingDeleteFileLoader {
                     )
                     .await?,
                     sender,
-                    equality_ids: HashSet::from_iter(task.equality_ids.clone()),
+                    equality_ids: HashSet::from_iter(task.equality_ids.clone().unwrap()),
                 })
             }
 

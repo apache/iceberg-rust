@@ -208,7 +208,6 @@ impl ExecutionPlan for IcebergWriteExec {
             ));
         }
 
-        let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -235,13 +234,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
-            None,
             FieldMatchMode::Name,
-            self.table.file_io().clone(),
-            DefaultLocationGenerator::new(self.table.metadata().clone())
-                .map_err(to_datafusion_error)?,
-            // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format),
         );
         let target_file_size = match self
             .table
@@ -261,10 +254,22 @@ impl ExecutionPlan for IcebergWriteExec {
                 .map_err(to_datafusion_error)?,
             None => PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         };
-        let rolling_writer_builder =
-            RollingFileWriterBuilder::new(parquet_file_writer_builder, target_file_size);
-        let data_file_writer_builder =
-            DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
+
+        let file_io = self.table.file_io().clone();
+        let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
+            .map_err(to_datafusion_error)?;
+        // todo filename prefix/suffix should be configurable
+        let file_name_generator =
+            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format);
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_file_writer_builder,
+            target_file_size,
+            file_io,
+            location_generator,
+            file_name_generator,
+        );
+        // todo specify partition key when partitioning writer is supported
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder, None);
 
         // Get input data
         let data = execute_input_stream(
