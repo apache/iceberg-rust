@@ -162,9 +162,10 @@ define_table_properties! {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
+
     use super::*;
     use crate::{Error, ErrorKind};
-    use anyhow::anyhow;
 
     #[test]
     fn test_table_properties_default() {
@@ -183,7 +184,8 @@ mod tests {
             ("commit.retry.num-retries".to_string(), "5".to_string()),
             ("commit.retry.min-wait-ms".to_string(), "10".to_string()),
             ("write.format.default".to_string(), "avro".to_string()),
-        ])).unwrap();
+        ]))
+        .unwrap();
         assert_eq!(properties.commit_num_retries, 5);
         assert_eq!(properties.commit_min_retry_wait_ms, 10);
         assert_eq!(properties.commit_max_retry_wait_ms, 60000);
