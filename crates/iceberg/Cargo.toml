@@ -71,6 +71,7 @@ murmur3 = { workspace = true }
 num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
+paste = "1.0"
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 rand = { workspace = true }
