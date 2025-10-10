@@ -37,7 +37,7 @@ const OWNER: &str = "owner";
 const COMMENT: &str = "comment";
 /// hive metatore `location` property
 const LOCATION: &str = "location";
-/// hive metatore `metadat_location` property
+/// hive metatore `metadata_location` property
 const METADATA_LOCATION: &str = "metadata_location";
 /// hive metatore `external` property
 const EXTERNAL: &str = "EXTERNAL";
