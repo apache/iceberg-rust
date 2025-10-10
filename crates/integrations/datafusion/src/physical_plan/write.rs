@@ -256,6 +256,7 @@ impl ExecutionPlan for IcebergWriteExec {
         };
 
         let file_io = self.table.file_io().clone();
+        // todo location_gen and file_name_gen should be configurable
         let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
             .map_err(to_datafusion_error)?;
         // todo filename prefix/suffix should be configurable
@@ -268,8 +269,7 @@ impl ExecutionPlan for IcebergWriteExec {
             location_generator,
             file_name_generator,
         );
-        // todo specify partition key when partitioning writer is supported
-        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder, None);
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Get input data
         let data = execute_input_stream(
@@ -285,7 +285,8 @@ impl ExecutionPlan for IcebergWriteExec {
         // Create write stream
         let stream = futures::stream::once(async move {
             let mut writer = data_file_writer_builder
-                .build()
+                // todo specify partition key when partitioning writer is supported
+                .build_with_partition(None)
                 .await
                 .map_err(to_datafusion_error)?;
             let mut input_stream = data;
