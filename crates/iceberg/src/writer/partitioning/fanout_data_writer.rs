@@ -104,7 +104,7 @@ impl<B: IcebergWriterBuilder> PartitioningWriter for FanoutDataWriter<B> {
         partition_key: Option<PartitionKey>,
         input: RecordBatch,
     ) -> Result<()> {
-        if let Some(ref partition_key) = partition_key {
+        if let Some(partition_key) = partition_key {
             let writer = self.get_or_create_partition_writer(&partition_key).await?;
             writer.write(input).await
         } else {
