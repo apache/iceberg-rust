@@ -144,6 +144,16 @@ impl ExecutionPlan for IcebergWriteExec {
         self
     }
 
+    /// Prevents the introduction of additional `RepartitionExec` and processing input in parallel.
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // Maintains ordering in the sense that the written file will reflect the ordering of the input.
+        vec![true; self.children().len()]
+    }
+
     fn properties(&self) -> &PlanProperties {
         &self.plan_properties
     }
