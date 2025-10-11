@@ -3628,7 +3628,6 @@ dependencies = [
  "opendal",
  "ordered-float 4.6.0",
  "parquet",
- "paste",
  "pretty_assertions",
  "rand 0.8.5",
  "regex",
