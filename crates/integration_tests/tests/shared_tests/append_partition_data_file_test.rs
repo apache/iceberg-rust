@@ -31,6 +31,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -96,18 +97,18 @@ async fn test_append_partition_data_file() {
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
         table.metadata().current_schema().clone(),
-        Some(partition_key),
+    );
+
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder.clone(),
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
     );
 
     let mut data_file_writer_valid = DataFileWriterBuilder::new(
-        parquet_writer_builder.clone(),
-        Some(Struct::from_iter([Some(Literal::Primitive(
-            PrimitiveLiteral::Int(first_partition_id_value),
-        ))])),
-        0,
+        rolling_file_writer_builder.clone(),
+        Some(partition_key.clone()),
     )
     .build()
     .await
@@ -148,44 +149,53 @@ async fn test_append_partition_data_file() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
 
+    let partition_key = partition_key.copy_with_data(Struct::from_iter([Some(
+        Literal::Primitive(PrimitiveLiteral::Boolean(true)),
+    )]));
     test_schema_incompatible_partition_type(
-        parquet_writer_builder.clone(),
+        rolling_file_writer_builder.clone(),
         batch.clone(),
+        partition_key.clone(),
         table.clone(),
         &rest_catalog,
     )
     .await;
 
+    let partition_key = partition_key.copy_with_data(Struct::from_iter([
+        Some(Literal::Primitive(PrimitiveLiteral::Int(
+            first_partition_id_value,
+        ))),
+        Some(Literal::Primitive(PrimitiveLiteral::Int(
+            first_partition_id_value,
+        ))),
+    ]));
     test_schema_incompatible_partition_fields(
-        parquet_writer_builder,
+        rolling_file_writer_builder.clone(),
         batch,
+        partition_key,
         table,
         &rest_catalog,
-        first_partition_id_value,
     )
     .await;
 }
 
 async fn test_schema_incompatible_partition_type(
-    parquet_writer_builder: ParquetWriterBuilder<
+    rolling_file_writer_builder: RollingFileWriterBuilder<
+        ParquetWriterBuilder,
         DefaultLocationGenerator,
         DefaultFileNameGenerator,
     >,
     batch: RecordBatch,
+    partition_key: PartitionKey,
     table: Table,
     catalog: &dyn Catalog,
 ) {
     // test writing different "type" of partition than mentioned in schema
-    let mut data_file_writer_invalid = DataFileWriterBuilder::new(
-        parquet_writer_builder.clone(),
-        Some(Struct::from_iter([Some(Literal::Primitive(
-            PrimitiveLiteral::Boolean(true),
-        ))])),
-        0,
-    )
-    .build()
-    .await
-    .unwrap();
+    let mut data_file_writer_invalid =
+        DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
+            .build()
+            .await
+            .unwrap();
 
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
@@ -200,32 +210,22 @@ async fn test_schema_incompatible_partition_type(
 }
 
 async fn test_schema_incompatible_partition_fields(
-    parquet_writer_builder: ParquetWriterBuilder<
+    rolling_file_writer_builder: RollingFileWriterBuilder<
+        ParquetWriterBuilder,
         DefaultLocationGenerator,
         DefaultFileNameGenerator,
     >,
     batch: RecordBatch,
+    partition_key: PartitionKey,
     table: Table,
     catalog: &dyn Catalog,
-    first_partition_id_value: i32,
 ) {
     // test writing different number of partition fields than mentioned in schema
-
-    let mut data_file_writer_invalid = DataFileWriterBuilder::new(
-        parquet_writer_builder,
-        Some(Struct::from_iter([
-            Some(Literal::Primitive(PrimitiveLiteral::Int(
-                first_partition_id_value,
-            ))),
-            Some(Literal::Primitive(PrimitiveLiteral::Int(
-                first_partition_id_value,
-            ))),
-        ])),
-        0,
-    )
-    .build()
-    .await
-    .unwrap();
+    let mut data_file_writer_invalid =
+        DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
+            .build()
+            .await
+            .unwrap();
 
     data_file_writer_invalid.write(batch.clone()).await.unwrap();
     let data_file_invalid = data_file_writer_invalid.close().await.unwrap();
