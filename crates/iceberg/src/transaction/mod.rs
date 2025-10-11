@@ -56,12 +56,14 @@ use std::collections::HashMap;
 
 pub use action::*;
 mod append;
+mod rewrite_files;
 mod snapshot;
 mod sort_order;
 mod update_location;
 mod update_properties;
 mod update_statistics;
 mod upgrade_format_version;
+mod validate;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,6 +80,7 @@ use crate::spec::{
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -151,6 +154,11 @@ impl Transaction {
     /// Creates replace sort order action.
     pub fn replace_sort_order(&self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction::new()
+    }
+
+    /// Rewrite a set of data files of table
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
+        RewriteFilesAction::new()
     }
 
     /// Set the location of table
