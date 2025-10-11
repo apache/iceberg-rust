@@ -1271,7 +1271,7 @@
 <a href=#1271 id=1271 data-nosnippet>1271</a>    ///
 <a href=#1272 id=1272 data-nosnippet>1272</a>    /// For string literals, this returns the raw string value without quotes.
 <a href=#1273 id=1273 data-nosnippet>1273</a>    /// For all other literals, it falls back to [`to_string()`].
-<a href=#1274 id=1274 data-nosnippet>1274</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#1274 id=1274 data-nosnippet>1274</a>    </span><span class="kw">pub fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
 <a href=#1275 id=1275 data-nosnippet>1275</a>        <span class="kw">match </span><span class="self">self</span>.literal() {
 <a href=#1276 id=1276 data-nosnippet>1276</a>            PrimitiveLiteral::String(s) =&gt; s.to_string(),
 <a href=#1277 id=1277 data-nosnippet>1277</a>            <span class="kw">_ </span>=&gt; <span class="self">self</span>.to_string(),
