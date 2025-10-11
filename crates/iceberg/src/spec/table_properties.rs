@@ -17,178 +17,109 @@
 
 use std::collections::HashMap;
 
-/// Macro to define table properties with type-safe access and validation.
-///
-/// # Example
-/// ```ignore
-/// define_table_properties! {
-///     TableProperties {
-///         commit_num_retries: usize = "commit.retry.num-retries" => 4,
-///         commit_min_retry_wait_ms: u64 = "commit.retry.min-wait-ms" => 100,
-///         write_format_default: String = "write.format.default" => "parquet",
-///     }
-/// }
-/// ```
-macro_rules! define_table_properties {
-    (
-        $struct_name:ident {
-            $(
-                $(#[$field_doc:meta])*
-                $field_name:ident: $field_type:ty = $key:literal => $default:expr
-            ),* $(,)?
-        }
-    ) => {
-        /// Table properties with type-safe access and validation
-        #[derive(Clone)]
-        pub struct $struct_name {
-            $(
-                $(#[$field_doc])*
-                pub $field_name: $field_type,
-            )*
-        }
-
-        impl $struct_name {
-            $(
-                paste::paste! {
-                    #[doc = "Property key for " $key]
-                    pub const [<PROPERTY_ $field_name:upper>]: &'static str = $key;
-                }
-            )*
-
-            /// Create a new instance with default values
-            pub fn new() -> Self {
-                Self {
-                    $($field_name: parse_default!($default, $field_type),)*
-                }
-            }
-        }
-
-        impl Default for $struct_name {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
-
-        impl TryFrom<HashMap<String, String>> for $struct_name {
-            type Error = anyhow::Error;
-
-            fn try_from(properties: HashMap<String, String>) -> Result<Self, Self::Error> {
-                let mut result = Self::new();
-
-                $(
-                    paste::paste! {
-                        if let Some(value_str) = properties.get(Self::[<PROPERTY_ $field_name:upper>]) {
-                            result.$field_name = parse_value!(
-                                value_str,
-                                $field_type,
-                                Self::[<PROPERTY_ $field_name:upper>]
-                            )?;
-                        }
-                    }
-                )*
-
-                Ok(result)
-            }
-        }
-
-        impl From<$struct_name> for HashMap<String, String> {
-            fn from(properties: $struct_name) -> Self {
-                let mut map = HashMap::new();
-
-                $(
-                    paste::paste! {
-                        map.insert(
-                            $struct_name::[<PROPERTY_ $field_name:upper>].to_string(),
-                            format_value!(properties.$field_name)
-                        );
-                    }
-                )*
-
-                map
-            }
-        }
-    };
+// Helper function to parse a property from a HashMap
+// If the property is not found, use the default value
+fn parse_property<T: std::str::FromStr>(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default: T,
+) -> Result<T, anyhow::Error>
+where
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    properties.get(key).map_or(Ok(default), |value| {
+        value
+            .parse::<T>()
+            .map_err(|e| anyhow::anyhow!("Invalid value for {}: {}", key, e))
+    })
 }
 
-/// Helper macro to parse default values based on type
-#[macro_export]
-macro_rules! parse_default {
-    ($value:expr, String) => {
-        $value.to_string()
-    };
-    ($value:expr, $type:ty) => {
-        $value
-    };
+/// TableProperties that contains the properties of a table.
+pub struct TableProperties {
+    /// The number of times to retry a commit.
+    pub commit_num_retries: usize,
+    /// The minimum wait time between retries.
+    pub commit_min_retry_wait_ms: u64,
+    /// The maximum wait time between retries.
+    pub commit_max_retry_wait_ms: u64,
+    /// The total timeout for commit retries.
+    pub commit_total_retry_timeout_ms: u64,
+    /// The default format for files.
+    pub write_format_default: String,
+    /// The target file size for files.
+    pub write_target_file_size_bytes: usize,
 }
 
-/// Helper macro to parse values from strings based on type
-#[macro_export]
-macro_rules! parse_value {
-    ($value:expr, String, $key:expr) => {
-        Ok::<String, anyhow::Error>($value.clone())
-    };
-    ($value:expr, $type:ty, $key:expr) => {
-        $value
-            .parse::<$type>()
-            .map_err(|e| anyhow::anyhow!("Invalid value for {}: {}", $key, e))
-    };
+impl TableProperties {
+    /// Property key for number of commit retries.
+    pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+    /// Default value for number of commit retries.
+    pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
+
+    /// Property key for minimum wait time (ms) between retries.
+    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
+    /// Default value for minimum wait time (ms) between retries.
+    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
+
+    /// Property key for maximum wait time (ms) between retries.
+    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
+    /// Default value for maximum wait time (ms) between retries.
+    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
+
+    /// Property key for total maximum retry time (ms).
+    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
+    /// Default value for total maximum retry time (ms).
+    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
+
+    /// Default file format for data files
+    pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
+    /// Default file format for delete files
+    pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.default";
+    /// Default value for data file format
+    pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
+
+    /// Target file size for newly written files.
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
+    /// Default target file size
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 }
 
-/// Helper macro to format values for storage
-#[macro_export]
-macro_rules! format_value {
-    ($value:expr) => {
-        $value.to_string()
-    };
-}
+impl TryFrom<&HashMap<String, String>> for TableProperties {
+    // parse by entry key or use default value
+    type Error = anyhow::Error;
 
-// Define the actual TableProperties struct using the macro
-define_table_properties! {
-    TableProperties {
-        /// Number of commit retries
-        commit_num_retries: usize = "commit.retry.num-retries" => 4,
-        /// Minimum wait time (ms) between retries
-        commit_min_retry_wait_ms: u64 = "commit.retry.min-wait-ms" => 100,
-        /// Maximum wait time (ms) between retries
-        commit_max_retry_wait_ms: u64 = "commit.retry.max-wait-ms" => 60000,
-        /// Total maximum retry time (ms)
-        commit_total_retry_timeout_ms: u64 = "commit.retry.total-timeout-ms" => 1800000,
-        /// Default file format for data files
-        write_format_default: String = "write.format.default" => "parquet".to_string(),
-        /// Target file size in bytes
-        write_target_file_size_bytes: u64 = "write.target-file-size-bytes" => 536870912,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_table_properties_default() {
-        let properties = TableProperties::new();
-        assert_eq!(properties.commit_num_retries, 4);
-        assert_eq!(properties.commit_min_retry_wait_ms, 100);
-        assert_eq!(properties.commit_max_retry_wait_ms, 60000);
-        assert_eq!(properties.commit_total_retry_timeout_ms, 1800000);
-        assert_eq!(properties.write_format_default, "parquet");
-        assert_eq!(properties.write_target_file_size_bytes, 536870912);
-    }
-
-    #[test]
-    fn test_table_properties_from_map() {
-        let properties = TableProperties::try_from(HashMap::from([
-            ("commit.retry.num-retries".to_string(), "5".to_string()),
-            ("commit.retry.min-wait-ms".to_string(), "10".to_string()),
-            ("write.format.default".to_string(), "avro".to_string()),
-        ]))
-        .unwrap();
-        assert_eq!(properties.commit_num_retries, 5);
-        assert_eq!(properties.commit_min_retry_wait_ms, 10);
-        assert_eq!(properties.commit_max_retry_wait_ms, 60000);
-        assert_eq!(properties.commit_max_retry_wait_ms, 1800000);
-        assert_eq!(properties.write_format_default, "avro");
-        assert_eq!(properties.write_target_file_size_bytes, 536870912);
+    fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
+        Ok(TableProperties {
+            commit_num_retries: parse_property(
+                props,
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES,
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
+            )?,
+            commit_min_retry_wait_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS,
+                TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
+            )?,
+            commit_max_retry_wait_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS,
+                TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
+            )?,
+            commit_total_retry_timeout_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS,
+                TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+            )?,
+            write_format_default: parse_property(
+                props,
+                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT,
+                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string(),
+            )?,
+            write_target_file_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            )?,
+        })
     }
 }
