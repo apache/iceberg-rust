@@ -17,7 +17,7 @@
 
 //! Partition value projection for Iceberg tables.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
@@ -28,6 +28,7 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
 use iceberg::arrow::record_batch_projector::RecordBatchProjector;
+use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::spec::{PartitionSpec, Schema};
 use iceberg::table::Table;
 use iceberg::transform::BoxedTransformFunction;
@@ -63,6 +64,10 @@ pub fn project_with_partition(
     }
 
     let input_schema = input.schema();
+
+    // Validate that input schema matches the table schema
+    validate_schema_compatibility(&input_schema, table_schema.as_ref())?;
+
     let partition_type = build_partition_type(partition_spec, table_schema.as_ref())?;
     let calculator = PartitionValueCalculator::new(
         partition_spec.as_ref().clone(),
@@ -88,13 +93,13 @@ pub fn project_with_partition(
 /// PhysicalExpr implementation for partition value calculation
 #[derive(Debug, Clone)]
 struct PartitionExpr {
-    calculator: Arc<Mutex<PartitionValueCalculator>>,
+    calculator: Arc<PartitionValueCalculator>,
 }
 
 impl PartitionExpr {
     fn new(calculator: PartitionValueCalculator) -> Self {
         Self {
-            calculator: Arc::new(Mutex::new(calculator)),
+            calculator: Arc::new(calculator),
         }
     }
 }
@@ -115,11 +120,7 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn data_type(&self, _input_schema: &ArrowSchema) -> DFResult<DataType> {
-        let calculator = self
-            .calculator
-            .lock()
-            .map_err(|e| DataFusionError::Internal(format!("Failed to lock calculator: {}", e)))?;
-        Ok(calculator.partition_type.clone())
+        Ok(self.calculator.partition_type.clone())
     }
 
     fn nullable(&self, _input_schema: &ArrowSchema) -> DFResult<bool> {
@@ -127,11 +128,7 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> DFResult<ColumnarValue> {
-        let calculator = self
-            .calculator
-            .lock()
-            .map_err(|e| DataFusionError::Internal(format!("Failed to lock calculator: {}", e)))?;
-        let array = calculator.calculate(batch)?;
+        let array = self.calculator.calculate(batch)?;
         Ok(ColumnarValue::Array(array))
     }
 
@@ -147,39 +144,34 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Ok(calculator) = self.calculator.lock() {
-            let field_names: Vec<String> = calculator
-                .partition_spec
-                .fields()
-                .iter()
-                .map(|pf| format!("{}({})", pf.transform, pf.name))
-                .collect();
-            write!(f, "iceberg_partition_values[{}]", field_names.join(", "))
-        } else {
-            write!(f, "iceberg_partition_values")
-        }
+        let field_names: Vec<String> = self
+            .calculator
+            .partition_spec
+            .fields()
+            .iter()
+            .map(|pf| format!("{}({})", pf.transform, pf.name))
+            .collect();
+        write!(f, "iceberg_partition_values[{}]", field_names.join(", "))
     }
 }
 
 impl std::fmt::Display for PartitionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Ok(calculator) = self.calculator.lock() {
-            let field_names: Vec<&str> = calculator
-                .partition_spec
-                .fields()
-                .iter()
-                .map(|pf| pf.name.as_str())
-                .collect();
-            write!(f, "iceberg_partition_values({})", field_names.join(", "))
-        } else {
-            write!(f, "iceberg_partition_values")
-        }
+        let field_names: Vec<&str> = self
+            .calculator
+            .partition_spec
+            .fields()
+            .iter()
+            .map(|pf| pf.name.as_str())
+            .collect();
+        write!(f, "iceberg_partition_values({})", field_names.join(", "))
     }
 }
 
 impl std::hash::Hash for PartitionExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::any::TypeId::of::<Self>().hash(state);
+        // Two PartitionExpr are equal if they share the same calculator Arc
+        Arc::as_ptr(&self.calculator).hash(state);
     }
 }
 
@@ -262,6 +254,46 @@ impl PartitionValueCalculator {
 
         Ok(Arc::new(struct_array))
     }
+}
+
+/// Validates that the input Arrow schema is compatible with the Iceberg table schema.
+///
+/// This ensures that:
+/// - All fields in the input schema have matching names in the table schema
+/// - The Arrow data types are compatible with the corresponding Iceberg types
+fn validate_schema_compatibility(
+    arrow_schema: &ArrowSchema,
+    table_schema: &Schema,
+) -> DFResult<()> {
+    // Convert Iceberg schema to Arrow schema for comparison
+    let expected_arrow_schema =
+        schema_to_arrow_schema(table_schema).map_err(to_datafusion_error)?;
+
+    // Check that all fields in the input schema exist in the table schema with compatible types
+    for arrow_field in arrow_schema.fields() {
+        let field_name = arrow_field.name();
+
+        let expected_field = expected_arrow_schema
+            .field_with_name(field_name)
+            .map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Input schema field '{}' not found in Iceberg table schema",
+                    field_name
+                ))
+            })?;
+
+        // Compare data types (metadata like field_id can differ)
+        if arrow_field.data_type() != expected_field.data_type() {
+            return Err(DataFusionError::Internal(format!(
+                "Input schema field '{}' has type {:?}, but Iceberg table schema expects {:?}",
+                field_name,
+                arrow_field.data_type(),
+                expected_field.data_type()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn build_partition_type(
@@ -495,5 +527,31 @@ mod tests {
 
         assert_eq!(city_partition.value(0), "New York");
         assert_eq!(city_partition.value(1), "Los Angeles");
+    }
+
+    #[test]
+    fn test_validate_schema_compatibility() {
+        let table_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let valid_arrow_schema = ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        assert!(super::validate_schema_compatibility(&valid_arrow_schema, &table_schema).is_ok());
+
+        let invalid_arrow_schema = ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("unknown_field", DataType::Int32, false),
+        ]);
+        assert!(
+            super::validate_schema_compatibility(&invalid_arrow_schema, &table_schema).is_err()
+        );
     }
 }
