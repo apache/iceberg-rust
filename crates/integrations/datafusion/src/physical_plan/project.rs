@@ -28,7 +28,6 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
 use iceberg::arrow::record_batch_projector::RecordBatchProjector;
-use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::spec::{PartitionSpec, Schema};
 use iceberg::table::Table;
 use iceberg::transform::BoxedTransformFunction;
@@ -64,9 +63,6 @@ pub fn project_with_partition(
     }
 
     let input_schema = input.schema();
-
-    // Validate that input schema matches the table schema
-    validate_schema_compatibility(&input_schema, table_schema.as_ref())?;
 
     let partition_type = build_partition_type(partition_spec, table_schema.as_ref())?;
     let calculator = PartitionValueCalculator::new(
@@ -254,46 +250,6 @@ impl PartitionValueCalculator {
 
         Ok(Arc::new(struct_array))
     }
-}
-
-/// Validates that the input Arrow schema is compatible with the Iceberg table schema.
-///
-/// This ensures that:
-/// - All fields in the input schema have matching names in the table schema
-/// - The Arrow data types are compatible with the corresponding Iceberg types
-fn validate_schema_compatibility(
-    arrow_schema: &ArrowSchema,
-    table_schema: &Schema,
-) -> DFResult<()> {
-    // Convert Iceberg schema to Arrow schema for comparison
-    let expected_arrow_schema =
-        schema_to_arrow_schema(table_schema).map_err(to_datafusion_error)?;
-
-    // Check that all fields in the input schema exist in the table schema with compatible types
-    for arrow_field in arrow_schema.fields() {
-        let field_name = arrow_field.name();
-
-        let expected_field = expected_arrow_schema
-            .field_with_name(field_name)
-            .map_err(|_| {
-                DataFusionError::Internal(format!(
-                    "Input schema field '{}' not found in Iceberg table schema",
-                    field_name
-                ))
-            })?;
-
-        // Compare data types (metadata like field_id can differ)
-        if arrow_field.data_type() != expected_field.data_type() {
-            return Err(DataFusionError::Internal(format!(
-                "Input schema field '{}' has type {:?}, but Iceberg table schema expects {:?}",
-                field_name,
-                arrow_field.data_type(),
-                expected_field.data_type()
-            )));
-        }
-    }
-
-    Ok(())
 }
 
 fn build_partition_type(
@@ -527,31 +483,5 @@ mod tests {
 
         assert_eq!(city_partition.value(0), "New York");
         assert_eq!(city_partition.value(1), "Los Angeles");
-    }
-
-    #[test]
-    fn test_validate_schema_compatibility() {
-        let table_schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let valid_arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-        ]);
-        assert!(super::validate_schema_compatibility(&valid_arrow_schema, &table_schema).is_ok());
-
-        let invalid_arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("unknown_field", DataType::Int32, false),
-        ]);
-        assert!(
-            super::validate_schema_compatibility(&invalid_arrow_schema, &table_schema).is_err()
-        );
     }
 }
