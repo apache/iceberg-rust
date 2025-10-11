@@ -99,38 +99,6 @@ pub const RESERVED_PROPERTIES: [&str; 9] = [
     PROPERTY_DEFAULT_SORT_ORDER,
 ];
 
-/// Property key for number of commit retries.
-pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
-/// Default value for number of commit retries.
-pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
-
-/// Property key for minimum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
-/// Default value for minimum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
-
-/// Property key for maximum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
-/// Default value for maximum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
-
-/// Property key for total maximum retry time (ms).
-pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
-/// Default value for total maximum retry time (ms).
-pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
-
-/// Default file format for data files
-pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
-/// Default file format for delete files
-pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.default";
-/// Default value for data file format
-pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
-
-/// Target file size for newly written files.
-pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
-/// Default target file size
-pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
-
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
