@@ -23,10 +23,7 @@ mod tests {
 
     use async_trait::async_trait;
     use ctor::{ctor, dtor};
-    use iceberg::io::{
-        CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-        S3_SECRET_ACCESS_KEY,
-    };
+    use iceberg::io::{CustomAwsCredentialLoader, Extensions, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, StorageBuilder};
     use iceberg_test_utils::docker::DockerCompose;
     use iceberg_test_utils::{normalize_test_name, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
@@ -140,7 +137,10 @@ mod tests {
     fn test_file_io_builder_extension_system() {
         // Test adding and retrieving extensions
         let test_string = "test_extension_value".to_string();
-        let builder = FileIOBuilder::new_fs_io().with_extension(test_string.clone());
+        
+        // Create a storage builder with the extension
+        use iceberg::io::OpenDALFsStorageBuilder;
+        let builder = OpenDALFsStorageBuilder::default().with_extension(test_string.clone());
 
         // Test retrieving the extension
         let extension: Option<Arc<String>> = builder.extension();
@@ -158,7 +158,9 @@ mod tests {
         let test_string = "test_value".to_string();
         let test_number = 42i32;
 
-        let builder = FileIOBuilder::new_fs_io()
+        // Create a storage builder with multiple extensions
+        use iceberg::io::OpenDALFsStorageBuilder;
+        let builder = OpenDALFsStorageBuilder::default()
             .with_extension(test_string.clone())
             .with_extension(test_number);
 
@@ -199,6 +201,8 @@ mod tests {
         // Create a mock credential loader
         let mock_loader = MockCredentialLoader::new_minio();
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+        let mut extensions = Extensions::default();
+        extensions.add(custom_loader);
 
         // Get container info for endpoint
         let container_ip = get_container_ip("minio");
@@ -206,7 +210,7 @@ mod tests {
 
         // Build FileIO with custom credential loader
         let file_io_with_custom_creds = FileIOBuilder::new("s3")
-            .with_extension(custom_loader)
+            .with_extensions(extensions)
             .with_props(vec![
                 (S3_ENDPOINT, format!("http://{}", minio_socket_addr)),
                 (S3_REGION, "us-east-1".to_string()),

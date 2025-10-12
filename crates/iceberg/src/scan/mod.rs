@@ -580,7 +580,7 @@ pub mod tests {
     use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
-    use crate::io::{FileIO, OutputFile};
+    use crate::io::{FileIO, OutputFileRef};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
@@ -726,7 +726,7 @@ pub mod tests {
             }
         }
 
-        fn next_manifest_file(&self) -> OutputFile {
+        fn next_manifest_file(&self) -> OutputFileRef {
             self.table
                 .file_io()
                 .new_output(format!(

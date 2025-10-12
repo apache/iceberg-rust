@@ -388,7 +388,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::io::{FileIOBuilder, InputFile, InputFileRef};
+    use crate::io::{FileIOBuilder, InputFileRef};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,

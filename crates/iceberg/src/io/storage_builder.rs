@@ -49,6 +49,8 @@ static STORAGE_REGISTRY: &[(&str, StorageBuilderFactory)] = &[
     ),
     #[cfg(feature = "storage-fs")]
     ("file", || Box::new(OpenDALFsStorageBuilder::default())),
+    #[cfg(feature = "storage-fs")]
+    ("", || Box::new(OpenDALFsStorageBuilder::default())),
     #[cfg(feature = "storage-s3")]
     ("s3", || Box::new(OpenDALS3StorageBuilder::default())),
     #[cfg(feature = "storage-s3")]
@@ -79,6 +81,11 @@ pub trait BoxedStorageBuilder {
     fn build(
         self: Box<Self>,
         props: HashMap<String, String>,
+    ) -> Result<Arc<dyn Storage>>;
+
+    fn build_with_extensions(
+        self: Box<Self>,
+        props: HashMap<String, String>,
         extensions: Extensions,
     ) -> Result<Arc<dyn Storage>>;
 }
@@ -88,15 +95,19 @@ impl<T: StorageBuilder + 'static> BoxedStorageBuilder for T {
     fn build(
         self: Box<Self>,
         props: HashMap<String, String>,
-        extensions: Extensions,
     ) -> Result<Arc<dyn Storage>> {
+        let builder = *self;
+        Ok(Arc::new(builder.build(props)?) as Arc<dyn Storage>)
+    }
+
+    fn build_with_extensions(self: Box<Self>, props: HashMap<String, String>, extensions: Extensions) -> Result<Arc<dyn Storage>> {
         let builder = *self;
         Ok(Arc::new(builder.with_extensions(extensions).build(props)?) as Arc<dyn Storage>)
     }
 }
 
-/// Load a storage from a string.
-pub fn load(r#type: &str) -> Result<Box<dyn BoxedStorageBuilder>> {
+/// Load a storage builder by storage type..
+pub fn load_storage_builder(r#type: &str) -> Result<Box<dyn BoxedStorageBuilder>> {
     let key = r#type.trim();
     if let Some((_, factory)) = STORAGE_REGISTRY
         .iter()
@@ -112,27 +123,5 @@ pub fn load(r#type: &str) -> Result<Box<dyn BoxedStorageBuilder>> {
                 supported_types().join(", ")
             ),
         ))
-    }
-}
-
-/// Ergonomic storage loader builder pattern.
-pub struct StorageLoader<'a> {
-    storage_type: &'a str,
-}
-
-impl<'a> From<&'a str> for StorageLoader<'a> {
-    fn from(s: &'a str) -> Self {
-        Self { storage_type: s }
-    }
-}
-
-impl StorageLoader<'_> {
-    pub fn load(
-        self,
-        props: HashMap<String, String>,
-        extensions: Extensions,
-    ) -> Result<Arc<dyn Storage>> {
-        let builder = load(self.storage_type)?;
-        builder.build(props, extensions)
     }
 }

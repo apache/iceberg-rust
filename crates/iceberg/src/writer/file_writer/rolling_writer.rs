@@ -19,7 +19,7 @@ use std::fmt::{Debug, Formatter};
 
 use arrow_array::RecordBatch;
 
-use crate::io::{FileIO, OutputFile};
+use crate::io::{FileIO, OutputFileRef};
 use crate::spec::{DataFileBuilder, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, PartitionKey};
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
@@ -161,7 +161,7 @@ where
         self.current_written_size() > self.target_file_size
     }
 
-    fn new_output_file(&self, partition_key: &Option<PartitionKey>) -> Result<OutputFile> {
+    fn new_output_file(&self, partition_key: &Option<PartitionKey>) -> Result<OutputFileRef> {
         self.file_io
             .new_output(self.location_generator.generate_location(
                 partition_key.as_ref(),

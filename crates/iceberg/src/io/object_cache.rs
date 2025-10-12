@@ -191,7 +191,7 @@ mod tests {
 
     use super::*;
     use crate::TableIdent;
-    use crate::io::{FileIO, OutputFile};
+    use crate::io::{FileIO, OutputFileRef};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
@@ -246,7 +246,7 @@ mod tests {
             }
         }
 
-        fn next_manifest_file(&self) -> OutputFile {
+        fn next_manifest_file(&self) -> OutputFileRef {
             self.table
                 .file_io()
                 .new_output(format!(

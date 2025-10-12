@@ -26,7 +26,7 @@ use bytes::Bytes;
 use opendal::Operator;
 use url::Url;
 
-use crate::io::loader::StorageLoader;
+use crate::io::storage_builder::load_storage_builder;
 use crate::{Error, ErrorKind, Result};
 
 /// todo doc
@@ -65,12 +65,14 @@ pub trait StorageBuilder: Default + Debug {
     fn build(self, props: HashMap<String, String>) -> Result<Self::S>;
 
     /// Add an extension to the file IO builder.
+    /// todo remove this?
     fn with_extension<T: Any + Send + Sync>(self, ext: T) -> Self;
 
-    /// Adds multiple extensions to the file IO builder.
+    /// Add extensions to the Storage builder.
     fn with_extensions(self, extensions: Extensions) -> Self;
 
     /// Fetch an extension from the file IO builder.
+    /// todo remove this?
     fn extension<T>(&self) -> Option<Arc<T>>
     where T: 'static + Send + Sync + Clone;
 }
@@ -270,7 +272,7 @@ pub struct FileIOBuilder {
     /// Arguments for operator.
     props: HashMap<String, String>,
     /// Optional extensions to configure the underlying Storage behavior.
-    extensions: Extensions,
+    extensions: Option<Extensions>,
 }
 
 impl FileIOBuilder {
@@ -280,7 +282,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
-            extensions: Extensions::default(),
+            extensions: None,
         }
     }
 
@@ -289,7 +291,7 @@ impl FileIOBuilder {
         Self {
             scheme_str: None,
             props: HashMap::default(),
-            extensions: Extensions::default(),
+            extensions: None,
         }
     }
 
@@ -316,18 +318,39 @@ impl FileIOBuilder {
         self
     }
 
+    /// Add an extension to the file IO builder.
+    pub fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
+        let mut extensions = self.extensions.unwrap_or_default();
+        extensions.add(ext);
+        self.extensions = Some(extensions);
+        self
+    }
+
     /// Add extensions to the builder.
     pub fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions = extensions;
+        self.extensions = Some(extensions);
         self
+    }
+
+    /// Fetch an extension from the file IO builder.
+    pub fn extension<T>(&self) -> Option<Arc<T>>
+    where T: 'static + Send + Sync + Clone {
+        self.extensions.as_ref()?.get::<T>()
     }
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
         // Use the scheme to determine the storage type
         let scheme = self.scheme_str.clone().unwrap_or_default();
-        let storage = StorageLoader::from(scheme.as_str())
-            .load(self.props.clone(), self.extensions.clone())?;
+        let builder = load_storage_builder(scheme.as_str())?;
+
+        // Attach extensions
+        let storage = if let Some(extensions) = self.extensions.clone() {
+            builder.build_with_extensions(self.props.clone(), extensions)?
+        } else {
+            builder.build(self.props.clone())?
+        };
+
         Ok(FileIO {
             builder: self,
             inner: storage,

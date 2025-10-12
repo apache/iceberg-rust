@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use super::blob::Blob;
-use crate::io::{FileIOBuilder, InputFile};
+use crate::io::{FileIOBuilder, InputFileRef};
 use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, CREATED_BY_PROPERTY, FileMetadata};
 
@@ -27,7 +27,7 @@ const EMPTY_UNCOMPRESSED: &str = "empty-puffin-uncompressed.bin";
 const METRIC_UNCOMPRESSED: &str = "sample-metric-data-uncompressed.bin";
 const METRIC_ZSTD_COMPRESSED: &str = "sample-metric-data-compressed-zstd.bin";
 
-fn input_file_for_test_data(path: &str) -> InputFile {
+fn input_file_for_test_data(path: &str) -> InputFileRef {
     FileIOBuilder::new_fs_io()
         .build()
         .unwrap()
@@ -35,15 +35,15 @@ fn input_file_for_test_data(path: &str) -> InputFile {
         .unwrap()
 }
 
-pub(crate) fn java_empty_uncompressed_input_file() -> InputFile {
+pub(crate) fn java_empty_uncompressed_input_file() -> InputFileRef {
     input_file_for_test_data(&[JAVA_TESTDATA, EMPTY_UNCOMPRESSED].join("/"))
 }
 
-pub(crate) fn java_uncompressed_metric_input_file() -> InputFile {
+pub(crate) fn java_uncompressed_metric_input_file() -> InputFileRef {
     input_file_for_test_data(&[JAVA_TESTDATA, METRIC_UNCOMPRESSED].join("/"))
 }
 
-pub(crate) fn java_zstd_compressed_metric_input_file() -> InputFile {
+pub(crate) fn java_zstd_compressed_metric_input_file() -> InputFileRef {
     input_file_for_test_data(&[JAVA_TESTDATA, METRIC_ZSTD_COMPRESSED].join("/"))
 }
 
