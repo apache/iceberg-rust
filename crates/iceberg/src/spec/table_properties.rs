@@ -51,6 +51,60 @@ pub struct TableProperties {
 }
 
 impl TableProperties {
+    /// Reserved table property for table format version.
+    ///
+    /// Iceberg will default a new table's format version to the latest stable and recommended
+    /// version. This reserved property keyword allows users to override the Iceberg format version of
+    /// the table metadata.
+    ///
+    /// If this table property exists when creating a table, the table will use the specified format
+    /// version. If a table updates this property, it will try to upgrade to the specified format
+    /// version.
+    pub const PROPERTY_FORMAT_VERSION: &str = "format-version";
+    /// Reserved table property for table UUID.
+    pub const PROPERTY_UUID: &str = "uuid";
+    /// Reserved table property for the total number of snapshots.
+    pub const PROPERTY_SNAPSHOT_COUNT: &str = "snapshot-count";
+    /// Reserved table property for current snapshot summary.
+    pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &str = "current-snapshot-summary";
+    /// Reserved table property for current snapshot id.
+    pub const PROPERTY_CURRENT_SNAPSHOT_ID: &str = "current-snapshot-id";
+    /// Reserved table property for current snapshot timestamp.
+    pub const PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &str = "current-snapshot-timestamp-ms";
+    /// Reserved table property for the JSON representation of current schema.
+    pub const PROPERTY_CURRENT_SCHEMA: &str = "current-schema";
+    /// Reserved table property for the JSON representation of current(default) partition spec.
+    pub const PROPERTY_DEFAULT_PARTITION_SPEC: &str = "default-partition-spec";
+    /// Reserved table property for the JSON representation of current(default) sort order.
+    pub const PROPERTY_DEFAULT_SORT_ORDER: &str = "default-sort-order";
+
+    /// Property key for max number of previous versions to keep.
+    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str =
+        "write.metadata.previous-versions-max";
+    /// Default value for max number of previous versions to keep.
+    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
+
+    /// Property key for max number of partitions to keep summary stats for.
+    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
+    /// Default value for the max number of partitions to keep summary stats for.
+    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
+
+    /// Reserved Iceberg table properties list.
+    ///
+    /// Reserved table properties are only used to control behaviors when creating or updating a
+    /// table. The value of these properties are not persisted as a part of the table metadata.
+    pub const RESERVED_PROPERTIES: [&str; 9] = [
+        Self::PROPERTY_FORMAT_VERSION,
+        Self::PROPERTY_UUID,
+        Self::PROPERTY_SNAPSHOT_COUNT,
+        Self::PROPERTY_CURRENT_SNAPSHOT_ID,
+        Self::PROPERTY_CURRENT_SNAPSHOT_SUMMARY,
+        Self::PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP,
+        Self::PROPERTY_CURRENT_SCHEMA,
+        Self::PROPERTY_DEFAULT_PARTITION_SPEC,
+        Self::PROPERTY_DEFAULT_SORT_ORDER,
+    ];
+
     /// Property key for number of commit retries.
     pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
     /// Default value for number of commit retries.
