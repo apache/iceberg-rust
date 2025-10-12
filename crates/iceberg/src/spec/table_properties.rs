@@ -35,6 +35,7 @@ where
 }
 
 /// TableProperties that contains the properties of a table.
+#[derive(Debug)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     pub commit_num_retries: usize,
@@ -175,5 +176,109 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_table_properties_default() {
+        let props = HashMap::new();
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.commit_num_retries,
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
+        assert_eq!(
+            table_properties.commit_min_retry_wait_ms,
+            TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT
+        );
+        assert_eq!(
+            table_properties.commit_max_retry_wait_ms,
+            TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT
+        );
+        assert_eq!(
+            table_properties.write_format_default,
+            TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()
+        );
+        assert_eq!(
+            table_properties.write_target_file_size_bytes,
+            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_valid() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "10".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS.to_string(),
+                "20".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT.to_string(),
+                "avro".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "512".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.commit_num_retries, 10);
+        assert_eq!(table_properties.commit_max_retry_wait_ms, 20);
+        assert_eq!(table_properties.write_format_default, "avro".to_string());
+        assert_eq!(table_properties.write_target_file_size_bytes, 512);
+    }
+
+    #[test]
+    fn test_table_properties_invalid() {
+        let invalid_retries = HashMap::from([(
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+            "abc".to_string(),
+        )]);
+
+        let table_properties = TableProperties::try_from(&invalid_retries).unwrap_err();
+        assert!(
+            table_properties.to_string().contains(
+                "Invalid value for commit.retry.num-retries: invalid digit found in string"
+            )
+        );
+
+        let invalid_min_wait = HashMap::from([(
+            TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS.to_string(),
+            "abc".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&invalid_min_wait).unwrap_err();
+        assert!(
+            table_properties.to_string().contains(
+                "Invalid value for commit.retry.min-wait-ms: invalid digit found in string"
+            )
+        );
+
+        let invalid_max_wait = HashMap::from([(
+            TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS.to_string(),
+            "abc".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&invalid_max_wait).unwrap_err();
+        assert!(
+            table_properties.to_string().contains(
+                "Invalid value for commit.retry.max-wait-ms: invalid digit found in string"
+            )
+        );
+
+        let invalid_target_size = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+            "abc".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&invalid_target_size).unwrap_err();
+        assert!(table_properties.to_string().contains(
+            "Invalid value for write.target-file-size-bytes: invalid digit found in string"
+        ));
     }
 }
