@@ -18,13 +18,13 @@
 //! This module provides the `FanoutDataWriter` implementation.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
-use arrow_array::RecordBatch;
 use async_trait::async_trait;
 
-use crate::spec::{DataFile, PartitionKey, Struct};
+use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// A writer that can write data to multiple partitions simultaneously.
@@ -33,15 +33,33 @@ use crate::{Error, ErrorKind, Result};
 /// `FanoutDataWriter` can handle unsorted data by maintaining multiple active writers in a map.
 /// This allows writing to any partition at any time, but uses more memory as all writers
 /// remain active until the writer is closed.
+///
+/// # Type Parameters
+///
+/// * `B` - The inner writer builder type
+/// * `I` - Input type (defaults to `RecordBatch`)
+/// * `O` - Output collection type (defaults to `Vec<DataFile>`)
 #[derive(Clone)]
-pub struct FanoutDataWriter<B: IcebergWriterBuilder> {
+pub struct FanoutDataWriter<B, I = DefaultInput, O = DefaultOutput>
+where
+    B: IcebergWriterBuilder<I, O>,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
+    <O as IntoIterator>::Item: Clone,
+{
     inner_builder: B,
     partition_writers: HashMap<Struct, B::R>,
     unpartitioned_writer: Option<B::R>,
-    output: Vec<DataFile>,
+    output: Vec<<O as IntoIterator>::Item>,
+    _phantom: PhantomData<I>,
 }
 
-impl<B: IcebergWriterBuilder> FanoutDataWriter<B> {
+impl<B, I, O> FanoutDataWriter<B, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
+    <O as IntoIterator>::Item: Send + Clone,
+{
     /// Create a new `FanoutDataWriter`.
     pub fn new(inner_builder: B) -> Self {
         Self {
@@ -49,6 +67,7 @@ impl<B: IcebergWriterBuilder> FanoutDataWriter<B> {
             partition_writers: HashMap::new(),
             unpartitioned_writer: None,
             output: Vec::new(),
+            _phantom: PhantomData,
         }
     }
 
@@ -98,12 +117,14 @@ impl<B: IcebergWriterBuilder> FanoutDataWriter<B> {
 }
 
 #[async_trait]
-impl<B: IcebergWriterBuilder> PartitioningWriter for FanoutDataWriter<B> {
-    async fn write(
-        &mut self,
-        partition_key: Option<PartitionKey>,
-        input: RecordBatch,
-    ) -> Result<()> {
+impl<B, I, O> PartitioningWriter<I, O> for FanoutDataWriter<B, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item> + Send + 'static,
+    <O as IntoIterator>::Item: Send + Clone,
+{
+    async fn write(&mut self, partition_key: Option<PartitionKey>, input: I) -> Result<()> {
         if let Some(partition_key) = partition_key {
             let writer = self.get_or_create_partition_writer(&partition_key).await?;
             writer.write(input).await
@@ -113,19 +134,21 @@ impl<B: IcebergWriterBuilder> PartitioningWriter for FanoutDataWriter<B> {
         }
     }
 
-    async fn close(&mut self) -> Result<Vec<DataFile>> {
+    async fn close(&mut self) -> Result<O> {
         // Close all partition writers
         for (_, mut writer) in std::mem::take(&mut self.partition_writers) {
-            self.output.extend(writer.close().await?);
+            let result = writer.close().await?;
+            self.output.extend(result);
         }
 
         // Close unpartitioned writer if it exists
         if let Some(mut writer) = self.unpartitioned_writer.take() {
-            self.output.extend(writer.close().await?);
+            let result = writer.close().await?;
+            self.output.extend(result);
         }
 
-        // Return all collected data files
-        Ok(std::mem::take(&mut self.output))
+        // Collect all output items into the output collection type
+        Ok(O::from_iter(std::mem::take(&mut self.output)))
     }
 }
 
@@ -134,7 +157,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, StringArray};
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;

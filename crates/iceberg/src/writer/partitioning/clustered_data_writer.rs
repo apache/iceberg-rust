@@ -18,26 +18,47 @@
 //! This module provides the `ClusteredDataWriter` implementation.
 
 use std::collections::HashSet;
+use std::marker::PhantomData;
 
-use arrow_array::RecordBatch;
 use async_trait::async_trait;
 
-use crate::spec::{DataFile, PartitionKey, Struct};
+use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// A writer that writes data to a single partition at a time.
+///
+/// This writer expects input data to be sorted by partition key. It maintains only one
+/// active writer at a time, making it memory efficient for sorted data.
+///
+/// # Type Parameters
+///
+/// * `B` - The inner writer builder type
+/// * `I` - Input type (defaults to `RecordBatch`)
+/// * `O` - Output collection type (defaults to `Vec<DataFile>`)
 #[derive(Clone)]
-pub struct ClusteredDataWriter<B: IcebergWriterBuilder> {
+pub struct ClusteredDataWriter<B, I = DefaultInput, O = DefaultOutput>
+where
+    B: IcebergWriterBuilder<I, O>,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
+    <O as IntoIterator>::Item: Clone,
+{
     inner_builder: B,
     current_writer: Option<B::R>,
     current_partition: Option<Struct>,
     closed_partitions: HashSet<Struct>,
-    output: Vec<DataFile>,
+    output: Vec<<O as IntoIterator>::Item>,
+    _phantom: PhantomData<I>,
 }
 
-impl<B: IcebergWriterBuilder> ClusteredDataWriter<B> {
+impl<B, I, O> ClusteredDataWriter<B, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
+    <O as IntoIterator>::Item: Send + Clone,
+{
     /// Create a new `ClusteredDataWriter`.
     pub fn new(inner_builder: B) -> Self {
         Self {
@@ -46,13 +67,15 @@ impl<B: IcebergWriterBuilder> ClusteredDataWriter<B> {
             current_partition: None,
             closed_partitions: HashSet::new(),
             output: Vec::new(),
+            _phantom: PhantomData,
         }
     }
 
     /// Closes the current writer if it exists, flushes the written data to output, and record closed partition.
     async fn close_current_writer(&mut self) -> Result<()> {
         if let Some(mut writer) = self.current_writer.take() {
-            self.output.extend(writer.close().await?);
+            let result = writer.close().await?;
+            self.output.extend(result);
 
             // Add the current partition to the set of closed partitions
             if let Some(current_partition) = self.current_partition.take() {
@@ -65,12 +88,14 @@ impl<B: IcebergWriterBuilder> ClusteredDataWriter<B> {
 }
 
 #[async_trait]
-impl<B: IcebergWriterBuilder> PartitioningWriter for ClusteredDataWriter<B> {
-    async fn write(
-        &mut self,
-        partition_key: Option<PartitionKey>,
-        input: RecordBatch,
-    ) -> Result<()> {
+impl<B, I, O> PartitioningWriter<I, O> for ClusteredDataWriter<B, I, O>
+where
+    B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
+    O: IntoIterator + FromIterator<<O as IntoIterator>::Item> + Send + 'static,
+    <O as IntoIterator>::Item: Send + Clone,
+{
+    async fn write(&mut self, partition_key: Option<PartitionKey>, input: I) -> Result<()> {
         if let Some(partition_key) = partition_key {
             let partition_value = partition_key.data();
 
@@ -115,8 +140,7 @@ impl<B: IcebergWriterBuilder> PartitioningWriter for ClusteredDataWriter<B> {
 
         // do write
         if let Some(writer) = &mut self.current_writer {
-            writer.write(input).await?;
-            Ok(())
+            writer.write(input).await
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
@@ -125,11 +149,11 @@ impl<B: IcebergWriterBuilder> PartitioningWriter for ClusteredDataWriter<B> {
         }
     }
 
-    async fn close(&mut self) -> Result<Vec<DataFile>> {
+    async fn close(&mut self) -> Result<O> {
         self.close_current_writer().await?;
 
-        // Return all collected data files
-        Ok(std::mem::take(&mut self.output))
+        // Collect all output items into the output collection type
+        Ok(O::from_iter(std::mem::take(&mut self.output)))
     }
 }
 
@@ -138,7 +162,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, StringArray};
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
