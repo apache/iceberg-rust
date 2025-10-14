@@ -20,7 +20,7 @@
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>arrow_array::RecordBatch;
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, OutputFile};
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileBuilder, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, PartitionKey};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileBuilder, PartitionKey, TableProperties};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::writer::CurrentFileStatus;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::{FileWriter, FileWriterBuilder};
@@ -95,7 +95,7 @@
 <a href=#95 id=95 data-nosnippet>95</a>    ) -&gt; <span class="self">Self </span>{
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="self">Self </span>{
 <a href=#97 id=97 data-nosnippet>97</a>            inner_builder,
-<a href=#98 id=98 data-nosnippet>98</a>            target_file_size: PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+<a href=#98 id=98 data-nosnippet>98</a>            target_file_size: TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
 <a href=#99 id=99 data-nosnippet>99</a>            file_io,
 <a href=#100 id=100 data-nosnippet>100</a>            location_generator,
 <a href=#101 id=101 data-nosnippet>101</a>            file_name_generator,
