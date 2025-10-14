@@ -348,7 +348,9 @@ mod tests {
         writer.write(partition_key_us.clone(), batch_us1).await?;
         writer.write(partition_key_eu.clone(), batch_eu1).await?;
         writer.write(partition_key_us.clone(), batch_us2).await?; // Back to US partition
-        writer.write(partition_key_asia.clone(), batch_asia1).await?;
+        writer
+            .write(partition_key_asia.clone(), batch_asia1)
+            .await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -381,5 +383,4 @@ mod tests {
 
         Ok(())
     }
-
 }

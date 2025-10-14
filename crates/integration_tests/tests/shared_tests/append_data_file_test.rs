@@ -83,10 +83,7 @@ async fn test_append_data_file() {
         file_name_generator.clone(),
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
-    let mut data_file_writer = data_file_writer_builder
-        .build(None)
-        .await
-        .unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);

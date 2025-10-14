@@ -18,9 +18,9 @@
 pub mod clustered_writer;
 pub mod fanout_writer;
 
+use crate::Result;
 use crate::spec::PartitionKey;
 use crate::writer::{DefaultInput, DefaultOutput};
-use crate::Result;
 
 /// A writer that can write data to partitioned tables.
 ///
