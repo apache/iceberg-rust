@@ -24,10 +24,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
-    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType,
-    Summary, update_snapshot_summaries,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -322,15 +321,15 @@ impl<'a> SnapshotProducer<'a> {
 
         let partition_summary_limit = if let Some(limit) = table_metadata
             .properties()
-            .get(PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
+            .get(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
         {
             if let Ok(limit) = limit.parse::<u64>() {
                 limit
             } else {
-                PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
             }
         } else {
-            PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+            TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
         };
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);

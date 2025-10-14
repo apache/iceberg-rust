@@ -57,14 +57,16 @@ impl IcebergCommitExec {
         input: Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
     ) -> Self {
-        let plan_properties = Self::compute_properties(schema.clone());
+        let count_schema = Self::make_count_schema();
+
+        let plan_properties = Self::compute_properties(Arc::clone(&count_schema));
 
         Self {
             table,
             catalog,
             input,
             schema,
-            count_schema: Self::make_count_schema(),
+            count_schema,
             plan_properties,
         }
     }
@@ -468,6 +470,9 @@ mod tests {
 
         let commit_exec =
             IcebergCommitExec::new(table.clone(), catalog.clone(), input_exec, arrow_schema);
+
+        // Verify Execution Plan schema matches the count schema
+        assert_eq!(commit_exec.schema(), IcebergCommitExec::make_count_schema());
 
         // Execute the commit exec
         let task_ctx = Arc::new(TaskContext::default());

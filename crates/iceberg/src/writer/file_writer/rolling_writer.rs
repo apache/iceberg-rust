@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use arrow_array::RecordBatch;
 
 use crate::io::{FileIO, OutputFile};
-use crate::spec::{DataFileBuilder, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT, PartitionKey};
+use crate::spec::{DataFileBuilder, PartitionKey, TableProperties};
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
@@ -95,7 +95,7 @@ where
     ) -> Self {
         Self {
             inner_builder,
-            target_file_size: PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            target_file_size: TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             file_io,
             location_generator,
             file_name_generator,
