@@ -118,6 +118,13 @@ impl<'a> RewriteFilesAction<'a> {
         self
     }
 
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn with_delete_filter_manager_enabled(mut self) -> Self {
+        self.snapshot_produce_action.enable_delete_filter_manager();
+        self
+    }
+
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(self) -> Result<Transaction<'a>> {
         if self.merge_enabled {

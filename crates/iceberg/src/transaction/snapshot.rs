@@ -17,8 +17,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
-use std::ops::RangeFrom;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
@@ -28,9 +29,11 @@ use crate::spec::{
     DataContentType, DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter, ManifestWriterBuilder,
     Operation, Snapshot, SnapshotReference, SnapshotRetention, Struct, StructType, Summary,
-    MAIN_BRANCH,
+    MAIN_BRANCH, UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::transaction::Transaction;
+#[allow(unused_imports)]
+use crate::transaction::manifest_filter::ManifestFilterManager;
+use crate::transaction::{ManifestWriterContext, Transaction};
 use crate::utils::bin::ListPacker;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
@@ -78,21 +81,20 @@ pub(crate) struct SnapshotProduceAction<'a> {
     pub added_data_files: Vec<DataFile>,
     pub added_delete_files: Vec<DataFile>,
 
-    removed_data_files: Vec<DataFile>,
-    removed_delete_files: Vec<DataFile>,
-
     // for filtering out files that are removed by action
     pub removed_data_file_paths: HashSet<String>,
     pub removed_delete_file_paths: HashSet<String>,
 
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
-    // Note: This counter is limited to the range of (0..u64::MAX).
-    manifest_counter: RangeFrom<u64>,
+    // This counter is shared with ManifestWriterContext to avoid naming conflicts.
+    manifest_counter: Arc<AtomicU64>,
 
     new_data_file_sequence_number: Option<i64>,
 
     target_branch: String,
+
+    delete_filter_manager: Option<ManifestFilterManager>,
 }
 
 impl<'a> SnapshotProduceAction<'a> {
@@ -103,6 +105,11 @@ impl<'a> SnapshotProduceAction<'a> {
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
+        let manifest_counter = Arc::new(AtomicU64::new(0));
+
+        // Default: disable delete filter manager (need to explicitly enable)
+        let delete_filter_manager = None;
+
         Ok(Self {
             tx,
             snapshot_id,
@@ -110,14 +117,13 @@ impl<'a> SnapshotProduceAction<'a> {
             snapshot_properties,
             added_data_files: vec![],
             added_delete_files: vec![],
-            removed_data_files: vec![],
-            removed_delete_files: vec![],
             removed_data_file_paths: HashSet::new(),
             removed_delete_file_paths: HashSet::new(),
-            manifest_counter: (0..),
+            manifest_counter,
             key_metadata,
             new_data_file_sequence_number: None,
             target_branch: MAIN_BRANCH.to_string(),
+            delete_filter_manager,
         })
     }
 
@@ -195,11 +201,13 @@ impl<'a> SnapshotProduceAction<'a> {
             if data_file.content_type() == DataContentType::Data {
                 self.removed_data_file_paths
                     .insert(data_file.file_path.clone());
-                self.removed_data_files.push(data_file);
             } else {
                 self.removed_delete_file_paths
                     .insert(data_file.file_path.clone());
-                self.removed_delete_files.push(data_file);
+                // Only use delete filter manager if it's enabled (Some)
+                if let Some(ref mut manager) = self.delete_filter_manager {
+                    manager.delete_file(data_file)?;
+                }
             }
         }
         Ok(self)
@@ -210,14 +218,14 @@ impl<'a> SnapshotProduceAction<'a> {
         content_type: &ManifestContentType,
         partition_spec_id: i32,
     ) -> Result<ManifestWriter> {
-        let new_manifest_path = format!(
-            "{}/{}/{}-m{}.{}",
+        let new_manifest_path = new_manifest_path(
             self.tx.current_table.metadata().location(),
             META_ROOT_PATH,
             self.commit_uuid,
-            self.manifest_counter.next().unwrap(),
-            DataFileFormat::Avro
+            self.manifest_counter.fetch_add(1, Ordering::SeqCst),
+            DataFileFormat::Avro,
         );
+
         let output = self
             .tx
             .current_table
@@ -393,7 +401,70 @@ impl<'a> SnapshotProduceAction<'a> {
 
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
 
-        manifest_files.extend(existing_manifests);
+        if let Some(delete_filter_manager) = self.delete_filter_manager.as_mut() {
+            let branch_snapshot_ref = self
+                .tx
+                .current_table
+                .metadata()
+                .snapshot_for_ref(&self.target_branch);
+
+            let schema_id = if let Some(branch_snapshot_ref) = branch_snapshot_ref {
+                branch_snapshot_ref
+                    .schema_id()
+                    .unwrap_or(self.tx.current_table.metadata().current_schema_id())
+            } else {
+                self.tx.current_table.metadata().current_schema_id()
+            };
+
+            let schema = self
+                .tx
+                .current_table
+                .metadata()
+                .schema_by_id(schema_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid schema id for existing manifest filtering",
+                    )
+                    .with_context("schema id", schema_id.to_string())
+                })?
+                .as_ref()
+                .clone();
+
+            let last_seq = self.tx.current_table.metadata().last_sequence_number();
+
+            // Partition manifests by type to avoid cloning
+            let (existing_data_manifests, existing_delete_manifests): (Vec<_>, Vec<_>) =
+                existing_manifests
+                    .into_iter()
+                    .partition(|m| matches!(m.content, ManifestContentType::Data));
+
+            let min_data_seq = existing_data_manifests
+                .iter()
+                .map(|m| m.min_sequence_number)
+                .filter(|seq| *seq != UNASSIGNED_SEQUENCE_NUMBER)
+                .reduce(std::cmp::min)
+                .map(|min_seq| std::cmp::min(min_seq, last_seq))
+                .unwrap_or(last_seq);
+
+            manifest_files.extend(existing_data_manifests);
+
+            delete_filter_manager.drop_delete_files_older_than(min_data_seq);
+
+            let filtered_delete_manifests: Vec<ManifestFile> = delete_filter_manager
+                .filter_manifests(&schema, existing_delete_manifests)
+                .await?;
+            manifest_files.extend(filtered_delete_manifests);
+
+            manifest_files.retain(|m| {
+                m.has_added_files()
+                    || m.has_existing_files()
+                    || m.added_snapshot_id == self.snapshot_id
+            });
+        } else {
+            manifest_files.extend(existing_manifests);
+        }
+
         manifest_process
             .process_manifest(self, manifest_files)
             .await
@@ -515,6 +586,25 @@ impl<'a> SnapshotProduceAction<'a> {
 
     pub fn target_branch(&self) -> &str {
         &self.target_branch
+    }
+
+    /// Enable delete filter manager for this snapshot (lazy initialization)
+    pub fn enable_delete_filter_manager(&mut self) {
+        if self.delete_filter_manager.is_none() {
+            self.delete_filter_manager = Some(ManifestFilterManager::new(
+                self.tx.current_table.file_io().clone(),
+                ManifestWriterContext::new(
+                    self.tx.current_table.metadata().location().to_string(),
+                    META_ROOT_PATH.to_string(),
+                    self.commit_uuid,
+                    self.manifest_counter.clone(),
+                    self.tx.current_table.metadata().format_version(),
+                    self.snapshot_id,
+                    self.tx.current_table.file_io().clone(),
+                    self.key_metadata.clone(),
+                ),
+            ));
+        }
     }
 }
 
@@ -705,4 +795,17 @@ impl MergeManifestManager {
 
         Ok(merge_manifests)
     }
+}
+
+pub(crate) fn new_manifest_path(
+    metadata_location: &str,
+    meta_root_path: &str,
+    commit_uuid: Uuid,
+    manifest_counter: u64,
+    format: DataFileFormat,
+) -> String {
+    format!(
+        "{}/{}/{}-m{}.{}",
+        metadata_location, meta_root_path, commit_uuid, manifest_counter, format
+    )
 }

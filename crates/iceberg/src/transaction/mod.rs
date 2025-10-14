@@ -18,6 +18,9 @@
 //! This module contains transaction api.
 
 mod append;
+mod manifest_filter;
+
+pub use manifest_filter::*;
 mod overwrite_files;
 mod remove_snapshots;
 mod rewrite_files;

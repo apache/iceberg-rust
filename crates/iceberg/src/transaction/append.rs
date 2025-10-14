@@ -73,6 +73,13 @@ impl<'a> FastAppendAction<'a> {
         self
     }
 
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn with_delete_filter_manager_enabled(mut self) -> Self {
+        self.snapshot_produce_action.enable_delete_filter_manager();
+        self
+    }
+
     /// Add data files to the snapshot.
     pub fn add_data_files(
         &mut self,
@@ -270,6 +277,13 @@ impl<'a> MergeAppendAction<'a> {
     pub fn with_to_branch(mut self, to_branch: String) -> Result<MergeAppendAction<'a>> {
         self.snapshot_produce_action.set_target_branch(to_branch);
         Ok(self)
+    }
+
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn with_delete_filter_manager_enabled(mut self) -> Self {
+        self.snapshot_produce_action.enable_delete_filter_manager();
+        self
     }
 
     /// Add data files to the snapshot.
