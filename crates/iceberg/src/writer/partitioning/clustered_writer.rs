@@ -148,11 +148,11 @@ where
         }
     }
 
-    async fn close(&mut self) -> Result<O> {
+    async fn close(mut self) -> Result<O> {
         self.close_current_writer().await?;
 
         // Collect all output items into the output collection type
-        Ok(O::from_iter(std::mem::take(&mut self.output)))
+        Ok(O::from_iter(self.output))
     }
 }
 

@@ -134,19 +134,19 @@ where
         }
     }
 
-    async fn close(&mut self) -> Result<O> {
+    async fn close(mut self) -> Result<O> {
         // Close all partition writers
-        for (_, mut writer) in std::mem::take(&mut self.partition_writers) {
+        for (_, mut writer) in self.partition_writers {
             self.output.extend(writer.close().await?);
         }
 
         // Close unpartitioned writer if it exists
-        if let Some(mut writer) = self.unpartitioned_writer.take() {
+        if let Some(mut writer) = self.unpartitioned_writer {
             self.output.extend(writer.close().await?);
         }
 
         // Collect all output items into the output collection type
-        Ok(O::from_iter(std::mem::take(&mut self.output)))
+        Ok(O::from_iter(self.output))
     }
 }
 
