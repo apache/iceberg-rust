@@ -52,10 +52,9 @@ pub struct RewriteFilesAction {
     removed_data_files: Vec<DataFile>,
     removed_delete_files: Vec<DataFile>,
     snapshot_id: Option<i64>,
-
     new_data_file_sequence_number: Option<i64>,
-
     target_branch: Option<String>,
+    enable_delete_filter_manager: bool,
 }
 
 pub struct RewriteFilesOperation;
@@ -77,6 +76,7 @@ impl RewriteFilesAction {
             snapshot_id: None,
             new_data_file_sequence_number: None,
             target_branch: None,
+            enable_delete_filter_manager: false,
         }
     }
 
@@ -133,6 +133,13 @@ impl RewriteFilesAction {
     /// Set commit UUID for the snapshot.
     pub fn set_commit_uuid(&mut self, commit_uuid: Uuid) -> &mut Self {
         self.commit_uuid = Some(commit_uuid);
+        self
+    }
+
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn set_enable_delete_filter_manager(mut self, enable_delete_filter_manager: bool) -> Self {
+        self.enable_delete_filter_manager = enable_delete_filter_manager;
         self
     }
 
@@ -213,11 +220,11 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                         deleted_entries.push(gen_manifest_entry(entry));
                     }
 
-                    if entry.content_type() == DataContentType::PositionDeletes
-                        || entry.content_type() == DataContentType::EqualityDeletes
-                            && snapshot_produce
-                                .removed_delete_file_paths
-                                .contains(entry.data_file().file_path())
+                    if (entry.content_type() == DataContentType::PositionDeletes
+                        || entry.content_type() == DataContentType::EqualityDeletes)
+                        && snapshot_produce
+                            .removed_delete_file_paths
+                            .contains(entry.data_file().file_path())
                     {
                         deleted_entries.push(gen_manifest_entry(entry));
                     }
@@ -322,6 +329,10 @@ impl TransactionAction for RewriteFilesAction {
 
         if let Some(branch) = &self.target_branch {
             snapshot_producer.set_target_branch(branch.clone());
+        }
+
+        if self.enable_delete_filter_manager {
+            snapshot_producer.enable_delete_filter_manager();
         }
 
         // Checks duplicate files
