@@ -18,27 +18,27 @@
 pub mod clustered_writer;
 pub mod fanout_writer;
 
-use crate::Result;
 use crate::spec::PartitionKey;
 use crate::writer::{DefaultInput, DefaultOutput};
+use crate::Result;
 
 /// A writer that can write data to partitioned tables.
 ///
-/// This trait provides methods for writing data with optional partition keys and
+/// This trait provides methods for writing data with partition keys and
 /// closing the writer to retrieve the output.
 #[async_trait::async_trait]
 pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
-    /// Write data with an optional partition key.
+    /// Write data with a partition key.
     ///
     /// # Parameters
     ///
-    /// * `partition_key` - Optional partition key to determine which partition to write to
+    /// * `partition_key` - Partition key to determine which partition to write to
     /// * `input` - The input data to write
     ///
     /// # Returns
     ///
     /// `Ok(())` on success, or an error if the write operation fails.
-    async fn write(&mut self, partition_key: Option<PartitionKey>, input: I) -> Result<()>;
+    async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()>;
 
     /// Close the writer and return the output.
     ///

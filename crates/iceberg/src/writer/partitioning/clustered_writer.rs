@@ -94,58 +94,45 @@ where
     O: IntoIterator + FromIterator<<O as IntoIterator>::Item> + Send + 'static,
     <O as IntoIterator>::Item: Send + Clone,
 {
-    async fn write(&mut self, partition_key: Option<PartitionKey>, input: I) -> Result<()> {
-        if let Some(partition_key) = partition_key {
-            let partition_value = partition_key.data();
+    async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()> {
+        let partition_value = partition_key.data();
 
-            // Check if this partition has been closed already
-            if self.closed_partitions.contains(partition_value) {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    format!(
-                        "The input is not sorted! Cannot write to partition that was previously closed: {:?}",
-                        partition_key
-                    ),
-                ));
-            }
+        // Check if this partition has been closed already
+        if self.closed_partitions.contains(partition_value) {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "The input is not sorted! Cannot write to partition that was previously closed: {:?}",
+                    partition_key
+                ),
+            ));
+        }
 
-            // Check if we need to switch to a new partition
-            let need_new_writer = match &self.current_partition {
-                Some(current) => current != partition_value,
-                None => true,
-            };
+        // Check if we need to switch to a new partition
+        let need_new_writer = match &self.current_partition {
+            Some(current) => current != partition_value,
+            None => true,
+        };
 
-            if need_new_writer {
-                self.close_current_writer().await?;
+        if need_new_writer {
+            self.close_current_writer().await?;
 
-                // Create a new writer for the new partition
-                self.current_writer = Some(
-                    self.inner_builder
-                        .clone()
-                        .build_with_partition(Some(partition_key.clone()))
-                        .await?,
-                );
-                self.current_partition = Some(partition_value.clone());
-            }
-        } else if self.current_writer.is_none() {
-            // Unpartitioned data, initialize the writer here
+            // Create a new writer for the new partition
             self.current_writer = Some(
                 self.inner_builder
                     .clone()
-                    .build_with_partition(None)
+                    .build_with_partition(Some(partition_key.clone()))
                     .await?,
             );
+            self.current_partition = Some(partition_value.clone());
         }
 
         // do write
-        if let Some(writer) = &mut self.current_writer {
-            writer.write(input).await
-        } else {
-            Err(Error::new(
-                ErrorKind::Unexpected,
-                "Writer is not initialized!",
-            ))
-        }
+        self.current_writer
+            .as_mut()
+            .expect("Writer should be initialized")
+            .write(input)
+            .await
     }
 
     async fn close(mut self) -> Result<O> {
@@ -176,83 +163,6 @@ mod tests {
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-
-    #[tokio::test]
-    async fn test_clustered_writer_unpartitioned() -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let file_io = FileIOBuilder::new_fs_io().build()?;
-        let location_gen = DefaultLocationGenerator::with_data_location(
-            temp_dir.path().to_str().unwrap().to_string(),
-        );
-        let file_name_gen =
-            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
-
-        // Create schema
-        let schema = Arc::new(
-            crate::spec::Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                ])
-                .build()?,
-        );
-
-        // Create writer builder
-        let parquet_writer_builder =
-            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
-
-        // Create rolling file writer builder
-        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
-            parquet_writer_builder,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
-        );
-
-        // Create data file writer builder
-        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
-
-        // Create clustered writer
-        let mut writer = ClusteredWriter::new(data_file_writer_builder);
-
-        // Create test data with proper field ID metadata
-        let arrow_schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                1.to_string(),
-            )])),
-            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                2.to_string(),
-            )])),
-        ]);
-
-        let batch1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-        ])?;
-
-        let batch2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![4, 5])),
-            Arc::new(StringArray::from(vec!["Dave", "Eve"])),
-        ])?;
-
-        // Write data without partitioning (pass None for partition_key)
-        writer.write(None, batch1).await?;
-        writer.write(None, batch2).await?;
-
-        // Close writer and get data files
-        let data_files = writer.close().await?;
-
-        // Verify at least one file was created
-        assert!(
-            !data_files.is_empty(),
-            "Expected at least one data file to be created"
-        );
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_clustered_writer_single_partition() -> Result<()> {
@@ -331,8 +241,8 @@ mod tests {
         ])?;
 
         // Write data to the same partition (this should work)
-        writer.write(Some(partition_key.clone()), batch1).await?;
-        writer.write(Some(partition_key.clone()), batch2).await?;
+        writer.write(partition_key.clone(), batch1).await?;
+        writer.write(partition_key.clone(), batch2).await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -456,15 +366,9 @@ mod tests {
         ])?;
 
         // Write data in sorted partition order (this should work)
-        writer
-            .write(Some(partition_key_asia.clone()), batch_asia)
-            .await?;
-        writer
-            .write(Some(partition_key_eu.clone()), batch_eu)
-            .await?;
-        writer
-            .write(Some(partition_key_us.clone()), batch_us)
-            .await?;
+        writer.write(partition_key_asia.clone(), batch_asia).await?;
+        writer.write(partition_key_eu.clone(), batch_eu).await?;
+        writer.write(partition_key_us.clone(), batch_us).await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -595,19 +499,13 @@ mod tests {
         ])?;
 
         // Write data to US partition first
-        writer
-            .write(Some(partition_key_us.clone()), batch_us)
-            .await?;
+        writer.write(partition_key_us.clone(), batch_us).await?;
 
         // Write data to EU partition (this closes US partition)
-        writer
-            .write(Some(partition_key_eu.clone()), batch_eu)
-            .await?;
+        writer.write(partition_key_eu.clone(), batch_eu).await?;
 
         // Try to write to US partition again - this should fail because data is not sorted
-        let result = writer
-            .write(Some(partition_key_us.clone()), batch_us2)
-            .await;
+        let result = writer.write(partition_key_us.clone(), batch_us2).await;
 
         assert!(result.is_err(), "Expected error when writing unsorted data");
 
