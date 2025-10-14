@@ -75,7 +75,7 @@ where
             let writer = self
                 .inner_builder
                 .clone()
-                .build_with_partition(Some(partition_key.clone()))
+                .build(Some(partition_key.clone()))
                 .await?;
             self.partition_writers
                 .insert(partition_key.data().clone(), writer);

@@ -123,7 +123,7 @@ where
 {
     type R = EqualityDeleteFileWriter<B, L, F>;
 
-    async fn build_with_partition(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
             inner: Some(self.inner.clone().build()),
             projector: self.config.projector,
@@ -438,7 +438,7 @@ mod test {
         );
         let mut equality_delete_writer =
             EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, equality_config)
-                .build_with_partition(None)
+                .build(None)
                 .await?;
 
         // write
@@ -605,7 +605,7 @@ mod test {
         );
         let mut equality_delete_writer =
             EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, config)
-                .build_with_partition(None)
+                .build(None)
                 .await?;
 
         // prepare data

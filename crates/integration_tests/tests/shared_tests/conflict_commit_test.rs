@@ -83,7 +83,7 @@ async fn test_append_data_file_conflict() {
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
     let mut data_file_writer = data_file_writer_builder
-        .build_with_partition(None)
+        .build(None)
         .await
         .unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);

@@ -121,7 +121,7 @@ where
             self.current_writer = Some(
                 self.inner_builder
                     .clone()
-                    .build_with_partition(Some(partition_key.clone()))
+                    .build(Some(partition_key.clone()))
                     .await?,
             );
             self.current_partition = Some(partition_value.clone());

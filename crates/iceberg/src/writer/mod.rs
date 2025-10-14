@@ -102,7 +102,7 @@
 //!     // Create a data file writer using parquet file writer builder.
 //!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 //!     // Build the data file writer
-//!     let mut data_file_writer = data_file_writer_builder.build_with_partition(None).await?;
+//!     let mut data_file_writer = data_file_writer_builder.build(None).await?;
 //!
 //!     // Write the data using data_file_writer...
 //!
@@ -153,10 +153,7 @@
 //!         partition_key: Option<PartitionKey>,
 //!     ) -> Result<Self::R> {
 //!         Ok(LatencyRecordWriter {
-//!             inner_writer: self
-//!                 .inner_writer_builder
-//!                 .build_with_partition(partition_key)
-//!                 .await?,
+//!             inner_writer: self.inner_writer_builder.build(partition_key).await?,
 //!         })
 //!     }
 //! }
@@ -241,7 +238,7 @@
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer
 //!     let mut latency_record_data_file_writer = latency_record_builder
-//!         .build_with_partition(Some(partition_key))
+//!         .build(Some(partition_key))
 //!         .await
 //!         .unwrap();
 //!
@@ -270,8 +267,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer for an optional partition key.
-    async fn build_with_partition(self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
+    /// Build the iceberg writer with an optional partition key.
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.

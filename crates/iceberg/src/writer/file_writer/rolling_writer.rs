@@ -332,7 +332,7 @@ mod tests {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 
         // Create writer
-        let mut writer = data_file_writer_builder.build_with_partition(None).await?;
+        let mut writer = data_file_writer_builder.build(None).await?;
 
         // Create test data
         let arrow_schema = make_test_arrow_schema();
@@ -390,7 +390,7 @@ mod tests {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create writer
-        let mut writer = data_file_writer_builder.build_with_partition(None).await?;
+        let mut writer = data_file_writer_builder.build(None).await?;
 
         // Create test data
         let arrow_schema = make_test_arrow_schema();

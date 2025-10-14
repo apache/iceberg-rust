@@ -296,7 +296,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let stream = futures::stream::once(async move {
             let mut writer = data_file_writer_builder
                 // todo specify partition key when partitioning writer is supported
-                .build_with_partition(None)
+                .build(None)
                 .await
                 .map_err(to_datafusion_error)?;
             let mut input_stream = data;
