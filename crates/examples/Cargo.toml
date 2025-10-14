@@ -29,6 +29,7 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }
 
 [[example]]
 name = "rest-catalog-namespace"

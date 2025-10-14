@@ -52,10 +52,9 @@ pub struct OverwriteFilesAction {
     removed_data_files: Vec<DataFile>,
     removed_delete_files: Vec<DataFile>,
     snapshot_id: Option<i64>,
-
     new_data_file_sequence_number: Option<i64>,
-
     target_branch: Option<String>,
+    enable_delete_filter_manager: bool,
 }
 
 pub struct OverwriteFilesOperation;
@@ -77,6 +76,7 @@ impl OverwriteFilesAction {
             snapshot_id: None,
             new_data_file_sequence_number: None,
             target_branch: None,
+            enable_delete_filter_manager: false,
         }
     }
 
@@ -145,6 +145,13 @@ impl OverwriteFilesAction {
     /// Set snapshot id
     pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn set_enable_delete_filter_manager(mut self, enable_delete_filter_manager: bool) -> Self {
+        self.enable_delete_filter_manager = enable_delete_filter_manager;
         self
     }
 
@@ -322,6 +329,10 @@ impl TransactionAction for OverwriteFilesAction {
 
         if let Some(branch) = &self.target_branch {
             snapshot_producer.set_target_branch(branch.clone());
+        }
+
+        if self.enable_delete_filter_manager {
+            snapshot_producer.enable_delete_filter_manager();
         }
 
         // Checks duplicate files

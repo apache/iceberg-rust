@@ -54,6 +54,9 @@ mod action;
 
 pub use action::*;
 mod append;
+mod manifest_filter;
+
+pub use manifest_filter::*;
 mod overwrite_files;
 mod remove_snapshots;
 mod rewrite_files;
@@ -550,7 +553,7 @@ mod test_row_lineage {
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
-    #[tokio::test]
+        #[tokio::test]
     async fn test_fast_append_with_row_lineage() {
         // Helper function to create a data file with specified number of rows
         fn file_with_rows(record_count: u64) -> DataFile {
