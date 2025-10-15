@@ -52,40 +52,14 @@ use crate::io::storage_s3::{s3_config_build, s3_config_parse};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for [`OpenDALStorage`].
-#[derive(Debug)]
-pub struct OpenDALStorageBuilder {
-    extensions: Extensions,
-}
-
-impl Default for OpenDALStorageBuilder {
-    fn default() -> Self {
-        Self {
-            extensions: Extensions::default(),
-        }
-    }
-}
+#[derive(Debug, Default)]
+pub struct OpenDALStorageBuilder;
 
 impl StorageBuilder for OpenDALStorageBuilder {
     type S = OpenDALStorage;
 
-    // todo this should only takes a property map
-    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
-        OpenDALStorage::build(props, self.extensions)
-    }
-
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
+    fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S> {
+        OpenDALStorage::build(props, extensions)
     }
 }
 

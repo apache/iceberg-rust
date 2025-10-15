@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -310,14 +309,12 @@ impl OpenDALS3Storage {
 
 /// Builder for S3 storage
 #[derive(Debug, Default)]
-pub struct OpenDALS3StorageBuilder {
-    extensions: Extensions,
-}
+pub struct OpenDALS3StorageBuilder;
 
 impl StorageBuilder for OpenDALS3StorageBuilder {
     type S = OpenDALS3Storage;
 
-    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+    fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S> {
         // Get the scheme string from the props or use "s3" as default
         let scheme_str = props
             .get("scheme_str")
@@ -328,8 +325,7 @@ impl StorageBuilder for OpenDALS3StorageBuilder {
         let config = s3_config_parse(props.clone())?;
 
         // Get customized credential loader from extensions if available
-        let customized_credential_load = self
-            .extensions
+        let customized_credential_load = extensions
             .get::<CustomAwsCredentialLoader>()
             .map(Arc::unwrap_or_clone);
 
@@ -338,20 +334,5 @@ impl StorageBuilder for OpenDALS3StorageBuilder {
             config: Arc::new(config),
             customized_credential_load,
         })
-    }
-
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
     }
 }

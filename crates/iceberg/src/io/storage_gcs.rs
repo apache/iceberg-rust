@@ -16,7 +16,6 @@
 // under the License.
 //! Google Cloud Storage properties
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -141,33 +140,16 @@ impl Storage for OpenDALGcsStorage {
 
 /// Builder for OpenDAL GCS storage
 #[derive(Debug, Default)]
-pub struct OpenDALGcsStorageBuilder {
-    extensions: Extensions,
-}
+pub struct OpenDALGcsStorageBuilder;
 
 impl StorageBuilder for OpenDALGcsStorageBuilder {
     type S = OpenDALGcsStorage;
 
-    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
         let cfg = gcs_config_parse(props)?;
         Ok(OpenDALGcsStorage {
             config: Arc::new(cfg),
         })
-    }
-
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
     }
 }
 

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -127,14 +126,12 @@ impl OpenDALAzdlsStorage {
 
 /// Builder for Azure Data Lake Storage
 #[derive(Debug, Default)]
-pub struct OpenDALAzdlsStorageBuilder {
-    extensions: Extensions,
-}
+pub struct OpenDALAzdlsStorageBuilder;
 
 impl StorageBuilder for OpenDALAzdlsStorageBuilder {
     type S = OpenDALAzdlsStorage;
 
-    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
         // Get the scheme string from the props or use default
         let scheme_str = props
             .get("scheme_str")
@@ -151,21 +148,6 @@ impl StorageBuilder for OpenDALAzdlsStorageBuilder {
             configured_scheme: scheme,
             config: Arc::new(config),
         })
-    }
-
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
     }
 }
 

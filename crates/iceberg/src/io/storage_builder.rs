@@ -81,11 +81,6 @@ pub trait BoxedStorageBuilder {
     fn build(
         self: Box<Self>,
         props: HashMap<String, String>,
-    ) -> Result<Arc<dyn Storage>>;
-
-    fn build_with_extensions(
-        self: Box<Self>,
-        props: HashMap<String, String>,
         extensions: Extensions,
     ) -> Result<Arc<dyn Storage>>;
 }
@@ -95,19 +90,15 @@ impl<T: StorageBuilder + 'static> BoxedStorageBuilder for T {
     fn build(
         self: Box<Self>,
         props: HashMap<String, String>,
+        extensions: Extensions,
     ) -> Result<Arc<dyn Storage>> {
         let builder = *self;
-        Ok(Arc::new(builder.build(props)?) as Arc<dyn Storage>)
-    }
-
-    fn build_with_extensions(self: Box<Self>, props: HashMap<String, String>, extensions: Extensions) -> Result<Arc<dyn Storage>> {
-        let builder = *self;
-        Ok(Arc::new(builder.with_extensions(extensions).build(props)?) as Arc<dyn Storage>)
+        Ok(Arc::new(builder.build(props, extensions)?) as Arc<dyn Storage>)
     }
 }
 
-/// Load a storage builder by storage type..
-pub fn load_storage_builder(r#type: &str) -> Result<Box<dyn BoxedStorageBuilder>> {
+/// Create a storage builder by storage type.
+pub fn create_storage_builder(r#type: &str) -> Result<Box<dyn BoxedStorageBuilder>> {
     let key = r#type.trim();
     if let Some((_, factory)) = STORAGE_REGISTRY
         .iter()

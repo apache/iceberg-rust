@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -158,32 +157,15 @@ impl Storage for OpenDALOssStorage {
 
 /// Builder for OpenDAL OSS storage
 #[derive(Debug, Default)]
-pub struct OpenDALOssStorageBuilder {
-    extensions: Extensions,
-}
+pub struct OpenDALOssStorageBuilder;
 
 impl StorageBuilder for OpenDALOssStorageBuilder {
     type S = OpenDALOssStorage;
 
-    fn build(self, props: HashMap<String, String>) -> Result<Self::S> {
+    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
         let cfg = oss_config_parse(props)?;
         Ok(OpenDALOssStorage {
             config: Arc::new(cfg),
         })
-    }
-
-    fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
     }
 }
