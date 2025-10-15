@@ -297,9 +297,9 @@ Our release page will only display ASF releases instead of GitHub Releases.</p>
 <li>Create a new branch named by <code>release-${release_version}</code> from the tag</li>
 <li>Generate the release candidate artifacts under <code>dist</code>, including:
 <ul>
-<li><code>apache-iceberg-rust-${release_version}-src.tar.gz</code></li>
-<li><code>apache-iceberg-rust-${release_version}-src.tar.gz.asc</code></li>
-<li><code>apache-iceberg-rust-${release_version}-src.tar.gz.sha512</code></li>
+<li><code>apache-iceberg-rust-${release_version}.tar.gz</code></li>
+<li><code>apache-iceberg-rust-${release_version}.tar.gz.asc</code></li>
+<li><code>apache-iceberg-rust-${release_version}.tar.gz.sha512</code></li>
 </ul>
 </li>
 <li>Check the header of the source code. This step needs docker to run.</li>
@@ -312,9 +312,9 @@ Our release page will only display ASF releases instead of GitHub Releases.</p>
 <p>For example:</p>
 <pre><code class="language-shell">&gt; tree dist
 dist
-├── apache-iceberg-rust-0.2.0-src.tar.gz
-├── apache-iceberg-rust-0.2.0-src.tar.gz.asc
-└── apache-iceberg-rust-0.2.0-src.tar.gz.sha512
+├── apache-iceberg-rust-0.2.0.tar.gz
+├── apache-iceberg-rust-0.2.0.tar.gz.asc
+└── apache-iceberg-rust-0.2.0.tar.gz.sha512
 </code></pre>
 <h3 id="upload-artifacts-to-the-svn-dist-repo"><a class="header" href="#upload-artifacts-to-the-svn-dist-repo">Upload artifacts to the SVN dist repo</a></h3>
 <p>SVN is required for this step.</p>
@@ -450,7 +450,7 @@ gpg --import KEYS
 <p>Verify the <code>.asc</code> file:</p>
 <pre><code class="language-bash">gpg --verify apache-iceberg-rust-*.tar.gz.asc
 </code></pre>
-<p>Expects: <code>&quot;apache-iceberg-rust-0.7.0-src.tar.gz: OK&quot;</code></p>
+<p>Expects: <code>&quot;apache-iceberg-rust-0.7.0.tar.gz: OK&quot;</code></p>
 </li>
 <li>
 <p>Verify the checksums: </p>
