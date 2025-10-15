@@ -42,8 +42,6 @@ pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'stati
 
     /// Close the writer and return the output.
     ///
-    /// This method consumes the writer, preventing further use after closing.
-    ///
     /// # Returns
     ///
     /// The accumulated output from all write operations.

@@ -39,7 +39,6 @@ use crate::{Error, ErrorKind, Result};
 /// * `B` - The inner writer builder type
 /// * `I` - Input type (defaults to `RecordBatch`)
 /// * `O` - Output collection type (defaults to `Vec<DataFile>`)
-#[derive(Clone)]
 pub struct FanoutWriter<B, I = DefaultInput, O = DefaultOutput>
 where
     B: IcebergWriterBuilder<I, O>,
