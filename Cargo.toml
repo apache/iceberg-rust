@@ -62,9 +62,9 @@ bytes = "1.10"
 chrono = "0.4.41"
 clap = { version = "4.5.41", features = ["derive", "cargo"] }
 ctor = "0.2.8"
-datafusion = "48.0.1"
-datafusion-cli = "48.0.1"
-datafusion-sqllogictest = "48.0.1"
+datafusion = "50.0"
+datafusion-cli = "50.0"
+datafusion-sqllogictest = "50.0"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
@@ -81,7 +81,7 @@ iceberg-catalog-hms = { version = "0.7.0", path = "./crates/catalog/hms" }
 iceberg-catalog-rest = { version = "0.7.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.7.0", path = "./crates/catalog/s3tables" }
 iceberg-datafusion = { version = "0.7.0", path = "./crates/integrations/datafusion" }
-indicatif = "0.17"
+indicatif = "0.18"
 itertools = "0.13"
 linkedbytes = "0.1.8"
 metainfo = "0.7.14"
