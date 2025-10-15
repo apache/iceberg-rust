@@ -134,7 +134,7 @@ impl StorageBuilder for OpenDALAzdlsStorageBuilder {
     fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
         // Get the scheme string from the props or use default
         let scheme_str = props
-            .get("scheme_str")
+            .get("scheme_str") // TODO need a static property key
             .map(|s| s.clone())
             .unwrap_or_else(|| "abfs".to_string());
 

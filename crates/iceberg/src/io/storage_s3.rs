@@ -317,7 +317,7 @@ impl StorageBuilder for OpenDALS3StorageBuilder {
     fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S> {
         // Get the scheme string from the props or use "s3" as default
         let scheme_str = props
-            .get("scheme_str")
+            .get("scheme_str") // TODO need a static property
             .map(|s| s.clone())
             .unwrap_or_else(|| "s3".to_string());
 
