@@ -1990,8 +1990,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
         let file = File::create(format!("{}/old_file.parquet", &table_location)).unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
@@ -2028,11 +2027,15 @@ message schema {
         assert_eq!(batch.num_rows(), 3);
 
         // Column 'a' should have the original data
-        let col_a = batch.column(0).as_primitive::<arrow_array::types::Int32Type>();
+        let col_a = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(col_a.values(), &[1, 2, 3]);
 
         // Column 'b' should be all NULLs (it didn't exist in the old file)
-        let col_b = batch.column(1).as_primitive::<arrow_array::types::Int32Type>();
+        let col_b = batch
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(col_b.null_count(), 3);
         assert!(col_b.is_null(0));
         assert!(col_b.is_null(1));
