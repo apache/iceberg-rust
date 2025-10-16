@@ -139,17 +139,19 @@ impl Storage for OpenDALGcsStorage {
 }
 
 /// Builder for OpenDAL GCS storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALGcsStorageBuilder;
 
 impl StorageBuilder for OpenDALGcsStorageBuilder {
-    type S = OpenDALGcsStorage;
-
-    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         let cfg = gcs_config_parse(props)?;
-        Ok(OpenDALGcsStorage {
+        Ok(Arc::new(OpenDALGcsStorage {
             config: Arc::new(cfg),
-        })
+        }))
     }
 }
 

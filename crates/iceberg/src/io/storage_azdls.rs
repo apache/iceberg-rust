@@ -125,13 +125,15 @@ impl OpenDALAzdlsStorage {
 }
 
 /// Builder for Azure Data Lake Storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALAzdlsStorageBuilder;
 
 impl StorageBuilder for OpenDALAzdlsStorageBuilder {
-    type S = OpenDALAzdlsStorage;
-
-    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         // Get the scheme string from the props or use default
         let scheme_str = props
             .get("scheme_str") // TODO need a static property key
@@ -144,10 +146,10 @@ impl StorageBuilder for OpenDALAzdlsStorageBuilder {
         // Parse Azdls config from props
         let config = azdls_config_parse(props)?;
 
-        Ok(OpenDALAzdlsStorage {
+        Ok(Arc::new(OpenDALAzdlsStorage {
             configured_scheme: scheme,
             config: Arc::new(config),
-        })
+        }))
     }
 }
 

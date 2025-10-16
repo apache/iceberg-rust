@@ -308,13 +308,15 @@ impl OpenDALS3Storage {
 }
 
 /// Builder for S3 storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALS3StorageBuilder;
 
 impl StorageBuilder for OpenDALS3StorageBuilder {
-    type S = OpenDALS3Storage;
-
-    fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S> {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         // Get the scheme string from the props or use "s3" as default
         let scheme_str = props
             .get("scheme_str") // TODO need a static property
@@ -329,10 +331,10 @@ impl StorageBuilder for OpenDALS3StorageBuilder {
             .get::<CustomAwsCredentialLoader>()
             .map(Arc::unwrap_or_clone);
 
-        Ok(OpenDALS3Storage {
+        Ok(Arc::new(OpenDALS3Storage {
             configured_scheme: scheme_str,
             config: Arc::new(config),
             customized_credential_load,
-        })
+        }))
     }
 }

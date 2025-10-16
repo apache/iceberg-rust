@@ -91,14 +91,16 @@ impl Storage for OpenDALMemoryStorage {
 }
 
 /// Builder for OpenDAL Memory storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALMemoryStorageBuilder;
 
 impl StorageBuilder for OpenDALMemoryStorageBuilder {
-    type S = OpenDALMemoryStorage;
-
-    fn build(self, _props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
+    fn build(
+        &self,
+        _props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         let op = Operator::from_config(MemoryConfig::default())?.finish();
-        Ok(OpenDALMemoryStorage { op })
+        Ok(Arc::new(OpenDALMemoryStorage { op }))
     }
 }

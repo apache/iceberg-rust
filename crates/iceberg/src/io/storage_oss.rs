@@ -156,16 +156,18 @@ impl Storage for OpenDALOssStorage {
 }
 
 /// Builder for OpenDAL OSS storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALOssStorageBuilder;
 
 impl StorageBuilder for OpenDALOssStorageBuilder {
-    type S = OpenDALOssStorage;
-
-    fn build(self, props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
         let cfg = oss_config_parse(props)?;
-        Ok(OpenDALOssStorage {
+        Ok(Arc::new(OpenDALOssStorage {
             config: Arc::new(cfg),
-        })
+        }))
     }
 }

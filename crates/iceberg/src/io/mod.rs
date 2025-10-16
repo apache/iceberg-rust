@@ -72,6 +72,7 @@ pub use file_io::*;
 pub(crate) mod object_cache;
 
 mod storage_builder;
+pub use storage_builder::StorageBuilderRegistry;
 // todo remove storage.rs
 // mod storage;
 #[cfg(feature = "storage-azdls")]

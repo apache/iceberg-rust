@@ -58,11 +58,13 @@ pub trait Storage: Debug + Send + Sync {
 }
 
 /// Common interface for all storage builders.
-pub trait StorageBuilder: Default + Debug {
-    /// The storage type that this builder creates.
-    type S: Storage;
+pub trait StorageBuilder: Debug + Send + Sync {
     /// Create a new storage instance with the given properties and extensions.
-    fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S>;
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>>;
 }
 
 /// Trait for reading files

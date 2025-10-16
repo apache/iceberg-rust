@@ -52,14 +52,16 @@ use crate::io::storage_s3::{s3_config_build, s3_config_parse};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for [`OpenDALStorage`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALStorageBuilder;
 
 impl StorageBuilder for OpenDALStorageBuilder {
-    type S = OpenDALStorage;
-
-    fn build(self, props: HashMap<String, String>, extensions: Extensions) -> Result<Self::S> {
-        OpenDALStorage::build(props, extensions)
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
+        Ok(Arc::new(OpenDALStorage::build(props, extensions)?))
     }
 }
 

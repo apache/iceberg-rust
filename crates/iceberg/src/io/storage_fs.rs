@@ -102,13 +102,15 @@ impl Storage for OpenDALFsStorage {
 }
 
 /// Builder for OpenDAL Filesystem storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenDALFsStorageBuilder;
 
 impl StorageBuilder for OpenDALFsStorageBuilder {
-    type S = OpenDALFsStorage;
-
-    fn build(self, _props: HashMap<String, String>, _extensions: Extensions) -> Result<Self::S> {
-        Ok(OpenDALFsStorage)
+    fn build(
+        &self,
+        _props: HashMap<String, String>,
+        _extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
+        Ok(Arc::new(OpenDALFsStorage))
     }
 }
