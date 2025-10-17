@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["base_writer","file_writer"],"trait":["CurrentFileStatus","IcebergWriter","IcebergWriterBuilder"]};
+window.SIDEBAR_ITEMS = {"mod":["base_writer","file_writer","partitioning"],"trait":["CurrentFileStatus","IcebergWriter","IcebergWriterBuilder"]};

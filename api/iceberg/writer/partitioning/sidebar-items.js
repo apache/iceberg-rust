@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["clustered_writer","fanout_writer"],"trait":["PartitioningWriter"]};
