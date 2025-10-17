@@ -675,17 +675,11 @@ impl Storage for OpenDALAzdlsStorage {
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
-        Ok(InputFile {
-            storage: Arc::new(self.clone()),
-            path: path.to_string(),
-        })
+        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
     }
 
     fn new_output(&self, path: &str) -> Result<OutputFile> {
-        Ok(OutputFile {
-            storage: Arc::new(self.clone()),
-            path: path.to_string(),
-        })
+        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
     }
 }
 

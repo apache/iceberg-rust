@@ -303,17 +303,28 @@ impl FileRead for opendal::Reader {
 /// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
-    /// todo doc
-    pub storage: Arc<dyn Storage>,
-    // Absolution path of file.
-    /// todo doc
-    pub path: String,
-    // todo should remove this? Should always pass down a full path
-    // // Relative path of file to uri, starts at [`relative_path_pos`]
-    // relative_path_pos: usize,
+    /// Storage backend for this input file.
+    storage: Arc<dyn Storage>,
+    /// Absolute path to the file.
+    path: String,
 }
 
 impl InputFile {
+    /// Creates a new input file.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - The storage backend to use
+    /// * `path` - Absolute path to the file
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+        Self { storage, path }
+    }
+
+    /// Returns the storage backend for this input file.
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
+    }
+
     /// Absolute path to root uri.
     pub fn location(&self) -> &str {
         &self.path
@@ -386,20 +397,31 @@ impl FileWrite for Box<dyn FileWrite> {
     }
 }
 
-/// Output file is used for writing to files..
+/// Output file is used for writing to files.
 #[derive(Debug)]
 pub struct OutputFile {
-    /// todo fix pub qualifier
-    pub storage: Arc<dyn Storage>,
-    // Absolution path of file.
-    /// todo fix pub qualifier
-    pub path: String,
-    // todo should always pass down a full path
-    // // Relative path of file to uri, starts at [`relative_path_pos`]
-    // relative_path_pos: usize,
+    /// Storage backend for this output file.
+    storage: Arc<dyn Storage>,
+    /// Absolute path to the file.
+    path: String,
 }
 
 impl OutputFile {
+    /// Creates a new output file.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - The storage backend to use
+    /// * `path` - Absolute path to the file
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+        Self { storage, path }
+    }
+
+    /// Returns the storage backend for this output file.
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
+    }
+
     /// Relative path to root uri.
     pub fn location(&self) -> &str {
         &self.path
@@ -419,10 +441,7 @@ impl OutputFile {
 
     /// Converts into [`InputFile`].
     pub fn to_input_file(self) -> InputFile {
-        InputFile {
-            storage: self.storage,
-            path: self.path,
-        }
+        InputFile::new(self.storage, self.path)
     }
 
     /// Create a new output file with given bytes.
