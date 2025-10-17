@@ -163,8 +163,8 @@ async fn test_scan_all_type() {
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder, None);
-    let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
 
     // Prepare data
     let col1 = Int32Array::from(vec![1, 2, 3, 4, 5]);

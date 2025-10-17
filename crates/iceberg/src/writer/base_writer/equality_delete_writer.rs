@@ -66,16 +66,11 @@ pub struct EqualityDeleteWriterConfig {
     equality_ids: Vec<i32>,
     // Projector used to project the data chunk into specific fields.
     projector: RecordBatchProjector,
-    partition_key: Option<PartitionKey>,
 }
 
 impl EqualityDeleteWriterConfig {
     /// Create a new `DataFileWriterConfig` with equality ids.
-    pub fn new(
-        equality_ids: Vec<i32>,
-        original_schema: SchemaRef,
-        partition_key: Option<PartitionKey>,
-    ) -> Result<Self> {
+    pub fn new(equality_ids: Vec<i32>, original_schema: SchemaRef) -> Result<Self> {
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
             original_arrow_schema,
@@ -110,7 +105,6 @@ impl EqualityDeleteWriterConfig {
         Ok(Self {
             equality_ids,
             projector,
-            partition_key,
         })
     }
 
@@ -129,12 +123,12 @@ where
 {
     type R = EqualityDeleteFileWriter<B, L, F>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
-            inner: Some(self.inner.clone().build()), // todo revisit this, probably still need a builder for rolling writer
+            inner: Some(self.inner.clone().build()),
             projector: self.config.projector,
             equality_ids: self.config.equality_ids,
-            partition_key: self.config.partition_key,
+            partition_key,
         })
     }
 }
@@ -428,7 +422,7 @@ mod test {
 
         let equality_ids = vec![0_i32, 8];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema)).unwrap();
         let delete_schema =
             arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
         let projector = equality_config.projector.clone();
@@ -444,7 +438,7 @@ mod test {
         );
         let mut equality_delete_writer =
             EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, equality_config)
-                .build()
+                .build(None)
                 .await?;
 
         // write
@@ -531,19 +525,19 @@ mod test {
                 .unwrap(),
         );
         // Float and Double are not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![0], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![1], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![0], schema.clone()).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![1], schema.clone()).is_err());
         // Struct is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![3], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![3], schema.clone()).is_err());
         // Nested field of struct is allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![4], schema.clone(), None).is_ok());
+        assert!(EqualityDeleteWriterConfig::new(vec![4], schema.clone()).is_ok());
         // Nested field of map is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![7], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![8], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![9], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![7], schema.clone()).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![8], schema.clone()).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![9], schema.clone()).is_err());
         // Nested field of list is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![10], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![11], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![10], schema.clone()).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![11], schema.clone()).is_err());
 
         Ok(())
     }
@@ -597,7 +591,7 @@ mod test {
                 .unwrap(),
         );
         let equality_ids = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
-        let config = EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), None).unwrap();
+        let config = EqualityDeleteWriterConfig::new(equality_ids, schema.clone()).unwrap();
         let delete_arrow_schema = config.projected_arrow_schema_ref().clone();
         let delete_schema = arrow_schema_to_schema(&delete_arrow_schema).unwrap();
 
@@ -611,7 +605,7 @@ mod test {
         );
         let mut equality_delete_writer =
             EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, config)
-                .build()
+                .build(None)
                 .await?;
 
         // prepare data
@@ -795,7 +789,7 @@ mod test {
         let to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
         let equality_ids = vec![0_i32, 2, 5];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema)).unwrap();
         let projector = equality_config.projector.clone();
 
         // check
