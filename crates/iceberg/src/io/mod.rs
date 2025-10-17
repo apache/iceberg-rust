@@ -68,8 +68,10 @@
 
 mod file_io;
 mod storage;
+mod storage_builder;
 
 pub use file_io::*;
+pub use storage_builder::StorageBuilderRegistry;
 pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]

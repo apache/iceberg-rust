@@ -25,10 +25,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use url::Url;
 
-use super::storage::OpenDALStorage;
 use crate::{Error, ErrorKind, Result};
 
-/// todo doc
+/// Trait for storage operations in Iceberg
 #[async_trait]
 pub trait Storage: Debug + Send + Sync {
     /// Check if a file exists at the given path
@@ -60,6 +59,16 @@ pub trait Storage: Debug + Send + Sync {
 
     /// Create a new output file for writing
     fn new_output(&self, path: &str) -> Result<OutputFile>;
+}
+
+/// Common interface for all storage builders.
+pub trait StorageBuilder: Debug + Send + Sync {
+    /// Create a new storage instance with the given properties and extensions.
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>>;
 }
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -288,10 +297,19 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        let storage = OpenDALStorage::build(self.clone())?;
+        // Use the scheme to determine the storage type
+        let scheme = self.scheme_str.clone().unwrap_or_default();
+        
+        // Create registry and get builder
+        let registry = crate::io::StorageBuilderRegistry::new();
+        let builder = registry.get_builder(scheme.as_str())?;
+        
+        // Build storage with props and extensions
+        let storage = builder.build(self.props.clone(), self.extensions.clone())?;
+
         Ok(FileIO {
             builder: self,
-            inner: Arc::new(storage),
+            inner: storage,
         })
     }
 }
