@@ -251,7 +251,8 @@
 //! ## FanoutWriter - For Unsorted Data
 //!
 //! Wraps the data file writer to handle unsorted data by maintaining multiple active writers.
-//! Use this when your data is not pre-sorted by partition key.
+//! Use this when your data is not pre-sorted by partition key. Writes to different partitions
+//! can happen in any order, even interleaved.
 //!
 //! ```rust, no_run
 //! # // Same setup as the simple example above...
@@ -301,10 +302,11 @@
 //!     Struct::from_iter([Some(Literal::string("EU"))]),
 //! );
 //!
-//! // Write to different partitions in any order (unsorted)
-//! // fanout_writer.write(partition_key_us, batch_us).await?;
-//! // fanout_writer.write(partition_key_eu, batch_eu).await?;
-//! // fanout_writer.write(partition_key_us, batch_us2).await?; // Can go back to US
+//! // Write to different partitions in any order - can interleave partition writes
+//! // fanout_writer.write(partition_key_us.clone(), batch_us1).await?;
+//! // fanout_writer.write(partition_key_eu.clone(), batch_eu1).await?;
+//! // fanout_writer.write(partition_key_us.clone(), batch_us2).await?; // Back to US - OK!
+//! // fanout_writer.write(partition_key_eu.clone(), batch_eu2).await?; // Back to EU - OK!
 //!
 //! let data_files = fanout_writer.close().await?;
 //! # Ok(())
