@@ -3712,6 +3712,9 @@ dependencies = [
  "iceberg-catalog-hms",
  "iceberg-catalog-rest",
  "iceberg-catalog-s3tables",
+ "iceberg-catalog-sql",
+ "sqlx",
+ "tempfile",
  "tokio",
 ]
 
@@ -3757,13 +3760,12 @@ version = "0.7.0"
 dependencies = [
  "async-trait",
  "iceberg",
- "iceberg_test_utils",
  "itertools 0.13.0",
  "regex",
  "sqlx",
+ "strum 0.27.2",
  "tempfile",
  "tokio",
- "typed-builder 0.20.1",
 ]
 
 [[package]]
