@@ -175,6 +175,29 @@ impl Extensions {
 }
 
 /// Builder for [`FileIO`].
+///
+/// # Custom Storage Implementations
+///
+/// You can use custom storage implementations by creating a custom
+/// [`StorageBuilderRegistry`] and registering your storage builder:
+///
+/// ```rust,ignore
+/// use iceberg::io::{StorageBuilderRegistry, StorageBuilder, FileIOBuilder};
+/// use std::sync::Arc;
+///
+/// // Create your custom storage builder
+/// let my_builder = Arc::new(MyCustomStorageBuilder);
+///
+/// // Register it with a custom scheme
+/// let mut registry = StorageBuilderRegistry::new();
+/// registry.register("mycustom", my_builder);
+///
+/// // Use it to build FileIO
+/// let file_io = FileIOBuilder::new("mycustom")
+///     .with_prop("key", "value")
+///     .with_registry(registry)
+///     .build()?;
+/// ```
 #[derive(Clone, Debug)]
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
@@ -185,6 +208,8 @@ pub struct FileIOBuilder {
     props: HashMap<String, String>,
     /// Optional extensions to configure the underlying FileIO behavior.
     extensions: Extensions,
+    /// Optional custom registry. If None, a default registry will be created.
+    registry: Option<StorageBuilderRegistry>,
 }
 
 impl FileIOBuilder {
@@ -195,6 +220,7 @@ impl FileIOBuilder {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
             extensions: Extensions::default(),
+            registry: None,
         }
     }
 
@@ -204,17 +230,26 @@ impl FileIOBuilder {
             scheme_str: None,
             props: HashMap::default(),
             extensions: Extensions::default(),
+            registry: None,
         }
     }
 
     /// Fetch the scheme string.
     ///
     /// The scheme_str will be empty if it's None.
-    pub fn into_parts(self) -> (String, HashMap<String, String>, Extensions) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        String,
+        HashMap<String, String>,
+        Extensions,
+        Option<StorageBuilderRegistry>,
+    ) {
         (
             self.scheme_str.unwrap_or_default(),
             self.props,
             self.extensions,
+            self.registry,
         )
     }
 
@@ -252,13 +287,38 @@ impl FileIOBuilder {
         self.extensions.get::<T>()
     }
 
+    /// Sets a custom storage builder registry.
+    ///
+    /// This allows you to register custom storage implementations that can be used
+    /// when building the FileIO. If not set, a default registry with built-in
+    /// storage types will be used.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::io::{StorageBuilderRegistry, FileIOBuilder};
+    /// use std::sync::Arc;
+    ///
+    /// let mut registry = StorageBuilderRegistry::new();
+    /// registry.register("mycustom", Arc::new(MyCustomStorageBuilder));
+    ///
+    /// let file_io = FileIOBuilder::new("mycustom")
+    ///     .with_registry(registry)
+    ///     .build()?;
+    /// ```
+    pub fn with_registry(mut self, registry: StorageBuilderRegistry) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
         // Use the scheme to determine the storage type
         let scheme = self.scheme_str.clone().unwrap_or_default();
 
-        // Create registry and get builder
-        let registry = StorageBuilderRegistry::new();
+        // Use custom registry if provided, otherwise create default
+        let registry = self.registry.clone().unwrap_or_default();
+
         let builder = registry.get_builder(scheme.as_str())?;
 
         // Build storage with props and extensions
@@ -466,16 +526,94 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
+    use std::sync::Arc;
 
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
+    use crate::io::{
+        Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
+        StorageBuilder, StorageBuilderRegistry,
+    };
+
+    // Dummy storage implementation for testing custom registries
+    #[derive(Debug, Clone)]
+    struct DummyStorage {
+        _scheme: String,
+    }
+
+    #[async_trait]
+    impl Storage for DummyStorage {
+        async fn exists(&self, _path: &str) -> crate::Result<bool> {
+            Ok(true)
+        }
+
+        async fn metadata(&self, _path: &str) -> crate::Result<FileMetadata> {
+            Ok(FileMetadata { size: 0 })
+        }
+
+        async fn read(&self, _path: &str) -> crate::Result<Bytes> {
+            Ok(Bytes::new())
+        }
+
+        async fn reader(&self, _path: &str) -> crate::Result<Box<dyn FileRead>> {
+            Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                "DummyStorage does not support reader",
+            ))
+        }
+
+        async fn write(&self, _path: &str, _bs: Bytes) -> crate::Result<()> {
+            Ok(())
+        }
+
+        async fn writer(&self, _path: &str) -> crate::Result<Box<dyn FileWrite>> {
+            Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                "DummyStorage does not support writer",
+            ))
+        }
+
+        async fn delete(&self, _path: &str) -> crate::Result<()> {
+            Ok(())
+        }
+
+        async fn remove_dir_all(&self, _path: &str) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn new_input(&self, path: &str) -> crate::Result<InputFile> {
+            Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+        }
+
+        fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
+            Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+        }
+    }
+
+    // Dummy storage builder for testing
+    #[derive(Debug)]
+    struct DummyStorageBuilder;
+
+    impl StorageBuilder for DummyStorageBuilder {
+        fn build(
+            &self,
+            _props: HashMap<String, String>,
+            _extensions: Extensions,
+        ) -> crate::Result<Arc<dyn Storage>> {
+            Ok(Arc::new(DummyStorage {
+                _scheme: "dummy".to_string(),
+            }))
+        }
+    }
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
@@ -618,5 +756,157 @@ mod tests {
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
+    }
+
+    #[test]
+    fn test_custom_registry() {
+        // Create a custom registry and register the dummy storage
+        let mut registry = StorageBuilderRegistry::new();
+        registry.register("dummy", Arc::new(DummyStorageBuilder));
+
+        // Build FileIO with custom storage
+        let file_io = FileIOBuilder::new("dummy")
+            .with_registry(registry)
+            .build()
+            .unwrap();
+
+        // Verify we can create files with the custom storage
+        assert!(file_io.new_output("dummy://test.txt").is_ok());
+        assert!(file_io.new_input("dummy://test.txt").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_custom_registry_operations() {
+        // Define a dummy storage that tracks operations
+        #[derive(Debug, Clone)]
+        struct TrackingStorage {
+            written: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Storage for TrackingStorage {
+            async fn exists(&self, _path: &str) -> crate::Result<bool> {
+                Ok(true)
+            }
+
+            async fn metadata(&self, _path: &str) -> crate::Result<FileMetadata> {
+                Ok(FileMetadata { size: 42 })
+            }
+
+            async fn read(&self, _path: &str) -> crate::Result<Bytes> {
+                Ok(Bytes::from("test data"))
+            }
+
+            async fn reader(&self, _path: &str) -> crate::Result<Box<dyn FileRead>> {
+                Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    "TrackingStorage does not support reader",
+                ))
+            }
+
+            async fn write(&self, path: &str, _bs: Bytes) -> crate::Result<()> {
+                self.written.lock().unwrap().push(path.to_string());
+                Ok(())
+            }
+
+            async fn writer(&self, _path: &str) -> crate::Result<Box<dyn FileWrite>> {
+                Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    "TrackingStorage does not support writer",
+                ))
+            }
+
+            async fn delete(&self, _path: &str) -> crate::Result<()> {
+                Ok(())
+            }
+
+            async fn remove_dir_all(&self, _path: &str) -> crate::Result<()> {
+                Ok(())
+            }
+
+            fn new_input(&self, path: &str) -> crate::Result<InputFile> {
+                Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+
+            fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
+                Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+        }
+
+        // Define a builder for tracking storage
+        #[derive(Debug)]
+        struct TrackingStorageBuilder {
+            written: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+
+        impl StorageBuilder for TrackingStorageBuilder {
+            fn build(
+                &self,
+                _props: HashMap<String, String>,
+                _extensions: Extensions,
+            ) -> crate::Result<Arc<dyn Storage>> {
+                Ok(Arc::new(TrackingStorage {
+                    written: self.written.clone(),
+                }))
+            }
+        }
+
+        // Create tracking storage
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut registry = StorageBuilderRegistry::new();
+        registry.register(
+            "tracking",
+            Arc::new(TrackingStorageBuilder {
+                written: written.clone(),
+            }),
+        );
+
+        // Build FileIO with tracking storage
+        let file_io = FileIOBuilder::new("tracking")
+            .with_registry(registry)
+            .build()
+            .unwrap();
+
+        // Perform operations
+        let output = file_io.new_output("tracking://bucket/file.txt").unwrap();
+        output.write(Bytes::from("test")).await.unwrap();
+
+        let input = file_io.new_input("tracking://bucket/file.txt").unwrap();
+        let data = input.read().await.unwrap();
+        assert_eq!(data, Bytes::from("test data"));
+
+        let metadata = input.metadata().await.unwrap();
+        assert_eq!(metadata.size, 42);
+
+        // Verify write was tracked
+        let tracked = written.lock().unwrap();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0], "tracking://bucket/file.txt");
+    }
+
+    #[test]
+    fn test_into_parts_includes_registry() {
+        let registry = StorageBuilderRegistry::new();
+
+        let builder = FileIOBuilder::new("memory")
+            .with_prop("key", "value")
+            .with_registry(registry.clone());
+
+        let (scheme, props, _extensions, returned_registry) = builder.into_parts();
+
+        assert_eq!(scheme, "memory");
+        assert_eq!(props.get("key"), Some(&"value".to_string()));
+        assert!(returned_registry.is_some());
+    }
+
+    #[test]
+    fn test_into_parts_without_registry() {
+        let builder = FileIOBuilder::new("memory").with_prop("key", "value");
+
+        let (scheme, props, _extensions, returned_registry) = builder.into_parts();
+
+        assert_eq!(scheme, "memory");
+        assert_eq!(props.get("key"), Some(&"value".to_string()));
+        assert!(returned_registry.is_none());
     }
 }
