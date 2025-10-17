@@ -63,7 +63,8 @@ pub fn project_with_partition(
     }
 
     let input_schema = input.schema();
-
+    // TODO: Validate that input_schema matches the Iceberg table schema.
+    // See: https://github.com/apache/iceberg-rust/issues/1752
     let partition_type = build_partition_type(partition_spec, table_schema.as_ref())?;
     let calculator = PartitionValueCalculator::new(
         partition_spec.as_ref().clone(),
