@@ -407,14 +407,14 @@ impl OutputFile {
 
     /// Checks if file exists.
     pub async fn exists(&self) -> Result<bool> {
-        self.storage.exists(&self.path).await?
+        self.storage.exists(&self.path).await
     }
 
     /// Deletes file.
     ///
     /// If the file does not exist, it will not return error.
     pub async fn delete(&self) -> Result<()> {
-        self.storage.delete(&self.path).await?
+        self.storage.delete(&self.path).await
     }
 
     /// Converts into [`InputFile`].
