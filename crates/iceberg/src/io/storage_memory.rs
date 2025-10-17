@@ -28,10 +28,6 @@ use crate::io::{
     Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
 };
 
-pub(crate) fn memory_config_build() -> Result<Operator> {
-    Ok(Operator::from_config(MemoryConfig::default())?.finish())
-}
-
 /// Memory storage implementation using OpenDAL
 #[derive(Debug, Clone)]
 pub struct OpenDALMemoryStorage {
