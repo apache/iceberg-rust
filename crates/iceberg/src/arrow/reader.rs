@@ -480,35 +480,25 @@ impl ArrowReader {
                 true
             });
 
-            if column_map.len() != leaf_field_ids.len() {
-                let missing_fields = leaf_field_ids
-                    .iter()
-                    .filter(|field_id| !column_map.contains_key(field_id))
-                    .collect::<Vec<_>>();
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Parquet schema {} and Iceberg schema {} do not match.",
-                        iceberg_schema, iceberg_schema_of_task
-                    ),
-                )
-                .with_context("column_map", format! {"{:?}", column_map})
-                .with_context("field_ids", format! {"{:?}", leaf_field_ids})
-                .with_context("missing_fields", format! {"{:?}", missing_fields}));
-            }
-
+            // Only project columns that exist in the Parquet file.
+            // Missing columns will be added by RecordBatchTransformer with default/NULL values.
+            // This supports schema evolution where new columns are added to the table schema
+            // but old Parquet files don't have them yet.
             let mut indices = vec![];
             for field_id in leaf_field_ids {
                 if let Some(col_idx) = column_map.get(&field_id) {
                     indices.push(*col_idx);
-                } else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Field {} is not found in Parquet schema.", field_id),
-                    ));
                 }
+                // Skip fields that don't exist in the Parquet file - they will be added later
             }
-            Ok(ProjectionMask::leaves(parquet_schema, indices))
+
+            if indices.is_empty() {
+                // If no columns from the projection exist in the file, project all columns
+                // This can happen if all requested columns are new and need to be added by the transformer
+                Ok(ProjectionMask::all())
+            } else {
+                Ok(ProjectionMask::leaves(parquet_schema, indices))
+            }
         }
     }
 
