@@ -363,9 +363,7 @@ impl FileRead for opendal::Reader {
 /// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
-    /// Storage backend for this input file.
     storage: Arc<dyn Storage>,
-    /// Absolute path to the file.
     path: String,
 }
 
@@ -460,9 +458,7 @@ impl FileWrite for Box<dyn FileWrite> {
 /// Output file is used for writing to files.
 #[derive(Debug)]
 pub struct OutputFile {
-    /// Storage backend for this output file.
     storage: Arc<dyn Storage>,
-    /// Absolute path to the file.
     path: String,
 }
 
