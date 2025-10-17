@@ -88,8 +88,12 @@ mod storage_s3;
 
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;
+#[cfg(feature = "storage-fs")]
+use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
 pub use storage_gcs::*;
+#[cfg(feature = "storage-memory")]
+use storage_memory::*;
 #[cfg(feature = "storage-oss")]
 pub use storage_oss::*;
 #[cfg(feature = "storage-s3")]
