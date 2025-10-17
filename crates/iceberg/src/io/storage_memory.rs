@@ -20,14 +20,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use opendal::services::MemoryConfig;
 use opendal::Operator;
+use opendal::services::MemoryConfig;
 
-use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageBuilder,
-};
 use crate::Result;
+use crate::io::{
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+};
 
 pub(crate) fn memory_config_build() -> Result<Operator> {
     Ok(Operator::from_config(MemoryConfig::default())?.finish())

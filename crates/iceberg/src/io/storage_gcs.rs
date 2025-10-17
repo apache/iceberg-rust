@@ -21,13 +21,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use opendal::services::GcsConfig;
 use opendal::Operator;
+use opendal::services::GcsConfig;
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageBuilder, is_truthy,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    is_truthy,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -122,7 +122,7 @@ impl OpenDALGcsStorage {
     fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
         let operator = gcs_config_build(&self.config, path)?;
         let prefix = format!("gs://{}/", operator.info().name());
-        
+
         if path.starts_with(&prefix) {
             let op = operator.layer(opendal::layers::RetryLayer::new());
             Ok((op, &path[prefix.len()..]))

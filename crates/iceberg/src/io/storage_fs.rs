@@ -20,14 +20,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use opendal::services::FsConfig;
 use opendal::Operator;
+use opendal::services::FsConfig;
 
-use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageBuilder,
-};
 use crate::Result;
+use crate::io::{
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+};
 
 /// Build new opendal operator from give path.
 pub(crate) fn fs_config_build() -> Result<Operator> {

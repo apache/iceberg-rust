@@ -25,51 +25,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use url::Url;
 
+// Re-export traits from storage module
+pub use super::storage::{Storage, StorageBuilder};
+use crate::io::StorageBuilderRegistry;
 use crate::{Error, ErrorKind, Result};
-
-/// Trait for storage operations in Iceberg
-#[async_trait]
-pub trait Storage: Debug + Send + Sync {
-    /// Check if a file exists at the given path
-    async fn exists(&self, path: &str) -> Result<bool>;
-
-    /// Get metadata from an input path
-    async fn metadata(&self, path: &str) -> Result<FileMetadata>;
-
-    /// Read bytes from a path
-    async fn read(&self, path: &str) -> Result<Bytes>;
-
-    /// Get FileRead from a path
-    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>>;
-
-    /// Write bytes to an output path
-    async fn write(&self, path: &str, bs: Bytes) -> Result<()>;
-
-    /// Get FileWrite from a path
-    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>>;
-
-    /// Delete a file at the given path
-    async fn delete(&self, path: &str) -> Result<()>;
-
-    /// Remove a directory and all its contents recursively
-    async fn remove_dir_all(&self, path: &str) -> Result<()>;
-
-    /// Create a new input file for reading
-    fn new_input(&self, path: &str) -> Result<InputFile>;
-
-    /// Create a new output file for writing
-    fn new_output(&self, path: &str) -> Result<OutputFile>;
-}
-
-/// Common interface for all storage builders.
-pub trait StorageBuilder: Debug + Send + Sync {
-    /// Create a new storage instance with the given properties and extensions.
-    fn build(
-        &self,
-        props: HashMap<String, String>,
-        extensions: Extensions,
-    ) -> Result<Arc<dyn Storage>>;
-}
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -133,8 +92,6 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        // let (op, relative_path) = self.inner.create_operator(&path)?;
-        // Ok(op.delete(relative_path).await?)
         self.inner.delete(path.as_ref()).await
     }
 
@@ -299,11 +256,11 @@ impl FileIOBuilder {
     pub fn build(self) -> Result<FileIO> {
         // Use the scheme to determine the storage type
         let scheme = self.scheme_str.clone().unwrap_or_default();
-        
+
         // Create registry and get builder
-        let registry = crate::io::StorageBuilderRegistry::new();
+        let registry = StorageBuilderRegistry::new();
         let builder = registry.get_builder(scheme.as_str())?;
-        
+
         // Build storage with props and extensions
         let storage = builder.build(self.props.clone(), self.extensions.clone())?;
 

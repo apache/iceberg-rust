@@ -27,8 +27,7 @@ use opendal::{Configurator, Operator};
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -617,7 +616,8 @@ pub struct OpenDALAzdlsStorage {
 impl OpenDALAzdlsStorage {
     /// Creates operator from path.
     fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
-        let (op, relative_path) = azdls_create_operator(path, &self.config, &self.configured_scheme)?;
+        let (op, relative_path) =
+            azdls_create_operator(path, &self.config, &self.configured_scheme)?;
         let op = op.layer(opendal::layers::RetryLayer::new());
         Ok((op, relative_path))
     }

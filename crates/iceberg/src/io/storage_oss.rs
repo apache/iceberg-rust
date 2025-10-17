@@ -25,8 +25,7 @@ use opendal::{Configurator, Operator};
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -83,7 +82,7 @@ impl OpenDALOssStorage {
     fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
         let op = oss_config_build(&self.config, path)?;
         let prefix = format!("oss://{}/", op.info().name());
-        
+
         if path.starts_with(&prefix) {
             let op = op.layer(opendal::layers::RetryLayer::new());
             Ok((op, &path[prefix.len()..]))
