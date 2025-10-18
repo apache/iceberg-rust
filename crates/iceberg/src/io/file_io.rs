@@ -529,7 +529,7 @@ mod tests {
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, MutexGuard};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -538,78 +538,107 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
+    use crate::{Error, ErrorKind, Result};
     use crate::io::{
-        Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-        StorageBuilder, StorageBuilderRegistry,
+        Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile,
+        STORAGE_LOCATION_SCHEME, Storage, StorageBuilder, StorageBuilderRegistry,
     };
 
-    // Dummy storage implementation for testing custom registries
+    // Test storage implementation that tracks write operations
     #[derive(Debug, Clone)]
-    struct DummyStorage {
-        _scheme: String,
+    struct TestStorage {
+        written: Arc<Mutex<Vec<String>>>,
+        received_props: HashMap<String, String>,
+    }
+
+    #[allow(dead_code)]
+    impl TestStorage {
+        pub fn written(&self) -> MutexGuard<'_, Vec<String>> {
+            self.written.lock().unwrap()
+        }
+
+        pub fn received_props(&self) -> &HashMap<String, String> {
+            &self.received_props
+        }
     }
 
     #[async_trait]
-    impl Storage for DummyStorage {
-        async fn exists(&self, _path: &str) -> crate::Result<bool> {
+    impl Storage for TestStorage {
+        async fn exists(&self, _path: &str) -> Result<bool> {
             Ok(true)
         }
 
-        async fn metadata(&self, _path: &str) -> crate::Result<FileMetadata> {
-            Ok(FileMetadata { size: 0 })
+        async fn metadata(&self, _path: &str) -> Result<FileMetadata> {
+            Ok(FileMetadata { size: 42 })
         }
 
-        async fn read(&self, _path: &str) -> crate::Result<Bytes> {
-            Ok(Bytes::new())
+        async fn read(&self, _path: &str) -> Result<Bytes> {
+            Ok(Bytes::from("test data"))
         }
 
-        async fn reader(&self, _path: &str) -> crate::Result<Box<dyn FileRead>> {
-            Err(crate::Error::new(
-                crate::ErrorKind::FeatureUnsupported,
-                "DummyStorage does not support reader",
+        async fn reader(&self, _path: &str) -> Result<Box<dyn FileRead>> {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "TestStorage does not support reader",
             ))
         }
 
-        async fn write(&self, _path: &str, _bs: Bytes) -> crate::Result<()> {
+        async fn write(&self, path: &str, _bs: Bytes) -> Result<()> {
+            self.written.lock().unwrap().push(path.to_string());
             Ok(())
         }
 
-        async fn writer(&self, _path: &str) -> crate::Result<Box<dyn FileWrite>> {
-            Err(crate::Error::new(
-                crate::ErrorKind::FeatureUnsupported,
-                "DummyStorage does not support writer",
+        async fn writer(&self, _path: &str) -> Result<Box<dyn FileWrite>> {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "TestStorage does not support writer",
             ))
         }
 
-        async fn delete(&self, _path: &str) -> crate::Result<()> {
+        async fn delete(&self, _path: &str) -> Result<()> {
             Ok(())
         }
 
-        async fn remove_dir_all(&self, _path: &str) -> crate::Result<()> {
+        async fn remove_dir_all(&self, _path: &str) -> Result<()> {
             Ok(())
         }
 
-        fn new_input(&self, path: &str) -> crate::Result<InputFile> {
+        fn new_input(&self, path: &str) -> Result<InputFile> {
             Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
         }
 
-        fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
+        fn new_output(&self, path: &str) -> Result<OutputFile> {
             Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
         }
     }
 
-    // Dummy storage builder for testing
+    // Test storage builder
     #[derive(Debug)]
-    struct DummyStorageBuilder;
+    struct TestStorageBuilder {
+        written: Arc<Mutex<Vec<String>>>,
+        received_props: Arc<Mutex<HashMap<String, String>>>,
+    }
 
-    impl StorageBuilder for DummyStorageBuilder {
+    impl TestStorageBuilder {
+        pub fn written(&self) -> MutexGuard<'_, Vec<String>> {
+            self.written.lock().unwrap()
+        }
+
+        pub fn received_props(&self) -> MutexGuard<'_, HashMap<String, String>> {
+            self.received_props.lock().unwrap()
+        }
+    }
+
+    impl StorageBuilder for TestStorageBuilder {
         fn build(
             &self,
-            _props: HashMap<String, String>,
+            props: HashMap<String, String>,
             _extensions: Extensions,
-        ) -> crate::Result<Arc<dyn Storage>> {
-            Ok(Arc::new(DummyStorage {
-                _scheme: "dummy".to_string(),
+        ) -> Result<Arc<dyn Storage>> {
+            *self.received_props.lock().unwrap() = props.clone();
+            Ok(Arc::new(TestStorage {
+                written: self.written.clone(),
+                received_props: props,
             }))
         }
     }
@@ -759,118 +788,48 @@ mod tests {
 
     #[test]
     fn test_custom_registry() {
-        // Create a custom registry and register the dummy storage
+        // Create a custom registry and register test storage
+        let builder = Arc::new(TestStorageBuilder {
+            written: Arc::new(Mutex::new(Vec::new())),
+            received_props: Arc::new(Mutex::new(HashMap::new())),
+        });
+        
         let mut registry = StorageBuilderRegistry::new();
-        registry.register("dummy", Arc::new(DummyStorageBuilder));
+        registry.register("test", builder.clone());
 
         // Build FileIO with custom storage
-        let file_io = FileIOBuilder::new("dummy")
+        let file_io = FileIOBuilder::new("test")
             .with_registry(registry)
             .build()
             .unwrap();
 
         // Verify we can create files with the custom storage
-        assert!(file_io.new_output("dummy://test.txt").is_ok());
-        assert!(file_io.new_input("dummy://test.txt").is_ok());
+        assert!(file_io.new_output("test://test.txt").is_ok());
+        assert!(file_io.new_input("test://test.txt").is_ok());
     }
 
     #[tokio::test]
     async fn test_custom_registry_operations() {
-        // Define a dummy storage that tracks operations
-        #[derive(Debug, Clone)]
-        struct TrackingStorage {
-            written: Arc<std::sync::Mutex<Vec<String>>>,
-        }
-
-        #[async_trait]
-        impl Storage for TrackingStorage {
-            async fn exists(&self, _path: &str) -> crate::Result<bool> {
-                Ok(true)
-            }
-
-            async fn metadata(&self, _path: &str) -> crate::Result<FileMetadata> {
-                Ok(FileMetadata { size: 42 })
-            }
-
-            async fn read(&self, _path: &str) -> crate::Result<Bytes> {
-                Ok(Bytes::from("test data"))
-            }
-
-            async fn reader(&self, _path: &str) -> crate::Result<Box<dyn FileRead>> {
-                Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
-                    "TrackingStorage does not support reader",
-                ))
-            }
-
-            async fn write(&self, path: &str, _bs: Bytes) -> crate::Result<()> {
-                self.written.lock().unwrap().push(path.to_string());
-                Ok(())
-            }
-
-            async fn writer(&self, _path: &str) -> crate::Result<Box<dyn FileWrite>> {
-                Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
-                    "TrackingStorage does not support writer",
-                ))
-            }
-
-            async fn delete(&self, _path: &str) -> crate::Result<()> {
-                Ok(())
-            }
-
-            async fn remove_dir_all(&self, _path: &str) -> crate::Result<()> {
-                Ok(())
-            }
-
-            fn new_input(&self, path: &str) -> crate::Result<InputFile> {
-                Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
-            }
-
-            fn new_output(&self, path: &str) -> crate::Result<OutputFile> {
-                Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
-            }
-        }
-
-        // Define a builder for tracking storage
-        #[derive(Debug)]
-        struct TrackingStorageBuilder {
-            written: Arc<std::sync::Mutex<Vec<String>>>,
-        }
-
-        impl StorageBuilder for TrackingStorageBuilder {
-            fn build(
-                &self,
-                _props: HashMap<String, String>,
-                _extensions: Extensions,
-            ) -> crate::Result<Arc<dyn Storage>> {
-                Ok(Arc::new(TrackingStorage {
-                    written: self.written.clone(),
-                }))
-            }
-        }
-
-        // Create tracking storage
-        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        // Create test storage with write tracking
+        let builder = Arc::new(TestStorageBuilder {
+            written: Arc::new(Mutex::new(Vec::new())),
+            received_props: Arc::new(Mutex::new(HashMap::new())),
+        });
+        
         let mut registry = StorageBuilderRegistry::new();
-        registry.register(
-            "tracking",
-            Arc::new(TrackingStorageBuilder {
-                written: written.clone(),
-            }),
-        );
+        registry.register("test", builder.clone());
 
-        // Build FileIO with tracking storage
-        let file_io = FileIOBuilder::new("tracking")
+        // Build FileIO with test storage
+        let file_io = FileIOBuilder::new("test")
             .with_registry(registry)
             .build()
             .unwrap();
 
         // Perform operations
-        let output = file_io.new_output("tracking://bucket/file.txt").unwrap();
+        let output = file_io.new_output("test://bucket/file.txt").unwrap();
         output.write(Bytes::from("test")).await.unwrap();
 
-        let input = file_io.new_input("tracking://bucket/file.txt").unwrap();
+        let input = file_io.new_input("test://bucket/file.txt").unwrap();
         let data = input.read().await.unwrap();
         assert_eq!(data, Bytes::from("test data"));
 
@@ -878,9 +837,40 @@ mod tests {
         assert_eq!(metadata.size, 42);
 
         // Verify write was tracked
-        let tracked = written.lock().unwrap();
+        let tracked = builder.written();
         assert_eq!(tracked.len(), 1);
-        assert_eq!(tracked[0], "tracking://bucket/file.txt");
+        assert_eq!(tracked[0], "test://bucket/file.txt");
+    }
+
+    #[test]
+    fn test_scheme_and_props_propagation() {
+        // Create test storage that captures props
+        let builder = Arc::new(TestStorageBuilder {
+            written: Arc::new(Mutex::new(Vec::new())),
+            received_props: Arc::new(Mutex::new(HashMap::new())),
+        });
+        
+        let mut registry = StorageBuilderRegistry::new();
+        registry.register("myscheme", builder.clone());
+
+        // Build FileIO with custom scheme and additional props
+        let file_io = FileIOBuilder::new("myscheme")
+            .with_prop("custom.prop", "custom_value")
+            .with_registry(registry)
+            .build()
+            .unwrap();
+
+        // Verify the storage was created
+        assert!(file_io.new_output("myscheme://test.txt").is_ok());
+
+        // Verify the scheme was propagated to the builder
+        let props = builder.received_props();
+        assert_eq!(
+            props.get(STORAGE_LOCATION_SCHEME),
+            Some(&"myscheme".to_string())
+        );
+        // Verify custom props were also passed
+        assert_eq!(props.get("custom.prop"), Some(&"custom_value".to_string()));
     }
 
     #[test]
