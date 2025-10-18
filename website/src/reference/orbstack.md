@@ -25,7 +25,7 @@
    
 2. Migrate Docker data
     ```shell
-    orbstack migrate docker
+    orb migrate docker
     ```
    
 3. (Optional) Add registry mirrors
