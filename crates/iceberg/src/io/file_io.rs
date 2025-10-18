@@ -102,7 +102,6 @@ impl FileIO {
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     #[deprecated(note = "use remove_dir_all instead", since = "0.4.0")]
     pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
-        // todo this should be removed as it doesn't exist in the new trait
         self.inner.remove_dir_all(path.as_ref()).await
     }
 
