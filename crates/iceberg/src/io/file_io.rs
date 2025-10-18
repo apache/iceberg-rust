@@ -27,7 +27,7 @@ use url::Url;
 
 // Re-export traits from storage module
 pub use super::storage::{Storage, StorageBuilder};
-use crate::io::StorageBuilderRegistry;
+use crate::io::{StorageBuilderRegistry, STORAGE_LOCATION_SCHEME};
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -321,8 +321,11 @@ impl FileIOBuilder {
 
         let builder = registry.get_builder(scheme.as_str())?;
 
+        let mut props_with_scheme = self.props.clone();
+        props_with_scheme.insert(STORAGE_LOCATION_SCHEME.to_string(), scheme);
+
         // Build storage with props and extensions
-        let storage = builder.build(self.props.clone(), self.extensions.clone())?;
+        let storage = builder.build(props_with_scheme, self.extensions.clone())?;
 
         Ok(FileIO {
             builder: self,

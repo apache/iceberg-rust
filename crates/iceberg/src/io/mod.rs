@@ -73,6 +73,12 @@ pub use file_io::*;
 pub use storage::{Storage, StorageBuilder, StorageBuilderRegistry};
 pub(crate) mod object_cache;
 
+/// Property key used to pass the scheme string to storage builders.
+/// 
+/// Custom storage implementations can use this constant to retrieve the scheme
+/// from the properties map passed to `StorageBuilder::build()`.
+pub const STORAGE_LOCATION_SCHEME: &str = "iceberg.storage.location.scheme";
+
 #[cfg(feature = "storage-azdls")]
 mod storage_azdls;
 #[cfg(feature = "storage-fs")]

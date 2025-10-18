@@ -28,6 +28,7 @@ use url::Url;
 
 use crate::io::{
     Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    STORAGE_LOCATION_SCHEME,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -695,7 +696,7 @@ impl StorageBuilder for OpenDALAzdlsStorageBuilder {
     ) -> Result<Arc<dyn Storage>> {
         // Get the scheme string from the props or use default
         let scheme_str = props
-            .get("scheme_str")
+            .get(STORAGE_LOCATION_SCHEME)
             .cloned()
             .unwrap_or_else(|| "abfs".to_string());
 

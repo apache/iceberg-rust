@@ -28,7 +28,7 @@ use url::Url;
 
 use crate::io::{
     Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
-    is_truthy,
+    is_truthy, STORAGE_LOCATION_SCHEME,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -334,7 +334,7 @@ impl StorageBuilder for OpenDALS3StorageBuilder {
     ) -> Result<Arc<dyn Storage>> {
         // Get the scheme string from the props or use "s3" as default
         let scheme_str = props
-            .get("scheme_str")
+            .get(STORAGE_LOCATION_SCHEME)
             .cloned()
             .unwrap_or_else(|| "s3".to_string());
 
