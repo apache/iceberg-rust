@@ -27,8 +27,8 @@ use opendal::{Configurator, Operator};
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
-    STORAGE_LOCATION_SCHEME,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
+    Storage, StorageBuilder,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 

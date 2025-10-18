@@ -27,8 +27,8 @@ use reqwest::Client;
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
-    is_truthy, STORAGE_LOCATION_SCHEME,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
+    Storage, StorageBuilder, is_truthy,
 };
 use crate::{Error, ErrorKind, Result};
 

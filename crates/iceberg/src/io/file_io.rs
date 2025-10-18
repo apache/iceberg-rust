@@ -27,7 +27,7 @@ use url::Url;
 
 // Re-export traits from storage module
 pub use super::storage::{Storage, StorageBuilder};
-use crate::io::{StorageBuilderRegistry, STORAGE_LOCATION_SCHEME};
+use crate::io::{STORAGE_LOCATION_SCHEME, StorageBuilderRegistry};
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
