@@ -538,11 +538,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::{Error, ErrorKind, Result};
     use crate::io::{
         Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile,
         STORAGE_LOCATION_SCHEME, Storage, StorageBuilder, StorageBuilderRegistry,
     };
+    use crate::{Error, ErrorKind, Result};
 
     // Test storage implementation that tracks write operations
     #[derive(Debug, Clone)]
@@ -793,7 +793,7 @@ mod tests {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
-        
+
         let mut registry = StorageBuilderRegistry::new();
         registry.register("test", builder.clone());
 
@@ -815,7 +815,7 @@ mod tests {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
-        
+
         let mut registry = StorageBuilderRegistry::new();
         registry.register("test", builder.clone());
 
@@ -849,7 +849,7 @@ mod tests {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
-        
+
         let mut registry = StorageBuilderRegistry::new();
         registry.register("myscheme", builder.clone());
 
