@@ -213,14 +213,13 @@ impl PopulatedDeleteFileIndex {
 }
 
 #[cfg(test)]
-
 mod tests {
     use uuid::Uuid;
 
     use super::*;
     use crate::spec::{
-        self, DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
-        ManifestStatus, Struct,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry, ManifestStatus,
+        Struct,
     };
 
     #[test]
