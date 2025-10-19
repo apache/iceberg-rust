@@ -42,7 +42,7 @@ enum DeleteFileIndexState {
 #[derive(Debug)]
 struct PopulatedDeleteFileIndex {
     #[allow(dead_code)]
-    global_deletes: Vec<Arc<DeleteFileContext>>,
+    global_equality_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     // TODO: do we need this?
@@ -65,7 +65,8 @@ impl DeleteFileIndex {
         spawn({
             let state = state.clone();
             async move {
-                let delete_files = delete_file_stream.collect::<Vec<_>>().await;
+                let delete_files: Vec<DeleteFileContext> =
+                    delete_file_stream.collect::<Vec<_>>().await;
 
                 let populated_delete_file_index = PopulatedDeleteFileIndex::new(delete_files);
 
@@ -122,7 +123,7 @@ impl PopulatedDeleteFileIndex {
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
 
-        let mut global_deletes: Vec<Arc<DeleteFileContext>> = vec![];
+        let mut global_equality_deletes: Vec<Arc<DeleteFileContext>> = vec![];
 
         files.into_iter().for_each(|ctx| {
             let arc_ctx = Arc::new(ctx);
@@ -133,7 +134,7 @@ impl PopulatedDeleteFileIndex {
             if partition.fields().is_empty() {
                 // TODO: confirm we're good to skip here if we encounter a pos del
                 if arc_ctx.manifest_entry.content_type() != DataContentType::PositionDeletes {
-                    global_deletes.push(arc_ctx);
+                    global_equality_deletes.push(arc_ctx);
                     return;
                 }
             }
@@ -153,7 +154,7 @@ impl PopulatedDeleteFileIndex {
         });
 
         PopulatedDeleteFileIndex {
-            global_deletes,
+            global_equality_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
         }
@@ -167,7 +168,7 @@ impl PopulatedDeleteFileIndex {
     ) -> Vec<FileScanTaskDeleteFile> {
         let mut results = vec![];
 
-        self.global_deletes
+        self.global_equality_deletes
             .iter()
             // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
             .filter(|&delete| {
@@ -206,5 +207,124 @@ impl PopulatedDeleteFileIndex {
         }
 
         results
+    }
+}
+
+#[cfg(test)]
+
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestStatus, Struct,
+    };
+
+    #[test]
+    fn test_delete_file_index_unpartitioned() {
+        let deletes: Vec<ManifestEntry> = vec![
+            build_added_manifest_entry(4, &build_unpartitioned_eq_delete()),
+            build_added_manifest_entry(6, &build_unpartitioned_eq_delete()),
+            build_added_manifest_entry(5, &build_unpartitioned_pos_delete()),
+            build_added_manifest_entry(6, &build_unpartitioned_pos_delete()),
+        ];
+
+        let delete_file_paths: Vec<String> = deletes
+            .iter()
+            .map(|file| file.file_path().to_string())
+            .collect();
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: 0,
+            })
+            .collect();
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        let data_file = build_unpartitioned_data_file();
+
+        // All deletes apply to sequence 0
+        let delete_files_to_apply_for_seq_0 =
+            delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+        assert_eq!(delete_files_to_apply_for_seq_0.len(), 4);
+
+        // All deletes apply to sequence 3
+        let delete_files_to_apply_for_seq_3 =
+            delete_file_index.get_deletes_for_data_file(&data_file, Some(3));
+        assert_eq!(delete_files_to_apply_for_seq_3.len(), 4);
+
+        // Last 3 deletes apply to sequence 4
+        let delete_files_to_apply_for_seq_4 =
+            delete_file_index.get_deletes_for_data_file(&data_file, Some(4));
+        let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
+            .into_iter()
+            .map(|file| file.file_path)
+            .collect();
+
+        assert_eq!(
+            actual_paths_to_apply_for_seq_4,
+            delete_file_paths[delete_file_paths.len() - 3..]
+        );
+
+        // Last 3 deletes apply to sequence 5
+        let delete_files_to_apply_for_seq_5 =
+            delete_file_index.get_deletes_for_data_file(&data_file, Some(5));
+        let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
+            .into_iter()
+            .map(|file| file.file_path)
+            .collect();
+        assert_eq!(
+            actual_paths_to_apply_for_seq_5,
+            delete_file_paths[delete_file_paths.len() - 3..]
+        );
+    }
+
+    fn build_unpartitioned_eq_delete() -> DataFile {
+        DataFileBuilder::default()
+            .file_path(format!("{}_equality_delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::EqualityDeletes)
+            .equality_ids(Some(vec![1]))
+            .record_count(1)
+            .partition(Struct::empty())
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap()
+    }
+
+    fn build_unpartitioned_pos_delete() -> DataFile {
+        DataFileBuilder::default()
+            .file_path(format!("{}-dv.puffin", Uuid::new_v4()))
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some("/some-data-file.parquet".to_string()))
+            .partition(Struct::empty())
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap()
+    }
+
+    fn build_unpartitioned_data_file() -> DataFile {
+        DataFileBuilder::default()
+            .file_path(format!("{}-data.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::Data)
+            .record_count(100)
+            .partition(Struct::empty())
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap()
+    }
+
+    fn build_added_manifest_entry(data_seq_number: i64, file: &DataFile) -> ManifestEntry {
+        ManifestEntry::builder()
+            .status(ManifestStatus::Added)
+            .sequence_number(data_seq_number)
+            .data_file(file.clone())
+            .build()
     }
 }
