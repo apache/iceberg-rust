@@ -35,4 +35,6 @@ mod value;
 
 pub use reader::*;
 pub use value::*;
-pub(crate) mod record_batch_partition_splitter;
+/// Record batch partition splitter for partitioned tables
+pub mod record_batch_partition_splitter;
+pub use record_batch_partition_splitter::*;

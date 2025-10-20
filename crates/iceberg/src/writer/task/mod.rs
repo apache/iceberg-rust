@@ -21,6 +21,9 @@
 //! for writing data to Iceberg tables with automatic partition handling.
 
 use crate::Result;
+use crate::arrow::RecordBatchPartitionSplitter;
+use crate::spec::{PartitionKey, PartitionSpecRef, SchemaRef, Struct};
+use crate::writer::partitioning::PartitioningWriter;
 use crate::writer::{DefaultInput, DefaultOutput};
 
 /// High-level async trait for writing tasks to Iceberg tables.
@@ -52,4 +55,98 @@ pub trait TaskWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Returns the accumulated output (e.g., `Vec<DataFile>`) on success,
     /// or an error if the close operation fails.
     async fn close(self) -> Result<O>;
+}
+
+/// A high-level writer implementation for writing data to Iceberg tables.
+///
+/// `BaseTaskWriter` handles both partitioned and non-partitioned tables by composing
+/// a [`PartitioningWriter`] with an optional [`RecordBatchPartitionSplitter`].
+///
+/// # Type Parameters
+///
+/// * `W` - The underlying [`PartitioningWriter`] implementation
+pub struct BaseTaskWriter<W: PartitioningWriter> {
+    writer: W,
+    partition_splitter: Option<RecordBatchPartitionSplitter>,
+    schema: SchemaRef,
+    partition_spec: PartitionSpecRef,
+}
+
+impl<W: PartitioningWriter> BaseTaskWriter<W> {
+    /// Create a new BaseTaskWriter.
+    ///
+    /// # Parameters
+    ///
+    /// * `writer` - The underlying [`PartitioningWriter`] implementation
+    /// * `partition_splitter` - Optional partition splitter for partitioned tables.
+    ///   Should be `None` for unpartitioned tables and `Some` for partitioned tables.
+    /// * `schema` - The Iceberg schema reference
+    /// * `partition_spec` - The partition specification reference
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `BaseTaskWriter` instance, or an error if the partition splitter
+    /// configuration is invalid (e.g., missing splitter for a partitioned table).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - A partitioned table is provided without a partition splitter
+    pub fn new(
+        writer: W,
+        partition_splitter: Option<RecordBatchPartitionSplitter>,
+        schema: SchemaRef,
+        partition_spec: PartitionSpecRef,
+    ) -> Result<Self> {
+        // Validate that partitioned tables have a splitter
+        if !partition_spec.is_unpartitioned() && partition_splitter.is_none() {
+            return Err(crate::Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Partition splitter is required for partitioned tables",
+            ));
+        }
+
+        Ok(Self {
+            writer,
+            partition_splitter,
+            schema,
+            partition_spec,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl<W: PartitioningWriter> TaskWriter for BaseTaskWriter<W> {
+    async fn write(&mut self, input: DefaultInput) -> Result<()> {
+        if self.partition_spec.is_unpartitioned() {
+            // Unpartitioned table: create empty PartitionKey and write directly
+            let partition_key = PartitionKey::new(
+                self.partition_spec.as_ref().clone(),
+                self.schema.clone(),
+                Struct::empty(),
+            );
+            self.writer.write(partition_key, input).await?;
+        } else {
+            // Partitioned table: must have a splitter
+            let splitter = self.partition_splitter.as_ref().ok_or_else(|| {
+                crate::Error::new(
+                    crate::ErrorKind::DataInvalid,
+                    "Partition splitter is required for partitioned tables",
+                )
+            })?;
+
+            // Split batch and write each partition
+            let partitioned_batches = splitter.split(&input)?;
+
+            for (partition_key, batch) in partitioned_batches {
+                self.writer.write(partition_key, batch).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn close(self) -> Result<DefaultOutput> {
+        self.writer.close().await
+    }
 }

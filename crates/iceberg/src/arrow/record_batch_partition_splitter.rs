@@ -51,6 +51,17 @@ pub struct RecordBatchPartitionSplitter {
 // Remove this after partition writer supported.
 #[allow(dead_code)]
 impl RecordBatchPartitionSplitter {
+    /// Create a new RecordBatchPartitionSplitter.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_schema` - The Arrow schema of the input record batches
+    /// * `iceberg_schema` - The Iceberg schema reference
+    /// * `partition_spec` - The partition specification reference
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `RecordBatchPartitionSplitter` instance or an error if initialization fails.
     pub fn new(
         input_schema: ArrowSchemaRef,
         iceberg_schema: SchemaRef,
