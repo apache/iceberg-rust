@@ -602,28 +602,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.107",
-]
-
-[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3821,7 +3799,6 @@ name = "iceberg-sqllogictest"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
  "datafusion",
  "datafusion-sqllogictest",
@@ -3830,7 +3807,7 @@ dependencies = [
  "iceberg",
  "iceberg-datafusion",
  "indicatif",
- "libtest-mimic 0.7.3",
+ "libtest-mimic",
  "log",
  "serde",
  "sqllogictest",
@@ -4286,18 +4263,6 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "libtest-mimic"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc0bda45ed5b3a2904262c1bb91e526127aa70e7ef3758aba2ef93cf896b9b58"
-dependencies = [
- "clap",
- "escape8259",
- "termcolor",
- "threadpool",
 ]
 
 [[package]]
@@ -6773,7 +6738,7 @@ dependencies = [
  "glob",
  "humantime",
  "itertools 0.13.0",
- "libtest-mimic 0.8.1",
+ "libtest-mimic",
  "md-5",
  "owo-colors",
  "rand 0.8.5",
@@ -7198,15 +7163,6 @@ dependencies = [
  "serde_json",
  "slug",
  "unic-segment",
-]
-
-[[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
 ]
 
 [[package]]

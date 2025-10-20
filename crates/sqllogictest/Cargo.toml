@@ -43,8 +43,7 @@ tokio = { workspace = true }
 log = "0.4.28"
 
 [dev-dependencies]
-libtest-mimic = "0.7.3"
-async-stream = ">=0.3.5, <0.4"
+libtest-mimic = "0.8.1"
 
 [[test]]
 harness = false
