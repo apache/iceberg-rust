@@ -542,6 +542,7 @@ impl ArrowReader {
         let num_rows = batch.num_rows();
 
         // Create a string array with the file path repeated for all rows
+        // TODO @vustef L0: Is this encoded efficiently, e.g. RLE?
         let file_array = StringArray::from(vec![file_path; num_rows]);
 
         let mut columns = batch.columns().to_vec();
