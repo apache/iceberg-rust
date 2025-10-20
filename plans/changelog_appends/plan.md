@@ -22,13 +22,27 @@ Next functionality to implement is changelog scan planning. For this, we will im
   - Collects snapshot IDs into a `HashSet` for efficient lookup
   - Loads manifest lists from each relevant snapshot
   - Filters manifest files to only include those whose `added_snapshot_id` is in the snapshot set
-  - Added TODO comment noting that Added-Deleted file filtering still needs to be implemented
+- Added `filter_fn` pattern in `context.rs` to filter manifest entries by snapshot_id (lines 39, 55-56, 88-92, 240-245)
 - Added necessary imports: `HashSet`, `Itertools`, `Operation`, `ancestors_between`
 - Changed loop iteration to use references (`&manifest_files`) to avoid ownership issues
+- Implemented Added-Deleted file filtering in `plan_append_changelog_files()`:
+  - Added separate channel for tracking deleted file paths (`crates/iceberg/src/scan/mod.rs:510`)
+  - Modified manifest entry processing to handle three cases (lines 567-590):
+    - `ManifestStatus::Added`: Process as normal FileScanTask
+    - `ManifestStatus::Deleted`: Send file path to deleted files channel
+    - `ManifestStatus::Existing`: Skip (not part of changelog)
+  - Added filtering logic at the end (lines 596-607):
+    - Collect all deleted file paths into a `HashSet<String>`
+    - Filter the FileScanTask stream using `try_filter` to exclude files in the deleted set
+    - TODO comment notes that this blocks until all deletes are found - could be optimized
+  - Added `ManifestStatus` import to support status checking
+  - Fixed mutability issue with `tx_delete` parameter in closure
+  - Added type annotation for deleted file paths channel: `channel::<Result<String>>`
 
 **Current test status:**
-- Test `test_changelog_no_delete_files` runs but fails as expected (returns 2048 rows instead of 1024)
-- This is correct behavior - filtering of Added-Deleted files not yet implemented
+- Test `test_changelog_no_delete_files` passes successfully, returning exactly 1024 rows (only from 1.parquet)
+- Test confirms that files with `ManifestStatus::Existing` are correctly filtered out
+- TODO on line 1492 notes that test should be enhanced to create scenario of file added then deleted within changelog window
 
 ## Step 3: ✓ COMPLETED
 After that, simply building an arrow reader would work, and would produce an incremental scan. We want to provide a utility function similar to `to_arrow` (let's call it `appends_changelog_to_arrow`), that would build the arrow reader and read, passing it the output of the `plan_append_changelog_files`.

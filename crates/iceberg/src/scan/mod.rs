@@ -37,7 +37,7 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::runtime::spawn;
-use crate::spec::{DataContentType, SnapshotRef};
+use crate::spec::{DataContentType, ManifestStatus, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -400,13 +400,10 @@ impl TableScan {
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
 
-        let manifest_list = plan_context.get_manifest_list().await?;
-
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
         // scan's filter
         let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
@@ -510,15 +507,14 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+        let (file_scan_task_tx_delete, file_scan_task_rx_delete) = channel::<Result<String>>(concurrency_limit_manifest_entries);
 
-        let manifest_list = plan_context.get_manifest_list().await?;
+        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
         // scan's filter
         let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
@@ -568,14 +564,26 @@ impl TableScan {
         // Process the data file [`ManifestEntry`] stream in parallel
         spawn(async move {
             let result = manifest_entry_data_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone(), file_scan_task_tx_delete.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
+                    |(manifest_entry_context, tx, mut tx_delete)| async move {
+                        if manifest_entry_context.manifest_entry.status() == ManifestStatus::Added {
+                            spawn(async move {
+                                Self::process_data_manifest_entry(manifest_entry_context, tx).await
+                            })
+                            .await
+                        } else if manifest_entry_context.manifest_entry.status() == ManifestStatus::Deleted {
+                            spawn(async move {
+                                tx_delete
+                                    .send(Ok(manifest_entry_context.manifest_entry.file_path().to_string()))
+                                    .await?;
+                                Ok(())
+                            })
+                            .await
+                        } else {
+                            Ok(())
+                        }
                     },
                 )
                 .await;
@@ -585,7 +593,18 @@ impl TableScan {
             }
         });
 
-        Ok(file_scan_task_rx.boxed())
+        // Collect all deleted file paths
+        let deleted_files: std::collections::HashSet<String> = file_scan_task_rx_delete.try_collect().await?;
+
+        // TODO: This blocks until we find all the deletes, which could be improved by
+        // prioritizing finding those first (e.g., process deleted data fileentries before added data entries).
+
+        // Filter out file scan tasks whose file path matches deleted files
+        let filtered_stream = file_scan_task_rx.try_filter(move |task| {
+            futures::future::ready(!deleted_files.contains(&task.data_file_path))
+        });
+
+        Ok(filtered_stream.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`] for changelog append scan.
@@ -1470,6 +1489,7 @@ pub mod tests {
         assert_eq!(int64_arr.value(0), 1);
     }
 
+    // TODO @vustef L0: Make this (or some other) test actually test when there's a delete of a previously added data file.
     #[tokio::test]
     async fn test_changelog_no_delete_files() {
         let mut fixture = TableTestFixture::new();
