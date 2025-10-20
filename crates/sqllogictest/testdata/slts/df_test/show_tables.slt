@@ -15,20 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TTTT
+query TTTT rowsort
 SHOW TABLES
 ----
-datafusion information_schema tables VIEW
-datafusion information_schema views VIEW
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
-datafusion information_schema schemata VIEW
-datafusion information_schema routines VIEW
 datafusion information_schema parameters VIEW
-default information_schema tables VIEW
-default information_schema views VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
 default information_schema columns VIEW
 default information_schema df_settings VIEW
-default information_schema schemata VIEW
-default information_schema routines VIEW
 default information_schema parameters VIEW
+default information_schema routines VIEW
+default information_schema schemata VIEW
+default information_schema tables VIEW
+default information_schema views VIEW
