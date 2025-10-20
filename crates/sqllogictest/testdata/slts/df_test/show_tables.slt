@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query T
+query TTTT
 SHOW TABLES
 ----
 datafusion information_schema tables VIEW
