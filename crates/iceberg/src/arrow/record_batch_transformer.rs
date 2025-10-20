@@ -32,6 +32,9 @@ use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{Literal, PrimitiveLiteral, Schema as IcebergSchema};
 use crate::{Error, ErrorKind, Result};
 
+// Import reserved field constants from reader module
+use super::reader::{RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_POS};
+
 /// Indicates how a particular column in a processed RecordBatch should
 /// be sourced.
 #[derive(Debug)]
@@ -328,22 +331,32 @@ impl RecordBatchTransformer {
     ) -> Result<HashMap<i32, (FieldRef, usize)>> {
         let mut field_id_to_source_schema = HashMap::new();
         for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
-            let this_field_id = source_field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "field ID not present in parquet metadata",
-                    )
-                })?
-                .parse()
-                .map_err(|e| {
+            let this_field_id = if source_field.name() == RESERVED_COL_NAME_POS {
+                // Per Iceberg spec, the _pos column has reserved field ID RESERVED_FIELD_ID_POS
+                // TODO: Handle error case when users use a file that has a column with this ID
+                RESERVED_FIELD_ID_POS
+            } else {
+                // Get field ID from metadata
+                let field_id_str = source_field
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "field ID not present in parquet metadata for field '{}'",
+                                source_field.name()
+                            ),
+                        )
+                    })?;
+
+                field_id_str.parse().map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("field id not parseable as an i32: {}", e),
                     )
-                })?;
+                })?
+            };
 
             field_id_to_source_schema
                 .insert(this_field_id, (source_field.clone(), source_field_idx));

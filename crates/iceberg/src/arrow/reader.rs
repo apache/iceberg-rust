@@ -57,6 +57,16 @@ use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
+/// Reserved field ID for the row ordinal (_pos) column per Iceberg spec
+pub(crate) const RESERVED_FIELD_ID_POS: i32 = 2147483645;
+/// Reserved field ID for the file path (_file) column per Iceberg spec
+pub(crate) const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
+
+/// Column name for the row ordinal metadata column per Iceberg spec
+pub(crate) const RESERVED_COL_NAME_POS: &str = "_pos";
+/// Column name for the file path metadata column per Iceberg spec
+pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
+
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
@@ -64,6 +74,8 @@ pub struct ArrowReaderBuilder {
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    include_row_ordinals: bool,
+    include_file_path: bool, // TODO: Perhaps we should have a generic API that allows specifying extra field IDs, or metadata column names...
 }
 
 impl ArrowReaderBuilder {
@@ -77,6 +89,8 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            include_row_ordinals: false,
+            include_file_path: false,
         }
     }
 
@@ -105,6 +119,20 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Determines whether to include row ordinals in the output.
+    /// When enabled, adds a `_pos` column containing the row position within each parquet file.
+    pub fn with_row_ordinals(mut self, include_row_ordinals: bool) -> Self {
+        self.include_row_ordinals = include_row_ordinals;
+        self
+    }
+
+    /// Determines whether to include file path in the output.
+    /// When enabled, adds a `_file` column containing the file path for each row.
+    pub fn with_file_path(mut self, include_file_path: bool) -> Self {
+        self.include_file_path = include_file_path;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
@@ -117,6 +145,8 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            include_row_ordinals: self.include_row_ordinals,
+            include_file_path: self.include_file_path,
         }
     }
 }
@@ -133,6 +163,8 @@ pub struct ArrowReader {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    include_row_ordinals: bool,
+    include_file_path: bool,
 }
 
 impl ArrowReader {
@@ -144,6 +176,8 @@ impl ArrowReader {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
+        let include_row_ordinals = self.include_row_ordinals;
+        let include_file_path = self.include_file_path;
 
         let stream = tasks
             .map_ok(move |task| {
@@ -156,6 +190,8 @@ impl ArrowReader {
                     self.delete_file_loader.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
+                    include_row_ordinals,
+                    include_file_path,
                 )
             })
             .map_err(|err| {
@@ -175,6 +211,8 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
+        include_row_ordinals: bool,
+        include_file_path: bool,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
@@ -185,16 +223,36 @@ impl ArrowReader {
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
+            include_row_ordinals,
         )
         .await?;
+
+        // Add reserved field IDs for metadata columns when enabled
+        let mut extended_project_field_ids = task.project_field_ids.clone();
+        let extended_schema = if include_row_ordinals {
+            // Per Iceberg spec, _pos column has reserved field ID RESERVED_FIELD_ID_POS
+            extended_project_field_ids.push(RESERVED_FIELD_ID_POS);
+
+            // Extend the schema to include the _pos field so RecordBatchTransformer can find it
+            let mut fields = task.schema.as_struct().fields().to_vec();
+            use crate::spec::{NestedField, PrimitiveType, Type};
+            fields.push(Arc::new(NestedField::required(RESERVED_FIELD_ID_POS, RESERVED_COL_NAME_POS, Type::Primitive(PrimitiveType::Long))));
+            Arc::new(Schema::builder()
+                .with_schema_id(task.schema.schema_id())
+                .with_fields(fields)
+                .build()?)
+        } else {
+            task.schema_ref()
+        };
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
         let projection_mask = Self::get_arrow_projection_mask(
-            &task.project_field_ids,
-            &task.schema,
+            &extended_project_field_ids,
+            &extended_schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
+            include_row_ordinals,
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
@@ -202,7 +260,7 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformer::build(extended_schema, &extended_project_field_ids);
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -312,11 +370,19 @@ impl ArrowReader {
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
+        let file_path = task.data_file_path.clone();
         let record_batch_stream =
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Ok(batch) => {
+                        let batch = record_batch_transformer.process_record_batch(batch)?;
+                        if include_file_path {
+                            Self::add_file_path_column(batch, &file_path)
+                        } else {
+                            Ok(batch)
+                        }
+                    }
                     Err(err) => Err(err.into()),
                 });
 
@@ -327,6 +393,7 @@ impl ArrowReader {
         data_file_path: &str,
         file_io: FileIO,
         should_load_page_index: bool,
+        include_row_ordinals: bool,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
@@ -339,11 +406,18 @@ impl ArrowReader {
             .with_preload_page_index(should_load_page_index);
 
         // Create the record batch stream builder, which wraps the parquet file reader
-        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
+        let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
             ArrowReaderOptions::new(),
         )
         .await?;
+
+        // Add row number column if requested (for changelog scans)
+        // Per Iceberg spec, the position column should be named RESERVED_COL_NAME_POS with field ID RESERVED_FIELD_ID_POS
+        if include_row_ordinals {
+            record_batch_stream_builder = record_batch_stream_builder.with_row_number_column(RESERVED_COL_NAME_POS);
+        }
+
         Ok(record_batch_stream_builder)
     }
 
@@ -457,6 +531,41 @@ impl ArrowReader {
         Ok(results.into())
     }
 
+    /// Adds a `_file` column to the RecordBatch containing the file path.
+    /// Uses a constant string value for all rows, which should be memory-efficient
+    /// as Arrow will use dictionary encoding or similar optimizations internally.
+    fn add_file_path_column(batch: RecordBatch, file_path: &str) -> Result<RecordBatch> {
+        use arrow_array::StringArray;
+        use arrow_schema::Field;
+        use std::collections::HashMap;
+
+        let num_rows = batch.num_rows();
+
+        // Create a string array with the file path repeated for all rows
+        let file_array = StringArray::from(vec![file_path; num_rows]);
+
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(file_array) as ArrayRef);
+
+        let mut fields: Vec<_> = batch.schema().fields().iter().cloned().collect();
+        // Per Iceberg spec, the _file column has reserved field ID RESERVED_FIELD_ID_FILE
+        let file_field = Field::new(RESERVED_COL_NAME_FILE, DataType::Utf8, false)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_FILE.to_string(),
+            )]));
+        fields.push(Arc::new(file_field));
+
+        let schema = Arc::new(ArrowSchema::new(fields));
+        RecordBatch::try_new(schema, columns).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to add _file column to RecordBatch",
+            )
+            .with_source(e)
+        })
+    }
+
     fn build_field_id_set_and_map(
         parquet_schema: &SchemaDescriptor,
         predicate: &BoundPredicate,
@@ -500,7 +609,30 @@ impl ArrowReader {
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
+        include_row_ordinals: bool,
     ) -> Result<ProjectionMask> {
+        // WORKAROUND: The parquet reader's `with_row_number_column()` method adds the _pos column
+        // dynamically when building record batches, but does NOT update the schema returned by
+        // ParquetRecordBatchStreamBuilder::schema(). This means the arrow_schema parameter here
+        // won't include the _pos field even though it will be present in the actual record batches.
+        // To work around this, we manually extend the arrow_schema to include the _pos field
+        // when include_row_ordinals is true.
+        let arrow_schema = if include_row_ordinals {
+            let mut fields: Vec<_> = arrow_schema.fields().iter().cloned().collect();
+            let pos_field = arrow_schema::Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
+                .with_metadata(std::collections::HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    RESERVED_FIELD_ID_POS.to_string(),
+                )]));
+            fields.push(Arc::new(pos_field));
+            Arc::new(ArrowSchema::new_with_metadata(
+                fields,
+                arrow_schema.metadata().clone(),
+            ))
+        } else {
+            arrow_schema.clone()
+        };
+
         fn type_promotion_is_valid(
             file_type: Option<&PrimitiveType>,
             projected_type: Option<&PrimitiveType>,
@@ -540,6 +672,7 @@ impl ArrowReader {
             let mut column_map = HashMap::new();
 
             let fields = arrow_schema.fields();
+
             // Pre-project only the fields that have been selected, possibly avoiding converting
             // some Arrow types that are not yet supported.
             let mut projected_fields: HashMap<FieldRef, i32> = HashMap::new();
@@ -602,6 +735,12 @@ impl ArrowReader {
 
             let mut indices = vec![];
             for field_id in leaf_field_ids {
+                // Skip _pos field - it's added dynamically by the parquet reader via
+                // with_row_number_column(), not read from the parquet file itself
+                if field_id == RESERVED_FIELD_ID_POS {
+                    continue;
+                }
+
                 if let Some(col_idx) = column_map.get(&field_id) {
                     indices.push(*col_idx);
                 } else {
@@ -1373,19 +1512,16 @@ impl<R: FileRead> ArrowFileReader<R> {
 }
 
 impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r
-                .read(range.start..range.end)
+                .read(range.start as u64..range.end as u64)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
     }
 
-    // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
-    // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
     fn get_metadata(
         &mut self,
-        _options: Option<&'_ ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
             let reader = ParquetMetaDataReader::new()
@@ -1393,7 +1529,7 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
                 .with_column_indexes(self.preload_column_index)
                 .with_page_indexes(self.preload_page_index)
                 .with_offset_indexes(self.preload_offset_index);
-            let size = self.meta.size;
+            let size = self.meta.size as usize;
             let meta = reader.load_and_finish(self, size).await?;
 
             Ok(Arc::new(meta))
@@ -1580,6 +1716,7 @@ message schema {
             &schema,
             &parquet_schema,
             &arrow_schema,
+            false,
         )
         .unwrap_err();
 
@@ -1595,6 +1732,7 @@ message schema {
             &schema,
             &parquet_schema,
             &arrow_schema,
+            false,
         )
         .unwrap_err();
 
@@ -1606,7 +1744,7 @@ message schema {
 
         // Finally avoid selecting fields with unsupported data types
         let mask =
-            ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
+            ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema, false)
                 .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
