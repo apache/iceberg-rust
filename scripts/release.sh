@@ -47,7 +47,7 @@ python3 ./scripts/dependencies.py check
 
 # Generate and verify artifacts
 echo "> Start package"
-git archive --format=tar.gz --output="dist/apache-iceberg-rust-$release_version-src.tar.gz" --prefix="apache-iceberg-rust-$release_version-src/" --add-file=Cargo.toml "$git_branch"
+git archive --format=tar.gz --output="dist/apache-iceberg-rust-$release_version.tar.gz" --prefix="apache-iceberg-rust-$release_version/" --add-file=Cargo.toml "$git_branch"
 
 cd dist
 

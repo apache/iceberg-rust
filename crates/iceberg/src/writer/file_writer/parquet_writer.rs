@@ -34,7 +34,6 @@ use parquet::format::FileMetaData;
 use parquet::thrift::{TCompactOutputProtocol, TSerializable};
 use thrift::protocol::TOutputProtocol;
 
-use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
@@ -43,8 +42,8 @@ use crate::arrow::{
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionKey, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
-    Struct, StructType, TableMetadata, Type, visit_schema,
+    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
+    StructType, TableMetadata, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -52,78 +51,43 @@ use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
-pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
+pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
-    partition_key: Option<PartitionKey>,
     match_mode: FieldMatchMode,
-
-    file_io: FileIO,
-    location_generator: T,
-    file_name_generator: F,
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
+impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    pub fn new(
-        props: WriterProperties,
-        schema: SchemaRef,
-        partition_key: Option<PartitionKey>,
-        file_io: FileIO,
-        location_generator: T,
-        file_name_generator: F,
-    ) -> Self {
-        Self::new_with_match_mode(
-            props,
-            schema,
-            partition_key,
-            FieldMatchMode::Id,
-            file_io,
-            location_generator,
-            file_name_generator,
-        )
+    pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
+        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
     /// Create a new `ParquetWriterBuilder` with custom match mode
     pub fn new_with_match_mode(
         props: WriterProperties,
         schema: SchemaRef,
-        partition_key: Option<PartitionKey>,
         match_mode: FieldMatchMode,
-        file_io: FileIO,
-        location_generator: T,
-        file_name_generator: F,
     ) -> Self {
         Self {
             props,
             schema,
-            partition_key,
             match_mode,
-            file_io,
-            location_generator,
-            file_name_generator,
         }
     }
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
+impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self) -> Result<Self::R> {
-        let out_file = self
-            .file_io
-            .new_output(self.location_generator.generate_location(
-                self.partition_key.as_ref(),
-                &self.file_name_generator.generate_file_name(),
-            ))?;
-
+    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props,
             current_row_num: 0,
-            out_file,
+            output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
         })
     }
@@ -250,7 +214,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
-    out_file: OutputFile,
+    output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
@@ -555,7 +519,7 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer = self.out_file.writer().await?;
+            let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
@@ -594,7 +558,7 @@ impl FileWriter for ParquetWriter {
         let written_size = writer.bytes_written();
 
         if self.current_row_num == 0 {
-            self.out_file.delete().await.map_err(|err| {
+            self.output_file.delete().await.map_err(|err| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to delete empty parquet file.",
@@ -616,7 +580,7 @@ impl FileWriter for ParquetWriter {
                 self.schema,
                 parquet_metadata,
                 written_size,
-                self.out_file.location().to_string(),
+                self.output_file.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
             )?])
         }
@@ -625,7 +589,7 @@ impl FileWriter for ParquetWriter {
 
 impl CurrentFileStatus for ParquetWriter {
     fn current_file_path(&self) -> String {
-        self.out_file.location().to_string()
+        self.output_file.location().to_string()
     }
 
     fn current_row_num(&self) -> usize {
@@ -703,7 +667,7 @@ mod tests {
     use crate::io::FileIOBuilder;
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::{
-        DefaultFileNameGenerator, DefaultLocationGenerator,
+        DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
     use crate::writer::tests::check_parquet_data_file;
 
@@ -871,11 +835,13 @@ mod tests {
 
         // prepare data
         let schema = {
-            let fields = vec![
-                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
-                ),
-            ];
+            let fields =
+                vec![
+                    Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
@@ -883,18 +849,18 @@ mod tests {
         let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
         let to_write_null = RecordBatch::try_new(schema.clone(), vec![null_col]).unwrap();
 
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+
         // write data
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder()
                 .set_max_row_group_size(128)
                 .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
         pw.write(&to_write).await?;
         pw.write(&to_write_null).await?;
@@ -905,7 +871,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1006,7 +972,7 @@ mod tests {
             None,
         ));
         let col5 = Arc::new({
-            let mut map_array_builder = arrow_array::builder::MapBuilder::new(
+            let mut map_array_builder = MapBuilder::new(
                 None,
                 arrow_array::builder::StringBuilder::new(),
                 arrow_array::builder::ListBuilder::new(arrow_array::builder::PrimitiveBuilder::<
@@ -1083,18 +1049,15 @@ mod tests {
             col0, col1, col2, col3, col4, col5,
         ])
         .unwrap();
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let mut pw =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema))
+                .build(output_file)
+                .await?;
         pw.write(&to_write).await?;
         let res = pw.close().await?;
         assert_eq!(res.len(), 1);
@@ -1161,7 +1124,7 @@ mod tests {
     async fn test_all_type_for_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen = DefaultLocationGenerator::with_data_location(
+        let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
         let file_name_gen =
@@ -1276,18 +1239,15 @@ mod tests {
             col14, col15, col16,
         ])
         .unwrap();
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema),
-            None,
-            file_io.clone(),
-            loccation_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let mut pw =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema))
+                .build(output_file)
+                .await?;
         pw.write(&to_write).await?;
         let res = pw.close().await?;
         assert_eq!(res.len(), 1);
@@ -1405,7 +1365,7 @@ mod tests {
     async fn test_decimal_bound() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen = DefaultLocationGenerator::with_data_location(
+        let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
         let file_name_gen =
@@ -1429,16 +1389,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema.clone(),
-            None,
-            file_io.clone(),
-            loccation_gen.clone(),
-            file_name_gen.clone(),
-        )
-        .build()
-        .await?;
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone())
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![Some(22000000000), Some(11000000000)])
                 .with_data_type(DataType::Decimal128(28, 10)),
@@ -1485,16 +1441,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema.clone(),
-            None,
-            file_io.clone(),
-            loccation_gen.clone(),
-            file_name_gen.clone(),
-        )
-        .build()
-        .await?;
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone())
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![Some(-22000000000), Some(-11000000000)])
                 .with_data_type(DataType::Decimal128(28, 10)),
@@ -1544,16 +1496,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema,
-            None,
-            file_io.clone(),
-            loccation_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
                 Some(decimal_max.mantissa()),
@@ -1676,37 +1624,31 @@ mod tests {
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
         let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+        let file_path = location_gen.generate_location(None, &file_name_gen.generate_file_name());
+        let output_file = file_io.new_output(&file_path)?;
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            None,
-            file_io.clone(),
-            location_gen.clone(),
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
         pw.write(&to_write).await?;
-        let file_path = pw.out_file.location().to_string();
         pw.close().await.unwrap();
-        assert!(file_io.exists(file_path).await.unwrap());
+        assert!(file_io.exists(&file_path).await.unwrap());
 
         // Test that file will not create if no data to write
         let file_name_gen =
             DefaultFileNameGenerator::new("test_empty".to_string(), None, DataFileFormat::Parquet);
+        let file_path = location_gen.generate_location(None, &file_name_gen.generate_file_name());
+        let output_file = file_io.new_output(&file_path)?;
         let pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
-        let file_path = pw.out_file.location().to_string();
         pw.close().await.unwrap();
-        assert!(!file_io.exists(file_path).await.unwrap());
+        assert!(!file_io.exists(&file_path).await.unwrap());
 
         Ok(())
     }
@@ -1746,17 +1688,16 @@ mod tests {
 
         let to_write =
             RecordBatch::try_new(arrow_schema.clone(), vec![float_32_col, float_64_col]).unwrap();
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
 
         pw.write(&to_write).await?;
@@ -1887,17 +1828,16 @@ mod tests {
             struct_nested_float_field_col,
         ])
         .unwrap();
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
 
         pw.write(&to_write).await?;
@@ -2047,6 +1987,9 @@ mod tests {
             // large_list_float_field_col,
         ])
         .expect("Could not form record batch");
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
@@ -2058,12 +2001,8 @@ mod tests {
                     .try_into()
                     .expect("Could not convert iceberg schema"),
             ),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
 
         pw.write(&to_write).await?;
@@ -2229,6 +2168,9 @@ mod tests {
             struct_list_float_field_col,
         ])
         .expect("Could not form record batch");
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
@@ -2240,12 +2182,8 @@ mod tests {
                     .try_into()
                     .expect("Could not convert iceberg schema"),
             ),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
 
         pw.write(&to_write).await?;
@@ -2310,6 +2248,9 @@ mod tests {
         );
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+        let output_file = file_io
+            .new_output(location_gen.generate_location(None, &file_name_gen.generate_file_name()))
+            .unwrap();
 
         // write data
         let pw = ParquetWriterBuilder::new(
@@ -2325,12 +2266,8 @@ mod tests {
                     .build()
                     .expect("Failed to create schema"),
             ),
-            None,
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await
         .unwrap();
 

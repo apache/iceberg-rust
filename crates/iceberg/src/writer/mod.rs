@@ -60,6 +60,9 @@
 //! async fn main() -> Result<()> {
 //!     // Connect to a catalog.
 //!     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
 //!             "memory",
@@ -86,15 +89,20 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
-//!         None,
+//!     );
+//!
+//!     // Create a rolling file writer using parquet file writer builder.
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+//!         parquet_writer_builder,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
+//!
 //!     // Create a data file writer using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 //!     // Build the data file writer
-//!     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+//!     let mut data_file_writer = data_file_writer_builder.build(None).await?;
 //!
 //!     // Write the data using data_file_writer...
 //!
@@ -113,7 +121,7 @@
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
 //! use iceberg::memory::MemoryCatalogBuilder;
-//! use iceberg::spec::DataFile;
+//! use iceberg::spec::{DataFile, PartitionKey};
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 //! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
@@ -140,9 +148,9 @@
 //! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
-//!     async fn build(self) -> Result<Self::R> {
+//!     async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
 //!         Ok(LatencyRecordWriter {
-//!             inner_writer: self.inner_writer_builder.build().await?,
+//!             inner_writer: self.inner_writer_builder.build(partition_key).await?,
 //!         })
 //!     }
 //! }
@@ -174,6 +182,9 @@
 //!     // Connect to a catalog.
 //!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 //!     use iceberg::spec::{Literal, PartitionKey, Struct};
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
 //!
 //!     let catalog = MemoryCatalogBuilder::default()
 //!         .load(
@@ -207,17 +218,26 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
-//!         Some(partition_key),
+//!     );
+//!
+//!     // Create a rolling file writer
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new(
+//!         parquet_writer_builder,
+//!         512 * 1024 * 1024,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
-//!     // Create a data file writer builder using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!
+//!     // Create a data file writer builder using rolling file writer.
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 //!     // Create latency record writer using data file writer builder.
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer
-//!     let mut latency_record_data_file_writer = latency_record_builder.build().await.unwrap();
+//!     let mut latency_record_data_file_writer = latency_record_builder
+//!         .build(Some(partition_key))
+//!         .await
+//!         .unwrap();
 //!
 //!     Ok(())
 //! }
@@ -225,11 +245,14 @@
 
 pub mod base_writer;
 pub mod file_writer;
+/// Provides partition-aware writers
+/// TODO examples
+pub mod partitioning;
 
 use arrow_array::RecordBatch;
 
 use crate::Result;
-use crate::spec::DataFile;
+use crate::spec::{DataFile, PartitionKey};
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
@@ -241,8 +264,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    /// Build the iceberg writer with an optional partition key.
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.
