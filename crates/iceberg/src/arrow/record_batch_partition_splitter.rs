@@ -27,7 +27,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use super::arrow_struct_to_literal;
 use super::record_batch_projector::RecordBatchProjector;
 use crate::arrow::type_to_arrow_type;
-use crate::spec::{Literal, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
+use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
 use crate::transform::{BoxedTransformFunction, create_transform_function};
 use crate::{Error, ErrorKind, Result};
 
@@ -141,7 +141,7 @@ impl RecordBatchPartitionSplitter {
     }
 
     /// Split the record batch into multiple record batches based on the partition spec.
-    pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(Struct, RecordBatch)>> {
+    pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
         let source_columns = self.projector.project_column(batch.columns())?;
         let partition_columns = source_columns
             .into_iter()
@@ -172,8 +172,15 @@ impl RecordBatchPartitionSplitter {
                 filter.into()
             };
 
+            // Create PartitionKey from the partition struct
+            let partition_key = PartitionKey::new(
+                self.partition_spec.as_ref().clone(),
+                self.schema.clone(),
+                row,
+            );
+
             // filter the RecordBatch
-            partition_batches.push((row, filter_record_batch(batch, &filter_array)?));
+            partition_batches.push((partition_key, filter_record_batch(batch, &filter_array)?));
         }
 
         Ok(partition_batches)
@@ -243,8 +250,8 @@ mod tests {
         let mut partitioned_batches = partition_splitter
             .split(&batch)
             .expect("Failed to split RecordBatch");
-        partitioned_batches.sort_by_key(|(row, _)| {
-            if let PrimitiveLiteral::Int(i) = row.fields()[0]
+        partitioned_batches.sort_by_key(|(partition_key, _)| {
+            if let PrimitiveLiteral::Int(i) = partition_key.data().fields()[0]
                 .as_ref()
                 .unwrap()
                 .as_primitive_literal()
@@ -292,7 +299,7 @@ mod tests {
 
         let partition_values = partitioned_batches
             .iter()
-            .map(|(row, _)| row.clone())
+            .map(|(partition_key, _)| partition_key.data().clone())
             .collect::<Vec<_>>();
         // check partition value is struct(1), struct(2), struct(3)
         assert_eq!(partition_values, vec![
