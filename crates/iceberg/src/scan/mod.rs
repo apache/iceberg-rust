@@ -753,8 +753,9 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::{
-        ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
+        ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray, StringArray,
     };
+    use arrow_array::types::Int32Type;
     use futures::{TryStreamExt, stream};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -1540,9 +1541,18 @@ pub mod tests {
         assert_eq!(pos_arr.value(0), 0, "_pos column should start at 0");
 
         // Verify the _file column contains specifically 1.parquet (the Added file, not 3.parquet which is Existing)
+        // The _file column is stored as a RunArray (Run-End Encoded) for memory efficiency
         let file_col = batches[0].column_by_name("_file").expect("_file column should be present");
-        let file_arr = file_col.as_any().downcast_ref::<StringArray>().unwrap();
-        let file_path = file_arr.value(0);
+        let file_run_arr = file_col.as_any().downcast_ref::<RunArray<Int32Type>>().unwrap();
+
+        // Verify the run array has a single run covering the entire batch
+        let run_ends = file_run_arr.run_ends();
+        assert_eq!(run_ends.values().len(), 1, "Should have exactly one run for constant file path");
+        assert_eq!(run_ends.values()[0], batches[0].num_rows() as i32, "Run length should equal batch size");
+
+        // Extract and verify the file path value
+        let file_values = file_run_arr.values().as_any().downcast_ref::<StringArray>().unwrap();
+        let file_path = file_values.value(0);
         assert!(file_path.ends_with("1.parquet"), "_file column should contain 1.parquet (the Added file), got: {}", file_path);
     }
 

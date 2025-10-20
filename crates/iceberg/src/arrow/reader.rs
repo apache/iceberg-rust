@@ -532,29 +532,48 @@ impl ArrowReader {
     }
 
     /// Adds a `_file` column to the RecordBatch containing the file path.
-    /// Uses a constant string value for all rows, which should be memory-efficient
-    /// as Arrow will use dictionary encoding or similar optimizations internally.
+    /// Uses Run-End Encoding (RLE) for maximum memory efficiency when the same
+    /// file path is repeated across all rows.
     fn add_file_path_column(batch: RecordBatch, file_path: &str) -> Result<RecordBatch> {
-        use arrow_array::StringArray;
+        use arrow_array::{Int32Array, RunArray, StringArray};
         use arrow_schema::Field;
         use std::collections::HashMap;
 
         let num_rows = batch.num_rows();
 
-        // Create a string array with the file path repeated for all rows
-        // TODO @vustef L0: Is this encoded efficiently, e.g. RLE?
-        let file_array = StringArray::from(vec![file_path; num_rows]);
+        // Use Run-End Encoded array for optimal memory efficiency
+        // For a constant value repeated num_rows times, this stores:
+        // - run_ends: [num_rows] (one i32)
+        // - values: [file_path] (one string)
+        let run_ends = Int32Array::from(vec![num_rows as i32]);
+        let values = StringArray::from(vec![file_path]);
+        // TODO @vustef L0: These may not be supported in Julia's Arrow.jl, see what alternatives we have...
+        let file_array = RunArray::try_new(&run_ends, &values).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to create RunArray for _file column",
+            )
+            .with_source(e)
+        })?;
 
         let mut columns = batch.columns().to_vec();
         columns.push(Arc::new(file_array) as ArrayRef);
 
         let mut fields: Vec<_> = batch.schema().fields().iter().cloned().collect();
         // Per Iceberg spec, the _file column has reserved field ID RESERVED_FIELD_ID_FILE
-        let file_field = Field::new(RESERVED_COL_NAME_FILE, DataType::Utf8, false)
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                RESERVED_FIELD_ID_FILE.to_string(),
-            )]));
+        // DataType is RunEndEncoded with Int32 run ends and Utf8 values
+        // Note: values field is nullable to match what StringArray::from() creates // TODO @vustef: Not sure why is that the case, fix it.
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+        let file_field = Field::new(
+            RESERVED_COL_NAME_FILE,
+            DataType::RunEndEncoded(run_ends_field, values_field),
+            false
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            RESERVED_FIELD_ID_FILE.to_string(),
+        )]));
         fields.push(Arc::new(file_field));
 
         let schema = Arc::new(ArrowSchema::new(fields));
