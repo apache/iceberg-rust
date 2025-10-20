@@ -115,7 +115,7 @@ impl PopulatedDeleteFileIndex {
     ///
     /// 1. The partition information is extracted from each delete file's manifest entry.
     /// 2. If the partition is empty and the delete file is not a positional delete,
-    ///    it is added to the `global_deletes` vector
+    ///    it is added to the `global_equality_deletes` vector
     /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
     fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
         let mut eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
@@ -436,8 +436,8 @@ mod tests {
 
     fn build_partitioned_pos_delete(partition: &Struct, spec_id: i32) -> DataFile {
         DataFileBuilder::default()
-            .file_path(format!("{}-dv.puffin", Uuid::new_v4()))
-            .file_format(DataFileFormat::Puffin)
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
             .referenced_data_file(Some("/some-data-file.parquet".to_string()))
