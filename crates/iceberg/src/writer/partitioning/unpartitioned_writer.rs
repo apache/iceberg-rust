@@ -87,7 +87,7 @@ where
             .await
     }
 
-    async fn close(mut self) -> crate::Result<O> {
+    async fn close(mut self) -> Result<O> {
         if let Some(mut writer) = self.writer.take() {
             self.output.extend(writer.close().await?);
         }
@@ -125,7 +125,7 @@ mod tests {
     fn create_test_writer_builder(
         temp_dir: &TempDir,
         schema: Arc<crate::spec::Schema>,
-    ) -> Result<impl IcebergWriterBuilder + Clone> {
+    ) -> Result<impl IcebergWriterBuilder> {
         let file_io = FileIOBuilder::new_fs_io().build()?;
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
