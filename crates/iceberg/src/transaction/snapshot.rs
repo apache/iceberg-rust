@@ -450,10 +450,12 @@ impl<'a> SnapshotProduceAction<'a> {
             manifest_files.extend(existing_data_manifests);
 
             delete_filter_manager.drop_delete_files_older_than(min_data_seq);
+            delete_filter_manager.remove_dangling_deletes_for(&self.removed_data_file_paths);
 
             let filtered_delete_manifests: Vec<ManifestFile> = delete_filter_manager
                 .filter_manifests(&schema, existing_delete_manifests)
                 .await?;
+
             manifest_files.extend(filtered_delete_manifests);
 
             manifest_files.retain(|m| {

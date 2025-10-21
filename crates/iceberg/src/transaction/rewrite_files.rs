@@ -256,11 +256,11 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                         deleted_entries.push(gen_manifest_entry(entry));
                     }
 
-                    if entry.content_type() == DataContentType::PositionDeletes
-                        || entry.content_type() == DataContentType::EqualityDeletes
-                            && snapshot_produce
-                                .removed_delete_file_paths
-                                .contains(entry.data_file().file_path())
+                    if (entry.content_type() == DataContentType::PositionDeletes
+                        || entry.content_type() == DataContentType::EqualityDeletes)
+                        && snapshot_produce
+                            .removed_delete_file_paths
+                            .contains(entry.data_file().file_path())
                     {
                         deleted_entries.push(gen_manifest_entry(entry));
                     }

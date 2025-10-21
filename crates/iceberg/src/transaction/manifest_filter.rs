@@ -119,6 +119,8 @@ pub struct ManifestFilterManager {
     filtered_manifests: HashMap<String, ManifestFile>, // manifest_path -> filtered_manifest
     /// Tracking where files were deleted to validate retries quickly
     filtered_manifest_to_deleted_files: HashMap<String, Vec<String>>, // manifest_path -> deleted_files
+    ///    this is only being used for the DeleteManifestFilterManager to detect orphaned deletes for removed data file paths
+    removed_data_file_path: HashSet<String>,
 
     file_io: FileIO,
     writer_context: ManifestWriterContext,
@@ -134,6 +136,7 @@ impl ManifestFilterManager {
             fail_missing_delete_paths: false,
             filtered_manifests: HashMap::new(),
             filtered_manifest_to_deleted_files: HashMap::new(),
+            removed_data_file_path: HashSet::new(),
             file_io,
             writer_context,
         }
@@ -151,7 +154,7 @@ impl ManifestFilterManager {
     }
 
     /// Set minimum sequence number for removing old delete files
-    pub fn drop_delete_files_older_than(&mut self, sequence_number: i64) {
+    pub(crate) fn drop_delete_files_older_than(&mut self, sequence_number: i64) {
         assert!(
             sequence_number >= 0,
             "Invalid minimum data sequence number: {}",
@@ -242,7 +245,7 @@ impl ManifestFilterManager {
         }
 
         // If we have file-based deletes, any manifest with live files might contain them
-        !self.files_to_delete.is_empty()
+        !self.files_to_delete.is_empty() || !self.removed_data_file_path.is_empty()
     }
 
     /// Filter a manifest that is known to contain files to delete
@@ -319,6 +322,8 @@ impl ManifestFilterManager {
 
                     // For file that it was deleted using an expression
                     self.files_to_delete.insert(file.file_path().to_string(), file_copy.clone());
+
+                    // TODO: add file to removed_data_file_path once we implement drop_partition
                     
                     // Track deleted files for duplicate detection and validation
                     if deleted_files.contains_key(file_copy.file_path()) {
@@ -415,6 +420,7 @@ impl ManifestFilterManager {
                   matches!(entry.sequence_number(), Some(seq_num) if seq_num != crate::spec::UNASSIGNED_SEQUENCE_NUMBER 
                              && seq_num > 0 
                              && seq_num < self.min_sequence_number));
+                
                 // TODO: Add dangling delete vector check: (is_delete && self.is_dangling_dv(file))
             
             // TODO: Add expression evaluation logic
@@ -450,6 +456,10 @@ impl ManifestFilterManager {
         }
         
         Ok(false)
+    }
+
+    pub(crate) fn remove_dangling_deletes_for(&mut self, file_paths: &HashSet<String>) {
+        self.removed_data_file_path.extend(file_paths.iter().cloned());
     }
 }
 
