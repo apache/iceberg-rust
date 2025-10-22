@@ -815,6 +815,13 @@ impl ArrowReader {
             ));
         };
 
+        // If all row groups were filtered out, return an empty RowSelection (select no rows)
+        if let Some(selected_row_groups) = selected_row_groups {
+            if selected_row_groups.is_empty() {
+                return Ok(RowSelection::from(Vec::new()));
+            }
+        }
+
         let mut selected_row_groups_idx = 0;
 
         let page_index = column_index
@@ -2689,5 +2696,90 @@ message schema {
             .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
+    }
+
+    /// Test reading Parquet files without field IDs with a filter that eliminates all row groups.
+    /// During development of field ID mapping, we saw a panic when row_selection_enabled=true and
+    /// all row groups are filtered out.
+    #[tokio::test]
+    async fn test_read_parquet_without_field_ids_filter_eliminates_all_rows() {
+        use arrow_array::{Float64Array, Int32Array};
+
+        // Schema with fields that will use fallback IDs 1, 2, 3
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(3, "value", Type::Primitive(PrimitiveType::Double))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        // Write data where all ids are >= 10
+        let id_data = Arc::new(Int32Array::from(vec![10, 11, 12])) as ArrayRef;
+        let name_data = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let value_data = Arc::new(Float64Array::from(vec![100.0, 200.0, 300.0])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_data, name_data, value_data])
+                .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        // Filter that eliminates all row groups: id < 5
+        let predicate = Reference::new("id").less_than(Datum::int(5));
+
+        // Enable both row_group_filtering and row_selection - triggered the panic
+        let reader = ArrowReaderBuilder::new(file_io)
+            .with_row_group_filtering_enabled(true)
+            .with_row_selection_enabled(true)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2, 3],
+                predicate: Some(predicate.bind(schema, true).unwrap()),
+                deletes: vec![],
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        // Should no longer panic
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Should return empty results
+        assert!(result.is_empty() || result.iter().all(|batch| batch.num_rows() == 0));
     }
 }
