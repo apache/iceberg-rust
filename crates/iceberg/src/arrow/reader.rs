@@ -572,41 +572,46 @@ impl ArrowReader {
             }
         }
 
-        let mut leaf_field_ids = vec![];
-        for field_id in field_ids {
-            let field = iceberg_schema_of_task.field_by_id(*field_id);
-            if let Some(field) = field {
-                Self::include_leaf_field_id(field, &mut leaf_field_ids);
-            }
+        if field_ids.is_empty() {
+            return Ok((ProjectionMask::all(), None));
         }
 
-        if leaf_field_ids.is_empty() {
-            Ok((ProjectionMask::all(), None))
-        } else {
-            // Check if Arrow schema has field ID metadata by sampling the first field
-            let has_field_ids = arrow_schema
-                .fields()
-                .iter()
-                .next()
-                .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_some());
+        // Check if Arrow schema has field ID metadata by sampling the first field
+        let has_field_ids = arrow_schema
+            .fields()
+            .iter()
+            .next()
+            .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_some());
 
-            if has_field_ids {
-                // Standard path: use field IDs from Arrow schema metadata
-                // This matches iceberg-java's ReadConf when hasIds() returns true
-                Self::get_arrow_projection_mask_with_field_ids(
-                    &leaf_field_ids,
-                    iceberg_schema_of_task,
-                    parquet_schema,
-                    arrow_schema,
-                    type_promotion_is_valid,
-                )
-                .map(|mask| (mask, None))
-            } else {
-                // Fallback path for Parquet files without field IDs (e.g., migrated tables)
-                // This matches iceberg-java's pruneColumnsFallback() in ParquetSchemaUtil
-                // Return both the projection mask and the mapping of Arrow positions to field IDs
-                Self::get_arrow_projection_mask_fallback(&leaf_field_ids, parquet_schema)
+        if has_field_ids {
+            // Standard path: use field IDs from Arrow schema metadata
+            // This matches iceberg-java's ReadConf when hasIds() returns true
+
+            // Expand top-level field IDs to leaf field IDs for matching against Parquet schema
+            let mut leaf_field_ids = vec![];
+            for field_id in field_ids {
+                let field = iceberg_schema_of_task.field_by_id(*field_id);
+                if let Some(field) = field {
+                    Self::include_leaf_field_id(field, &mut leaf_field_ids);
+                }
             }
+
+            Self::get_arrow_projection_mask_with_field_ids(
+                &leaf_field_ids,
+                iceberg_schema_of_task,
+                parquet_schema,
+                arrow_schema,
+                type_promotion_is_valid,
+            )
+            .map(|mask| (mask, None))
+        } else {
+            // Fallback path for Parquet files without field IDs (e.g., migrated tables)
+            // This matches iceberg-java's ParquetSchemaUtil.pruneColumnsFallback()
+
+            // Java uses expectedSchema.columns() which returns only top-level fields,
+            // then maps them by position to top-level Parquet columns.
+            // Java projects the ENTIRE top-level column including any nested content (structs, lists, maps).
+            Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
         }
     }
 
@@ -687,42 +692,51 @@ impl ArrowReader {
     }
 
     /// Fallback projection mask creation for Parquet files without field IDs.
-    /// Uses position-based matching where the i-th requested leaf field maps to the i-th column.
+    /// Uses position-based matching where top-level field ID N maps to top-level column N-1.
     /// Matches iceberg-java's ParquetSchemaUtil.pruneColumnsFallback()
     /// Returns both the ProjectionMask and a mapping of Arrow positions to field IDs
     /// so that field ID metadata can be added to the Arrow schema after projection.
     fn get_arrow_projection_mask_fallback(
-        leaf_field_ids: &[i32],
+        field_ids: &[i32],
         parquet_schema: &SchemaDescriptor,
     ) -> Result<(ProjectionMask, Option<HashMap<usize, i32>>)> {
         // Position-based matching for files without field IDs (e.g., migrated tables).
-        // Field ID N maps to column position N-1 (field IDs are 1-indexed, positions are 0-indexed).
+        // Top-level field ID N maps to top-level column position N-1 (field IDs are 1-indexed, positions are 0-indexed).
         // This matches iceberg-java's addFallbackIds() which assigns sequential IDs 1, 2, 3, ...
+        // to top-level Parquet columns only.
+        //
+        // Unlike the standard path which matches leaf field IDs, the fallback path matches
+        // TOP-LEVEL field IDs to TOP-LEVEL Parquet columns. When projecting a struct/list/map,
+        // we project the ENTIRE top-level column including all nested content, matching Java's behavior.
         //
         // For schema evolution, we only project columns that exist in the file.
         // Missing columns will be added later by RecordBatchTransformer with NULL values.
-        let mut indices = vec![];
+
+        // Parquet schema has top-level fields; we need to find which root columns to project
+        let parquet_root_fields = parquet_schema.root_schema().get_fields();
+
+        let mut root_indices = vec![];
         let mut arrow_pos_to_field_id = HashMap::new();
 
-        for (result_pos, field_id) in leaf_field_ids.iter().enumerate() {
-            // Map field_id to Parquet column position (field_ids are 1-indexed)
+        for (result_pos, field_id) in field_ids.iter().enumerate() {
+            // Map top-level field_id to top-level Parquet column position (field_ids are 1-indexed)
             let parquet_pos = (*field_id - 1) as usize;
 
-            if parquet_pos < parquet_schema.num_columns() {
-                indices.push(parquet_pos);
+            if parquet_pos < parquet_root_fields.len() {
+                root_indices.push(parquet_pos);
                 // result_pos is the position in the final Arrow schema after projection
                 arrow_pos_to_field_id.insert(result_pos, *field_id);
             }
             // Skip fields that don't exist in the Parquet file - they will be added later by RecordBatchTransformer
         }
 
-        if indices.is_empty() {
+        if root_indices.is_empty() {
             // If no columns from the projection exist in the file, project all columns
             // This can happen if all requested columns are new and need to be added by the transformer
             Ok((ProjectionMask::all(), None))
         } else {
             Ok((
-                ProjectionMask::leaves(parquet_schema, indices),
+                ProjectionMask::roots(parquet_schema, root_indices),
                 Some(arrow_pos_to_field_id),
             ))
         }
@@ -2550,5 +2564,130 @@ message schema {
             assert_eq!(all_names[i], format!("name_{}", i));
             assert_eq!(all_values[i], i as i32);
         }
+    }
+
+    /// Test reading Parquet files without field IDs with nested types (struct).
+    /// Java's pruneColumnsFallback() projects entire top-level columns including nested content.
+    /// This test verifies that a top-level struct field is projected correctly with all its nested fields.
+    #[tokio::test]
+    async fn test_read_parquet_without_field_ids_with_struct() {
+        use arrow_array::{Int32Array, StructArray};
+        use arrow_schema::Fields;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            NestedField::required(4, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "person",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("age", DataType::Int32, false),
+                ])),
+                false,
+            ),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let name_data = Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef;
+        let age_data = Arc::new(Int32Array::from(vec![30, 25])) as ArrayRef;
+        let person_data = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+                name_data,
+            ),
+            (
+                Arc::new(Field::new("age", DataType::Int32, false)),
+                age_data,
+            ),
+        ])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_data, person_data]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 2);
+
+        let id_array = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(id_array.value(0), 1);
+        assert_eq!(id_array.value(1), 2);
+
+        let person_array = batch.column(1).as_struct();
+        assert_eq!(person_array.num_columns(), 2);
+
+        let name_array = person_array.column(0).as_string::<i32>();
+        assert_eq!(name_array.value(0), "Alice");
+        assert_eq!(name_array.value(1), "Bob");
+
+        let age_array = person_array
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(age_array.value(0), 30);
+        assert_eq!(age_array.value(1), 25);
     }
 }
