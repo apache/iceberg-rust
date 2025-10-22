@@ -68,10 +68,13 @@ impl DeleteFilter {
     pub(crate) fn try_start_eq_del_load(&self, file_path: &str) -> Option<Arc<Notify>> {
         let mut state = self.state.write().unwrap();
 
-        if !state.equality_deletes.contains_key(file_path) {
+        // If this equality delete file is already being loaded or has been loaded, return None
+        // to indicate that another task is handling it or it's already available
+        if state.equality_deletes.contains_key(file_path) {
             return None;
         }
 
+        // First time seeing this equality delete file - mark it as Loading
         let notifier = Arc::new(Notify::new());
         state
             .equality_deletes
