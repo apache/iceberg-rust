@@ -242,94 +242,233 @@
 <a href=#242 id=242 data-nosnippet>242</a>//!     Ok(())
 <a href=#243 id=243 data-nosnippet>243</a>//! }
 <a href=#244 id=244 data-nosnippet>244</a>//! ```
-<a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a></span><span class="kw">pub mod </span>base_writer;
-<a href=#247 id=247 data-nosnippet>247</a><span class="kw">pub mod </span>file_writer;
-<a href=#248 id=248 data-nosnippet>248</a><span class="doccomment">/// Provides partition-aware writers
-<a href=#249 id=249 data-nosnippet>249</a>/// TODO examples
-<a href=#250 id=250 data-nosnippet>250</a></span><span class="kw">pub mod </span>partitioning;
-<a href=#251 id=251 data-nosnippet>251</a>
-<a href=#252 id=252 data-nosnippet>252</a><span class="kw">use </span>arrow_array::RecordBatch;
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a><span class="kw">use </span><span class="kw">crate</span>::Result;
-<a href=#255 id=255 data-nosnippet>255</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataFile, PartitionKey};
-<a href=#256 id=256 data-nosnippet>256</a>
-<a href=#257 id=257 data-nosnippet>257</a><span class="kw">type </span>DefaultInput = RecordBatch;
-<a href=#258 id=258 data-nosnippet>258</a><span class="kw">type </span>DefaultOutput = Vec&lt;DataFile&gt;;
-<a href=#259 id=259 data-nosnippet>259</a>
-<a href=#260 id=260 data-nosnippet>260</a><span class="doccomment">/// The builder for iceberg writer.
-<a href=#261 id=261 data-nosnippet>261</a></span><span class="attr">#[async_trait::async_trait]
-<a href=#262 id=262 data-nosnippet>262</a></span><span class="kw">pub trait </span>IcebergWriterBuilder&lt;I = DefaultInput, O = DefaultOutput&gt;:
-<a href=#263 id=263 data-nosnippet>263</a>    Send + Clone + <span class="lifetime">'static
-<a href=#264 id=264 data-nosnippet>264</a></span>{
-<a href=#265 id=265 data-nosnippet>265</a>    <span class="doccomment">/// The associated writer type.
-<a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">type </span>R: IcebergWriter&lt;I, O&gt;;
-<a href=#267 id=267 data-nosnippet>267</a>    <span class="doccomment">/// Build the iceberg writer with an optional partition key.
-<a href=#268 id=268 data-nosnippet>268</a>    </span><span class="kw">async fn </span>build(<span class="self">self</span>, partition_key: <span class="prelude-ty">Option</span>&lt;PartitionKey&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;;
-<a href=#269 id=269 data-nosnippet>269</a>}
-<a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a><span class="doccomment">/// The iceberg writer used to write data to iceberg table.
-<a href=#272 id=272 data-nosnippet>272</a></span><span class="attr">#[async_trait::async_trait]
-<a href=#273 id=273 data-nosnippet>273</a></span><span class="kw">pub trait </span>IcebergWriter&lt;I = DefaultInput, O = DefaultOutput&gt;: Send + <span class="lifetime">'static </span>{
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// Write data to iceberg table.
-<a href=#275 id=275 data-nosnippet>275</a>    </span><span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input: I) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="doccomment">/// Close the writer and return the written data files.
-<a href=#277 id=277 data-nosnippet>277</a>    /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
-<a href=#278 id=278 data-nosnippet>278</a>    /// # NOTE
-<a href=#279 id=279 data-nosnippet>279</a>    /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
-<a href=#280 id=280 data-nosnippet>280</a>    </span><span class="kw">async fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;O&gt;;
-<a href=#281 id=281 data-nosnippet>281</a>}
-<a href=#282 id=282 data-nosnippet>282</a>
-<a href=#283 id=283 data-nosnippet>283</a><span class="doccomment">/// The current file status of the Iceberg writer.
-<a href=#284 id=284 data-nosnippet>284</a>/// This is implemented for writers that write a single file at a time.
-<a href=#285 id=285 data-nosnippet>285</a></span><span class="kw">pub trait </span>CurrentFileStatus {
-<a href=#286 id=286 data-nosnippet>286</a>    <span class="doccomment">/// Get the current file path.
-<a href=#287 id=287 data-nosnippet>287</a>    </span><span class="kw">fn </span>current_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
-<a href=#288 id=288 data-nosnippet>288</a>    <span class="doccomment">/// Get the current file row number.
-<a href=#289 id=289 data-nosnippet>289</a>    </span><span class="kw">fn </span>current_row_num(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="doccomment">/// Get the current file written size.
-<a href=#291 id=291 data-nosnippet>291</a>    </span><span class="kw">fn </span>current_written_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-<a href=#292 id=292 data-nosnippet>292</a>}
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a><span class="attr">#[cfg(test)]
-<a href=#295 id=295 data-nosnippet>295</a></span><span class="kw">mod </span>tests {
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">use </span>arrow_array::RecordBatch;
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">use </span>arrow_schema::Schema;
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">use </span>arrow_select::concat::concat_batches;
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">use </span>parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">use </span><span class="kw">super</span>::IcebergWriter;
-<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
-<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFile, DataFileFormat};
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>    <span class="comment">// This function is used to guarantee the trait can be used as an object safe trait.
-<a href=#306 id=306 data-nosnippet>306</a>    </span><span class="kw">async fn </span>_guarantee_object_safe(<span class="kw-2">mut </span>w: Box&lt;<span class="kw">dyn </span>IcebergWriter&gt;) {
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let _ </span>= w
-<a href=#308 id=308 data-nosnippet>308</a>            .write(RecordBatch::new_empty(Schema::empty().into()))
-<a href=#309 id=309 data-nosnippet>309</a>            .<span class="kw">await</span>;
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let _ </span>= w.close().<span class="kw">await</span>;
-<a href=#311 id=311 data-nosnippet>311</a>    }
-<a href=#312 id=312 data-nosnippet>312</a>
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="comment">// This function check:
-<a href=#314 id=314 data-nosnippet>314</a>    // The data of the written parquet file is correct.
-<a href=#315 id=315 data-nosnippet>315</a>    // The metadata of the data file is consistent with the written parquet file.
-<a href=#316 id=316 data-nosnippet>316</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>check_parquet_data_file(
-<a href=#317 id=317 data-nosnippet>317</a>        file_io: <span class="kw-2">&amp;</span>FileIO,
-<a href=#318 id=318 data-nosnippet>318</a>        data_file: <span class="kw-2">&amp;</span>DataFile,
-<a href=#319 id=319 data-nosnippet>319</a>        batch: <span class="kw-2">&amp;</span>RecordBatch,
-<a href=#320 id=320 data-nosnippet>320</a>    ) {
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="macro">assert_eq!</span>(data_file.file_format, DataFileFormat::Parquet);
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>input_file = file_io.new_input(data_file.file_path.clone()).unwrap();
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="comment">// read the written file
-<a href=#325 id=325 data-nosnippet>325</a>        </span><span class="kw">let </span>input_content = input_file.read().<span class="kw">await</span>.unwrap();
-<a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">let </span>reader_builder =
-<a href=#327 id=327 data-nosnippet>327</a>            ParquetRecordBatchReaderBuilder::try_new(input_content.clone()).unwrap();
-<a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="comment">// check data
-<a href=#330 id=330 data-nosnippet>330</a>        </span><span class="kw">let </span>reader = reader_builder.build().unwrap();
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>batches = reader.map(|batch| batch.unwrap()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">let </span>res = concat_batches(<span class="kw-2">&amp;</span>batch.schema(), <span class="kw-2">&amp;</span>batches).unwrap();
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>batch, res);
-<a href=#334 id=334 data-nosnippet>334</a>    }
-<a href=#335 id=335 data-nosnippet>335</a>}</code></pre></div></section></main></body></html>
+<a href=#245 id=245 data-nosnippet>245</a>//!
+<a href=#246 id=246 data-nosnippet>246</a>//! # Adding Partitioning to Data File Writers
+<a href=#247 id=247 data-nosnippet>247</a>//!
+<a href=#248 id=248 data-nosnippet>248</a>//! You can wrap a `DataFileWriter` with partitioning writers to handle partitioned tables.
+<a href=#249 id=249 data-nosnippet>249</a>//! Iceberg provides two partitioning strategies:
+<a href=#250 id=250 data-nosnippet>250</a>//!
+<a href=#251 id=251 data-nosnippet>251</a>//! ## FanoutWriter - For Unsorted Data
+<a href=#252 id=252 data-nosnippet>252</a>//!
+<a href=#253 id=253 data-nosnippet>253</a>//! Wraps the data file writer to handle unsorted data by maintaining multiple active writers.
+<a href=#254 id=254 data-nosnippet>254</a>//! Use this when your data is not pre-sorted by partition key. Writes to different partitions
+<a href=#255 id=255 data-nosnippet>255</a>//! can happen in any order, even interleaved.
+<a href=#256 id=256 data-nosnippet>256</a>//!
+<a href=#257 id=257 data-nosnippet>257</a>//! ```rust, no_run
+<a href=#258 id=258 data-nosnippet>258</a>//! # // Same setup as the simple example above...
+<a href=#259 id=259 data-nosnippet>259</a>//! # use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+<a href=#260 id=260 data-nosnippet>260</a>//! # use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+<a href=#261 id=261 data-nosnippet>261</a>//! # use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
+<a href=#262 id=262 data-nosnippet>262</a>//! # use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+<a href=#263 id=263 data-nosnippet>263</a>//! # use iceberg::writer::file_writer::ParquetWriterBuilder;
+<a href=#264 id=264 data-nosnippet>264</a>//! # use iceberg::writer::file_writer::location_generator::{
+<a href=#265 id=265 data-nosnippet>265</a>//! #     DefaultFileNameGenerator, DefaultLocationGenerator,
+<a href=#266 id=266 data-nosnippet>266</a>//! # };
+<a href=#267 id=267 data-nosnippet>267</a>//! # use parquet::file::properties::WriterProperties;
+<a href=#268 id=268 data-nosnippet>268</a>//! # use std::collections::HashMap;
+<a href=#269 id=269 data-nosnippet>269</a>//! # #[tokio::main]
+<a href=#270 id=270 data-nosnippet>270</a>//! # async fn main() -&gt; Result&lt;()&gt; {
+<a href=#271 id=271 data-nosnippet>271</a>//! # let catalog = MemoryCatalogBuilder::default()
+<a href=#272 id=272 data-nosnippet>272</a>//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
+<a href=#273 id=273 data-nosnippet>273</a>//! #     .await?;
+<a href=#274 id=274 data-nosnippet>274</a>//! # let table = catalog.load_table(&amp;TableIdent::from_strs(["hello", "world"])?).await?;
+<a href=#275 id=275 data-nosnippet>275</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#276 id=276 data-nosnippet>276</a>//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
+<a href=#277 id=277 data-nosnippet>277</a>//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+<a href=#278 id=278 data-nosnippet>278</a>//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+<a href=#279 id=279 data-nosnippet>279</a>//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+<a href=#280 id=280 data-nosnippet>280</a>//! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+<a href=#281 id=281 data-nosnippet>281</a>//!
+<a href=#282 id=282 data-nosnippet>282</a>//! // Wrap the data file writer with FanoutWriter for partitioning
+<a href=#283 id=283 data-nosnippet>283</a>//! use iceberg::writer::partitioning::fanout_writer::FanoutWriter;
+<a href=#284 id=284 data-nosnippet>284</a>//! use iceberg::writer::partitioning::PartitioningWriter;
+<a href=#285 id=285 data-nosnippet>285</a>//! use iceberg::spec::{Literal, PartitionKey, Struct};
+<a href=#286 id=286 data-nosnippet>286</a>//!
+<a href=#287 id=287 data-nosnippet>287</a>//! let mut fanout_writer = FanoutWriter::new(data_file_writer_builder);
+<a href=#288 id=288 data-nosnippet>288</a>//!
+<a href=#289 id=289 data-nosnippet>289</a>//! // Create partition keys for different regions
+<a href=#290 id=290 data-nosnippet>290</a>//! let schema = table.metadata().current_schema().clone();
+<a href=#291 id=291 data-nosnippet>291</a>//! let partition_spec = table.metadata().default_partition_spec().as_ref().clone();
+<a href=#292 id=292 data-nosnippet>292</a>//!
+<a href=#293 id=293 data-nosnippet>293</a>//! let partition_key_us = PartitionKey::new(
+<a href=#294 id=294 data-nosnippet>294</a>//!     partition_spec.clone(),
+<a href=#295 id=295 data-nosnippet>295</a>//!     schema.clone(),
+<a href=#296 id=296 data-nosnippet>296</a>//!     Struct::from_iter([Some(Literal::string("US"))]),
+<a href=#297 id=297 data-nosnippet>297</a>//! );
+<a href=#298 id=298 data-nosnippet>298</a>//!
+<a href=#299 id=299 data-nosnippet>299</a>//! let partition_key_eu = PartitionKey::new(
+<a href=#300 id=300 data-nosnippet>300</a>//!     partition_spec.clone(),
+<a href=#301 id=301 data-nosnippet>301</a>//!     schema.clone(),
+<a href=#302 id=302 data-nosnippet>302</a>//!     Struct::from_iter([Some(Literal::string("EU"))]),
+<a href=#303 id=303 data-nosnippet>303</a>//! );
+<a href=#304 id=304 data-nosnippet>304</a>//!
+<a href=#305 id=305 data-nosnippet>305</a>//! // Write to different partitions in any order - can interleave partition writes
+<a href=#306 id=306 data-nosnippet>306</a>//! // fanout_writer.write(partition_key_us.clone(), batch_us1).await?;
+<a href=#307 id=307 data-nosnippet>307</a>//! // fanout_writer.write(partition_key_eu.clone(), batch_eu1).await?;
+<a href=#308 id=308 data-nosnippet>308</a>//! // fanout_writer.write(partition_key_us.clone(), batch_us2).await?; // Back to US - OK!
+<a href=#309 id=309 data-nosnippet>309</a>//! // fanout_writer.write(partition_key_eu.clone(), batch_eu2).await?; // Back to EU - OK!
+<a href=#310 id=310 data-nosnippet>310</a>//!
+<a href=#311 id=311 data-nosnippet>311</a>//! let data_files = fanout_writer.close().await?;
+<a href=#312 id=312 data-nosnippet>312</a>//! # Ok(())
+<a href=#313 id=313 data-nosnippet>313</a>//! # }
+<a href=#314 id=314 data-nosnippet>314</a>//! ```
+<a href=#315 id=315 data-nosnippet>315</a>//!
+<a href=#316 id=316 data-nosnippet>316</a>//! ## ClusteredWriter - For Sorted Data
+<a href=#317 id=317 data-nosnippet>317</a>//!
+<a href=#318 id=318 data-nosnippet>318</a>//! Wraps the data file writer for pre-sorted data. More memory efficient as it maintains
+<a href=#319 id=319 data-nosnippet>319</a>//! only one active writer at a time, but requires input sorted by partition key.
+<a href=#320 id=320 data-nosnippet>320</a>//!
+<a href=#321 id=321 data-nosnippet>321</a>//! ```rust, no_run
+<a href=#322 id=322 data-nosnippet>322</a>//! # // Same setup as the simple example above...
+<a href=#323 id=323 data-nosnippet>323</a>//! # use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+<a href=#324 id=324 data-nosnippet>324</a>//! # use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+<a href=#325 id=325 data-nosnippet>325</a>//! # use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
+<a href=#326 id=326 data-nosnippet>326</a>//! # use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+<a href=#327 id=327 data-nosnippet>327</a>//! # use iceberg::writer::file_writer::ParquetWriterBuilder;
+<a href=#328 id=328 data-nosnippet>328</a>//! # use iceberg::writer::file_writer::location_generator::{
+<a href=#329 id=329 data-nosnippet>329</a>//! #     DefaultFileNameGenerator, DefaultLocationGenerator,
+<a href=#330 id=330 data-nosnippet>330</a>//! # };
+<a href=#331 id=331 data-nosnippet>331</a>//! # use parquet::file::properties::WriterProperties;
+<a href=#332 id=332 data-nosnippet>332</a>//! # use std::collections::HashMap;
+<a href=#333 id=333 data-nosnippet>333</a>//! # #[tokio::main]
+<a href=#334 id=334 data-nosnippet>334</a>//! # async fn main() -&gt; Result&lt;()&gt; {
+<a href=#335 id=335 data-nosnippet>335</a>//! # let catalog = MemoryCatalogBuilder::default()
+<a href=#336 id=336 data-nosnippet>336</a>//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
+<a href=#337 id=337 data-nosnippet>337</a>//! #     .await?;
+<a href=#338 id=338 data-nosnippet>338</a>//! # let table = catalog.load_table(&amp;TableIdent::from_strs(["hello", "world"])?).await?;
+<a href=#339 id=339 data-nosnippet>339</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#340 id=340 data-nosnippet>340</a>//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
+<a href=#341 id=341 data-nosnippet>341</a>//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+<a href=#342 id=342 data-nosnippet>342</a>//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+<a href=#343 id=343 data-nosnippet>343</a>//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+<a href=#344 id=344 data-nosnippet>344</a>//! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+<a href=#345 id=345 data-nosnippet>345</a>//!
+<a href=#346 id=346 data-nosnippet>346</a>//! // Wrap the data file writer with ClusteredWriter for sorted partitioning
+<a href=#347 id=347 data-nosnippet>347</a>//! use iceberg::writer::partitioning::clustered_writer::ClusteredWriter;
+<a href=#348 id=348 data-nosnippet>348</a>//! use iceberg::writer::partitioning::PartitioningWriter;
+<a href=#349 id=349 data-nosnippet>349</a>//! use iceberg::spec::{Literal, PartitionKey, Struct};
+<a href=#350 id=350 data-nosnippet>350</a>//!
+<a href=#351 id=351 data-nosnippet>351</a>//! let mut clustered_writer = ClusteredWriter::new(data_file_writer_builder);
+<a href=#352 id=352 data-nosnippet>352</a>//!
+<a href=#353 id=353 data-nosnippet>353</a>//! // Create partition keys (must write in sorted order)
+<a href=#354 id=354 data-nosnippet>354</a>//! let schema = table.metadata().current_schema().clone();
+<a href=#355 id=355 data-nosnippet>355</a>//! let partition_spec = table.metadata().default_partition_spec().as_ref().clone();
+<a href=#356 id=356 data-nosnippet>356</a>//!
+<a href=#357 id=357 data-nosnippet>357</a>//! let partition_key_asia = PartitionKey::new(
+<a href=#358 id=358 data-nosnippet>358</a>//!     partition_spec.clone(),
+<a href=#359 id=359 data-nosnippet>359</a>//!     schema.clone(),
+<a href=#360 id=360 data-nosnippet>360</a>//!     Struct::from_iter([Some(Literal::string("ASIA"))]),
+<a href=#361 id=361 data-nosnippet>361</a>//! );
+<a href=#362 id=362 data-nosnippet>362</a>//!
+<a href=#363 id=363 data-nosnippet>363</a>//! let partition_key_eu = PartitionKey::new(
+<a href=#364 id=364 data-nosnippet>364</a>//!     partition_spec.clone(),
+<a href=#365 id=365 data-nosnippet>365</a>//!     schema.clone(),
+<a href=#366 id=366 data-nosnippet>366</a>//!     Struct::from_iter([Some(Literal::string("EU"))]),
+<a href=#367 id=367 data-nosnippet>367</a>//! );
+<a href=#368 id=368 data-nosnippet>368</a>//!
+<a href=#369 id=369 data-nosnippet>369</a>//! let partition_key_us = PartitionKey::new(
+<a href=#370 id=370 data-nosnippet>370</a>//!     partition_spec.clone(),
+<a href=#371 id=371 data-nosnippet>371</a>//!     schema.clone(),
+<a href=#372 id=372 data-nosnippet>372</a>//!     Struct::from_iter([Some(Literal::string("US"))]),
+<a href=#373 id=373 data-nosnippet>373</a>//! );
+<a href=#374 id=374 data-nosnippet>374</a>//!
+<a href=#375 id=375 data-nosnippet>375</a>//! // Write to partitions in sorted order (ASIA -&gt; EU -&gt; US)
+<a href=#376 id=376 data-nosnippet>376</a>//! // clustered_writer.write(partition_key_asia, batch_asia).await?;
+<a href=#377 id=377 data-nosnippet>377</a>//! // clustered_writer.write(partition_key_eu, batch_eu).await?;
+<a href=#378 id=378 data-nosnippet>378</a>//! // clustered_writer.write(partition_key_us, batch_us).await?;
+<a href=#379 id=379 data-nosnippet>379</a>//! // Writing back to ASIA would fail since data must be sorted!
+<a href=#380 id=380 data-nosnippet>380</a>//!
+<a href=#381 id=381 data-nosnippet>381</a>//! let data_files = clustered_writer.close().await?;
+<a href=#382 id=382 data-nosnippet>382</a>//!
+<a href=#383 id=383 data-nosnippet>383</a>//!     Ok(())
+<a href=#384 id=384 data-nosnippet>384</a>//! }
+<a href=#385 id=385 data-nosnippet>385</a>//! ```
+<a href=#386 id=386 data-nosnippet>386</a>
+<a href=#387 id=387 data-nosnippet>387</a></span><span class="kw">pub mod </span>base_writer;
+<a href=#388 id=388 data-nosnippet>388</a><span class="kw">pub mod </span>file_writer;
+<a href=#389 id=389 data-nosnippet>389</a><span class="kw">pub mod </span>partitioning;
+<a href=#390 id=390 data-nosnippet>390</a>
+<a href=#391 id=391 data-nosnippet>391</a><span class="kw">use </span>arrow_array::RecordBatch;
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a><span class="kw">use </span><span class="kw">crate</span>::Result;
+<a href=#394 id=394 data-nosnippet>394</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataFile, PartitionKey};
+<a href=#395 id=395 data-nosnippet>395</a>
+<a href=#396 id=396 data-nosnippet>396</a><span class="kw">type </span>DefaultInput = RecordBatch;
+<a href=#397 id=397 data-nosnippet>397</a><span class="kw">type </span>DefaultOutput = Vec&lt;DataFile&gt;;
+<a href=#398 id=398 data-nosnippet>398</a>
+<a href=#399 id=399 data-nosnippet>399</a><span class="doccomment">/// The builder for iceberg writer.
+<a href=#400 id=400 data-nosnippet>400</a></span><span class="attr">#[async_trait::async_trait]
+<a href=#401 id=401 data-nosnippet>401</a></span><span class="kw">pub trait </span>IcebergWriterBuilder&lt;I = DefaultInput, O = DefaultOutput&gt;:
+<a href=#402 id=402 data-nosnippet>402</a>    Send + Clone + <span class="lifetime">'static
+<a href=#403 id=403 data-nosnippet>403</a></span>{
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="doccomment">/// The associated writer type.
+<a href=#405 id=405 data-nosnippet>405</a>    </span><span class="kw">type </span>R: IcebergWriter&lt;I, O&gt;;
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="doccomment">/// Build the iceberg writer with an optional partition key.
+<a href=#407 id=407 data-nosnippet>407</a>    </span><span class="kw">async fn </span>build(<span class="self">self</span>, partition_key: <span class="prelude-ty">Option</span>&lt;PartitionKey&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;;
+<a href=#408 id=408 data-nosnippet>408</a>}
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a><span class="doccomment">/// The iceberg writer used to write data to iceberg table.
+<a href=#411 id=411 data-nosnippet>411</a></span><span class="attr">#[async_trait::async_trait]
+<a href=#412 id=412 data-nosnippet>412</a></span><span class="kw">pub trait </span>IcebergWriter&lt;I = DefaultInput, O = DefaultOutput&gt;: Send + <span class="lifetime">'static </span>{
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="doccomment">/// Write data to iceberg table.
+<a href=#414 id=414 data-nosnippet>414</a>    </span><span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input: I) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
+<a href=#415 id=415 data-nosnippet>415</a>    <span class="doccomment">/// Close the writer and return the written data files.
+<a href=#416 id=416 data-nosnippet>416</a>    /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
+<a href=#417 id=417 data-nosnippet>417</a>    /// # NOTE
+<a href=#418 id=418 data-nosnippet>418</a>    /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
+<a href=#419 id=419 data-nosnippet>419</a>    </span><span class="kw">async fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;O&gt;;
+<a href=#420 id=420 data-nosnippet>420</a>}
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a><span class="doccomment">/// The current file status of the Iceberg writer.
+<a href=#423 id=423 data-nosnippet>423</a>/// This is implemented for writers that write a single file at a time.
+<a href=#424 id=424 data-nosnippet>424</a></span><span class="kw">pub trait </span>CurrentFileStatus {
+<a href=#425 id=425 data-nosnippet>425</a>    <span class="doccomment">/// Get the current file path.
+<a href=#426 id=426 data-nosnippet>426</a>    </span><span class="kw">fn </span>current_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
+<a href=#427 id=427 data-nosnippet>427</a>    <span class="doccomment">/// Get the current file row number.
+<a href=#428 id=428 data-nosnippet>428</a>    </span><span class="kw">fn </span>current_row_num(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+<a href=#429 id=429 data-nosnippet>429</a>    <span class="doccomment">/// Get the current file written size.
+<a href=#430 id=430 data-nosnippet>430</a>    </span><span class="kw">fn </span>current_written_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+<a href=#431 id=431 data-nosnippet>431</a>}
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a><span class="attr">#[cfg(test)]
+<a href=#434 id=434 data-nosnippet>434</a></span><span class="kw">mod </span>tests {
+<a href=#435 id=435 data-nosnippet>435</a>    <span class="kw">use </span>arrow_array::RecordBatch;
+<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">use </span>arrow_schema::Schema;
+<a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">use </span>arrow_select::concat::concat_batches;
+<a href=#438 id=438 data-nosnippet>438</a>    <span class="kw">use </span>parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+<a href=#439 id=439 data-nosnippet>439</a>
+<a href=#440 id=440 data-nosnippet>440</a>    <span class="kw">use </span><span class="kw">super</span>::IcebergWriter;
+<a href=#441 id=441 data-nosnippet>441</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
+<a href=#442 id=442 data-nosnippet>442</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFile, DataFileFormat};
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>    <span class="comment">// This function is used to guarantee the trait can be used as an object safe trait.
+<a href=#445 id=445 data-nosnippet>445</a>    </span><span class="kw">async fn </span>_guarantee_object_safe(<span class="kw-2">mut </span>w: Box&lt;<span class="kw">dyn </span>IcebergWriter&gt;) {
+<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">let _ </span>= w
+<a href=#447 id=447 data-nosnippet>447</a>            .write(RecordBatch::new_empty(Schema::empty().into()))
+<a href=#448 id=448 data-nosnippet>448</a>            .<span class="kw">await</span>;
+<a href=#449 id=449 data-nosnippet>449</a>        <span class="kw">let _ </span>= w.close().<span class="kw">await</span>;
+<a href=#450 id=450 data-nosnippet>450</a>    }
+<a href=#451 id=451 data-nosnippet>451</a>
+<a href=#452 id=452 data-nosnippet>452</a>    <span class="comment">// This function check:
+<a href=#453 id=453 data-nosnippet>453</a>    // The data of the written parquet file is correct.
+<a href=#454 id=454 data-nosnippet>454</a>    // The metadata of the data file is consistent with the written parquet file.
+<a href=#455 id=455 data-nosnippet>455</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>check_parquet_data_file(
+<a href=#456 id=456 data-nosnippet>456</a>        file_io: <span class="kw-2">&amp;</span>FileIO,
+<a href=#457 id=457 data-nosnippet>457</a>        data_file: <span class="kw-2">&amp;</span>DataFile,
+<a href=#458 id=458 data-nosnippet>458</a>        batch: <span class="kw-2">&amp;</span>RecordBatch,
+<a href=#459 id=459 data-nosnippet>459</a>    ) {
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="macro">assert_eq!</span>(data_file.file_format, DataFileFormat::Parquet);
+<a href=#461 id=461 data-nosnippet>461</a>
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw">let </span>input_file = file_io.new_input(data_file.file_path.clone()).unwrap();
+<a href=#463 id=463 data-nosnippet>463</a>        <span class="comment">// read the written file
+<a href=#464 id=464 data-nosnippet>464</a>        </span><span class="kw">let </span>input_content = input_file.read().<span class="kw">await</span>.unwrap();
+<a href=#465 id=465 data-nosnippet>465</a>        <span class="kw">let </span>reader_builder =
+<a href=#466 id=466 data-nosnippet>466</a>            ParquetRecordBatchReaderBuilder::try_new(input_content.clone()).unwrap();
+<a href=#467 id=467 data-nosnippet>467</a>
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="comment">// check data
+<a href=#469 id=469 data-nosnippet>469</a>        </span><span class="kw">let </span>reader = reader_builder.build().unwrap();
+<a href=#470 id=470 data-nosnippet>470</a>        <span class="kw">let </span>batches = reader.map(|batch| batch.unwrap()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="kw">let </span>res = concat_batches(<span class="kw-2">&amp;</span>batch.schema(), <span class="kw-2">&amp;</span>batches).unwrap();
+<a href=#472 id=472 data-nosnippet>472</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>batch, res);
+<a href=#473 id=473 data-nosnippet>473</a>    }
+<a href=#474 id=474 data-nosnippet>474</a>}</code></pre></div></section></main></body></html>
