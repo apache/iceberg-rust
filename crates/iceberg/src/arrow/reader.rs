@@ -349,10 +349,7 @@ impl ArrowReader {
             .map(|(pos, field)| {
                 let mut metadata = field.metadata().clone();
                 if let Some(field_id) = arrow_pos_to_field_id.get(&pos) {
-                    metadata.insert(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        field_id.to_string(),
-                    );
+                    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
                 }
                 Field::new(field.name(), field.data_type().clone(), field.is_nullable())
                     .with_metadata(metadata)
@@ -587,9 +584,11 @@ impl ArrowReader {
             Ok((ProjectionMask::all(), None))
         } else {
             // Check if Arrow schema has field ID metadata by sampling the first field
-            let has_field_ids = arrow_schema.fields().iter().next().is_some_and(|f| {
-                f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_some()
-            });
+            let has_field_ids = arrow_schema
+                .fields()
+                .iter()
+                .next()
+                .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_some());
 
             if has_field_ids {
                 // Standard path: use field IDs from Arrow schema metadata
@@ -600,15 +599,13 @@ impl ArrowReader {
                     parquet_schema,
                     arrow_schema,
                     type_promotion_is_valid,
-                ).map(|mask| (mask, None))
+                )
+                .map(|mask| (mask, None))
             } else {
                 // Fallback path for Parquet files without field IDs (e.g., migrated tables)
                 // This matches iceberg-java's pruneColumnsFallback() in ParquetSchemaUtil
                 // Return both the projection mask and the mapping of Arrow positions to field IDs
-                Self::get_arrow_projection_mask_fallback(
-                    &leaf_field_ids,
-                    parquet_schema,
-                )
+                Self::get_arrow_projection_mask_fallback(&leaf_field_ids, parquet_schema)
             }
         }
     }
@@ -721,7 +718,10 @@ impl ArrowReader {
                 ));
             }
         }
-        Ok((ProjectionMask::leaves(parquet_schema, indices), Some(arrow_pos_to_field_id)))
+        Ok((
+            ProjectionMask::leaves(parquet_schema, indices),
+            Some(arrow_pos_to_field_id),
+        ))
     }
 
     fn get_row_filter(
@@ -2196,8 +2196,8 @@ message schema {
         // Create an Arrow schema WITHOUT field ID metadata
         // This simulates a Parquet file from a migrated table
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("name", DataType::Utf8, false),  // NO metadata!
-            Field::new("age", DataType::Int32, false),  // NO metadata!
+            Field::new("name", DataType::Utf8, false), // NO metadata!
+            Field::new("age", DataType::Int32, false), // NO metadata!
         ]));
 
         let tmp_dir = TempDir::new().unwrap();
@@ -2220,8 +2220,7 @@ message schema {
             .build();
 
         let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -2237,7 +2236,7 @@ message schema {
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
-                project_field_ids: vec![1, 2],  // Request both fields
+                project_field_ids: vec![1, 2], // Request both fields
                 predicate: None,
                 deletes: vec![],
             })]
@@ -2264,7 +2263,9 @@ message schema {
         assert_eq!(name_array.value(2), "Charlie");
 
         // Check age column (field_id 2 → position 1)
-        let age_array = batch.column(1).as_primitive::<arrow_array::types::Int32Type>();
+        let age_array = batch
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
         assert_eq!(age_array.value(2), 35);
