@@ -868,15 +868,13 @@ impl ArrowReader {
 /// Returns None if the Parquet file doesn't have field IDs embedded (e.g., migrated tables).
 fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMap<i32, usize>>> {
     let mut column_map = HashMap::new();
-    let mut has_field_ids = true;
 
     for (idx, field) in parquet_schema.columns().iter().enumerate() {
         let field_type = field.self_type();
         match field_type {
             ParquetType::PrimitiveType { basic_info, .. } => {
                 if !basic_info.has_id() {
-                    has_field_ids = false;
-                    break;
+                    return Ok(None);
                 }
                 column_map.insert(basic_info.id(), idx);
             }
@@ -892,11 +890,7 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
         };
     }
 
-    if !has_field_ids {
-        Ok(None)
-    } else {
-        Ok(Some(column_map))
-    }
+    Ok(Some(column_map))
 }
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
