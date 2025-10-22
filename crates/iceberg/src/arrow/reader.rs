@@ -2188,7 +2188,6 @@ message schema {
     /// in /parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
     #[tokio::test]
     async fn test_read_parquet_file_without_field_ids() {
-        // Create an Iceberg schema with field IDs 1 and 2
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -2200,18 +2199,16 @@ message schema {
                 .unwrap(),
         );
 
-        // Create an Arrow schema WITHOUT field ID metadata
-        // This simulates a Parquet file from a migrated table
+        // Parquet file from a migrated table - no field ID metadata
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("name", DataType::Utf8, false), // NO metadata!
-            Field::new("age", DataType::Int32, false), // NO metadata!
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, false),
         ]));
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
 
-        // Create test data
         let name_data = vec!["Alice", "Bob", "Charlie"];
         let age_data = vec![30, 25, 35];
 
@@ -2221,7 +2218,6 @@ message schema {
 
         let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![name_col, age_col]).unwrap();
 
-        // Write Parquet file without field ID metadata
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
@@ -2232,7 +2228,6 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        // Read the file using ArrowReader
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -2243,7 +2238,7 @@ message schema {
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
-                project_field_ids: vec![1, 2], // Request both fields
+                project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
             })]
@@ -2257,19 +2252,17 @@ message schema {
             .await
             .unwrap();
 
-        // Verify the data was read correctly using position-based fallback
         assert_eq!(result.len(), 1);
         let batch = &result[0];
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 2);
 
-        // Check name column (field_id 1 → position 0)
+        // Verify position-based mapping: field_id 1 → position 0, field_id 2 → position 1
         let name_array = batch.column(0).as_string::<i32>();
         assert_eq!(name_array.value(0), "Alice");
         assert_eq!(name_array.value(1), "Bob");
         assert_eq!(name_array.value(2), "Charlie");
 
-        // Check age column (field_id 2 → position 1)
         let age_array = batch
             .column(1)
             .as_primitive::<arrow_array::types::Int32Type>();
@@ -2285,7 +2278,6 @@ message schema {
     async fn test_read_parquet_without_field_ids_partial_projection() {
         use arrow_array::Int32Array;
 
-        // Create an Iceberg schema with 4 fields
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -2299,7 +2291,6 @@ message schema {
                 .unwrap(),
         );
 
-        // Create an Arrow schema WITHOUT field ID metadata
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("col1", DataType::Utf8, false),
             Field::new("col2", DataType::Int32, false),
@@ -2311,7 +2302,6 @@ message schema {
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
 
-        // Create test data for all 4 columns
         let col1_data = Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef;
         let col2_data = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
         let col3_data = Arc::new(StringArray::from(vec!["c", "d"])) as ArrayRef;
@@ -2322,7 +2312,6 @@ message schema {
         ])
         .unwrap();
 
-        // Write Parquet file without field ID metadata
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
@@ -2333,7 +2322,6 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        // Read the file using ArrowReader, but only request fields 1 and 3
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -2344,7 +2332,7 @@ message schema {
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
-                project_field_ids: vec![1, 3], // Only request col1 and col3
+                project_field_ids: vec![1, 3],
                 predicate: None,
                 deletes: vec![],
             })]
@@ -2358,18 +2346,15 @@ message schema {
             .await
             .unwrap();
 
-        // Verify only the requested columns were returned
         assert_eq!(result.len(), 1);
         let batch = &result[0];
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 2); // Only 2 columns (col1 and col3)
+        assert_eq!(batch.num_columns(), 2);
 
-        // Check col1 (field_id 1 → position 0)
         let col1_array = batch.column(0).as_string::<i32>();
         assert_eq!(col1_array.value(0), "a");
         assert_eq!(col1_array.value(1), "b");
 
-        // Check col3 (field_id 3 → position 2 in file, but position 1 in result)
         let col3_array = batch.column(1).as_string::<i32>();
         assert_eq!(col3_array.value(0), "c");
         assert_eq!(col3_array.value(1), "d");
@@ -2382,38 +2367,34 @@ message schema {
     async fn test_read_parquet_without_field_ids_schema_evolution() {
         use arrow_array::{Array, Int32Array};
 
-        // Create an Iceberg schema with 3 fields (but file will only have 2)
+        // Schema with field 3 added after the file was written
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
                     NestedField::required(1, "name", Type::Primitive(PrimitiveType::String)).into(),
                     NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(3, "city", Type::Primitive(PrimitiveType::String)).into(), // New field not in file
+                    NestedField::optional(3, "city", Type::Primitive(PrimitiveType::String)).into(),
                 ])
                 .build()
                 .unwrap(),
         );
 
-        // Create an Arrow schema WITHOUT field ID metadata, with only 2 columns
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("age", DataType::Int32, false),
-            // No "city" column in the file
         ]));
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
 
-        // Create test data with only 2 columns
         let name_data = Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef;
         let age_data = Arc::new(Int32Array::from(vec![30, 25])) as ArrayRef;
 
         let to_write =
             RecordBatch::try_new(arrow_schema.clone(), vec![name_data, age_data]).unwrap();
 
-        // Write Parquet file without field ID metadata
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
@@ -2424,7 +2405,6 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        // Read the file using ArrowReader, requesting all 3 fields including the missing one
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -2435,7 +2415,7 @@ message schema {
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
-                project_field_ids: vec![1, 2, 3], // Request all 3 fields
+                project_field_ids: vec![1, 2, 3],
                 predicate: None,
                 deletes: vec![],
             })]
@@ -2449,25 +2429,22 @@ message schema {
             .await
             .unwrap();
 
-        // Verify the data was read correctly with the missing column as NULL
         assert_eq!(result.len(), 1);
         let batch = &result[0];
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 3); // All 3 columns including the missing one
+        assert_eq!(batch.num_columns(), 3);
 
-        // Check name column (field_id 1 → position 0)
         let name_array = batch.column(0).as_string::<i32>();
         assert_eq!(name_array.value(0), "Alice");
         assert_eq!(name_array.value(1), "Bob");
 
-        // Check age column (field_id 2 → position 1)
         let age_array = batch
             .column(1)
             .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
 
-        // Check city column (field_id 3 → missing, should be NULL)
+        // Verify missing column filled with NULLs
         let city_array = batch.column(2).as_string::<i32>();
         assert_eq!(city_array.null_count(), 2);
         assert!(city_array.is_null(0));
@@ -2480,7 +2457,6 @@ message schema {
     async fn test_read_parquet_without_field_ids_multiple_row_groups() {
         use arrow_array::Int32Array;
 
-        // Create an Iceberg schema
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -2492,7 +2468,6 @@ message schema {
                 .unwrap(),
         );
 
-        // Create an Arrow schema WITHOUT field ID metadata
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("value", DataType::Int32, false),
@@ -2502,11 +2477,11 @@ message schema {
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
 
-        // Write Parquet file with multiple row groups (small row group size)
+        // Small row group size to create multiple row groups
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
-            .set_write_batch_size(2) // Force multiple row groups
-            .set_max_row_group_size(2) // 2 rows per row group
+            .set_write_batch_size(2)
+            .set_max_row_group_size(2)
             .build();
 
         let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
@@ -2527,7 +2502,6 @@ message schema {
         }
         writer.close().unwrap();
 
-        // Read the file using ArrowReader
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -2538,7 +2512,7 @@ message schema {
                 data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
-                project_field_ids: vec![1, 2], // Request both fields
+                project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
             })]
@@ -2552,10 +2526,8 @@ message schema {
             .await
             .unwrap();
 
-        // Verify all data from all row groups was read correctly
         assert!(!result.is_empty());
 
-        // Collect all rows from all batches
         let mut all_names = Vec::new();
         let mut all_values = Vec::new();
 
@@ -2571,11 +2543,9 @@ message schema {
             }
         }
 
-        // Verify we got all 6 rows across all row groups
         assert_eq!(all_names.len(), 6);
         assert_eq!(all_values.len(), 6);
 
-        // Check the data is correct
         for i in 0..6 {
             assert_eq!(all_names[i], format!("name_{}", i));
             assert_eq!(all_values[i], i as i32);
