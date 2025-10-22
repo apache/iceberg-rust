@@ -334,5 +334,24 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+
+        // Check object cache status.
+        // - First we delete the manifest list file
+        // - Load from cache and compare with the expected, to make sure it's indeed cache instead of being loaded ad-hoc.
+        let manifest_list_filepath = new_snapshot.manifest_list().to_string();
+        table
+            .file_io()
+            .delete(manifest_list_filepath)
+            .await
+            .unwrap();
+
+        let snapshot_ref = Arc::new(new_snapshot.clone());
+        let table_metadata_ref = &table.metadata_ref();
+        let loaded_manifest_list = table
+            .object_cache()
+            .get_manifest_list(&snapshot_ref, table_metadata_ref)
+            .await
+            .unwrap();
+        assert_eq!(loaded_manifest_list.entries().len(), 1);
     }
 }

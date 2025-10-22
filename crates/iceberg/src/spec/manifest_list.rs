@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use apache_avro::types::Value;
 use apache_avro::{Reader, Writer, from_value};
@@ -30,6 +31,7 @@ use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEM
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
 use crate::error::Result;
+use crate::io::object_cache::{CachedObjectKey, ObjectCache};
 use crate::io::{FileIO, OutputFile};
 use crate::{Error, ErrorKind};
 
@@ -90,6 +92,9 @@ pub struct ManifestListWriter {
     avro_writer: Writer<'static, Vec<u8>>,
     sequence_number: i64,
     snapshot_id: i64,
+    /// Optional write-through cache, should be assigned before all writes.
+    buffered_manifest_file_entries: Vec<ManifestFile>,
+    cache: Option<(CachedObjectKey, Arc<ObjectCache>)>,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -168,11 +173,43 @@ impl ManifestListWriter {
             avro_writer,
             sequence_number,
             snapshot_id,
+            buffered_manifest_file_entries: Vec::new(),
+            cache: None,
         }
+    }
+
+    /// Set write-through cache.
+    ///
+    /// Notice:
+    /// - Cache, if enabled, should be assigned before all write operations.
+    /// - Cache cannot be repeatedly assigned, otherwise return `Unexpected` error status.
+    pub(crate) fn set_cache(
+        &mut self,
+        key: CachedObjectKey,
+        cache: Arc<ObjectCache>,
+    ) -> Result<()> {
+        if self.cache.is_some() {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot repeatedly assign object cache to manifest list writer.".to_string(),
+            ));
+        }
+        self.cache = Some((key, cache));
+        Ok(())
     }
 
     /// Append manifests to be written.
     pub fn add_manifests(&mut self, manifests: impl Iterator<Item = ManifestFile>) -> Result<()> {
+        let manifests: Vec<ManifestFile> = manifests.collect();
+
+        // Buffer manifest file entries if write-through cache enabled.
+        if self.cache.is_some() {
+            for cur_manifest_file in &manifests {
+                self.buffered_manifest_file_entries
+                    .push(cur_manifest_file.clone());
+            }
+        }
+
         match self.format_version {
             FormatVersion::V1 => {
                 for manifest in manifests {
@@ -220,6 +257,15 @@ impl ManifestListWriter {
         let mut writer = self.output_file.writer().await?;
         writer.write(Bytes::from(data)).await?;
         writer.close().await?;
+
+        // Place manifest list into object cache if enabled.
+        if let Some((key, cache)) = self.cache {
+            let manifest_list = Arc::new(ManifestList {
+                entries: self.buffered_manifest_file_entries,
+            });
+            cache.set_manifest_list(key, manifest_list).await;
+        }
+
         Ok(())
     }
 }

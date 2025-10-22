@@ -83,6 +83,11 @@ impl ObjectCache {
         }
     }
 
+    /// Return whether cache is enabled.
+    pub(crate) fn enabled(&self) -> bool {
+        !self.cache_disabled
+    }
+
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
@@ -116,6 +121,20 @@ impl ObjectCache {
                 format!("cached object for key '{:?}' is not a Manifest", key),
             )),
         }
+    }
+
+    /// Set a [`ManifestList`] to the cache, if duplicate key already exist, new value will be ignored.
+    /// No-op if cache disabled.
+    pub(crate) async fn set_manifest_list(
+        &self,
+        cache_key: CachedObjectKey,
+        manifest_list: Arc<ManifestList>,
+    ) {
+        if self.cache_disabled {
+            return;
+        }
+        let cached_item = CachedItem::ManifestList(manifest_list);
+        self.cache.insert(cache_key, cached_item).await;
     }
 
     /// Retrieves an Arc [`ManifestList`] from the cache
