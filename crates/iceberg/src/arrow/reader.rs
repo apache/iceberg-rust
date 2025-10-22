@@ -717,15 +717,16 @@ impl ArrowReader {
 
         let mut root_indices = vec![];
         let mut arrow_pos_to_field_id = HashMap::new();
+        let mut arrow_output_pos = 0;
 
-        for (result_pos, field_id) in field_ids.iter().enumerate() {
+        for field_id in field_ids.iter() {
             // Map top-level field_id to top-level Parquet column position (field_ids are 1-indexed)
             let parquet_pos = (*field_id - 1) as usize;
 
             if parquet_pos < parquet_root_fields.len() {
                 root_indices.push(parquet_pos);
-                // result_pos is the position in the final Arrow schema after projection
-                arrow_pos_to_field_id.insert(result_pos, *field_id);
+                arrow_pos_to_field_id.insert(arrow_output_pos, *field_id);
+                arrow_output_pos += 1;
             }
             // Skip fields that don't exist in the Parquet file - they will be added later by RecordBatchTransformer
         }
@@ -2696,6 +2697,100 @@ message schema {
             .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
+    }
+
+    /// Test reading Parquet files without field IDs with schema evolution - column added in the middle.
+    /// When a new column is inserted between existing columns in the schema order,
+    /// the fallback projection must correctly map field IDs to output positions.
+    #[tokio::test]
+    async fn test_read_parquet_without_field_ids_schema_evolution_add_column_in_middle() {
+        use arrow_array::{Array, Int32Array};
+
+        let arrow_schema_old = Arc::new(ArrowSchema::new(vec![
+            Field::new("col0", DataType::Int32, true),
+            Field::new("col1", DataType::Int32, true),
+        ]));
+
+        // New column added between existing columns: col0 (id=1), newCol (id=5), col1 (id=2)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "col0", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(5, "newCol", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "col1", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        let col0_data = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let col1_data = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema_old.clone(), vec![col0_data, col1_data]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 5, 2],
+                predicate: None,
+                deletes: vec![],
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+
+        let result_col0 = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(result_col0.value(0), 1);
+        assert_eq!(result_col0.value(1), 2);
+
+        // New column should be NULL (doesn't exist in old file)
+        let result_newcol = batch
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(result_newcol.null_count(), 2);
+        assert!(result_newcol.is_null(0));
+        assert!(result_newcol.is_null(1));
+
+        let result_col1 = batch
+            .column(2)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(result_col1.value(0), 10);
+        assert_eq!(result_col1.value(1), 20);
     }
 
     /// Test reading Parquet files without field IDs with a filter that eliminates all row groups.
