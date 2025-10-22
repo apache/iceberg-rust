@@ -380,71 +380,74 @@
 <a href=#380 id=380 data-nosnippet>380</a>        snapshot_produce_operation: OP,
 <a href=#381 id=381 data-nosnippet>381</a>        process: MP,
 <a href=#382 id=382 data-nosnippet>382</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;ActionCommit&gt; {
-<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">let </span>new_manifests = <span class="self">self
-<a href=#384 id=384 data-nosnippet>384</a>            </span>.manifest_file(<span class="kw-2">&amp;</span>snapshot_produce_operation, <span class="kw-2">&amp;</span>process)
-<a href=#385 id=385 data-nosnippet>385</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>next_seq_num = <span class="self">self</span>.table.metadata().next_sequence_number();
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>summary = <span class="self">self</span>.summary(<span class="kw-2">&amp;</span>snapshot_produce_operation).map_err(|err| {
-<a href=#389 id=389 data-nosnippet>389</a>            Error::new(ErrorKind::Unexpected, <span class="string">"Failed to create snapshot summary."</span>).with_source(err)
-<a href=#390 id=390 data-nosnippet>390</a>        })<span class="question-mark">?</span>;
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">let </span>manifest_list_path = <span class="self">self</span>.generate_manifest_list_file_path(<span class="number">0</span>);
-<a href=#393 id=393 data-nosnippet>393</a>
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="kw">let </span><span class="kw-2">mut </span>manifest_list_writer = <span class="kw">match </span><span class="self">self</span>.table.metadata().format_version() {
-<a href=#395 id=395 data-nosnippet>395</a>            FormatVersion::V1 =&gt; ManifestListWriter::v1(
-<a href=#396 id=396 data-nosnippet>396</a>                <span class="self">self</span>.table
-<a href=#397 id=397 data-nosnippet>397</a>                    .file_io()
-<a href=#398 id=398 data-nosnippet>398</a>                    .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
-<a href=#399 id=399 data-nosnippet>399</a>                <span class="self">self</span>.snapshot_id,
-<a href=#400 id=400 data-nosnippet>400</a>                <span class="self">self</span>.table.metadata().current_snapshot_id(),
-<a href=#401 id=401 data-nosnippet>401</a>            ),
-<a href=#402 id=402 data-nosnippet>402</a>            FormatVersion::V2 =&gt; ManifestListWriter::v2(
-<a href=#403 id=403 data-nosnippet>403</a>                <span class="self">self</span>.table
-<a href=#404 id=404 data-nosnippet>404</a>                    .file_io()
-<a href=#405 id=405 data-nosnippet>405</a>                    .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                <span class="self">self</span>.snapshot_id,
-<a href=#407 id=407 data-nosnippet>407</a>                <span class="self">self</span>.table.metadata().current_snapshot_id(),
-<a href=#408 id=408 data-nosnippet>408</a>                next_seq_num,
-<a href=#409 id=409 data-nosnippet>409</a>            ),
-<a href=#410 id=410 data-nosnippet>410</a>        };
-<a href=#411 id=411 data-nosnippet>411</a>        manifest_list_writer.add_manifests(new_manifests.into_iter())<span class="question-mark">?</span>;
-<a href=#412 id=412 data-nosnippet>412</a>        manifest_list_writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">let </span>manifest_list_path = <span class="self">self</span>.generate_manifest_list_file_path(<span class="number">0</span>);
+<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">let </span>next_seq_num = <span class="self">self</span>.table.metadata().next_sequence_number();
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw">let </span><span class="kw-2">mut </span>manifest_list_writer = <span class="kw">match </span><span class="self">self</span>.table.metadata().format_version() {
+<a href=#386 id=386 data-nosnippet>386</a>            FormatVersion::V1 =&gt; ManifestListWriter::v1(
+<a href=#387 id=387 data-nosnippet>387</a>                <span class="self">self</span>.table
+<a href=#388 id=388 data-nosnippet>388</a>                    .file_io()
+<a href=#389 id=389 data-nosnippet>389</a>                    .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
+<a href=#390 id=390 data-nosnippet>390</a>                <span class="self">self</span>.snapshot_id,
+<a href=#391 id=391 data-nosnippet>391</a>                <span class="self">self</span>.table.metadata().current_snapshot_id(),
+<a href=#392 id=392 data-nosnippet>392</a>            ),
+<a href=#393 id=393 data-nosnippet>393</a>            FormatVersion::V2 =&gt; ManifestListWriter::v2(
+<a href=#394 id=394 data-nosnippet>394</a>                <span class="self">self</span>.table
+<a href=#395 id=395 data-nosnippet>395</a>                    .file_io()
+<a href=#396 id=396 data-nosnippet>396</a>                    .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
+<a href=#397 id=397 data-nosnippet>397</a>                <span class="self">self</span>.snapshot_id,
+<a href=#398 id=398 data-nosnippet>398</a>                <span class="self">self</span>.table.metadata().current_snapshot_id(),
+<a href=#399 id=399 data-nosnippet>399</a>                next_seq_num,
+<a href=#400 id=400 data-nosnippet>400</a>            ),
+<a href=#401 id=401 data-nosnippet>401</a>        };
+<a href=#402 id=402 data-nosnippet>402</a>
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="comment">// Calling self.summary() before self.manifest_file() is important because self.added_data_files
+<a href=#404 id=404 data-nosnippet>404</a>        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+<a href=#405 id=405 data-nosnippet>405</a>        // being generated.
+<a href=#406 id=406 data-nosnippet>406</a>        </span><span class="kw">let </span>summary = <span class="self">self</span>.summary(<span class="kw-2">&amp;</span>snapshot_produce_operation).map_err(|err| {
+<a href=#407 id=407 data-nosnippet>407</a>            Error::new(ErrorKind::Unexpected, <span class="string">"Failed to create snapshot summary."</span>).with_source(err)
+<a href=#408 id=408 data-nosnippet>408</a>        })<span class="question-mark">?</span>;
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>new_manifests = <span class="self">self
+<a href=#411 id=411 data-nosnippet>411</a>            </span>.manifest_file(<span class="kw-2">&amp;</span>snapshot_produce_operation, <span class="kw-2">&amp;</span>process)
+<a href=#412 id=412 data-nosnippet>412</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#413 id=413 data-nosnippet>413</a>
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="kw">let </span>commit_ts = chrono::Utc::now().timestamp_millis();
-<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">let </span>new_snapshot = Snapshot::builder()
-<a href=#416 id=416 data-nosnippet>416</a>            .with_manifest_list(manifest_list_path)
-<a href=#417 id=417 data-nosnippet>417</a>            .with_snapshot_id(<span class="self">self</span>.snapshot_id)
-<a href=#418 id=418 data-nosnippet>418</a>            .with_parent_snapshot_id(<span class="self">self</span>.table.metadata().current_snapshot_id())
-<a href=#419 id=419 data-nosnippet>419</a>            .with_sequence_number(next_seq_num)
-<a href=#420 id=420 data-nosnippet>420</a>            .with_summary(summary)
-<a href=#421 id=421 data-nosnippet>421</a>            .with_schema_id(<span class="self">self</span>.table.metadata().current_schema_id())
-<a href=#422 id=422 data-nosnippet>422</a>            .with_timestamp_ms(commit_ts)
-<a href=#423 id=423 data-nosnippet>423</a>            .build();
-<a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>updates = <span class="macro">vec!</span>[
-<a href=#426 id=426 data-nosnippet>426</a>            TableUpdate::AddSnapshot {
-<a href=#427 id=427 data-nosnippet>427</a>                snapshot: new_snapshot,
-<a href=#428 id=428 data-nosnippet>428</a>            },
-<a href=#429 id=429 data-nosnippet>429</a>            TableUpdate::SetSnapshotRef {
-<a href=#430 id=430 data-nosnippet>430</a>                ref_name: MAIN_BRANCH.to_string(),
-<a href=#431 id=431 data-nosnippet>431</a>                reference: SnapshotReference::new(
-<a href=#432 id=432 data-nosnippet>432</a>                    <span class="self">self</span>.snapshot_id,
-<a href=#433 id=433 data-nosnippet>433</a>                    SnapshotRetention::branch(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
-<a href=#434 id=434 data-nosnippet>434</a>                ),
-<a href=#435 id=435 data-nosnippet>435</a>            },
-<a href=#436 id=436 data-nosnippet>436</a>        ];
-<a href=#437 id=437 data-nosnippet>437</a>
-<a href=#438 id=438 data-nosnippet>438</a>        <span class="kw">let </span>requirements = <span class="macro">vec!</span>[
-<a href=#439 id=439 data-nosnippet>439</a>            TableRequirement::UuidMatch {
-<a href=#440 id=440 data-nosnippet>440</a>                uuid: <span class="self">self</span>.table.metadata().uuid(),
-<a href=#441 id=441 data-nosnippet>441</a>            },
-<a href=#442 id=442 data-nosnippet>442</a>            TableRequirement::RefSnapshotIdMatch {
-<a href=#443 id=443 data-nosnippet>443</a>                r#ref: MAIN_BRANCH.to_string(),
-<a href=#444 id=444 data-nosnippet>444</a>                snapshot_id: <span class="self">self</span>.table.metadata().current_snapshot_id(),
-<a href=#445 id=445 data-nosnippet>445</a>            },
-<a href=#446 id=446 data-nosnippet>446</a>        ];
-<a href=#447 id=447 data-nosnippet>447</a>
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="prelude-val">Ok</span>(ActionCommit::new(updates, requirements))
-<a href=#449 id=449 data-nosnippet>449</a>    }
-<a href=#450 id=450 data-nosnippet>450</a>}</code></pre></div></section></main></body></html>
+<a href=#414 id=414 data-nosnippet>414</a>        manifest_list_writer.add_manifests(new_manifests.into_iter())<span class="question-mark">?</span>;
+<a href=#415 id=415 data-nosnippet>415</a>        manifest_list_writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#416 id=416 data-nosnippet>416</a>
+<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">let </span>commit_ts = chrono::Utc::now().timestamp_millis();
+<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">let </span>new_snapshot = Snapshot::builder()
+<a href=#419 id=419 data-nosnippet>419</a>            .with_manifest_list(manifest_list_path)
+<a href=#420 id=420 data-nosnippet>420</a>            .with_snapshot_id(<span class="self">self</span>.snapshot_id)
+<a href=#421 id=421 data-nosnippet>421</a>            .with_parent_snapshot_id(<span class="self">self</span>.table.metadata().current_snapshot_id())
+<a href=#422 id=422 data-nosnippet>422</a>            .with_sequence_number(next_seq_num)
+<a href=#423 id=423 data-nosnippet>423</a>            .with_summary(summary)
+<a href=#424 id=424 data-nosnippet>424</a>            .with_schema_id(<span class="self">self</span>.table.metadata().current_schema_id())
+<a href=#425 id=425 data-nosnippet>425</a>            .with_timestamp_ms(commit_ts)
+<a href=#426 id=426 data-nosnippet>426</a>            .build();
+<a href=#427 id=427 data-nosnippet>427</a>
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>updates = <span class="macro">vec!</span>[
+<a href=#429 id=429 data-nosnippet>429</a>            TableUpdate::AddSnapshot {
+<a href=#430 id=430 data-nosnippet>430</a>                snapshot: new_snapshot,
+<a href=#431 id=431 data-nosnippet>431</a>            },
+<a href=#432 id=432 data-nosnippet>432</a>            TableUpdate::SetSnapshotRef {
+<a href=#433 id=433 data-nosnippet>433</a>                ref_name: MAIN_BRANCH.to_string(),
+<a href=#434 id=434 data-nosnippet>434</a>                reference: SnapshotReference::new(
+<a href=#435 id=435 data-nosnippet>435</a>                    <span class="self">self</span>.snapshot_id,
+<a href=#436 id=436 data-nosnippet>436</a>                    SnapshotRetention::branch(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
+<a href=#437 id=437 data-nosnippet>437</a>                ),
+<a href=#438 id=438 data-nosnippet>438</a>            },
+<a href=#439 id=439 data-nosnippet>439</a>        ];
+<a href=#440 id=440 data-nosnippet>440</a>
+<a href=#441 id=441 data-nosnippet>441</a>        <span class="kw">let </span>requirements = <span class="macro">vec!</span>[
+<a href=#442 id=442 data-nosnippet>442</a>            TableRequirement::UuidMatch {
+<a href=#443 id=443 data-nosnippet>443</a>                uuid: <span class="self">self</span>.table.metadata().uuid(),
+<a href=#444 id=444 data-nosnippet>444</a>            },
+<a href=#445 id=445 data-nosnippet>445</a>            TableRequirement::RefSnapshotIdMatch {
+<a href=#446 id=446 data-nosnippet>446</a>                r#ref: MAIN_BRANCH.to_string(),
+<a href=#447 id=447 data-nosnippet>447</a>                snapshot_id: <span class="self">self</span>.table.metadata().current_snapshot_id(),
+<a href=#448 id=448 data-nosnippet>448</a>            },
+<a href=#449 id=449 data-nosnippet>449</a>        ];
+<a href=#450 id=450 data-nosnippet>450</a>
+<a href=#451 id=451 data-nosnippet>451</a>        <span class="prelude-val">Ok</span>(ActionCommit::new(updates, requirements))
+<a href=#452 id=452 data-nosnippet>452</a>    }
+<a href=#453 id=453 data-nosnippet>453</a>}</code></pre></div></section></main></body></html>
