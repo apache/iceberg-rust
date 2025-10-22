@@ -687,8 +687,9 @@ mod tests {
         assert!(result.is_none()); // no pos dels for file 3
     }
 
-    /// Test loading a FileScanTask with BOTH positional and equality deletes.
-    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
+    /// Test loading a FileScanTask with both positional and equality deletes.
+    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality
+    /// delete file" errors first encountered when running Iceberg Java's TestSparkExecutorCache
     #[tokio::test]
     async fn test_load_deletes_with_mixed_types() {
         use crate::scan::FileScanTask;
@@ -701,28 +702,16 @@ mod tests {
             .build()
             .unwrap();
 
-        // Create the data file schema
         let data_file_schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    crate::spec::NestedField::optional(
-                        2,
-                        "y",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
-                    )
-                    .into(),
-                    crate::spec::NestedField::optional(
-                        3,
-                        "z",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
-                    )
-                    .into(),
+                    NestedField::optional(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
                 ])
                 .build()
                 .unwrap(),
         );
 
-        // Write positional delete file
         let positional_delete_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
         let file_path_values =
             vec![format!("{}/data-1.parquet", table_location.to_str().unwrap()); 4];
@@ -751,7 +740,6 @@ mod tests {
         writer.write(&positional_deletes_to_write).unwrap();
         writer.close().unwrap();
 
-        // Write equality delete file
         let eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
 
         // Create FileScanTask with BOTH positional and equality deletes
