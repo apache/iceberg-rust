@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Partitioning writers for handling partitioned Iceberg tables.
+//!
+//! This module provides two strategies for writing to partitioned tables:
+//! - [`FanoutWriter`](fanout_writer::FanoutWriter): Handles unsorted data by maintaining multiple active writers
+//! - [`ClusteredWriter`](clustered_writer::ClusteredWriter): Optimized for pre-sorted data with single active writer
+
 pub mod clustered_writer;
 pub mod fanout_writer;
 
