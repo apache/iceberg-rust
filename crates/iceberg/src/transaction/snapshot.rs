@@ -380,17 +380,8 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
-            .await?;
-        let next_seq_num = self.table.metadata().next_sequence_number();
-
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
         let manifest_list_path = self.generate_manifest_list_file_path(0);
-
+        let next_seq_num = self.table.metadata().next_sequence_number();
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
@@ -408,6 +399,18 @@ impl<'a> SnapshotProducer<'a> {
                 next_seq_num,
             ),
         };
+
+        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
+        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // being generated.
+        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
+
+        let new_manifests = self
+            .manifest_file(&snapshot_produce_operation, &process)
+            .await?;
+
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         manifest_list_writer.close().await?;
 
