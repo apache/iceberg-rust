@@ -688,7 +688,7 @@ mod tests {
     }
 
     /// Test loading a FileScanTask with BOTH positional and equality deletes.
-    /// This reproduces the "Missing predicate for equality delete file" error from TestSparkExecutorCache.
+    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
     #[tokio::test]
     async fn test_load_deletes_with_mixed_types() {
         use crate::scan::FileScanTask;
@@ -705,16 +705,27 @@ mod tests {
         let data_file_schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    crate::spec::NestedField::optional(2, "y", crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long)).into(),
-                    crate::spec::NestedField::optional(3, "z", crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long)).into(),
+                    crate::spec::NestedField::optional(
+                        2,
+                        "y",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                    crate::spec::NestedField::optional(
+                        3,
+                        "z",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
                 ])
                 .build()
-                .unwrap()
+                .unwrap(),
         );
 
         // Write positional delete file
         let positional_delete_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
-        let file_path_values = vec![format!("{}/data-1.parquet", table_location.to_str().unwrap()); 4];
+        let file_path_values =
+            vec![format!("{}/data-1.parquet", table_location.to_str().unwrap()); 4];
         let file_path_col = Arc::new(StringArray::from_iter_values(&file_path_values));
         let pos_col = Arc::new(Int64Array::from_iter_values(vec![0i64, 1, 2, 3]));
 
@@ -767,10 +778,10 @@ mod tests {
             schema: data_file_schema.clone(),
             project_field_ids: vec![2, 3],
             predicate: None,
-            deletes: vec![pos_del, eq_del], // BOTH types of deletes!
+            deletes: vec![pos_del, eq_del],
         };
 
-        // Load the deletes - this should handle both types
+        // Load the deletes - should handle both types without error
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
         let delete_filter = delete_file_loader
             .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
@@ -778,11 +789,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Try to build the equality delete predicate - this should fail with
-        // "Missing predicate for equality delete file" if the bug exists
-        let result = delete_filter.build_equality_delete_predicate(&file_scan_task).await;
-
-        // For now, this should fail, but once we fix the bug, this assertion should pass
-        assert!(result.is_ok(), "Expected to successfully build equality delete predicate, but got error: {:?}", result.err());
+        // Verify both delete types can be processed together
+        let result = delete_filter
+            .build_equality_delete_predicate(&file_scan_task)
+            .await;
+        assert!(
+            result.is_ok(),
+            "Failed to build equality delete predicate: {:?}",
+            result.err()
+        );
     }
 }
