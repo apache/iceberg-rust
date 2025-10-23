@@ -52,7 +52,6 @@ where
     M: MakeConnection<Conn = D> + Send + 'static,
 {
     let path = step_slt_file.as_ref().canonicalize()?;
-
     let records = parse_file(&path).map_err(|e| Error(anyhow!("parsing slt file failed: {e}")))?;
 
     for record in records {
