@@ -48,7 +48,7 @@ pub struct RecordBatchPartitionSplitter {
 
     partition_type: StructType,
     partition_arrow_type: DataType,
-    has_partition_column: bool,
+    use_projected_partition_column: bool,
 }
 
 // # TODO
@@ -62,7 +62,7 @@ impl RecordBatchPartitionSplitter {
     /// * `input_schema` - The Arrow schema of the input record batches
     /// * `iceberg_schema` - The Iceberg schema reference
     /// * `partition_spec` - The partition specification reference
-    /// * `has_partition_column` - If true, expects a pre-computed partition column in the input batch
+    /// * `use_projected_partition_column` - If true, expects a pre-computed partition column in the input batch
     ///
     /// # Returns
     ///
@@ -71,12 +71,12 @@ impl RecordBatchPartitionSplitter {
         input_schema: ArrowSchemaRef,
         iceberg_schema: SchemaRef,
         partition_spec: PartitionSpecRef,
-        has_partition_column: bool,
+        use_projected_partition_column: bool,
     ) -> Result<Self> {
         let partition_type = partition_spec.partition_type(&iceberg_schema)?;
         let partition_arrow_type = type_to_arrow_type(&Type::Struct(partition_type.clone()))?;
 
-        let (projector, transform_functions) = if has_partition_column {
+        let (projector, transform_functions) = if use_projected_partition_column {
             // Skip projector and transform initialization when partition column is pre-computed
             (None, Vec::new())
         } else {
@@ -119,7 +119,7 @@ impl RecordBatchPartitionSplitter {
             transform_functions,
             partition_type,
             partition_arrow_type,
-            has_partition_column,
+            use_projected_partition_column,
         })
     }
 
@@ -166,7 +166,7 @@ impl RecordBatchPartitionSplitter {
 
     /// Split the record batch into multiple record batches based on the partition spec.
     pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
-        let partition_structs = if self.has_partition_column {
+        let partition_structs = if self.use_projected_partition_column {
             // Extract partition values from pre-computed partition column
             let partition_column = batch
                 .column_by_name(PROJECTED_PARTITION_VALUE_COLUMN)
