@@ -28,7 +28,8 @@ pub mod delete_file_loader;
 pub(crate) mod delete_filter;
 
 mod reader;
-pub(crate) mod record_batch_projector;
+/// RecordBatch projection utilities
+pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
 mod value;
 

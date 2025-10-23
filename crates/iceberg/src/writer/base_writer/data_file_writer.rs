@@ -30,7 +30,6 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: RollingFileWriterBuilder<B, L, F>,
-    partition_key: Option<PartitionKey>,
 }
 
 impl<B, L, F> DataFileWriterBuilder<B, L, F>
@@ -40,14 +39,8 @@ where
     F: FileNameGenerator,
 {
     /// Create a new `DataFileWriterBuilder` using a `RollingFileWriterBuilder`.
-    pub fn new(
-        inner_builder: RollingFileWriterBuilder<B, L, F>,
-        partition_key: Option<PartitionKey>,
-    ) -> Self {
-        Self {
-            inner: inner_builder,
-            partition_key,
-        }
+    pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
+        Self { inner }
     }
 }
 
@@ -60,10 +53,10 @@ where
 {
     type R = DataFileWriter<B, L, F>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DataFileWriter {
             inner: Some(self.inner.clone().build()),
-            partition_key: self.partition_key,
+            partition_key,
         })
     }
 }
@@ -194,8 +187,8 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer_builder, None)
-            .build()
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer_builder)
+            .build(None)
             .await
             .unwrap();
 
@@ -280,10 +273,9 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer =
-            DataFileWriterBuilder::new(rolling_file_writer_builder, Some(partition_key))
-                .build()
-                .await?;
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_file_writer_builder)
+            .build(Some(partition_key))
+            .await?;
 
         let arrow_schema = arrow_schema::Schema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
