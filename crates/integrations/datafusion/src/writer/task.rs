@@ -63,7 +63,6 @@ use iceberg::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
 /// // Close and get data files
 /// let data_files = task_writer.close().await?;
 /// ```
-#[allow(dead_code)]
 pub struct TaskWriter<B: IcebergWriterBuilder> {
     /// The underlying writer (UnpartitionedWriter, FanoutWriter, or ClusteredWriter)
     writer: SupportedWriter<B>,
@@ -79,7 +78,6 @@ pub struct TaskWriter<B: IcebergWriterBuilder> {
 ///
 /// This enum allows TaskWriter to work with different partitioning strategies
 /// while maintaining a unified interface.
-#[allow(dead_code)]
 enum SupportedWriter<B: IcebergWriterBuilder> {
     /// Writer for unpartitioned tables
     Unpartitioned(UnpartitionedWriter<B>),
