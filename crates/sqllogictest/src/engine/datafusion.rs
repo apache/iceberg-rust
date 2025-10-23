@@ -26,7 +26,6 @@ use iceberg::CatalogBuilder;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
-use tempfile::TempDir;
 use toml::Table as TomlTable;
 
 use crate::engine::{EngineRunner, run_slt_with_runner};
@@ -73,13 +72,15 @@ impl DataFusionEngine {
     }
 
     async fn create_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        let temp_dir = TempDir::new()?;
-        let path_str = temp_dir.path().to_str().unwrap().to_string();
-
+        // TODO: support dynamic catalog configuration
+        //  See: https://github.com/apache/iceberg-rust/issues/1780
         let catalog = MemoryCatalogBuilder::default()
             .load(
                 "memory",
-                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), path_str)]),
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    "memory://".to_string(),
+                )]),
             )
             .await?;
 
