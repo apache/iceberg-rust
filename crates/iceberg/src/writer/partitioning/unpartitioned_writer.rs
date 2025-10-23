@@ -20,15 +20,12 @@
 use std::marker::PhantomData;
 
 use crate::Result;
-use crate::spec::PartitionKey;
-use crate::writer::partitioning::PartitioningWriter;
 use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
 
-/// A writer that adapts `IcebergWriterBuilder` to the `PartitioningWriter` interface
-/// for non-partitioned tables.
+/// A simple wrapper around `IcebergWriterBuilder` for unpartitioned tables.
 ///
-/// This writer ignores partition keys and writes all data to a single underlying writer.
-/// It lazily creates the writer on the first write operation.
+/// This writer lazily creates the underlying writer on the first write operation
+/// and writes all data to a single file (or set of files if rolling).
 ///
 /// # Type Parameters
 ///
@@ -63,23 +60,25 @@ where
             _phantom: PhantomData,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl<B, I, O> PartitioningWriter<I, O> for UnpartitionedWriter<B, I, O>
-where
-    B: IcebergWriterBuilder<I, O>,
-    I: Send + 'static,
-    O: IntoIterator + FromIterator<<O as IntoIterator>::Item> + Send + 'static,
-    <O as IntoIterator>::Item: Send + Clone,
-{
-    async fn write(&mut self, _partition_key: PartitionKey, input: I) -> Result<()> {
+    /// Write data to the writer.
+    ///
+    /// The underlying writer is lazily created on the first write operation.
+    ///
+    /// # Parameters
+    ///
+    /// * `input` - The input data to write
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, or an error if the write operation fails.
+    pub async fn write(&mut self, input: I) -> Result<()> {
         // Lazily create writer on first write
         if self.writer.is_none() {
             self.writer = Some(self.inner_builder.clone().build(None).await?);
         }
 
-        // Ignore partition key, write directly to inner writer
+        // Write directly to inner writer
         self.writer
             .as_mut()
             .expect("Writer should be initialized")
@@ -87,7 +86,15 @@ where
             .await
     }
 
-    async fn close(mut self) -> Result<O> {
+    /// Close the writer and return all written data files.
+    ///
+    /// This method consumes the writer to prevent further use.
+    ///
+    /// # Returns
+    ///
+    /// The accumulated output from all write operations, or an empty collection
+    /// if no data was written.
+    pub async fn close(mut self) -> Result<O> {
         if let Some(mut writer) = self.writer.take() {
             self.output.extend(writer.close().await?);
         }
@@ -110,7 +117,7 @@ mod tests {
     use crate::Result;
     use crate::io::FileIOBuilder;
     use crate::spec::{
-        DataFileFormat, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Struct,
+        DataFileFormat, NestedField, PrimitiveType, Struct,
         Type,
     };
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -119,7 +126,6 @@ mod tests {
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-    use crate::writer::partitioning::PartitioningWriter;
 
     /// Helper function to create a test writer setup with common configuration
     fn create_test_writer_builder(
@@ -211,12 +217,6 @@ mod tests {
         let schema = create_simple_schema()?;
         let data_file_writer_builder = create_test_writer_builder(&temp_dir, schema.clone())?;
 
-        // Create partition spec (unpartitioned)
-        let partition_spec = PartitionSpec::builder(schema.clone()).build()?;
-        let partition_value = Struct::empty();
-        let partition_key =
-            PartitionKey::new(partition_spec, schema.clone(), partition_value.clone());
-
         // Create unpartitioned writer
         let mut writer = UnpartitionedWriter::new(data_file_writer_builder);
 
@@ -232,9 +232,9 @@ mod tests {
             Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
         ])?;
 
-        // Write data
-        writer.write(partition_key.clone(), batch1).await?;
-        writer.write(partition_key.clone(), batch2).await?;
+        // Write data without partition keys
+        writer.write(batch1).await?;
+        writer.write(batch2).await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -246,6 +246,7 @@ mod tests {
         );
 
         // Verify that all data files have empty partition value (unpartitioned)
+        let partition_value = Struct::empty();
         for data_file in &data_files {
             assert_eq!(data_file.partition, partition_value);
         }
@@ -254,33 +255,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unpartitioned_writer_ignores_partition_keys() -> Result<()> {
+    async fn test_unpartitioned_writer_writes_all_data_together() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let schema = create_schema_with_region()?;
         let data_file_writer_builder = create_test_writer_builder(&temp_dir, schema.clone())?;
 
-        // Create partition spec (unpartitioned)
-        let partition_spec = PartitionSpec::builder(schema.clone()).build()?;
-
-        // Create different partition keys (these should be ignored)
-        let partition_value_us = Struct::from_iter([Some(Literal::string("US"))]);
-        let partition_key_us = PartitionKey::new(
-            partition_spec.clone(),
-            schema.clone(),
-            partition_value_us.clone(),
-        );
-
-        let partition_value_eu = Struct::from_iter([Some(Literal::string("EU"))]);
-        let partition_key_eu = PartitionKey::new(
-            partition_spec.clone(),
-            schema.clone(),
-            partition_value_eu.clone(),
-        );
-
         // Create unpartitioned writer
         let mut writer = UnpartitionedWriter::new(data_file_writer_builder);
 
-        // Create test data
+        // Create test data with different regions
         let arrow_schema = create_arrow_schema_with_region();
         let batch_us = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
             Arc::new(Int32Array::from(vec![1, 2])),
@@ -294,9 +277,9 @@ mod tests {
             Arc::new(StringArray::from(vec!["EU", "EU"])),
         ])?;
 
-        // Write data with different partition keys - they should be ignored
-        writer.write(partition_key_us.clone(), batch_us).await?;
-        writer.write(partition_key_eu.clone(), batch_eu).await?;
+        // Write data from different regions - all goes to same file(s)
+        writer.write(batch_us).await?;
+        writer.write(batch_eu).await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -308,12 +291,11 @@ mod tests {
         );
 
         // All data should be written to the same file(s) with empty partition
-        // (partition keys were ignored)
         for data_file in &data_files {
             assert_eq!(
                 data_file.partition,
                 Struct::empty(),
-                "Expected empty partition since writer ignores partition keys"
+                "Expected empty partition for unpartitioned writer"
             );
         }
 
@@ -325,11 +307,6 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let schema = create_simple_schema()?;
         let data_file_writer_builder = create_test_writer_builder(&temp_dir, schema.clone())?;
-
-        // Create partition spec (unpartitioned)
-        let partition_spec = PartitionSpec::builder(schema.clone()).build()?;
-        let partition_value = Struct::empty();
-        let partition_key = PartitionKey::new(partition_spec, schema.clone(), partition_value);
 
         // Create unpartitioned writer - writer should not be initialized yet
         let mut writer = UnpartitionedWriter::new(data_file_writer_builder);
@@ -348,7 +325,7 @@ mod tests {
         ])?;
 
         // Write data - this should trigger lazy initialization
-        writer.write(partition_key.clone(), batch).await?;
+        writer.write(batch).await?;
 
         // Verify writer is now initialized
         assert!(
@@ -371,12 +348,6 @@ mod tests {
         let schema = create_simple_schema()?;
         let data_file_writer_builder = create_test_writer_builder(&temp_dir, schema.clone())?;
 
-        // Create partition spec (unpartitioned)
-        let partition_spec = PartitionSpec::builder(schema.clone()).build()?;
-        let partition_value = Struct::empty();
-        let partition_key =
-            PartitionKey::new(partition_spec, schema.clone(), partition_value.clone());
-
         // Create unpartitioned writer
         let mut writer = UnpartitionedWriter::new(data_file_writer_builder);
 
@@ -388,7 +359,7 @@ mod tests {
         ])?;
 
         // Write data
-        writer.write(partition_key.clone(), batch).await?;
+        writer.write(batch).await?;
 
         // Close writer and get data files
         let data_files = writer.close().await?;
@@ -397,6 +368,7 @@ mod tests {
         assert!(!data_files.is_empty(), "Expected at least one data file");
 
         // Verify each data file has correct properties
+        let partition_value = Struct::empty();
         for data_file in &data_files {
             // Check partition is empty (unpartitioned)
             assert_eq!(data_file.partition, partition_value);

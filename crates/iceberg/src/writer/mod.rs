@@ -387,9 +387,6 @@
 pub mod base_writer;
 pub mod file_writer;
 pub mod partitioning;
-/// Provides TaskWriter
-/// TODO examples
-pub mod task;
 
 use arrow_array::RecordBatch;
 

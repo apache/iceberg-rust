@@ -15,16 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+//! Writer module for DataFusion integration.
 
-mod error;
-pub use error::*;
-
-pub mod physical_plan;
-mod schema;
-pub mod table;
-pub use table::table_provider_factory::IcebergTableProviderFactory;
-pub use table::*;
-
-pub mod writer;
+pub mod task;
