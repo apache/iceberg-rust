@@ -27,15 +27,13 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
+use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 use iceberg::arrow::record_batch_projector::RecordBatchProjector;
 use iceberg::spec::{PartitionSpec, Schema};
 use iceberg::table::Table;
 use iceberg::transform::BoxedTransformFunction;
 
 use crate::to_datafusion_error;
-
-/// Column name for the combined partition values struct
-const PARTITION_VALUES_COLUMN: &str = "_partition";
 
 /// Extends an ExecutionPlan with partition value calculations for Iceberg tables.
 ///
@@ -81,7 +79,7 @@ pub fn project_with_partition(
     }
 
     let partition_expr = Arc::new(PartitionExpr::new(calculator));
-    projection_exprs.push((partition_expr, PARTITION_VALUES_COLUMN.to_string()));
+    projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
     Ok(Arc::new(projection))
@@ -343,7 +341,7 @@ mod tests {
         }
 
         let partition_expr = Arc::new(PartitionExpr::new(calculator));
-        projection_exprs.push((partition_expr, PARTITION_VALUES_COLUMN.to_string()));
+        projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
         let projection = ProjectionExec::try_new(projection_exprs, input).unwrap();
         let result = Arc::new(projection);

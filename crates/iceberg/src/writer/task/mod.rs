@@ -353,6 +353,7 @@ mod tests {
             arrow_schema.clone(),
             schema.clone(),
             partition_spec.clone(),
+            false,
         )?;
 
         // Create DefaultTaskWriter with FanoutWriter and splitter
@@ -451,6 +452,7 @@ mod tests {
             arrow_schema.clone(),
             schema.clone(),
             partition_spec.clone(),
+            false,
         )?;
 
         // Create DefaultTaskWriter with ClusteredWriter and splitter
