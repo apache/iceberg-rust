@@ -18,9 +18,6 @@
 [engines]
 df = { type = "datafusion" }
 
-[catalog]
-memory = { type = "in-memory" }
-
 [[steps]]
 engine = "df"
 slt = "df_test/show_tables.slt"
