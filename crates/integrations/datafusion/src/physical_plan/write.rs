@@ -36,11 +36,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
-use iceberg::spec::{
-    DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
-    PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-    serialize_data_file_to_json,
-};
+use iceberg::spec::{DataFileFormat, TableProperties, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -144,6 +140,16 @@ impl ExecutionPlan for IcebergWriteExec {
         self
     }
 
+    /// Prevents the introduction of additional `RepartitionExec` and processing input in parallel.
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // Maintains ordering in the sense that the written file will reflect the ordering of the input.
+        vec![true; self.children().len()]
+    }
+
     fn properties(&self) -> &PlanProperties {
         &self.plan_properties
     }
@@ -208,7 +214,6 @@ impl ExecutionPlan for IcebergWriteExec {
             ));
         }
 
-        let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -217,8 +222,8 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table
                 .metadata()
                 .properties()
-                .get(PROPERTY_DEFAULT_FILE_FORMAT)
-                .unwrap_or(&PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
+                .get(TableProperties::PROPERTY_DEFAULT_FILE_FORMAT)
+                .unwrap_or(&TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
         )
         .map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
@@ -235,19 +240,13 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
-            None,
             FieldMatchMode::Name,
-            self.table.file_io().clone(),
-            DefaultLocationGenerator::new(self.table.metadata().clone())
-                .map_err(to_datafusion_error)?,
-            // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format),
         );
         let target_file_size = match self
             .table
             .metadata()
             .properties()
-            .get(PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
+            .get(TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
         {
             Some(value_str) => value_str
                 .parse::<usize>()
@@ -259,12 +258,24 @@ impl ExecutionPlan for IcebergWriteExec {
                     .with_source(e)
                 })
                 .map_err(to_datafusion_error)?,
-            None => PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            None => TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         };
-        let rolling_writer_builder =
-            RollingFileWriterBuilder::new(parquet_file_writer_builder, target_file_size);
-        let data_file_writer_builder =
-            DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
+
+        let file_io = self.table.file_io().clone();
+        // todo location_gen and file_name_gen should be configurable
+        let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
+            .map_err(to_datafusion_error)?;
+        // todo filename prefix/suffix should be configurable
+        let file_name_generator =
+            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format);
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_file_writer_builder,
+            target_file_size,
+            file_io,
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Get input data
         let data = execute_input_stream(
@@ -280,7 +291,8 @@ impl ExecutionPlan for IcebergWriteExec {
         // Create write stream
         let stream = futures::stream::once(async move {
             let mut writer = data_file_writer_builder
-                .build()
+                // todo specify partition key when partitioning writer is supported
+                .build(None)
                 .await
                 .map_err(to_datafusion_error)?;
             let mut input_stream = data;

@@ -26,7 +26,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use super::_serde::DataFileSerde;
 use super::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
 use crate::error::Result;
-use crate::spec::{Struct, StructType};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
 use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
@@ -49,6 +49,7 @@ pub struct DataFile {
     ///
     /// Partition data tuple, schema based on the partition spec output using
     /// partition field ids for the struct field ids
+    #[builder(default = "Struct::empty()")]
     pub(crate) partition: Struct,
     /// field id: 103
     ///
@@ -156,6 +157,7 @@ pub struct DataFile {
     pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
+    #[builder(default = "DEFAULT_PARTITION_SPEC_ID")]
     pub(crate) partition_spec_id: i32,
     /// field id: 143
     ///

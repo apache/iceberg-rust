@@ -24,6 +24,7 @@ use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_hms::HmsCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_catalog_s3tables::S3TablesCatalogBuilder;
+use iceberg_catalog_sql::SqlCatalogBuilder;
 
 /// A CatalogBuilderFactory creating a new catalog builder.
 type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
@@ -34,6 +35,7 @@ static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
     ("glue", || Box::new(GlueCatalogBuilder::default())),
     ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
     ("hms", || Box::new(HmsCatalogBuilder::default())),
+    ("sql", || Box::new(SqlCatalogBuilder::default())),
 ];
 
 /// Return the list of supported catalog types.
@@ -107,6 +109,9 @@ impl CatalogLoader<'_> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use sqlx::migrate::MigrateDatabase;
+    use tempfile::TempDir;
 
     use crate::{CatalogLoader, load};
 
@@ -213,6 +218,35 @@ mod tests {
                         "s3://warehouse".to_string(),
                     ),
                     ("key".to_string(), "value".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+    }
+
+    fn temp_path() -> String {
+        let temp_dir = TempDir::new().unwrap();
+        temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern_sql_catalog() {
+        use iceberg_catalog_sql::{SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE};
+
+        let uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+
+        let catalog_loader = load("sql").unwrap();
+        let catalog = catalog_loader
+            .load(
+                "sql".to_string(),
+                HashMap::from([
+                    (SQL_CATALOG_PROP_URI.to_string(), uri),
+                    (
+                        SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://warehouse".to_string(),
+                    ),
                 ]),
             )
             .await;
