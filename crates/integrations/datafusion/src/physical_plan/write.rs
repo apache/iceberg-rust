@@ -474,7 +474,7 @@ mod tests {
     async fn test_iceberg_write_exec() -> Result<()> {
         // This test verifies that IcebergWriteExec works correctly with the new TaskWriter
         // implementation for unpartitioned tables.
-        
+
         // 1. Set up test environment
         let iceberg_catalog = get_iceberg_catalog().await;
         let namespace = NamespaceIdent::new("test_namespace".to_string());
@@ -639,7 +639,7 @@ mod tests {
     async fn test_iceberg_write_exec_multiple_batches() -> Result<()> {
         // This test verifies that IcebergWriteExec correctly handles multiple input batches
         // with the new TaskWriter implementation.
-        
+
         // 1. Set up test environment
         let iceberg_catalog = get_iceberg_catalog().await;
         let namespace = NamespaceIdent::new("test_multi_batch_namespace".to_string());
@@ -670,13 +670,10 @@ mod tests {
             )])),
         ]));
 
-        let batch1 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
-                Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef,
-            ],
-        )
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef,
+        ])
         .map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
@@ -684,13 +681,10 @@ mod tests {
             )
         })?;
 
-        let batch2 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef,
-                Arc::new(StringArray::from(vec!["Charlie", "David", "Eve"])) as ArrayRef,
-            ],
-        )
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Charlie", "David", "Eve"])) as ArrayRef,
+        ])
         .map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
@@ -699,10 +693,9 @@ mod tests {
         })?;
 
         // 3. Create mock input execution plan with multiple batches
-        let input_plan = Arc::new(MockExecutionPlan::new(
-            arrow_schema.clone(),
-            vec![batch1, batch2],
-        ));
+        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![
+            batch1, batch2,
+        ]));
 
         // 4. Create IcebergWriteExec
         let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);

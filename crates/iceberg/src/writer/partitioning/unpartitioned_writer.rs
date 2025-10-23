@@ -116,10 +116,7 @@ mod tests {
     use super::*;
     use crate::Result;
     use crate::io::FileIOBuilder;
-    use crate::spec::{
-        DataFileFormat, NestedField, PrimitiveType, Struct,
-        Type,
-    };
+    use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Struct, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{

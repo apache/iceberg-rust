@@ -21,13 +21,14 @@
 //! of RecordBatch data to Iceberg tables.
 
 use datafusion::arrow::array::RecordBatch;
+use iceberg::Result;
 use iceberg::arrow::RecordBatchPartitionSplitter;
-use iceberg::spec::{PartitionSpecRef, SchemaRef};
+use iceberg::spec::{DataFile, PartitionSpecRef, SchemaRef};
 use iceberg::writer::IcebergWriterBuilder;
+use iceberg::writer::partitioning::PartitioningWriter;
 use iceberg::writer::partitioning::clustered_writer::ClusteredWriter;
 use iceberg::writer::partitioning::fanout_writer::FanoutWriter;
 use iceberg::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
-use iceberg::writer::partitioning::PartitioningWriter;
 
 /// High-level writer for DataFusion that handles partitioning and routing of RecordBatch data.
 ///
@@ -65,7 +66,7 @@ use iceberg::writer::partitioning::PartitioningWriter;
 #[allow(dead_code)]
 pub struct TaskWriter<B: IcebergWriterBuilder> {
     /// The underlying writer (UnpartitionedWriter, FanoutWriter, or ClusteredWriter)
-    writer: WriterEnum<B>,
+    writer: SupportedWriter<B>,
     /// Lazily initialized partition splitter for partitioned tables
     partition_splitter: Option<RecordBatchPartitionSplitter>,
     /// Iceberg schema reference
@@ -79,7 +80,7 @@ pub struct TaskWriter<B: IcebergWriterBuilder> {
 /// This enum allows TaskWriter to work with different partitioning strategies
 /// while maintaining a unified interface.
 #[allow(dead_code)]
-enum WriterEnum<B: IcebergWriterBuilder> {
+enum SupportedWriter<B: IcebergWriterBuilder> {
     /// Writer for unpartitioned tables
     Unpartitioned(UnpartitionedWriter<B>),
     /// Writer for partitioned tables with unsorted data (maintains multiple active writers)
@@ -130,11 +131,11 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
         partition_spec: PartitionSpecRef,
     ) -> Self {
         let writer = if partition_spec.is_unpartitioned() {
-            WriterEnum::Unpartitioned(UnpartitionedWriter::new(writer_builder))
+            SupportedWriter::Unpartitioned(UnpartitionedWriter::new(writer_builder))
         } else if fanout_enabled {
-            WriterEnum::Fanout(FanoutWriter::new(writer_builder))
+            SupportedWriter::Fanout(FanoutWriter::new(writer_builder))
         } else {
-            WriterEnum::Clustered(ClusteredWriter::new(writer_builder))
+            SupportedWriter::Clustered(ClusteredWriter::new(writer_builder))
         };
 
         Self {
@@ -174,13 +175,13 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// // Write a RecordBatch
     /// task_writer.write(record_batch).await?;
     /// ```
-    pub async fn write(&mut self, batch: RecordBatch) -> iceberg::Result<()> {
+    pub async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         match &mut self.writer {
-            WriterEnum::Unpartitioned(writer) => {
+            SupportedWriter::Unpartitioned(writer) => {
                 // Unpartitioned: write directly without splitting
                 writer.write(batch).await
             }
-            WriterEnum::Fanout(writer) => {
+            SupportedWriter::Fanout(writer) => {
                 // Partitioned with fanout: initialize splitter on first write if needed
                 if self.partition_splitter.is_none() {
                     let arrow_schema = batch.schema();
@@ -206,7 +207,7 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
 
                 Ok(())
             }
-            WriterEnum::Clustered(writer) => {
+            SupportedWriter::Clustered(writer) => {
                 // Partitioned with clustered: initialize splitter on first write if needed
                 if self.partition_splitter.is_none() {
                     let arrow_schema = batch.schema();
@@ -257,11 +258,11 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// // Close the writer and get all data files
     /// let data_files = task_writer.close().await?;
     /// ```
-    pub async fn close(self) -> iceberg::Result<Vec<iceberg::spec::DataFile>> {
+    pub async fn close(self) -> Result<Vec<DataFile>> {
         match self.writer {
-            WriterEnum::Unpartitioned(writer) => writer.close().await,
-            WriterEnum::Fanout(writer) => writer.close().await,
-            WriterEnum::Clustered(writer) => writer.close().await,
+            SupportedWriter::Unpartitioned(writer) => writer.close().await,
+            SupportedWriter::Fanout(writer) => writer.close().await,
+            SupportedWriter::Clustered(writer) => writer.close().await,
         }
     }
 }
