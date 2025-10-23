@@ -19,16 +19,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StructArray};
-use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use arrow_select::filter::filter_record_batch;
-use itertools::Itertools;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use super::arrow_struct_to_literal;
-use super::record_batch_projector::RecordBatchProjector;
-use crate::arrow::type_to_arrow_type;
-use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
-use crate::transform::{BoxedTransformFunction, create_transform_function};
+use super::partition_value_calculator::PartitionValueCalculator;
+use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, StructType};
 use crate::{Error, ErrorKind, Result};
 
 /// Column name for the projected partition values struct
@@ -43,11 +39,8 @@ pub const PROJECTED_PARTITION_VALUE_COLUMN: &str = "_partition";
 pub struct RecordBatchPartitionSplitter {
     schema: SchemaRef,
     partition_spec: PartitionSpecRef,
-    projector: Option<RecordBatchProjector>,
-    transform_functions: Vec<BoxedTransformFunction>,
-
+    calculator: Option<PartitionValueCalculator>,
     partition_type: StructType,
-    partition_arrow_type: DataType,
     use_projected_partition_column: bool,
 }
 
@@ -59,7 +52,7 @@ impl RecordBatchPartitionSplitter {
     ///
     /// # Arguments
     ///
-    /// * `input_schema` - The Arrow schema of the input record batches
+    /// * `_input_schema` - The Arrow schema of the input record batches (unused when use_projected_partition_column is true)
     /// * `iceberg_schema` - The Iceberg schema reference
     /// * `partition_spec` - The partition specification reference
     /// * `use_projected_partition_column` - If true, expects a pre-computed partition column in the input batch
@@ -68,100 +61,31 @@ impl RecordBatchPartitionSplitter {
     ///
     /// Returns a new `RecordBatchPartitionSplitter` instance or an error if initialization fails.
     pub fn new(
-        input_schema: ArrowSchemaRef,
+        _input_schema: ArrowSchemaRef,
         iceberg_schema: SchemaRef,
         partition_spec: PartitionSpecRef,
         use_projected_partition_column: bool,
     ) -> Result<Self> {
         let partition_type = partition_spec.partition_type(&iceberg_schema)?;
-        let partition_arrow_type = type_to_arrow_type(&Type::Struct(partition_type.clone()))?;
 
-        let (projector, transform_functions) = if use_projected_partition_column {
-            // Skip projector and transform initialization when partition column is pre-computed
-            (None, Vec::new())
+        let calculator = if use_projected_partition_column {
+            // Skip calculator initialization when partition column is pre-computed
+            None
         } else {
-            let projector = RecordBatchProjector::new(
-                input_schema,
-                &partition_spec
-                    .fields()
-                    .iter()
-                    .map(|field| field.source_id)
-                    .collect::<Vec<_>>(),
-                // The source columns, selected by ids, must be a primitive type and cannot be contained in a map or list, but may be nested in a struct.
-                // ref: https://iceberg.apache.org/spec/#partitioning
-                |field| {
-                    if !field.data_type().is_primitive() {
-                        return Ok(None);
-                    }
-                    field
-                        .metadata()
-                        .get(PARQUET_FIELD_ID_META_KEY)
-                        .map(|s| {
-                            s.parse::<i64>()
-                                .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))
-                        })
-                        .transpose()
-                },
-                |_| true,
-            )?;
-            let transform_functions = partition_spec
-                .fields()
-                .iter()
-                .map(|field| create_transform_function(&field.transform))
-                .collect::<Result<Vec<_>>>()?;
-            (Some(projector), transform_functions)
+            // Create calculator for computing partition values from source columns
+            Some(PartitionValueCalculator::try_new(
+                &partition_spec,
+                &iceberg_schema,
+            )?)
         };
 
         Ok(Self {
             schema: iceberg_schema,
             partition_spec,
-            projector,
-            transform_functions,
+            calculator,
             partition_type,
-            partition_arrow_type,
             use_projected_partition_column,
         })
-    }
-
-    fn partition_columns_to_struct(&self, partition_columns: Vec<ArrayRef>) -> Result<Vec<Struct>> {
-        let arrow_struct_array = {
-            let partition_arrow_fields = {
-                let DataType::Struct(fields) = &self.partition_arrow_type else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partition arrow type is not a struct type",
-                    ));
-                };
-                fields.clone()
-            };
-            Arc::new(StructArray::try_new(
-                partition_arrow_fields,
-                partition_columns,
-                None,
-            )?) as ArrayRef
-        };
-        let struct_array = {
-            let struct_array = arrow_struct_to_literal(&arrow_struct_array, &self.partition_type)?;
-            struct_array
-                .into_iter()
-                .map(|s| {
-                    if let Some(s) = s {
-                        if let Literal::Struct(s) = s {
-                            Ok(s)
-                        } else {
-                            Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                "The struct is not a struct literal",
-                            ))
-                        }
-                    } else {
-                        Err(Error::new(ErrorKind::DataInvalid, "The struct is null"))
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
-        };
-
-        Ok(struct_array)
     }
 
     /// Split the record batch into multiple record batches based on the partition spec.
@@ -207,24 +131,30 @@ impl RecordBatchPartitionSplitter {
                 })
                 .collect::<Result<Vec<_>>>()?
         } else {
-            // Compute partition values from source columns
-            let projector = self.projector.as_ref().ok_or_else(|| {
+            // Compute partition values from source columns using calculator
+            let calculator = self.calculator.as_ref().ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    "Projector not initialized for non-partition-column mode",
+                    "Calculator not initialized for non-partition-column mode",
                 )
             })?;
 
-            let source_columns = projector.project_column(batch.columns())?;
-            let partition_columns = source_columns
-                .into_iter()
-                .zip_eq(self.transform_functions.iter())
-                .map(|(source_column, transform_function)| {
-                    transform_function.transform(source_column)
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let partition_array = calculator.calculate(batch)?;
+            let struct_array = arrow_struct_to_literal(&partition_array, &self.partition_type)?;
 
-            self.partition_columns_to_struct(partition_columns)?
+            struct_array
+                .into_iter()
+                .map(|s| {
+                    if let Some(Literal::Struct(s)) = s {
+                        Ok(s)
+                    } else {
+                        Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Partition value is not a struct literal or is null",
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?
         };
 
         // Group the batch by row value.
@@ -268,11 +198,13 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_schema::DataType;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
     use crate::spec::{
-        NestedField, PartitionSpecBuilder, PrimitiveLiteral, Schema, Transform,
+        NestedField, PartitionSpecBuilder, PrimitiveLiteral, Schema, Struct, Transform, Type,
         UnboundPartitionField,
     };
 

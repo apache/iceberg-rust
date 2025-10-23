@@ -180,7 +180,7 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
                 writer.write(batch).await
             }
             SupportedWriter::Fanout(writer) => {
-                // Partitioned with fanout: initialize splitter on first write if needed
+                // Initialize splitter on first write if needed
                 if self.partition_splitter.is_none() {
                     let arrow_schema = batch.schema();
                     self.partition_splitter = Some(RecordBatchPartitionSplitter::new(
@@ -191,22 +191,11 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
                     )?);
                 }
 
-                // Split batch by partition
-                let splitter = self
-                    .partition_splitter
-                    .as_ref()
-                    .expect("Partition splitter should be initialized");
-                let partitioned_batches = splitter.split(&batch)?;
-
-                // Write each partition
-                for (partition_key, partition_batch) in partitioned_batches {
-                    writer.write(partition_key, partition_batch).await?;
-                }
-
-                Ok(())
+                // Split and write partitioned data
+                Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
             SupportedWriter::Clustered(writer) => {
-                // Partitioned with clustered: initialize splitter on first write if needed
+                // Initialize splitter on first write if needed
                 if self.partition_splitter.is_none() {
                     let arrow_schema = batch.schema();
                     self.partition_splitter = Some(RecordBatchPartitionSplitter::new(
@@ -217,21 +206,44 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
                     )?);
                 }
 
-                // Split batch by partition
-                let splitter = self
-                    .partition_splitter
-                    .as_ref()
-                    .expect("Partition splitter should be initialized");
-                let partitioned_batches = splitter.split(&batch)?;
-
-                // Write each partition
-                for (partition_key, partition_batch) in partitioned_batches {
-                    writer.write(partition_key, partition_batch).await?;
-                }
-
-                Ok(())
+                // Split and write partitioned data
+                Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
         }
+    }
+
+    /// Helper method to split and write partitioned data.
+    ///
+    /// This method handles the common logic for both FanoutWriter and ClusteredWriter:
+    /// - Splits the batch by partition key using the provided splitter
+    /// - Writes each partition to the underlying writer
+    ///
+    /// # Parameters
+    ///
+    /// * `writer` - The underlying PartitioningWriter (FanoutWriter or ClusteredWriter)
+    /// * `partition_splitter` - The partition splitter (must be initialized)
+    /// * `batch` - The RecordBatch to write
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    async fn write_partitioned_batches<W: PartitioningWriter>(
+        writer: &mut W,
+        partition_splitter: &Option<RecordBatchPartitionSplitter>,
+        batch: &RecordBatch,
+    ) -> Result<()> {
+        // Split batch by partition
+        let splitter = partition_splitter
+            .as_ref()
+            .expect("Partition splitter should be initialized");
+        let partitioned_batches = splitter.split(batch)?;
+
+        // Write each partition
+        for (partition_key, partition_batch) in partitioned_batches {
+            writer.write(partition_key, partition_batch).await?;
+        }
+
+        Ok(())
     }
 
     /// Close the TaskWriter and return all written data files.
