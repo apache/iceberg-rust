@@ -26,7 +26,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
-use iceberg::arrow::{PartitionValueCalculator, PROJECTED_PARTITION_VALUE_COLUMN};
+use iceberg::arrow::{PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator};
 use iceberg::spec::PartitionSpec;
 use iceberg::table::Table;
 
