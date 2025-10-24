@@ -44,13 +44,13 @@ use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
 use crate::to_datafusion_error;
+use crate::writer::task::TaskWriter;
 
 /// An execution plan node that writes data to an Iceberg table.
 ///
@@ -202,18 +202,6 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        if !self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .is_unpartitioned()
-        {
-            // TODO add support for partitioned tables
-            return Err(DataFusionError::NotImplemented(
-                "IcebergWriteExec does not support partitioned tables yet".to_string(),
-            ));
-        }
-
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -277,6 +265,10 @@ impl ExecutionPlan for IcebergWriteExec {
         );
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
+        // Get schema and partition spec for TaskWriter
+        let schema = self.table.metadata().current_schema().clone();
+        let partition_spec = self.table.metadata().default_partition_spec().clone();
+
         // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
@@ -290,18 +282,23 @@ impl ExecutionPlan for IcebergWriteExec {
 
         // Create write stream
         let stream = futures::stream::once(async move {
-            let mut writer = data_file_writer_builder
-                // todo specify partition key when partitioning writer is supported
-                .build(None)
-                .await
-                .map_err(to_datafusion_error)?;
+            // Create TaskWriter with fanout_enabled=false (use ClusteredWriter for partitioned tables)
+            let mut task_writer = TaskWriter::new(
+                data_file_writer_builder,
+                false, // todo should be configurable
+                schema,
+                partition_spec,
+            );
             let mut input_stream = data;
 
             while let Some(batch) = input_stream.next().await {
-                writer.write(batch?).await.map_err(to_datafusion_error)?;
+                task_writer
+                    .write(batch?)
+                    .await
+                    .map_err(to_datafusion_error)?;
             }
 
-            let data_files = writer.close().await.map_err(to_datafusion_error)?;
+            let data_files = task_writer.close().await.map_err(to_datafusion_error)?;
 
             // Convert builders to data files and then to JSON strings
             let data_files_strs: Vec<String> = data_files
@@ -475,6 +472,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_iceberg_write_exec() -> Result<()> {
+        // This test verifies that IcebergWriteExec works correctly with the new TaskWriter
+        // implementation for unpartitioned tables.
+
         // 1. Set up test environment
         let iceberg_catalog = get_iceberg_catalog().await;
         let namespace = NamespaceIdent::new("test_namespace".to_string());
@@ -626,6 +626,134 @@ mod tests {
         // 7. Verify the file exists
         let file_io = table.file_io();
         assert!(file_io.exists(file_path).await?, "Data file should exist");
+
+        Ok(())
+    }
+
+    // Note: Partitioned table tests are covered by integration tests in
+    // crates/integrations/datafusion/tests/integration_datafusion_test.rs
+    // The test_insert_into test validates end-to-end write functionality including
+    // the new TaskWriter implementation through the DataFusion SQL interface.
+
+    #[tokio::test]
+    async fn test_iceberg_write_exec_multiple_batches() -> Result<()> {
+        // This test verifies that IcebergWriteExec correctly handles multiple input batches
+        // with the new TaskWriter implementation.
+
+        // 1. Set up test environment
+        let iceberg_catalog = get_iceberg_catalog().await;
+        let namespace = NamespaceIdent::new("test_multi_batch_namespace".to_string());
+
+        // Create namespace
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        // Create schema
+        let schema = get_test_schema()?;
+
+        // Create table
+        let table_name = "test_multi_batch_table";
+        let table_location = temp_path();
+        let creation = get_table_creation(table_location, table_name, schema);
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        // 2. Create multiple test batches
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef,
+        ])
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to create record batch: {}", e),
+            )
+        })?;
+
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Charlie", "David", "Eve"])) as ArrayRef,
+        ])
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to create record batch: {}", e),
+            )
+        })?;
+
+        // 3. Create mock input execution plan with multiple batches
+        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![
+            batch1, batch2,
+        ]));
+
+        // 4. Create IcebergWriteExec
+        let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);
+
+        // 5. Execute the plan
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = write_exec.execute(0, task_ctx).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to execute plan: {}", e),
+            )
+        })?;
+
+        // Collect the results
+        let mut results = vec![];
+        let mut stream = stream;
+        while let Some(batch) = stream.next().await {
+            results.push(batch.map_err(|e| {
+                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {}", e))
+            })?);
+        }
+
+        // 6. Verify the results
+        assert_eq!(results.len(), 1, "Expected one result batch");
+        let result_batch = &results[0];
+
+        // Check data - should have at least one data file
+        assert!(
+            result_batch.num_rows() >= 1,
+            "Expected at least one data file"
+        );
+
+        // Get the data file JSON and verify total record count
+        let partition_type = table.metadata().default_partition_type();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let schema = table.metadata().current_schema();
+
+        let mut total_records = 0;
+        for i in 0..result_batch.num_rows() {
+            let data_file_json = result_batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Expected StringArray")
+                .value(i);
+
+            let data_file =
+                deserialize_data_file_from_json(data_file_json, spec_id, partition_type, schema)
+                    .expect("Failed to deserialize data file JSON");
+
+            total_records += data_file.record_count();
+        }
+
+        // Verify total record count matches input (2 + 3 = 5)
+        assert_eq!(
+            total_records, 5,
+            "Total records should be 5 (2 from batch1 + 3 from batch2)"
+        );
 
         Ok(())
     }

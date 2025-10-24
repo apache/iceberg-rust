@@ -23,6 +23,7 @@
 
 pub mod clustered_writer;
 pub mod fanout_writer;
+pub mod unpartitioned_writer;
 
 use crate::Result;
 use crate::spec::PartitionKey;
