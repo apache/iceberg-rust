@@ -1383,6 +1383,7 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 
     // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
     // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
+    #[allow(deprecated)]
     fn get_metadata(
         &mut self,
         _options: Option<&'_ ArrowReaderOptions>,
