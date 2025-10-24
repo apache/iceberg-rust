@@ -75,6 +75,7 @@ fnv = "1.0.7"
 fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.2.0"
+home = "=0.5.11"
 http = "1.2"
 iceberg = { version = "0.7.0", path = "./crates/iceberg" }
 iceberg-catalog-glue = { version = "0.7.0", path = "./crates/catalog/glue" }
