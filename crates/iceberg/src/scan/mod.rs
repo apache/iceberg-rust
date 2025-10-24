@@ -59,6 +59,8 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    limit: Option<usize>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -77,7 +79,14 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            limit: None,
         }
+    }
+
+    /// Sets the maximum number of records to return
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
     }
 
     /// Sets the desired size of batches in the response
@@ -281,6 +290,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
+            limit: self.limit,
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
@@ -1407,6 +1417,130 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_limit() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let mut builder = fixture.table.scan();
+        builder = builder.with_limit(Some(1));
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 1);
+        assert_eq!(batches[1].num_rows(), 1);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 2);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 2);
+    }
+
+    #[tokio::test]
+    async fn test_limit_with_predicate() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y > 3
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").greater_than(Datum::long(3));
+        builder = builder.with_filter(predicate).with_limit(Some(1));
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 1);
+        assert_eq!(batches[1].num_rows(), 1);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 4);
+    }
+
+    #[tokio::test]
+    async fn test_limit_with_predicate_and_row_selection() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y > 3
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").greater_than(Datum::long(3));
+        builder = builder
+            .with_filter(predicate)
+            .with_limit(Some(1))
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 1);
+        assert_eq!(batches[1].num_rows(), 1);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 4);
+    }
+
+    #[tokio::test]
+    async fn test_limit_higher_than_total_rows() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y > 3
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").greater_than(Datum::long(3));
+        builder = builder
+            .with_filter(predicate)
+            .with_limit(Some(100_000_000))
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 312);
+        assert_eq!(batches[1].num_rows(), 312);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 4);
+    }
+
+    #[tokio::test]
     async fn test_filter_on_arrow_gt_eq() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
@@ -1780,6 +1914,7 @@ pub mod tests {
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
             deletes: vec![],
+            limit: None,
         };
         test_fn(task);
 
@@ -1794,6 +1929,7 @@ pub mod tests {
             record_count: None,
             data_file_format: DataFileFormat::Avro,
             deletes: vec![],
+            limit: None,
         };
         test_fn(task);
     }
