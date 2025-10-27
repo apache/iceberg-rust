@@ -567,14 +567,7 @@ impl FileWriter for ParquetWriter {
             })?;
             Ok(vec![])
         } else {
-            let parquet_metadata =
-                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to convert metadata from thrift to parquet.",
-                    )
-                    .with_source(err)
-                })?);
+            let parquet_metadata = Arc::new(metadata);
 
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,

@@ -23,7 +23,7 @@ use fnv::FnvHashSet;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
-use parquet::file::page_index::index::Index;
+use parquet::file::page_index::column_index::ColumnIndexMetaData as Index;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
@@ -253,117 +253,105 @@ impl<'a> PageIndexEvaluator<'a> {
             Index::NONE => {
                 return Ok(None);
             }
-            Index::BOOLEAN(idx) => idx
-                .indexes
-                .iter()
+            Index::BOOLEAN(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min.map(|val| {
+                        idx.min_value(page_idx).map(|&val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
-                        item.max.map(|val| {
+                        idx.max_value(page_idx).map(|&val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
-            Index::INT32(idx) => idx
-                .indexes
-                .iter()
+            Index::INT32(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
-                        item.max
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        idx.min_value(page_idx)
+                            .map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        idx.max_value(page_idx)
+                            .map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
-            Index::INT64(idx) => idx
-                .indexes
-                .iter()
+            Index::INT64(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
-                        item.max
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        idx.min_value(page_idx)
+                            .map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
+                        idx.max_value(page_idx)
+                            .map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
-            Index::FLOAT(idx) => idx
-                .indexes
-                .iter()
+            Index::FLOAT(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min.map(|val| {
+                        idx.min_value(page_idx).map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
                             )
                         }),
-                        item.max.map(|val| {
+                        idx.max_value(page_idx).map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
-            Index::DOUBLE(idx) => idx
-                .indexes
-                .iter()
+            Index::DOUBLE(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min.map(|val| {
+                        idx.min_value(page_idx).map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
-                        item.max.map(|val| {
+                        idx.max_value(page_idx).map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
-            Index::BYTE_ARRAY(idx) => idx
-                .indexes
-                .iter()
+            Index::BYTE_ARRAY(idx) => (0..idx.num_pages() as usize)
                 .zip(row_counts.iter())
-                .map(|(item, &row_count)| {
+                .map(|(page_idx, &row_count)| {
                     predicate(
-                        item.min.clone().map(|val| {
+                        idx.min_value(page_idx).map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::String(
-                                    String::from_utf8(val.data().to_vec()).unwrap(),
+                                    String::from_utf8(val.to_vec()).unwrap(),
                                 ),
                             )
                         }),
-                        item.max.clone().map(|val| {
+                        idx.max_value(page_idx).map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::String(
-                                    String::from_utf8(val.data().to_vec()).unwrap(),
+                                    String::from_utf8(val.to_vec()).unwrap(),
                                 ),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(row_count, item.null_count),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(page_idx)),
                     )
                 })
                 .collect(),
@@ -791,13 +779,13 @@ mod tests {
     use std::sync::Arc;
 
     use parquet::arrow::arrow_reader::RowSelector;
-    use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
+    use parquet::basic::{BoundaryOrder, LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
     use parquet::data_type::ByteArray;
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
-    use parquet::file::page_index::index::{Index, NativeIndex, PageIndex};
+    use parquet::file::page_index::column_index::{ColumnIndexMetaData as Index, PrimitiveColumnIndex as NativeIndex};
     use parquet::file::page_index::offset_index::OffsetIndexMetaData;
     use parquet::file::statistics::Statistics;
-    use parquet::format::{BoundaryOrder, PageLocation};
+    use parquet::format::PageLocation;
     use parquet::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
     };
@@ -1316,80 +1304,57 @@ mod tests {
     }
 
     fn create_page_index() -> Result<(Vec<Index>, Vec<OffsetIndexMetaData>)> {
-        let idx_float = Index::FLOAT(NativeIndex::<f32> {
-            indexes: vec![
-                PageIndex {
-                    min: None,
-                    max: None,
-                    null_count: Some(1024),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: Some(0.0),
-                    max: Some(10.0),
-                    null_count: Some(0),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: Some(10.0),
-                    max: Some(20.0),
-                    null_count: Some(1),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: None,
-                    max: None,
-                    null_count: None,
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-            ],
-            boundary_order: BoundaryOrder(0), // UNORDERED
-        });
+        use parquet::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 
-        let idx_string = Index::BYTE_ARRAY(NativeIndex::<ByteArray> {
-            indexes: vec![
-                PageIndex {
-                    min: Some("AA".into()),
-                    max: Some("DD".into()),
-                    null_count: Some(0),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: Some("DE".into()),
-                    max: Some("DE".into()),
-                    null_count: Some(0),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: Some("DF".into()),
-                    max: Some("UJ".into()),
-                    null_count: Some(1),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: None,
-                    max: None,
-                    null_count: Some(48),
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-                PageIndex {
-                    min: None,
-                    max: None,
-                    null_count: None,
-                    repetition_level_histogram: None,
-                    definition_level_histogram: None,
-                },
-            ],
-            boundary_order: BoundaryOrder(0), // UNORDERED
-        });
+        // Float index with 4 pages
+        let float_min_bytes = vec![
+            &[] as &[u8],  // Page 0: all nulls
+            &0.0f32.to_le_bytes()[..],  // Page 1: min=0.0
+            &10.0f32.to_le_bytes()[..],  // Page 2: min=10.0
+            &[] as &[u8],  // Page 3: all nulls
+        ];
+        let float_max_bytes = vec![
+            &[] as &[u8],  // Page 0: all nulls
+            &10.0f32.to_le_bytes()[..],  // Page 1: max=10.0
+            &20.0f32.to_le_bytes()[..],  // Page 2: max=20.0
+            &[] as &[u8],  // Page 3: all nulls
+        ];
+
+        let idx_float = Index::FLOAT(PrimitiveColumnIndex::try_new(
+            vec![true, false, false, true],  // null_pages
+            BoundaryOrder::UNORDERED,
+            Some(vec![1024, 0, 1, -1]),  // null_counts (-1 for unknown)
+            None,  // repetition_level_histograms
+            None,  // definition_level_histograms
+            float_min_bytes,
+            float_max_bytes,
+        ).map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to create float index: {}", e)))?);
+
+        // String index with 5 pages
+        let string_min_bytes = vec![
+            "AA".as_bytes(),  // Page 0
+            "DE".as_bytes(),  // Page 1
+            "DF".as_bytes(),  // Page 2
+            &[] as &[u8],     // Page 3: all nulls
+            &[] as &[u8],     // Page 4: all nulls
+        ];
+        let string_max_bytes = vec![
+            "DD".as_bytes(),  // Page 0
+            "DE".as_bytes(),  // Page 1
+            "UJ".as_bytes(),  // Page 2
+            &[] as &[u8],     // Page 3: all nulls
+            &[] as &[u8],     // Page 4: all nulls
+        ];
+
+        let idx_string = Index::BYTE_ARRAY(ByteArrayColumnIndex::try_new(
+            vec![false, false, false, true, true],  // null_pages
+            BoundaryOrder::UNORDERED,
+            Some(vec![0, 0, 1, 48, -1]),  // null_counts (-1 for unknown)
+            None,  // repetition_level_histograms
+            None,  // definition_level_histograms
+            string_min_bytes,
+            string_max_bytes,
+        ).map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to create string index: {}", e)))?);
 
         let page_locs_float = vec![
             PageLocation::new(0, 1024, 0),
