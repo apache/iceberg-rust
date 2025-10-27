@@ -224,14 +224,12 @@ impl CachingDeleteFileLoader {
                 let (sender, receiver) = channel();
                 del_filter.insert_equality_delete(&task.file_path, receiver);
 
+                // Equality deletes intentionally have partial schemas. Schema evolution would add
+                // NULL values for missing REQUIRED columns, causing Arrow validation to fail.
                 Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: BasicDeleteFileLoader::evolve_schema(
-                        basic_delete_file_loader
-                            .parquet_to_batch_stream(&task.file_path)
-                            .await?,
-                        schema,
-                    )
-                    .await?,
+                    batch_stream: basic_delete_file_loader
+                        .parquet_to_batch_stream(&task.file_path)
+                        .await?,
                     sender,
                     equality_ids: HashSet::from_iter(task.equality_ids.clone().unwrap()),
                 })
@@ -687,9 +685,93 @@ mod tests {
         assert!(result.is_none()); // no pos dels for file 3
     }
 
-    /// Test loading a FileScanTask with both positional and equality deletes.
-    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality
-    /// delete file" errors first encountered when running Iceberg Java's TestSparkExecutorCache
+    /// Verifies that evolve_schema on partial-schema equality deletes fails with Arrow
+    /// validation errors when missing REQUIRED columns are filled with NULLs.
+    ///
+    /// Reproduces the issue that caused 14 TestSparkReaderDeletes failures in Iceberg Java.
+    #[tokio::test]
+    async fn test_partial_schema_equality_deletes_evolve_fails() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+
+        // Create table schema with REQUIRED fields
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    crate::spec::NestedField::required(
+                        1,
+                        "id",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Int),
+                    )
+                    .into(),
+                    crate::spec::NestedField::required(
+                        2,
+                        "data",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Write equality delete file with PARTIAL schema (only 'data' column)
+        let delete_file_path = {
+            let data_vals = vec!["a", "d", "g"];
+            let data_col = Arc::new(StringArray::from(data_vals)) as ArrayRef;
+
+            let delete_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+                "data",
+                DataType::Utf8,
+                false,
+                "2", // field ID
+            )]));
+
+            let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![data_col]).unwrap();
+
+            let path = format!("{}/partial-eq-deletes.parquet", &table_location);
+            let file = File::create(&path).unwrap();
+            let props = WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(file, delete_batch.schema(), Some(props)).unwrap();
+            writer.write(&delete_batch).expect("Writing batch");
+            writer.close().unwrap();
+            path
+        };
+
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+
+        let batch_stream = basic_delete_file_loader
+            .parquet_to_batch_stream(&delete_file_path)
+            .await
+            .unwrap();
+
+        let mut evolved_stream = BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema)
+            .await
+            .unwrap();
+
+        let result = evolved_stream.next().await.unwrap();
+
+        assert!(
+            result.is_err(),
+            "Expected error from evolve_schema adding NULL to non-nullable column"
+        );
+
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("non-nullable") || err_msg.contains("null values"),
+            "Expected null value error, got: {}",
+            err_msg
+        );
+    }
+
+    /// Test loading a FileScanTask with BOTH positional and equality deletes.
+    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
     #[tokio::test]
     async fn test_load_deletes_with_mixed_types() {
         use crate::scan::FileScanTask;
@@ -702,16 +784,28 @@ mod tests {
             .build()
             .unwrap();
 
+        // Create the data file schema
         let data_file_schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                    crate::spec::NestedField::optional(
+                        2,
+                        "y",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                    crate::spec::NestedField::optional(
+                        3,
+                        "z",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
                 ])
                 .build()
                 .unwrap(),
         );
 
+        // Write positional delete file
         let positional_delete_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
         let file_path_values =
             vec![format!("{}/data-1.parquet", table_location.to_str().unwrap()); 4];
@@ -740,6 +834,7 @@ mod tests {
         writer.write(&positional_deletes_to_write).unwrap();
         writer.close().unwrap();
 
+        // Write equality delete file
         let eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
 
         // Create FileScanTask with BOTH positional and equality deletes
@@ -754,7 +849,7 @@ mod tests {
             file_path: eq_delete_path.clone(),
             file_type: DataContentType::EqualityDeletes,
             partition_spec_id: 0,
-            equality_ids: Some(vec![2, 3, 4, 6]), // field IDs from the equality delete schema
+            equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
         };
 
         let file_scan_task = FileScanTask {
