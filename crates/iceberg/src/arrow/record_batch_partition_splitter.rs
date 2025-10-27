@@ -443,16 +443,43 @@ mod tests {
 
         assert_eq!(partitioned_batches.len(), 3);
 
-        // Verify partition values
-        let partition_values = partitioned_batches
-            .iter()
-            .map(|(partition_key, _)| partition_key.data().clone())
-            .collect::<Vec<_>>();
+        // Helper to extract id and name values from a batch
+        let extract_values = |batch: &RecordBatch| -> (Vec<i32>, Vec<String>) {
+            let id_col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let name_col = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            (
+                id_col.values().to_vec(),
+                name_col.iter().map(|s| s.unwrap().to_string()).collect(),
+            )
+        };
 
-        assert_eq!(partition_values, vec![
-            Struct::from_iter(vec![Some(Literal::int(1))]),
-            Struct::from_iter(vec![Some(Literal::int(2))]),
-            Struct::from_iter(vec![Some(Literal::int(3))]),
-        ]);
+        // Verify partition 1: id=1, names=["a", "c", "g"]
+        let (key, batch) = &partitioned_batches[0];
+        assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(1))]));
+        let (ids, names) = extract_values(batch);
+        assert_eq!(ids, vec![1, 1, 1]);
+        assert_eq!(names, vec!["a", "c", "g"]);
+
+        // Verify partition 2: id=2, names=["b", "e"]
+        let (key, batch) = &partitioned_batches[1];
+        assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(2))]));
+        let (ids, names) = extract_values(batch);
+        assert_eq!(ids, vec![2, 2]);
+        assert_eq!(names, vec!["b", "e"]);
+
+        // Verify partition 3: id=3, names=["d", "f"]
+        let (key, batch) = &partitioned_batches[2];
+        assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(3))]));
+        let (ids, names) = extract_values(batch);
+        assert_eq!(ids, vec![3, 3]);
+        assert_eq!(names, vec!["d", "f"]);
     }
 }
