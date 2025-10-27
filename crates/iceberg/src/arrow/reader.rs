@@ -57,11 +57,11 @@ use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
-// Reserved field ID for the row ordinal (_pos) column per Iceberg spec
-pub(crate) const RESERVED_FIELD_ID_POS: i32 = 2147483645;
+/// Reserved field ID for the row ordinal (_pos) column per Iceberg spec
+pub const RESERVED_FIELD_ID_POS: i32 = 2147483645;
 
 /// Column name for the row ordinal metadata column per Iceberg spec
-pub(crate) const RESERVED_COL_NAME_POS: &str = "_pos";
+pub const RESERVED_COL_NAME_POS: &str = "_pos";
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -206,11 +206,11 @@ impl ArrowReader {
         for metadata_column in metadata_columns {
             if metadata_column == RESERVED_COL_NAME_POS {
                 let row_number_field = arrow_schema::Field::new(metadata_column, arrow_schema::DataType::Int64, false)
-                .with_extension_type(RowNumber)
                 .with_metadata(std::collections::HashMap::from([(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
                     RESERVED_FIELD_ID_POS.to_string(),
-                )]));
+                )]))
+                .with_extension_type(RowNumber);
                 virtual_columns.push(row_number_field);
             } else {
                 return Err(Error::new(
@@ -224,9 +224,58 @@ impl ArrowReader {
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
-            virtual_columns,
+            virtual_columns.clone(),
         )
         .await?;
+
+        // Extract field IDs from virtual columns and create Iceberg fields
+        let mut virtual_iceberg_fields = vec![];
+        let mut virtual_field_ids = vec![];
+
+        for field in &virtual_columns {
+            let field_id_str = field.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                .ok_or_else(|| Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Virtual field '{}' missing field ID metadata", field.name()),
+                ))?;
+            let field_id = field_id_str.parse::<i32>()?;
+
+            // Create an Iceberg NestedField for the virtual column
+            if field_id == RESERVED_FIELD_ID_POS {
+                virtual_field_ids.push(field_id);
+                let iceberg_field = NestedField::required(
+                    field_id,
+                    field.name(),
+                    Type::Primitive(PrimitiveType::Long),
+                );
+                virtual_iceberg_fields.push(Arc::new(iceberg_field));
+            } else {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported, // TODO @vustef: This is appropriate only for columns from iceberg spec.
+                    format!("Field ID '{}' not supported", field_id),
+                ));
+            }
+        }
+
+        // Create an extended schema that includes both regular fields and virtual fields
+        let extended_schema = if !virtual_iceberg_fields.is_empty() {
+            let mut all_fields: Vec<_> = task.schema.as_ref().as_struct().fields().iter().cloned().collect();
+            all_fields.extend(virtual_iceberg_fields);
+
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(task.schema.schema_id())
+                    .with_fields(all_fields)
+                    .build()
+                    .map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to build extended schema: {}", e)))?
+            )
+        } else {
+            task.schema_ref()
+        };
+
+        // Combine regular field IDs with virtual field IDs
+        let mut all_field_ids = task.project_field_ids.clone();
+        all_field_ids.extend(virtual_field_ids);
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
@@ -242,7 +291,7 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformer::build(extended_schema, &all_field_ids);
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -1617,7 +1666,7 @@ message schema {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
             err.to_string(),
-            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+            "DataInvalid => Unsupported Arrow data type: Duration(µs)".to_string()
         );
 
         // Omitting field c2, we still get an error due to c3 being selected

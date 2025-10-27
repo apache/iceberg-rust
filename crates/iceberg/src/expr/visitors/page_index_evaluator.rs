@@ -780,12 +780,10 @@ mod tests {
 
     use parquet::arrow::arrow_reader::RowSelector;
     use parquet::basic::{BoundaryOrder, LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
-    use parquet::data_type::ByteArray;
-    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
-    use parquet::file::page_index::column_index::{ColumnIndexMetaData as Index, PrimitiveColumnIndex as NativeIndex};
-    use parquet::file::page_index::offset_index::OffsetIndexMetaData;
+    use parquet::file::metadata::{ColumnChunkMetaData, ColumnIndexBuilder, RowGroupMetaData};
+    use parquet::file::page_index::column_index::ColumnIndexMetaData as Index;
+    use parquet::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
     use parquet::file::statistics::Statistics;
-    use parquet::format::PageLocation;
     use parquet::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
     };
@@ -1304,71 +1302,53 @@ mod tests {
     }
 
     fn create_page_index() -> Result<(Vec<Index>, Vec<OffsetIndexMetaData>)> {
-        use parquet::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
-
         // Float index with 4 pages
-        let float_min_bytes = vec![
-            &[] as &[u8],  // Page 0: all nulls
-            &0.0f32.to_le_bytes()[..],  // Page 1: min=0.0
-            &10.0f32.to_le_bytes()[..],  // Page 2: min=10.0
-            &[] as &[u8],  // Page 3: all nulls
-        ];
-        let float_max_bytes = vec![
-            &[] as &[u8],  // Page 0: all nulls
-            &10.0f32.to_le_bytes()[..],  // Page 1: max=10.0
-            &20.0f32.to_le_bytes()[..],  // Page 2: max=20.0
-            &[] as &[u8],  // Page 3: all nulls
-        ];
+        let mut float_builder = ColumnIndexBuilder::new(ParquetPhysicalType::FLOAT);
+        float_builder.set_boundary_order(BoundaryOrder::UNORDERED);
 
-        let idx_float = Index::FLOAT(PrimitiveColumnIndex::try_new(
-            vec![true, false, false, true],  // null_pages
-            BoundaryOrder::UNORDERED,
-            Some(vec![1024, 0, 1, -1]),  // null_counts (-1 for unknown)
-            None,  // repetition_level_histograms
-            None,  // definition_level_histograms
-            float_min_bytes,
-            float_max_bytes,
-        ).map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to create float index: {}", e)))?);
+        // Page 0: all nulls
+        float_builder.append(true, vec![], vec![], 1024);
+        // Page 1: min=0.0, max=10.0, null_count=0
+        float_builder.append(false, 0.0f32.to_le_bytes().to_vec(), 10.0f32.to_le_bytes().to_vec(), 0);
+        // Page 2: min=10.0, max=20.0, null_count=1
+        float_builder.append(false, 10.0f32.to_le_bytes().to_vec(), 20.0f32.to_le_bytes().to_vec(), 1);
+        // Page 3: all nulls, null_count=-1 (unknown)
+        float_builder.append(true, vec![], vec![], -1);
+
+        let idx_float = float_builder.build()
+            .map_err(|e| crate::Error::new(crate::ErrorKind::Unexpected, format!("Failed to create float index: {}", e)))?;
 
         // String index with 5 pages
-        let string_min_bytes = vec![
-            "AA".as_bytes(),  // Page 0
-            "DE".as_bytes(),  // Page 1
-            "DF".as_bytes(),  // Page 2
-            &[] as &[u8],     // Page 3: all nulls
-            &[] as &[u8],     // Page 4: all nulls
-        ];
-        let string_max_bytes = vec![
-            "DD".as_bytes(),  // Page 0
-            "DE".as_bytes(),  // Page 1
-            "UJ".as_bytes(),  // Page 2
-            &[] as &[u8],     // Page 3: all nulls
-            &[] as &[u8],     // Page 4: all nulls
-        ];
+        let mut string_builder = ColumnIndexBuilder::new(ParquetPhysicalType::BYTE_ARRAY);
+        string_builder.set_boundary_order(BoundaryOrder::UNORDERED);
 
-        let idx_string = Index::BYTE_ARRAY(ByteArrayColumnIndex::try_new(
-            vec![false, false, false, true, true],  // null_pages
-            BoundaryOrder::UNORDERED,
-            Some(vec![0, 0, 1, 48, -1]),  // null_counts (-1 for unknown)
-            None,  // repetition_level_histograms
-            None,  // definition_level_histograms
-            string_min_bytes,
-            string_max_bytes,
-        ).map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to create string index: {}", e)))?);
+        // Page 0: "AA" to "DD", null_count=0
+        string_builder.append(false, "AA".as_bytes().to_vec(), "DD".as_bytes().to_vec(), 0);
+        // Page 1: "DE" to "DE", null_count=0
+        string_builder.append(false, "DE".as_bytes().to_vec(), "DE".as_bytes().to_vec(), 0);
+        // Page 2: "DF" to "UJ", null_count=1
+        string_builder.append(false, "DF".as_bytes().to_vec(), "UJ".as_bytes().to_vec(), 1);
+        // Page 3: all nulls, null_count=48
+        string_builder.append(true, vec![], vec![], 48);
+        // Page 4: all nulls, null_count=-1 (unknown)
+        string_builder.append(true, vec![], vec![], -1);
+
+        let idx_string = string_builder.build()
+            .map_err(|e| crate::Error::new(crate::ErrorKind::Unexpected, format!("Failed to create string index: {}", e)))?;
 
         let page_locs_float = vec![
-            PageLocation::new(0, 1024, 0),
-            PageLocation::new(1024, 1024, 1024),
-            PageLocation::new(2048, 1024, 2048),
-            PageLocation::new(3072, 1024, 3072),
+            PageLocation { offset: 0, compressed_page_size: 1024, first_row_index: 0 },
+            PageLocation { offset: 1024, compressed_page_size: 1024, first_row_index: 1024 },
+            PageLocation { offset: 2048, compressed_page_size: 1024, first_row_index: 2048 },
+            PageLocation { offset: 3072, compressed_page_size: 1024, first_row_index: 3072 },
         ];
 
         let page_locs_string = vec![
-            PageLocation::new(0, 512, 0),
-            PageLocation::new(512, 512, 512),
-            PageLocation::new(1024, 2976, 1024),
-            PageLocation::new(4000, 48, 4000),
-            PageLocation::new(4048, 48, 4048),
+            PageLocation { offset: 0, compressed_page_size: 512, first_row_index: 0 },
+            PageLocation { offset: 512, compressed_page_size: 512, first_row_index: 512 },
+            PageLocation { offset: 1024, compressed_page_size: 2976, first_row_index: 1024 },
+            PageLocation { offset: 4000, compressed_page_size: 48, first_row_index: 4000 },
+            PageLocation { offset: 4048, compressed_page_size: 48, first_row_index: 4048 },
         ];
 
         Ok((vec![idx_float, idx_string], vec![
