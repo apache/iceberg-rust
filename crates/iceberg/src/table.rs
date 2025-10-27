@@ -236,7 +236,7 @@ impl Table {
     }
 
     /// Returns the current schema as a shared reference.
-    pub fn schema_ref(&self) -> SchemaRef {
+    pub fn current_schema_ref(&self) -> SchemaRef {
         self.metadata.current_schema().clone()
     }
 
