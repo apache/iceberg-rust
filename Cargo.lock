@@ -3741,6 +3741,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

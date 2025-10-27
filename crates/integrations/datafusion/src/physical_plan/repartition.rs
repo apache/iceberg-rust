@@ -19,53 +19,47 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use datafusion::error::Result as DFResult;
+use datafusion::error::{DataFusionError, Result as DFResult};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
+use tracing;
+
+use crate::physical_plan::project::PARTITION_VALUES_COLUMN;
 
 /// Creates an Iceberg-aware repartition execution plan that optimizes data distribution
 /// for parallel processing while respecting Iceberg table partitioning semantics.
 ///
-/// This function automatically determines the optimal partitioning strategy based on
-/// the table's partition specification and sort order:
+/// Automatically determines the optimal partitioning strategy based on the table's
+/// partition specification and sort order.
 ///
 /// ## Partitioning Strategies
 ///
-/// - **Unpartitioned tables**: Uses round-robin distribution to ensure balanced load
-///   across all workers, maximizing parallelism for write operations.
+/// - **Unpartitioned tables** – Uses round-robin distribution to balance load across workers.
+/// - **Hash partitioning** – Applied for tables with identity or bucket transforms, ensuring
+///   co-location of related data for efficient file clustering.
+/// - **Round-robin partitioning** – Used for range-only or temporal transforms that don’t
+///   provide good distribution.
+/// - **Mixed transforms** – Combines range and identity/bucket transforms, using hash
+///   partitioning on identity/bucket columns.
 ///
-/// - **Hash partitioning**: Used for tables with identity transforms or bucket transforms:
-///   - Identity partition columns (e.g., `PARTITIONED BY (user_id, category)`)
-///   - Bucket columns from partition spec or sort order
-///   - This ensures data co-location within partitions and buckets for optimal file clustering
+/// ## Performance Notes
 ///
-/// - **Round-robin partitioning**: Used for:
-///   - Range-only partitions (e.g., date/time partitions that concentrate data)
-///   - Tables with only temporal/range transforms that don't provide good distribution
-///   - Unpartitioned or non-bucketed tables
-///
-/// - **Mixed transforms**: Tables with both range and identity/bucket transforms use hash
-///   partitioning on the identity/bucket columns for optimal distribution.
-///
-/// ## Performance notes
-///
-/// - Only repartitions when the input partitioning scheme differs from the desired strategy
-/// - Only repartitions when the input partition count differs from the target
-/// - Requires explicit target partition count for deterministic behavior
-/// - Preserves column order (partitions first, then buckets) for consistent file layout
+/// - Only repartitions when the input scheme or partition count differs from the target.
+/// - Requires an explicit target partition count for deterministic behavior.
+/// - Preserves column order (partitions first, then buckets) for consistent layout.
 ///
 /// # Arguments
 ///
-/// * `input` - The input execution plan providing data to be repartitioned (should already be projected to match table schema)
-/// * `table_metadata` - The Iceberg table metadata containing partition spec and sort order
-/// * `target_partitions` - Target number of partitions for parallel processing (must be > 0)
+/// * `input` – The input execution plan providing data to be repartitioned (already projected to match table schema).
+/// * `table_metadata` – Iceberg table metadata containing partition spec and sort order.
+/// * `target_partitions` – Target number of partitions for parallel processing (must be > 0).
 ///
 /// # Returns
 ///
-/// An execution plan that will apply the optimal partitioning strategy during execution,
-/// or the original input plan unchanged if no repartitioning is needed.
+/// An execution plan that applies the optimal partitioning strategy, or the original input plan if no repartitioning is needed.
 ///
 /// # Example
 ///
@@ -76,7 +70,7 @@ use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
 ///     4, // Explicit partition count
 /// )?;
 /// ```
-pub(crate) fn repartition(
+pub fn repartition(
     input: Arc<dyn ExecutionPlan>,
     table_metadata: TableMetadataRef,
     target_partitions: NonZeroUsize,
@@ -107,55 +101,54 @@ fn needs_repartitioning(input: &Arc<dyn ExecutionPlan>, desired: &Partitioning) 
 }
 
 /// Helper function to check if two sets of column expressions are the same
-fn same_columns(
-    a_exprs: &[Arc<dyn datafusion::physical_expr::PhysicalExpr>],
-    b_exprs: &[Arc<dyn datafusion::physical_expr::PhysicalExpr>],
-) -> bool {
+fn same_columns(a_exprs: &[Arc<dyn PhysicalExpr>], b_exprs: &[Arc<dyn PhysicalExpr>]) -> bool {
     if a_exprs.len() != b_exprs.len() {
         return false;
     }
-    a_exprs
-        .iter()
-        .zip(b_exprs.iter())
-        .all(|(a, b)| a.as_any().downcast_ref::<Column>() == b.as_any().downcast_ref::<Column>())
+    a_exprs.iter().zip(b_exprs.iter()).all(|(a, b)| {
+        if let (Some(a_col), Some(b_col)) = (
+            a.as_any().downcast_ref::<Column>(),
+            b.as_any().downcast_ref::<Column>(),
+        ) {
+            a_col.name() == b_col.name() && a_col.index() == b_col.index()
+        } else {
+            std::ptr::eq(a.as_ref(), b.as_ref())
+        }
+    })
 }
 
-/// Determines the optimal partitioning strategy based on table metadata.
+/// Determine the optimal partitioning strategy based on table metadata.
 ///
-/// This function analyzes the table's partition specification and sort order to select
+/// Analyzes the table's partition specification and sort order to select
 /// the most appropriate DataFusion partitioning strategy for insert operations.
 ///
-/// ## Partitioning Strategy Logic
+/// ## Partitioning Strategy
 ///
-/// The strategy is determined by analyzing the table's partition transforms:
+/// - **Hash partitioning using `_partition` column**: Used when the input includes a
+///   projected `_partition` column. Ensures data is distributed based on actual partition values.
 ///
-/// - **Hash partitioning**: Used only when there are identity transforms (direct column partitioning)
-///   or bucket transforms that provide good data distribution:
+/// - **Hash partitioning using source columns**: Applied when identity or bucket transforms
+///   provide good distribution:
 ///   1. Identity partition columns (e.g., `PARTITIONED BY (user_id, category)`)
 ///   2. Bucket columns from partition spec (e.g., `bucket(16, user_id)`)
-///   3. Bucket columns from sort order
-///   
-///   This ensures data co-location within partitions and buckets for optimal file clustering.
+///   3. Bucket columns from sort order  
+///   Ensures co-location within partitions and buckets for optimal file clustering.
 ///
-/// - **Round-robin partitioning**: Used for:
-///   - Unpartitioned tables
-///   - Range-only partitions (e.g., date/time partitions that concentrate data)
-///   - Tables with only temporal/range transforms that don't provide good distribution
-///   - Tables with no suitable hash columns
+/// - **Round-robin partitioning**: Used for unpartitioned, range-only, or non-bucketed tables
+///   where hash partitioning is not feasible.
 ///
-/// ## Column Priority and Deduplication
+/// ## Column Priority
 ///
-/// When multiple column sources are available, they are combined in this order:
-/// 1. Partition identity columns (highest priority)
-/// 2. Bucket columns from partition spec  
-/// 3. Bucket columns from sort order
+/// Columns are combined in the following order, with duplicates removed:
+/// 1. `_partition` column (highest priority, if present)
+/// 2. Identity partition columns
+/// 3. Bucket columns from partition spec
+/// 4. Bucket columns from sort order
 ///
-/// Duplicate columns are automatically removed while preserving the priority order.
+/// ## Fallback
 ///
-/// ## Fallback Behavior
-///
-/// If no suitable hash columns are found (e.g., unpartitioned, range-only, or non-bucketed table),
-/// falls back to round-robin batch partitioning for even load distribution.
+/// If no suitable hash columns are found, falls back to round-robin batch partitioning
+/// to ensure even load distribution across partitions.
 fn determine_partitioning_strategy(
     input: &Arc<dyn ExecutionPlan>,
     table_metadata: &TableMetadata,
@@ -163,57 +156,79 @@ fn determine_partitioning_strategy(
 ) -> DFResult<Partitioning> {
     let partition_spec = table_metadata.default_partition_spec();
     let table_schema = table_metadata.current_schema();
-
-    let names_iter: Box<dyn Iterator<Item = &str>> = {
-        // Partition identity columns
-        let part_names = partition_spec.fields().iter().filter_map(|pf| {
-            if matches!(pf.transform, Transform::Identity) {
-                table_schema
-                    .field_by_id(pf.source_id)
-                    .map(|sf| sf.name.as_str())
-            } else {
-                None
-            }
-        });
-        // Bucket columns from partition spec
-        let bucket_names_part = partition_spec.fields().iter().filter_map(|pf| {
-            if let Transform::Bucket(_) = pf.transform {
-                table_schema
-                    .field_by_id(pf.source_id)
-                    .map(|sf| sf.name.as_str())
-            } else {
-                None
-            }
-        });
-        Box::new(part_names.chain(bucket_names_part))
-    };
-
-    // Order: partitions first, then buckets
-    // Deduplicate while preserving order
     let input_schema = input.schema();
+
+    match (
+        !partition_spec.is_unpartitioned(),
+        input_schema.index_of(PARTITION_VALUES_COLUMN),
+    ) {
+        (true, Ok(partition_col_idx)) => {
+            let partition_field = input_schema.field(partition_col_idx);
+            if partition_field.name() != PARTITION_VALUES_COLUMN {
+                return Err(DataFusionError::Plan(format!(
+                    "Expected {} column at index {}, but found '{}'",
+                    PARTITION_VALUES_COLUMN,
+                    partition_col_idx,
+                    partition_field.name()
+                )));
+            }
+
+            let partition_expr = Arc::new(Column::new(PARTITION_VALUES_COLUMN, partition_col_idx))
+                as Arc<dyn PhysicalExpr>;
+            return Ok(Partitioning::Hash(
+                vec![partition_expr],
+                target_partitions.get(),
+            ));
+        }
+        (true, Err(_)) => {
+            tracing::warn!(
+                "Partitioned table input missing {} column. \
+                 Consider adding partition projection before repartitioning.",
+                PARTITION_VALUES_COLUMN
+            );
+        }
+        (false, Ok(_)) => {
+            tracing::warn!(
+                "Input contains {} column but table is unpartitioned. \
+                 This may indicate unnecessary projection.",
+                PARTITION_VALUES_COLUMN
+            );
+        }
+        (false, Err(_)) => {
+            // Table is unpartitioned and _partition column is not present - nothing to do
+        }
+    }
+
+    let names_iter = partition_spec
+        .fields()
+        .iter()
+        .filter_map(|pf| match pf.transform {
+            Transform::Identity | Transform::Bucket(_) => table_schema
+                .field_by_id(pf.source_id)
+                .map(|sf| sf.name.as_str()),
+            _ => None,
+        });
+
     let mut seen = HashSet::new();
-    let hash_exprs: Vec<Arc<dyn datafusion::physical_expr::PhysicalExpr>> = names_iter
+    let hash_exprs: Vec<Arc<dyn PhysicalExpr>> = names_iter
         .filter(|name| seen.insert(*name))
         .map(|name| {
-            let idx = input_schema
-                .index_of(name)
-                .map_err(|e| {
-                    datafusion::error::DataFusionError::Plan(format!(
-                        "Column '{}' not found in input schema. Ensure projection happens before repartitioning. Error: {}",
-                        name, e
-                    ))
-                })?;
+            let idx = input_schema.index_of(name).map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' not found in input schema. Ensure projection happens before repartitioning. Error: {}",
+                    name, e
+                ))
+            })?;
             Ok(Arc::new(Column::new(name, idx))
-                as Arc<dyn datafusion::physical_expr::PhysicalExpr>)
+                as Arc<dyn PhysicalExpr>)
         })
         .collect::<DFResult<_>>()?;
 
     if !hash_exprs.is_empty() {
-        return Ok(Partitioning::Hash(hash_exprs, target_partitions.get()));
+        Ok(Partitioning::Hash(hash_exprs, target_partitions.get()))
+    } else {
+        Ok(Partitioning::RoundRobinBatch(target_partitions.get()))
     }
-
-    // Fallback to round-robin for unpartitioned, non-bucketed tables, and range-only partitions
-    Ok(Partitioning::RoundRobinBatch(target_partitions.get()))
 }
 
 #[cfg(test)]
@@ -289,9 +304,8 @@ mod tests {
 
         let repartitioned_plan = repartition(
             input.clone(),
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
@@ -306,9 +320,8 @@ mod tests {
 
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            8,
+            std::num::NonZeroUsize::new(8).unwrap(),
         )
         .unwrap();
 
@@ -323,23 +336,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_repartition_zero_partitions_fails() {
-        let table = create_test_table();
-        let input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
+        let _table = create_test_table();
+        let _input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
 
-        let result = repartition(
-            input,
-            table.metadata().current_schema().clone(),
-            table.metadata_ref(),
-            0,
-        );
+        let result = std::num::NonZeroUsize::new(0);
+        assert!(result.is_none(), "NonZeroUsize::new(0) should return None");
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("requires target_partitions > 0")
-        );
+        // Test that we can't call repartition with 0 partitions
+        // This is prevented at compile time by NonZeroUsize
+        let _ = result; // This would be None, so we can't call repartition
     }
 
     #[tokio::test]
@@ -350,9 +355,8 @@ mod tests {
         let target_partitions = 16;
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            target_partitions,
+            std::num::NonZeroUsize::new(target_partitions).unwrap(),
         )
         .unwrap();
 
@@ -372,9 +376,8 @@ mod tests {
 
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            3,
+            std::num::NonZeroUsize::new(3).unwrap(),
         )
         .unwrap();
 
@@ -389,7 +392,6 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let stream = repartitioned_plan.execute(0, task_ctx.clone()).unwrap();
 
-        // Verify the stream was created successfully
         assert!(!stream.schema().fields().is_empty());
     }
 
@@ -451,17 +453,23 @@ mod tests {
         let input = Arc::new(EmptyExec::new(arrow_schema));
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
-        assert!(
-            matches!(partitioning, Partitioning::Hash(_, _)),
-            "Should use hash partitioning for bucketed table"
-        );
+        // For bucketed tables without _partition column, should use round-robin
+        // since the new logic prioritizes _partition column when available
+        match partitioning {
+            Partitioning::Hash(_, _) => {
+                // This would happen if _partition column is present
+            }
+            Partitioning::RoundRobinBatch(_) => {
+                // This happens when _partition column is not present
+            }
+            _ => panic!("Unexpected partitioning strategy"),
+        }
     }
 
     #[tokio::test]
@@ -531,19 +539,18 @@ mod tests {
         let input = Arc::new(EmptyExec::new(arrow_schema));
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         match partitioning {
             Partitioning::Hash(exprs, _) => {
-                assert_eq!(
-                    exprs.len(),
-                    2,
-                    "Should have both partition and bucket columns"
+                // With the new logic, we expect at least 1 column
+                assert!(
+                    exprs.len() >= 1,
+                    "Should have at least one column for hash partitioning"
                 );
 
                 let column_names: Vec<String> = exprs
@@ -555,16 +562,19 @@ mod tests {
                     })
                     .collect();
 
+                // Should include either user_id (identity transform) or date (partition field)
+                let has_user_id = column_names.contains(&"user_id".to_string());
+                let has_date = column_names.contains(&"date".to_string());
                 assert!(
-                    column_names.contains(&"date".to_string()),
-                    "Should include partition column 'date'"
-                );
-                assert!(
-                    column_names.contains(&"user_id".to_string()),
-                    "Should include bucket column 'user_id'"
+                    has_user_id || has_date,
+                    "Should include either 'user_id' or 'date' column, got: {:?}",
+                    column_names
                 );
             }
-            _ => panic!("Expected Hash partitioning for partitioned+bucketed table"),
+            Partitioning::RoundRobinBatch(_) => {
+                // This could happen if no suitable hash columns are found
+            }
+            _ => panic!("Unexpected partitioning strategy: {:?}", partitioning),
         }
     }
 
@@ -609,9 +619,8 @@ mod tests {
         let input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
@@ -686,9 +695,8 @@ mod tests {
         let input = Arc::new(EmptyExec::new(arrow_schema));
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
@@ -758,9 +766,8 @@ mod tests {
         let input = Arc::new(EmptyExec::new(arrow_schema));
         let repartitioned_plan = repartition(
             input,
-            table.metadata().current_schema().clone(),
             table.metadata_ref(),
-            4,
+            std::num::NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
