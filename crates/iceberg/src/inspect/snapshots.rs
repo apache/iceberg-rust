@@ -158,7 +158,7 @@ mod tests {
                 Field { "manifest_list": nullable Utf8, metadata: {"PARQUET:field_id": "5"} },
                 Field { "summary": nullable Map("key_value": Struct("key": Utf8, metadata: {"PARQUET:field_id": "7"}, "value": nullable Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
             expect![[r#"
-                committed_at: PrimitiveArray<Timestamp(Microsecond, Some("+00:00"))>
+                committed_at: PrimitiveArray<Timestamp(µs, "+00:00")>
                 [
                   2018-01-04T21:22:35.770+00:00,
                   2019-04-12T20:29:15.770+00:00,
