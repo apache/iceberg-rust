@@ -33,6 +33,7 @@ datafusion = { workspace = true }
 datafusion-cli = { workspace = true }
 dirs = { workspace = true }
 fs-err = { workspace = true }
+home = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 iceberg-datafusion = { workspace = true }
@@ -45,4 +46,4 @@ tracing-subscriber = { workspace = true }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
-ignored = ["stacker", "mimalloc"]
+ignored = ["stacker", "mimalloc", "home"]
