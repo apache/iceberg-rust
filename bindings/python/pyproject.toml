@@ -51,8 +51,7 @@ ignore = ["F403", "F405"]
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=8.3.2",
-    "datafusion==45.*",
+    "datafusion==49.*",
     "pyiceberg[sql-sqlite,pyarrow] @ git+https://github.com/apache/iceberg-python.git@d3eb149fe99b14e714a06e727b69cd617c6c052d",
     "fastavro>=1.11.1",
-    "pydantic<2.12.0",
 ]
