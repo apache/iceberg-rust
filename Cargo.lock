@@ -3743,6 +3743,7 @@ dependencies = [
 name = "iceberg-catalog-s3tables"
 version = "0.7.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "aws-config",
  "aws-sdk-s3tables",

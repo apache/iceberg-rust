@@ -637,7 +637,7 @@ impl Catalog for S3TablesCatalog {
                     "Operation failed for hitting aws sdk error",
                 ),
             }
-            .with_source(anyhow!("aws sdk error: {:?}", error))
+            .with_source(anyhow::Error::msg(format!("aws sdk error: {:?}", error)))
         })?;
 
         Ok(staged_table)
