@@ -186,7 +186,7 @@ mod tests {
     use std::fs;
 
     use tempfile::TempDir;
-    use tera::{Context, Tera};
+    use minijinja::{value::Value, AutoEscape, Environment, context};
     use uuid::Uuid;
 
     use super::*;
@@ -197,6 +197,12 @@ mod tests {
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     use crate::table::Table;
+
+    fn render_template(template: &str, ctx: Value) -> String {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::None);
+        env.render_str(template, ctx).unwrap()
+    }
 
     struct TableTestFixture {
         table_location: String,
@@ -222,13 +228,15 @@ mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let mut context = Context::new();
-                context.insert("table_location", &table_location);
-                context.insert("manifest_list_1_location", &manifest_list1_location);
-                context.insert("manifest_list_2_location", &manifest_list2_location);
-                context.insert("table_metadata_1_location", &table_metadata1_location);
-
-                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                let metadata_json = render_template(
+                    &template_json_str,
+                    context! {
+                        table_location => &table_location,
+                        manifest_list_1_location => &manifest_list1_location,
+                        manifest_list_2_location => &manifest_list2_location,
+                        table_metadata_1_location => &table_metadata1_location,
+                    },
+                );
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
