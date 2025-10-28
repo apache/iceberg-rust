@@ -15,31 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
-
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
-
-jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@v5
-      - name: Check typos
-        uses: crate-ci/typos@v1.38.1
+query TTTT rowsort
+SHOW TABLES
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+default information_schema columns VIEW
+default information_schema df_settings VIEW
+default information_schema parameters VIEW
+default information_schema routines VIEW
+default information_schema schemata VIEW
+default information_schema tables VIEW
+default information_schema views VIEW
