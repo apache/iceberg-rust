@@ -570,11 +570,12 @@ pub mod tests {
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
     use futures::{TryStreamExt, stream};
+    use minijinja::value::Value;
+    use minijinja::{AutoEscape, Environment, context};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
-    use minijinja::{value::Value, AutoEscape, Environment, context};
     use uuid::Uuid;
 
     use crate::TableIdent;
@@ -620,15 +621,12 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(
-                    &template_json_str,
-                    context! {
-                        table_location => &table_location,
-                        manifest_list_1_location => &manifest_list1_location,
-                        manifest_list_2_location => &manifest_list2_location,
-                        table_metadata_1_location => &table_metadata1_location,
-                    },
-                );
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -663,13 +661,10 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(
-                    &template_json_str,
-                    context! {
-                        table_location => &table_location,
-                        table_metadata_1_location => &table_metadata1_location,
-                    },
-                );
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -705,15 +700,12 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(
-                    &template_json_str,
-                    context! {
-                        table_location => &table_location,
-                        manifest_list_1_location => &manifest_list1_location,
-                        manifest_list_2_location => &manifest_list2_location,
-                        table_metadata_1_location => &table_metadata1_location,
-                    },
-                );
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
