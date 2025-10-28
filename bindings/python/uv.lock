@@ -109,19 +109,19 @@ wheels = [
 
 [[package]]
 name = "datafusion"
-version = "49.0.0"
+version = "50.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/81/eb7f69e184eba6f8fc748f09aa6ac39a50a4aa54e66e1529769d68d7c9e4/datafusion-49.0.0.tar.gz", hash = "sha256:f3ba4f00d56a199a90df145f43667131dbba9aea9b170cc61cd3663241a74a94", size = 183558, upload-time = "2025-08-29T01:39:45.889Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/cc/e8e8f7c472e93e7a560203ac40ac319b926029007c0dad873dbba97f9f2d/datafusion-50.1.0.tar.gz", hash = "sha256:d8b8f027c7ce2498cda1589d3ce6d8720798963e031660fbe4d2e26e172442ec", size = 188103, upload-time = "2025-10-20T12:39:23.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/02/16/a1438058d784deea42105b869323007cf9dd8a52dbb4551a9ef23967a235/datafusion-49.0.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:bb419810c7b1032ec4a374260d289279c5911e3fcdcfb57c9513b6d256fe0330", size = 26455326, upload-time = "2025-08-29T01:39:19.759Z" },
-    { url = "https://files.pythonhosted.org/packages/83/8d/d906b27b61838002b1cf0880eaa75c741409f0f6386192f2fabee24684af/datafusion-49.0.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:95d82ceda75767714629c1b5572a41bc919066156163d1ca3777418ffdbf4916", size = 23623419, upload-time = "2025-08-29T01:39:26.613Z" },
-    { url = "https://files.pythonhosted.org/packages/66/4e/2a113bef5e51e56f7273f193959a80e4abd48a2ff6856cfa219dbba85600/datafusion-49.0.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e093a8d8cc68bf48376c2f553dcec35829be3ea2c9557516fcf93d2bf4695593", size = 29392602, upload-time = "2025-08-29T01:39:32.053Z" },
-    { url = "https://files.pythonhosted.org/packages/ea/80/f49809e61f28343f303059572d9fdfedcb6f08653f34c057c2018d98ab5e/datafusion-49.0.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:7e9286f92f9f292a57873f8b83f10796decba98f4c022e92d929511f68e2d79a", size = 27505100, upload-time = "2025-08-29T01:39:36.398Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/d7/54f1d73a9e8b084965ea40531988ca25e57f7f5c77560e198483b1c7bf25/datafusion-49.0.0-cp39-abi3-win_amd64.whl", hash = "sha256:2079a2ec6e73820a21d6f8d466a1410a94f8ef3171eba2cd2461790fc0437c91", size = 28352189, upload-time = "2025-08-29T01:39:43.546Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/6e/f9e2d5d935024a79fd549b5ce1d05549d26a027aab800727d492ac036504/datafusion-50.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:aeaa3c7bcf630bbea962b8fe75d300d98eaf7e2a5edf98e6a0130a1bec3543ea", size = 29280689, upload-time = "2025-10-20T12:39:06.913Z" },
+    { url = "https://files.pythonhosted.org/packages/db/58/2dc473240f552d3620186b527c04397f82b36f02243afaf49f0813c84a17/datafusion-50.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:85727df82c818103092c3ee18d198365833d3e44c2921d2b378d4d682798e511", size = 26140751, upload-time = "2025-10-20T12:39:09.95Z" },
+    { url = "https://files.pythonhosted.org/packages/00/ba/8d8aa1df96e0666752e5c9d406d440495df2014d315b2a95bbef9856b23e/datafusion-50.1.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:49f5bd0edb2bf2d00625beeb46a115e1421db2e1b14b535f7c17cc0927f36b8a", size = 32165290, upload-time = "2025-10-20T12:39:13.713Z" },
+    { url = "https://files.pythonhosted.org/packages/11/9a/afce9586145b3ed153d75364b21102a6a95260940352e06b7c6709e9d2db/datafusion-50.1.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:5c9c2f70922ddedf54d8abd4ba9585a5026c3409438f5aafc1ad0428a67a4d1f", size = 29982398, upload-time = "2025-10-20T12:39:16.823Z" },
+    { url = "https://files.pythonhosted.org/packages/51/a3/41ef1c565770ef0c4060ee3fd50367dd06816f70a5be1ef41fbd7c3975e8/datafusion-50.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:145c8f2e969c9cc51dc6af8a185ec39739ebeb5d680f9fe0020e005564ed40a8", size = 31258359, upload-time = "2025-10-20T12:39:21.731Z" },
 ]
 
 [[package]]
@@ -511,7 +511,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "datafusion", specifier = "==49.*" },
+    { name = "datafusion", specifier = "==50.*" },
     { name = "fastavro", specifier = ">=1.11.1" },
     { name = "maturin", specifier = ">=1.0,<2.0" },
     { name = "pyiceberg", extras = ["sql-sqlite", "pyarrow"], git = "https://github.com/apache/iceberg-python.git?rev=d3eb149fe99b14e714a06e727b69cd617c6c052d" },
