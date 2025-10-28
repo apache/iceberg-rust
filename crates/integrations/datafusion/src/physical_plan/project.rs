@@ -19,23 +19,18 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, StructArray};
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
 use datafusion::common::Result as DFResult;
-use datafusion::error::DataFusionError;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
-use iceberg::arrow::record_batch_projector::RecordBatchProjector;
-use iceberg::spec::{PartitionSpec, Schema};
+use iceberg::arrow::{PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator};
+use iceberg::spec::PartitionSpec;
 use iceberg::table::Table;
-use iceberg::transform::BoxedTransformFunction;
 
 use crate::to_datafusion_error;
-
-/// Column name for the combined partition values struct
-const PARTITION_VALUES_COLUMN: &str = "_partition";
 
 /// Extends an ExecutionPlan with partition value calculations for Iceberg tables.
 ///
@@ -65,12 +60,9 @@ pub fn project_with_partition(
     let input_schema = input.schema();
     // TODO: Validate that input_schema matches the Iceberg table schema.
     // See: https://github.com/apache/iceberg-rust/issues/1752
-    let partition_type = build_partition_type(partition_spec, table_schema.as_ref())?;
-    let calculator = PartitionValueCalculator::new(
-        partition_spec.as_ref().clone(),
-        table_schema.as_ref().clone(),
-        partition_type,
-    )?;
+    let calculator =
+        PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
+            .map_err(to_datafusion_error)?;
 
     let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
         Vec::with_capacity(input_schema.fields().len() + 1);
@@ -80,8 +72,8 @@ pub fn project_with_partition(
         projection_exprs.push((column_expr, field.name().clone()));
     }
 
-    let partition_expr = Arc::new(PartitionExpr::new(calculator));
-    projection_exprs.push((partition_expr, PARTITION_VALUES_COLUMN.to_string()));
+    let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec.clone()));
+    projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
     Ok(Arc::new(projection))
@@ -91,21 +83,24 @@ pub fn project_with_partition(
 #[derive(Debug, Clone)]
 struct PartitionExpr {
     calculator: Arc<PartitionValueCalculator>,
+    partition_spec: Arc<PartitionSpec>,
 }
 
 impl PartitionExpr {
-    fn new(calculator: PartitionValueCalculator) -> Self {
+    fn new(calculator: PartitionValueCalculator, partition_spec: Arc<PartitionSpec>) -> Self {
         Self {
             calculator: Arc::new(calculator),
+            partition_spec,
         }
     }
 }
 
 // Manual PartialEq/Eq implementations for pointer-based equality
-// (two PartitionExpr are equal if they share the same calculator instance)
+// (two PartitionExpr are equal if they share the same calculator and partition_spec instances)
 impl PartialEq for PartitionExpr {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.calculator, &other.calculator)
+            && Arc::ptr_eq(&self.partition_spec, &other.partition_spec)
     }
 }
 
@@ -117,7 +112,7 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn data_type(&self, _input_schema: &ArrowSchema) -> DFResult<DataType> {
-        Ok(self.calculator.partition_type.clone())
+        Ok(self.calculator.partition_arrow_type().clone())
     }
 
     fn nullable(&self, _input_schema: &ArrowSchema) -> DFResult<bool> {
@@ -125,7 +120,10 @@ impl PhysicalExpr for PartitionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> DFResult<ColumnarValue> {
-        let array = self.calculator.calculate(batch)?;
+        let array = self
+            .calculator
+            .calculate(batch)
+            .map_err(to_datafusion_error)?;
         Ok(ColumnarValue::Array(array))
     }
 
@@ -142,7 +140,6 @@ impl PhysicalExpr for PartitionExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let field_names: Vec<String> = self
-            .calculator
             .partition_spec
             .fields()
             .iter()
@@ -155,7 +152,6 @@ impl PhysicalExpr for PartitionExpr {
 impl std::fmt::Display for PartitionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let field_names: Vec<&str> = self
-            .calculator
             .partition_spec
             .fields()
             .iter()
@@ -167,110 +163,18 @@ impl std::fmt::Display for PartitionExpr {
 
 impl std::hash::Hash for PartitionExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Two PartitionExpr are equal if they share the same calculator Arc
+        // Two PartitionExpr are equal if they share the same calculator and partition_spec Arcs
         Arc::as_ptr(&self.calculator).hash(state);
+        Arc::as_ptr(&self.partition_spec).hash(state);
     }
-}
-
-/// Calculator for partition values in Iceberg tables
-#[derive(Debug)]
-struct PartitionValueCalculator {
-    partition_spec: PartitionSpec,
-    partition_type: DataType,
-    projector: RecordBatchProjector,
-    transform_functions: Vec<BoxedTransformFunction>,
-}
-
-impl PartitionValueCalculator {
-    fn new(
-        partition_spec: PartitionSpec,
-        table_schema: Schema,
-        partition_type: DataType,
-    ) -> DFResult<Self> {
-        if partition_spec.is_unpartitioned() {
-            return Err(DataFusionError::Internal(
-                "Cannot create partition calculator for unpartitioned table".to_string(),
-            ));
-        }
-
-        let transform_functions: Result<Vec<BoxedTransformFunction>, _> = partition_spec
-            .fields()
-            .iter()
-            .map(|pf| iceberg::transform::create_transform_function(&pf.transform))
-            .collect();
-
-        let transform_functions = transform_functions.map_err(to_datafusion_error)?;
-
-        let source_field_ids: Vec<i32> = partition_spec
-            .fields()
-            .iter()
-            .map(|pf| pf.source_id)
-            .collect();
-
-        let projector = RecordBatchProjector::from_iceberg_schema(
-            Arc::new(table_schema.clone()),
-            &source_field_ids,
-        )
-        .map_err(to_datafusion_error)?;
-
-        Ok(Self {
-            partition_spec,
-            partition_type,
-            projector,
-            transform_functions,
-        })
-    }
-
-    fn calculate(&self, batch: &RecordBatch) -> DFResult<ArrayRef> {
-        let source_columns = self
-            .projector
-            .project_column(batch.columns())
-            .map_err(to_datafusion_error)?;
-
-        let expected_struct_fields = match &self.partition_type {
-            DataType::Struct(fields) => fields.clone(),
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "Expected partition type must be a struct".to_string(),
-                ));
-            }
-        };
-
-        let mut partition_values = Vec::with_capacity(self.partition_spec.fields().len());
-
-        for (source_column, transform_fn) in source_columns.iter().zip(&self.transform_functions) {
-            let partition_value = transform_fn
-                .transform(source_column.clone())
-                .map_err(to_datafusion_error)?;
-
-            partition_values.push(partition_value);
-        }
-
-        let struct_array = StructArray::try_new(expected_struct_fields, partition_values, None)
-            .map_err(|e| DataFusionError::ArrowError(e, None))?;
-
-        Ok(Arc::new(struct_array))
-    }
-}
-
-fn build_partition_type(
-    partition_spec: &PartitionSpec,
-    table_schema: &Schema,
-) -> DFResult<DataType> {
-    let partition_struct_type = partition_spec
-        .partition_type(table_schema)
-        .map_err(to_datafusion_error)?;
-
-    iceberg::arrow::type_to_arrow_type(&iceberg::spec::Type::Struct(partition_struct_type))
-        .map_err(to_datafusion_error)
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
     use datafusion::arrow::datatypes::{Field, Fields};
     use datafusion::physical_plan::empty::EmptyExec;
-    use iceberg::spec::{NestedField, PrimitiveType, StructType, Transform, Type};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Transform, Type};
 
     use super::*;
 
@@ -291,20 +195,11 @@ mod tests {
             .build()
             .unwrap();
 
-        let _arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-        ]));
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
 
-        let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
-        let calculator = PartitionValueCalculator::new(
-            partition_spec.clone(),
-            table_schema,
-            partition_type.clone(),
-        )
-        .unwrap();
-
-        assert_eq!(calculator.partition_type, partition_type);
+        // Verify partition type
+        assert_eq!(calculator.partition_type().fields().len(), 1);
+        assert_eq!(calculator.partition_type().fields()[0].name, "id_partition");
     }
 
     #[test]
@@ -318,11 +213,13 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
-            .add_partition_field("id", "id_partition", Transform::Identity)
-            .unwrap()
-            .build()
-            .unwrap();
+        let partition_spec = Arc::new(
+            iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
+                .add_partition_field("id", "id_partition", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -331,9 +228,7 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema.clone()));
 
-        let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
-        let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type).unwrap();
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
 
         let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
             Vec::with_capacity(arrow_schema.fields().len() + 1);
@@ -342,8 +237,8 @@ mod tests {
             projection_exprs.push((column_expr, field.name().clone()));
         }
 
-        let partition_expr = Arc::new(PartitionExpr::new(calculator));
-        projection_exprs.push((partition_expr, PARTITION_VALUES_COLUMN.to_string()));
+        let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec));
+        projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
         let projection = ProjectionExec::try_new(projection_exprs, input).unwrap();
         let result = Arc::new(projection);
@@ -384,11 +279,10 @@ mod tests {
         ])
         .unwrap();
 
-        let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
-        let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type.clone())
-                .unwrap();
-        let expr = PartitionExpr::new(calculator);
+        let partition_spec = Arc::new(partition_spec);
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
+        let partition_type = calculator.partition_arrow_type().clone();
+        let expr = PartitionExpr::new(calculator, partition_spec);
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
         assert!(!expr.nullable(&arrow_schema).unwrap());
@@ -469,9 +363,7 @@ mod tests {
         ])
         .unwrap();
 
-        let partition_type = build_partition_type(&partition_spec, &table_schema).unwrap();
-        let calculator =
-            PartitionValueCalculator::new(partition_spec, table_schema, partition_type).unwrap();
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
         let array = calculator.calculate(&batch).unwrap();
 
         let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
