@@ -36,7 +36,7 @@ strum = { workspace = true }
 
 [dev-dependencies]
 itertools = { workspace = true }
-regex = "1.10.5"
+regex = { workspace = true }
 sqlx = { version = "0.8.1", features = [
   "tls-rustls",
   "runtime-tokio",
