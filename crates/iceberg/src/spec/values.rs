@@ -1266,6 +1266,17 @@ impl Datum {
             _ => false,
         }
     }
+
+    /// Returns a human-readable string representation of this literal.
+    ///
+    /// For string literals, this returns the raw string value without quotes.
+    /// For all other literals, it falls back to [`to_string()`].
+    pub fn to_human_string(&self) -> String {
+        match self.literal() {
+            PrimitiveLiteral::String(s) => s.to_string(),
+            _ => self.to_string(),
+        }
+    }
 }
 
 /// Map is a collection of key-value pairs with a key type and a value type.

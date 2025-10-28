@@ -22,8 +22,19 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
+    paths:
+      - '**'                                       # Include all files and directories in the repository by default.
+      - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
+      - '!scripts/**'
+      - '!website/**'
+      - '!.asf.yml'
+      - '!.gitattributes'
+      - '!.gitignore'
+      - '!CONTRIBUTING.md'
+      - '!CHANGELOG.md'
+      - '!LICENSE'
+      - '!NOTICE'
+      - '!README.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -33,7 +44,7 @@ jobs:
   check-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check format
         working-directory: "bindings/python"
         run: cargo fmt --all -- --check
@@ -44,7 +55,7 @@ jobs:
   check-python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install tools
         run: |
           pip install ruff
@@ -66,8 +77,8 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.9
       - uses: PyO3/maturin-action@v1

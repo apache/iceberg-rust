@@ -40,6 +40,7 @@
 //!
 //! # Simple example for the data file writer used parquet physical format:
 //! ```rust, no_run
+//! use std::collections::HashMap;
 //! use std::sync::Arc;
 //!
 //! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
@@ -53,14 +54,24 @@
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
+//! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Build your file IO.
-//!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
-//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
+//!     let catalog = MemoryCatalogBuilder::default()
+//!         .load(
+//!             "memory",
+//!             HashMap::from([(
+//!                 MEMORY_CATALOG_WAREHOUSE.to_string(),
+//!                 "file:///path/to/warehouse".to_string(),
+//!             )]),
+//!         )
+//!         .await?;
 //!     // Add customized code to create a table first.
 //!
 //!     // Load table from catalog.
@@ -78,14 +89,20 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
+//!     );
+//!
+//!     // Create a rolling file writer using parquet file writer builder.
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+//!         parquet_writer_builder,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
+//!
 //!     // Create a data file writer using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 //!     // Build the data file writer
-//!     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+//!     let mut data_file_writer = data_file_writer_builder.build(None).await?;
 //!
 //!     // Write the data using data_file_writer...
 //!
@@ -98,18 +115,20 @@
 //!
 //! # Custom writer to record latency
 //! ```rust, no_run
+//! use std::collections::HashMap;
 //! use std::time::Instant;
 //!
 //! use arrow_array::RecordBatch;
 //! use iceberg::io::FileIOBuilder;
-//! use iceberg::spec::DataFile;
+//! use iceberg::memory::MemoryCatalogBuilder;
+//! use iceberg::spec::{DataFile, PartitionKey};
 //! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 //! use iceberg::writer::file_writer::ParquetWriterBuilder;
 //! use iceberg::writer::file_writer::location_generator::{
 //!     DefaultFileNameGenerator, DefaultLocationGenerator,
 //! };
 //! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-//! use iceberg::{Catalog, MemoryCatalog, Result, TableIdent};
+//! use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, Result, TableIdent};
 //! use parquet::file::properties::WriterProperties;
 //!
 //! #[derive(Clone)]
@@ -129,9 +148,9 @@
 //! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
-//!     async fn build(self) -> Result<Self::R> {
+//!     async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
 //!         Ok(LatencyRecordWriter {
-//!             inner_writer: self.inner_writer_builder.build().await?,
+//!             inner_writer: self.inner_writer_builder.build(partition_key).await?,
 //!         })
 //!     }
 //! }
@@ -160,11 +179,22 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Build your file IO.
-//!     use iceberg::NamespaceIdent;
-//!     let file_io = FileIOBuilder::new("memory").build()?;
 //!     // Connect to a catalog.
-//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
+//!     use iceberg::spec::{Literal, PartitionKey, Struct};
+//!     use iceberg::writer::file_writer::rolling_writer::{
+//!         RollingFileWriter, RollingFileWriterBuilder,
+//!     };
+//!
+//!     let catalog = MemoryCatalogBuilder::default()
+//!         .load(
+//!             "memory",
+//!             HashMap::from([(
+//!                 MEMORY_CATALOG_WAREHOUSE.to_string(),
+//!                 "file:///path/to/warehouse".to_string(),
+//!             )]),
+//!         )
+//!         .await?;
 //!
 //!     // Add customized code to create a table first.
 //!
@@ -172,6 +202,11 @@
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
 //!         .await?;
+//!     let partition_key = PartitionKey::new(
+//!         table.metadata().default_partition_spec().as_ref().clone(),
+//!         table.metadata().current_schema().clone(),
+//!         Struct::from_iter(vec![Some(Literal::string("Seattle"))]),
+//!     );
 //!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
 //!         "test".to_string(),
@@ -183,16 +218,167 @@
 //!     let parquet_writer_builder = ParquetWriterBuilder::new(
 //!         WriterProperties::default(),
 //!         table.metadata().current_schema().clone(),
+//!     );
+//!
+//!     // Create a rolling file writer
+//!     let rolling_file_writer_builder = RollingFileWriterBuilder::new(
+//!         parquet_writer_builder,
+//!         512 * 1024 * 1024,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
 //!     );
-//!     // Create a data file writer builder using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!
+//!     // Create a data file writer builder using rolling file writer.
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 //!     // Create latency record writer using data file writer builder.
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer
-//!     let mut latency_record_data_file_writer = latency_record_builder.build().await.unwrap();
+//!     let mut latency_record_data_file_writer = latency_record_builder
+//!         .build(Some(partition_key))
+//!         .await
+//!         .unwrap();
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Adding Partitioning to Data File Writers
+//!
+//! You can wrap a `DataFileWriter` with partitioning writers to handle partitioned tables.
+//! Iceberg provides two partitioning strategies:
+//!
+//! ## FanoutWriter - For Unsorted Data
+//!
+//! Wraps the data file writer to handle unsorted data by maintaining multiple active writers.
+//! Use this when your data is not pre-sorted by partition key. Writes to different partitions
+//! can happen in any order, even interleaved.
+//!
+//! ```rust, no_run
+//! # // Same setup as the simple example above...
+//! # use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+//! # use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+//! # use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
+//! # use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! # use iceberg::writer::file_writer::ParquetWriterBuilder;
+//! # use iceberg::writer::file_writer::location_generator::{
+//! #     DefaultFileNameGenerator, DefaultLocationGenerator,
+//! # };
+//! # use parquet::file::properties::WriterProperties;
+//! # use std::collections::HashMap;
+//! # #[tokio::main]
+//! # async fn main() -> Result<()> {
+//! # let catalog = MemoryCatalogBuilder::default()
+//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
+//! #     .await?;
+//! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
+//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
+//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+//! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+//!
+//! // Wrap the data file writer with FanoutWriter for partitioning
+//! use iceberg::writer::partitioning::fanout_writer::FanoutWriter;
+//! use iceberg::writer::partitioning::PartitioningWriter;
+//! use iceberg::spec::{Literal, PartitionKey, Struct};
+//!
+//! let mut fanout_writer = FanoutWriter::new(data_file_writer_builder);
+//!
+//! // Create partition keys for different regions
+//! let schema = table.metadata().current_schema().clone();
+//! let partition_spec = table.metadata().default_partition_spec().as_ref().clone();
+//!
+//! let partition_key_us = PartitionKey::new(
+//!     partition_spec.clone(),
+//!     schema.clone(),
+//!     Struct::from_iter([Some(Literal::string("US"))]),
+//! );
+//!
+//! let partition_key_eu = PartitionKey::new(
+//!     partition_spec.clone(),
+//!     schema.clone(),
+//!     Struct::from_iter([Some(Literal::string("EU"))]),
+//! );
+//!
+//! // Write to different partitions in any order - can interleave partition writes
+//! // fanout_writer.write(partition_key_us.clone(), batch_us1).await?;
+//! // fanout_writer.write(partition_key_eu.clone(), batch_eu1).await?;
+//! // fanout_writer.write(partition_key_us.clone(), batch_us2).await?; // Back to US - OK!
+//! // fanout_writer.write(partition_key_eu.clone(), batch_eu2).await?; // Back to EU - OK!
+//!
+//! let data_files = fanout_writer.close().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## ClusteredWriter - For Sorted Data
+//!
+//! Wraps the data file writer for pre-sorted data. More memory efficient as it maintains
+//! only one active writer at a time, but requires input sorted by partition key.
+//!
+//! ```rust, no_run
+//! # // Same setup as the simple example above...
+//! # use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+//! # use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+//! # use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
+//! # use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! # use iceberg::writer::file_writer::ParquetWriterBuilder;
+//! # use iceberg::writer::file_writer::location_generator::{
+//! #     DefaultFileNameGenerator, DefaultLocationGenerator,
+//! # };
+//! # use parquet::file::properties::WriterProperties;
+//! # use std::collections::HashMap;
+//! # #[tokio::main]
+//! # async fn main() -> Result<()> {
+//! # let catalog = MemoryCatalogBuilder::default()
+//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
+//! #     .await?;
+//! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
+//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
+//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+//! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+//!
+//! // Wrap the data file writer with ClusteredWriter for sorted partitioning
+//! use iceberg::writer::partitioning::clustered_writer::ClusteredWriter;
+//! use iceberg::writer::partitioning::PartitioningWriter;
+//! use iceberg::spec::{Literal, PartitionKey, Struct};
+//!
+//! let mut clustered_writer = ClusteredWriter::new(data_file_writer_builder);
+//!
+//! // Create partition keys (must write in sorted order)
+//! let schema = table.metadata().current_schema().clone();
+//! let partition_spec = table.metadata().default_partition_spec().as_ref().clone();
+//!
+//! let partition_key_asia = PartitionKey::new(
+//!     partition_spec.clone(),
+//!     schema.clone(),
+//!     Struct::from_iter([Some(Literal::string("ASIA"))]),
+//! );
+//!
+//! let partition_key_eu = PartitionKey::new(
+//!     partition_spec.clone(),
+//!     schema.clone(),
+//!     Struct::from_iter([Some(Literal::string("EU"))]),
+//! );
+//!
+//! let partition_key_us = PartitionKey::new(
+//!     partition_spec.clone(),
+//!     schema.clone(),
+//!     Struct::from_iter([Some(Literal::string("US"))]),
+//! );
+//!
+//! // Write to partitions in sorted order (ASIA -> EU -> US)
+//! // clustered_writer.write(partition_key_asia, batch_asia).await?;
+//! // clustered_writer.write(partition_key_eu, batch_eu).await?;
+//! // clustered_writer.write(partition_key_us, batch_us).await?;
+//! // Writing back to ASIA would fail since data must be sorted!
+//!
+//! let data_files = clustered_writer.close().await?;
 //!
 //!     Ok(())
 //! }
@@ -200,11 +386,12 @@
 
 pub mod base_writer;
 pub mod file_writer;
+pub mod partitioning;
 
 use arrow_array::RecordBatch;
 
 use crate::Result;
-use crate::spec::DataFile;
+use crate::spec::{DataFile, PartitionKey};
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
@@ -216,8 +403,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    /// Build the iceberg writer with an optional partition key.
+    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.
@@ -254,7 +441,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
-    // This function is used to guarantee the trait can be used as a object safe trait.
+    // This function is used to guarantee the trait can be used as an object safe trait.
     async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
         let _ = w
             .write(RecordBatch::new_empty(Schema::empty().into()))

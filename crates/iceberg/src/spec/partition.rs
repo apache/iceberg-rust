@@ -155,7 +155,9 @@ impl PartitionSpec {
         true
     }
 
-    pub(crate) fn partition_to_path(&self, data: &Struct, schema: SchemaRef) -> String {
+    /// Returns partition path string containing partition type and partition
+    /// value as key-value pairs.
+    pub fn partition_to_path(&self, data: &Struct, schema: SchemaRef) -> String {
         let partition_type = self.partition_type(&schema).unwrap();
         let field_types = partition_type.fields();
 
@@ -173,6 +175,63 @@ impl PartitionSpec {
                 )
             })
             .join("/")
+    }
+}
+
+/// A partition key represents a specific partition in a table, containing the partition spec,
+/// schema, and the actual partition values.
+#[derive(Clone, Debug)]
+pub struct PartitionKey {
+    /// The partition spec that contains the partition fields.
+    spec: PartitionSpec,
+    /// The schema to which the partition spec is bound.
+    schema: SchemaRef,
+    /// Partition fields' values in struct.
+    data: Struct,
+}
+
+impl PartitionKey {
+    /// Creates a new partition key with the given spec, schema, and data.
+    pub fn new(spec: PartitionSpec, schema: SchemaRef, data: Struct) -> Self {
+        Self { spec, schema, data }
+    }
+
+    /// Creates a new partition key from another partition key, with a new data field.
+    pub fn copy_with_data(&self, data: Struct) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            schema: self.schema.clone(),
+            data,
+        }
+    }
+
+    /// Generates a partition path based on the partition values.
+    pub fn to_path(&self) -> String {
+        self.spec.partition_to_path(&self.data, self.schema.clone())
+    }
+
+    /// Returns `true` if the partition key is absent (`None`)
+    /// or represents an unpartitioned spec.
+    pub fn is_effectively_none(partition_key: Option<&PartitionKey>) -> bool {
+        match partition_key {
+            None => true,
+            Some(pk) => pk.spec.is_unpartitioned(),
+        }
+    }
+
+    /// Returns the associated [`PartitionSpec`].
+    pub fn spec(&self) -> &PartitionSpec {
+        &self.spec
+    }
+
+    /// Returns the associated [`SchemaRef`].
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Returns the associated [`Struct`].
+    pub fn data(&self) -> &Struct {
+        &self.data
     }
 }
 
@@ -1756,6 +1815,9 @@ mod tests {
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                    .into(),
+                NestedField::required(4, "empty", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()
             .unwrap();
@@ -1765,14 +1827,23 @@ mod tests {
             .unwrap()
             .add_partition_field("name", "name", Transform::Identity)
             .unwrap()
+            .add_partition_field("timestamp", "ts_hour", Transform::Hour)
+            .unwrap()
+            .add_partition_field("empty", "empty_void", Transform::Void)
+            .unwrap()
             .build()
             .unwrap();
 
-        let data = Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
+        let data = Struct::from_iter([
+            Some(Literal::int(42)),
+            Some(Literal::string("alice")),
+            Some(Literal::int(1000)),
+            Some(Literal::string("empty")),
+        ]);
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=\"alice\""
+            "id=42/name=alice/ts_hour=1000/empty_void=null"
         );
     }
 }

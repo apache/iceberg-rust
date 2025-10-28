@@ -171,4 +171,56 @@ mod tests {
             Some(statistics_file_2)
         );
     }
+
+    #[test]
+    fn test_set_single_statistics() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let statistics_file = StatisticsFile {
+            snapshot_id: 1234567890i64,
+            statistics_path: "s3://a/b/stats1.puffin".to_string(),
+            file_size_in_bytes: 500,
+            file_footer_size_in_bytes: 50,
+            key_metadata: None,
+            blob_metadata: vec![],
+        };
+
+        // Set statistics
+        let tx = tx
+            .update_statistics()
+            .set_statistics(statistics_file.clone())
+            .apply(tx)
+            .unwrap();
+
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateStatisticsAction>()
+            .unwrap();
+
+        // Verify that the statistics file is set correctly
+        assert_eq!(
+            action
+                .statistics_to_set
+                .get(&statistics_file.snapshot_id)
+                .unwrap()
+                .clone(),
+            Some(statistics_file)
+        );
+    }
+
+    #[test]
+    fn test_no_statistics_set() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // No statistics are set or removed
+        let tx = tx.update_statistics().apply(tx).unwrap();
+
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateStatisticsAction>()
+            .unwrap();
+
+        // Verify that no statistics are set
+        assert!(action.statistics_to_set.is_empty());
+    }
 }
