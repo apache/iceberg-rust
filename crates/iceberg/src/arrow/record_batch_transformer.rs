@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-    Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
+    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array,
+    Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
 };
 use arrow_cast::cast;
 use arrow_schema::{
@@ -400,6 +400,13 @@ impl RecordBatchTransformer {
             (DataType::Int32, None) => {
                 let vals: Vec<Option<i32>> = vec![None; num_rows];
                 Arc::new(Int32Array::from(vals))
+            }
+            (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
+                Arc::new(Date32Array::from(vec![*value; num_rows]))
+            }
+            (DataType::Date32, None) => {
+                let vals: Vec<Option<i32>> = vec![None; num_rows];
+                Arc::new(Date32Array::from(vals))
             }
             (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
                 Arc::new(Int64Array::from(vec![*value; num_rows]))
