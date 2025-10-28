@@ -181,23 +181,58 @@ impl ArrowReader {
 
         let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
 
-        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
+        // Create initial stream builder to check if the schema needs any modifications
+        let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
+            None,
         )
         .await?;
 
+        // Check if Arrow schema is missing field IDs (for migrated Parquet files)
+        let missing_field_ids = initial_stream_builder
+            .schema()
+            .fields()
+            .iter()
+            .next()
+            .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
+
+        // If the schema needs modifications, recreate the stream builder with the modified schema.
+        // Currently we only modify schemas that are missing field IDs, but other transformations
+        // may be added in the future.
+        let mut record_batch_stream_builder = if missing_field_ids {
+            // Build modified schema with necessary transformations
+            let arrow_schema =
+                add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema());
+            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+
+            // Recreate the builder with the modified schema
+            Self::create_parquet_record_batch_stream_builder(
+                &task.data_file_path,
+                file_io.clone(),
+                should_load_page_index,
+                Some(options),
+            )
+            .await?
+        } else {
+            // Schema doesn't need modifications, use the initial builder
+            initial_stream_builder
+        };
+
         // Create a projection mask for the batch stream to select which columns in the
-        // Parquet file that we want in the response. If position-based fallback is used,
-        // we also get a mapping of Arrow positions to field IDs.
-        let (projection_mask, arrow_pos_to_field_id) = Self::get_arrow_projection_mask(
+        // Parquet file that we want in the response.
+        // If we added fallback field IDs, we must use position-based projection (fallback path).
+        let (projection_mask, _) = Self::get_arrow_projection_mask(
             &task.project_field_ids,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
+            missing_field_ids, // Pass whether schema is missing field IDs, to force fallback path
         )?;
-        record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
+
+        record_batch_stream_builder =
+            record_batch_stream_builder.with_projection(projection_mask.clone());
 
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
@@ -341,57 +376,18 @@ impl ArrowReader {
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => {
-                        // If we used position-based fallback, add field ID metadata to the schema
-                        let batch_with_metadata = if let Some(ref mapping) = arrow_pos_to_field_id {
-                            Self::add_field_id_metadata_to_batch(batch, mapping)?
-                        } else {
-                            batch
-                        };
-                        record_batch_transformer.process_record_batch(batch_with_metadata)
-                    }
+                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
                     Err(err) => Err(err.into()),
                 });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
-    /// Add field ID metadata to a RecordBatch's schema.
-    /// This is used when position-based fallback is employed for projection,
-    /// to pass field ID information to RecordBatchTransformer.
-    fn add_field_id_metadata_to_batch(
-        batch: RecordBatch,
-        arrow_pos_to_field_id: &HashMap<usize, i32>,
-    ) -> Result<RecordBatch> {
-        use arrow_schema::Field;
-
-        let old_schema = batch.schema();
-        let new_fields: Vec<_> = old_schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(pos, field)| {
-                let mut metadata = field.metadata().clone();
-                if let Some(field_id) = arrow_pos_to_field_id.get(&pos) {
-                    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
-                }
-                Field::new(field.name(), field.data_type().clone(), field.is_nullable())
-                    .with_metadata(metadata)
-            })
-            .collect();
-
-        let new_schema = Arc::new(ArrowSchema::new_with_metadata(
-            new_fields,
-            old_schema.metadata().clone(),
-        ));
-
-        Ok(RecordBatch::try_new(new_schema, batch.columns().to_vec())?)
-    }
-
     pub(crate) async fn create_parquet_record_batch_stream_builder(
         data_file_path: &str,
         file_io: FileIO,
         should_load_page_index: bool,
+        arrow_reader_options: Option<ArrowReaderOptions>,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
@@ -403,12 +399,9 @@ impl ArrowReader {
             .with_preload_offset_index(true)
             .with_preload_page_index(should_load_page_index);
 
-        // Create the record batch stream builder, which wraps the parquet file reader
-        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            parquet_file_reader,
-            ArrowReaderOptions::new(),
-        )
-        .await?;
+        let options = arrow_reader_options.unwrap_or_default();
+        let record_batch_stream_builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(parquet_file_reader, options).await?;
         Ok(record_batch_stream_builder)
     }
 
@@ -534,10 +527,10 @@ impl ArrowReader {
 
         let iceberg_field_ids = collector.field_ids();
 
-        // Try to build field ID map from Parquet metadata
+        // Build field ID map from Parquet metadata.
+        // For files without field IDs (migrated tables), use position-based fallback.
         let field_id_map = match build_field_id_map(parquet_schema)? {
             Some(map) => map,
-            // If Parquet file doesn't have field IDs, use position-based fallback
             None => build_fallback_field_id_map(parquet_schema),
         };
 
@@ -571,6 +564,7 @@ impl ArrowReader {
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
+        use_fallback: bool, // Force use of position-based projection
     ) -> Result<(ProjectionMask, Option<HashMap<usize, i32>>)> {
         fn type_promotion_is_valid(
             file_type: Option<&PrimitiveType>,
@@ -600,14 +594,14 @@ impl ArrowReader {
             return Ok((ProjectionMask::all(), None));
         }
 
-        // Check if Arrow schema has field ID metadata by sampling the first field
-        let has_field_ids = arrow_schema
-            .fields()
-            .iter()
-            .next()
-            .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_some());
-
-        if has_field_ids {
+        // Use fallback path if explicitly requested (schema with fallback field IDs)
+        if use_fallback {
+            // Fallback path for Parquet files without field IDs (schema with fallback field IDs).
+            // Use position-based projection of top-level columns.
+            // This matches iceberg-java's ParquetSchemaUtil.pruneColumnsFallback()
+            Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
+                .map(|(mask, mapping)| (mask, Some(mapping)))
+        } else {
             // Standard path: use field IDs from Arrow schema metadata
             // This matches iceberg-java's ReadConf when hasIds() returns true
 
@@ -628,14 +622,6 @@ impl ArrowReader {
                 type_promotion_is_valid,
             )
             .map(|mask| (mask, None))
-        } else {
-            // Fallback path for Parquet files without field IDs (e.g., migrated tables)
-            // This matches iceberg-java's ParquetSchemaUtil.pruneColumnsFallback()
-
-            // Java uses expectedSchema.columns() which returns only top-level fields,
-            // then maps them by position to top-level Parquet columns.
-            // Java projects the ENTIRE top-level column including any nested content (structs, lists, maps).
-            Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
         }
     }
 
@@ -717,34 +703,25 @@ impl ArrowReader {
 
     /// Fallback projection mask creation for Parquet files without field IDs.
     /// Uses position-based matching where top-level field ID N maps to top-level column N-1.
+    /// Projects entire top-level columns including nested content (structs, lists, maps).
     /// Matches iceberg-java's ParquetSchemaUtil.pruneColumnsFallback()
-    /// Returns both the ProjectionMask and a mapping of Arrow positions to field IDs
-    /// so that field ID metadata can be added to the Arrow schema after projection.
+    ///
+    /// Returns the ProjectionMask and a mapping of output positions to field IDs.
     fn get_arrow_projection_mask_fallback(
         field_ids: &[i32],
         parquet_schema: &SchemaDescriptor,
-    ) -> Result<(ProjectionMask, Option<HashMap<usize, i32>>)> {
-        // Position-based matching for files without field IDs (e.g., migrated tables).
-        // Top-level field ID N maps to top-level column position N-1 (field IDs are 1-indexed, positions are 0-indexed).
-        // This matches iceberg-java's addFallbackIds() which assigns sequential IDs 1, 2, 3, ...
-        // to top-level Parquet columns only.
-        //
-        // Unlike the standard path which matches leaf field IDs, the fallback path matches
-        // TOP-LEVEL field IDs to TOP-LEVEL Parquet columns. When projecting a struct/list/map,
-        // we project the ENTIRE top-level column including all nested content, matching Java's behavior.
-        //
-        // For schema evolution, we only project columns that exist in the file.
-        // Missing columns will be added later by RecordBatchTransformer with NULL values.
+    ) -> Result<(ProjectionMask, HashMap<usize, i32>)> {
+        // Position-based matching for files without field IDs (migrated tables).
+        // Top-level field ID N maps to top-level column position N-1 (field IDs are 1-indexed).
+        // Projects ENTIRE top-level columns including nested content, matching Java's behavior.
 
-        // Parquet schema has top-level fields; we need to find which root columns to project
         let parquet_root_fields = parquet_schema.root_schema().get_fields();
-
         let mut root_indices = vec![];
         let mut arrow_pos_to_field_id = HashMap::new();
         let mut arrow_output_pos = 0;
 
         for field_id in field_ids.iter() {
-            // Map top-level field_id to top-level Parquet column position (field_ids are 1-indexed)
+            // Map top-level field_id to top-level Parquet column position
             let parquet_pos = (*field_id - 1) as usize;
 
             if parquet_pos < parquet_root_fields.len() {
@@ -752,17 +729,15 @@ impl ArrowReader {
                 arrow_pos_to_field_id.insert(arrow_output_pos, *field_id);
                 arrow_output_pos += 1;
             }
-            // Skip fields that don't exist in the Parquet file - they will be added later by RecordBatchTransformer
+            // Skip fields that don't exist in the file - RecordBatchTransformer will add them as NULLs
         }
 
         if root_indices.is_empty() {
-            // If no columns from the projection exist in the file, project all columns
-            // This can happen if all requested columns are new and need to be added by the transformer
-            Ok((ProjectionMask::all(), None))
+            Ok((ProjectionMask::all(), HashMap::new()))
         } else {
             Ok((
                 ProjectionMask::roots(parquet_schema, root_indices),
-                Some(arrow_pos_to_field_id),
+                arrow_pos_to_field_id,
             ))
         }
     }
@@ -961,6 +936,47 @@ fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32
     }
 
     column_map
+}
+
+/// Add fallback field IDs to Arrow schema when the Parquet file lacks field IDs.
+/// This creates a schema with position-based field IDs (1, 2, 3, ...) added to field metadata.
+///
+/// Matches iceberg-java's ParquetSchemaUtil.addFallbackIds() approach:
+/// - Assigns sequential IDs starting at 1 to top-level fields only
+/// - Field IDs are added once to the schema, not per-batch
+fn add_fallback_field_ids_to_arrow_schema(arrow_schema: &ArrowSchemaRef) -> Arc<ArrowSchema> {
+    // Debug assertion to catch misuse during development
+    debug_assert!(
+        arrow_schema
+            .fields()
+            .iter()
+            .next()
+            .is_none_or(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none()),
+        "Schema already has field IDs"
+    );
+
+    // Create schema with position-based fallback field IDs
+    use arrow_schema::Field;
+
+    let fields_with_fallback_ids: Vec<_> = arrow_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(pos, field)| {
+            let mut metadata = field.metadata().clone();
+            // Assign field ID based on position (1-indexed to match Java)
+            let field_id = (pos + 1) as i32;
+            metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
+
+            Field::new(field.name(), field.data_type().clone(), field.is_nullable())
+                .with_metadata(metadata)
+        })
+        .collect();
+
+    Arc::new(ArrowSchema::new_with_metadata(
+        fields_with_fallback_ids,
+        arrow_schema.metadata().clone(),
+    ))
 }
 
 /// A visitor to collect field ids from bound predicates.
@@ -1779,6 +1795,7 @@ message schema {
             &schema,
             &parquet_schema,
             &arrow_schema,
+            false,
         )
         .unwrap_err();
 
@@ -1794,6 +1811,7 @@ message schema {
             &schema,
             &parquet_schema,
             &arrow_schema,
+            false,
         )
         .unwrap_err();
 
@@ -1804,9 +1822,14 @@ message schema {
         );
 
         // Finally avoid selecting fields with unsupported data types
-        let (mask, _) =
-            ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
-                .expect("Some ProjectionMask");
+        let (mask, _) = ArrowReader::get_arrow_projection_mask(
+            &[1],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        )
+        .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
 
