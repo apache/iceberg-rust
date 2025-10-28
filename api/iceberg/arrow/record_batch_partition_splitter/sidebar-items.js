@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PROJECTED_PARTITION_VALUE_COLUMN"],"struct":["RecordBatchPartitionSplitter"]};
