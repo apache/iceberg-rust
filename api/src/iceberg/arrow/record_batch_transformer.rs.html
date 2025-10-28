@@ -19,8 +19,8 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>std::sync::Arc;
 <a href=#20 id=20 data-nosnippet>20</a>
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>arrow_array::{
-<a href=#22 id=22 data-nosnippet>22</a>    Array <span class="kw">as </span>ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-<a href=#23 id=23 data-nosnippet>23</a>    Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
+<a href=#22 id=22 data-nosnippet>22</a>    Array <span class="kw">as </span>ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array,
+<a href=#23 id=23 data-nosnippet>23</a>    Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
 <a href=#24 id=24 data-nosnippet>24</a>};
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>arrow_cast::cast;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>arrow_schema::{
@@ -401,223 +401,299 @@
 <a href=#401 id=401 data-nosnippet>401</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;i32&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
 <a href=#402 id=402 data-nosnippet>402</a>                Arc::new(Int32Array::from(vals))
 <a href=#403 id=403 data-nosnippet>403</a>            }
-<a href=#404 id=404 data-nosnippet>404</a>            (DataType::Int64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Long(value))) =&gt; {
-<a href=#405 id=405 data-nosnippet>405</a>                Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>value; num_rows]))
+<a href=#404 id=404 data-nosnippet>404</a>            (DataType::Date32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Int(value))) =&gt; {
+<a href=#405 id=405 data-nosnippet>405</a>                Arc::new(Date32Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>value; num_rows]))
 <a href=#406 id=406 data-nosnippet>406</a>            }
-<a href=#407 id=407 data-nosnippet>407</a>            (DataType::Int64, <span class="prelude-val">None</span>) =&gt; {
-<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
-<a href=#409 id=409 data-nosnippet>409</a>                Arc::new(Int64Array::from(vals))
+<a href=#407 id=407 data-nosnippet>407</a>            (DataType::Date32, <span class="prelude-val">None</span>) =&gt; {
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;i32&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#409 id=409 data-nosnippet>409</a>                Arc::new(Date32Array::from(vals))
 <a href=#410 id=410 data-nosnippet>410</a>            }
-<a href=#411 id=411 data-nosnippet>411</a>            (DataType::Float32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Float(value))) =&gt; {
-<a href=#412 id=412 data-nosnippet>412</a>                Arc::new(Float32Array::from(<span class="macro">vec!</span>[value.<span class="number">0</span>; num_rows]))
+<a href=#411 id=411 data-nosnippet>411</a>            (DataType::Int64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Long(value))) =&gt; {
+<a href=#412 id=412 data-nosnippet>412</a>                Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>value; num_rows]))
 <a href=#413 id=413 data-nosnippet>413</a>            }
-<a href=#414 id=414 data-nosnippet>414</a>            (DataType::Float32, <span class="prelude-val">None</span>) =&gt; {
-<a href=#415 id=415 data-nosnippet>415</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;f32&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
-<a href=#416 id=416 data-nosnippet>416</a>                Arc::new(Float32Array::from(vals))
+<a href=#414 id=414 data-nosnippet>414</a>            (DataType::Int64, <span class="prelude-val">None</span>) =&gt; {
+<a href=#415 id=415 data-nosnippet>415</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#416 id=416 data-nosnippet>416</a>                Arc::new(Int64Array::from(vals))
 <a href=#417 id=417 data-nosnippet>417</a>            }
-<a href=#418 id=418 data-nosnippet>418</a>            (DataType::Float64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Double(value))) =&gt; {
-<a href=#419 id=419 data-nosnippet>419</a>                Arc::new(Float64Array::from(<span class="macro">vec!</span>[value.<span class="number">0</span>; num_rows]))
+<a href=#418 id=418 data-nosnippet>418</a>            (DataType::Float32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Float(value))) =&gt; {
+<a href=#419 id=419 data-nosnippet>419</a>                Arc::new(Float32Array::from(<span class="macro">vec!</span>[value.<span class="number">0</span>; num_rows]))
 <a href=#420 id=420 data-nosnippet>420</a>            }
-<a href=#421 id=421 data-nosnippet>421</a>            (DataType::Float64, <span class="prelude-val">None</span>) =&gt; {
-<a href=#422 id=422 data-nosnippet>422</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;f64&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
-<a href=#423 id=423 data-nosnippet>423</a>                Arc::new(Float64Array::from(vals))
+<a href=#421 id=421 data-nosnippet>421</a>            (DataType::Float32, <span class="prelude-val">None</span>) =&gt; {
+<a href=#422 id=422 data-nosnippet>422</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;f32&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#423 id=423 data-nosnippet>423</a>                Arc::new(Float32Array::from(vals))
 <a href=#424 id=424 data-nosnippet>424</a>            }
-<a href=#425 id=425 data-nosnippet>425</a>            (DataType::Utf8, <span class="prelude-val">Some</span>(PrimitiveLiteral::String(value))) =&gt; {
-<a href=#426 id=426 data-nosnippet>426</a>                Arc::new(StringArray::from(<span class="macro">vec!</span>[value.clone(); num_rows]))
+<a href=#425 id=425 data-nosnippet>425</a>            (DataType::Float64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Double(value))) =&gt; {
+<a href=#426 id=426 data-nosnippet>426</a>                Arc::new(Float64Array::from(<span class="macro">vec!</span>[value.<span class="number">0</span>; num_rows]))
 <a href=#427 id=427 data-nosnippet>427</a>            }
-<a href=#428 id=428 data-nosnippet>428</a>            (DataType::Utf8, <span class="prelude-val">None</span>) =&gt; {
-<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
-<a href=#430 id=430 data-nosnippet>430</a>                Arc::new(StringArray::from(vals))
+<a href=#428 id=428 data-nosnippet>428</a>            (DataType::Float64, <span class="prelude-val">None</span>) =&gt; {
+<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;f64&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#430 id=430 data-nosnippet>430</a>                Arc::new(Float64Array::from(vals))
 <a href=#431 id=431 data-nosnippet>431</a>            }
-<a href=#432 id=432 data-nosnippet>432</a>            (DataType::Binary, <span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(value))) =&gt; {
-<a href=#433 id=433 data-nosnippet>433</a>                Arc::new(BinaryArray::from_vec(<span class="macro">vec!</span>[value; num_rows]))
+<a href=#432 id=432 data-nosnippet>432</a>            (DataType::Utf8, <span class="prelude-val">Some</span>(PrimitiveLiteral::String(value))) =&gt; {
+<a href=#433 id=433 data-nosnippet>433</a>                Arc::new(StringArray::from(<span class="macro">vec!</span>[value.clone(); num_rows]))
 <a href=#434 id=434 data-nosnippet>434</a>            }
-<a href=#435 id=435 data-nosnippet>435</a>            (DataType::Binary, <span class="prelude-val">None</span>) =&gt; {
-<a href=#436 id=436 data-nosnippet>436</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
-<a href=#437 id=437 data-nosnippet>437</a>                Arc::new(BinaryArray::from_opt_vec(vals))
+<a href=#435 id=435 data-nosnippet>435</a>            (DataType::Utf8, <span class="prelude-val">None</span>) =&gt; {
+<a href=#436 id=436 data-nosnippet>436</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#437 id=437 data-nosnippet>437</a>                Arc::new(StringArray::from(vals))
 <a href=#438 id=438 data-nosnippet>438</a>            }
-<a href=#439 id=439 data-nosnippet>439</a>            (DataType::Null, <span class="kw">_</span>) =&gt; Arc::new(NullArray::new(num_rows)),
-<a href=#440 id=440 data-nosnippet>440</a>            (dt, <span class="kw">_</span>) =&gt; {
-<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#442 id=442 data-nosnippet>442</a>                    ErrorKind::Unexpected,
-<a href=#443 id=443 data-nosnippet>443</a>                    <span class="macro">format!</span>(<span class="string">"unexpected target column type {}"</span>, dt),
-<a href=#444 id=444 data-nosnippet>444</a>                ));
+<a href=#439 id=439 data-nosnippet>439</a>            (DataType::Binary, <span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(value))) =&gt; {
+<a href=#440 id=440 data-nosnippet>440</a>                Arc::new(BinaryArray::from_vec(<span class="macro">vec!</span>[value; num_rows]))
+<a href=#441 id=441 data-nosnippet>441</a>            }
+<a href=#442 id=442 data-nosnippet>442</a>            (DataType::Binary, <span class="prelude-val">None</span>) =&gt; {
+<a href=#443 id=443 data-nosnippet>443</a>                <span class="kw">let </span>vals: Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt;&gt; = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; num_rows];
+<a href=#444 id=444 data-nosnippet>444</a>                Arc::new(BinaryArray::from_opt_vec(vals))
 <a href=#445 id=445 data-nosnippet>445</a>            }
-<a href=#446 id=446 data-nosnippet>446</a>        })
-<a href=#447 id=447 data-nosnippet>447</a>    }
-<a href=#448 id=448 data-nosnippet>448</a>}
-<a href=#449 id=449 data-nosnippet>449</a>
-<a href=#450 id=450 data-nosnippet>450</a><span class="attr">#[cfg(test)]
-<a href=#451 id=451 data-nosnippet>451</a></span><span class="kw">mod </span>test {
-<a href=#452 id=452 data-nosnippet>452</a>    <span class="kw">use </span>std::collections::HashMap;
-<a href=#453 id=453 data-nosnippet>453</a>    <span class="kw">use </span>std::sync::Arc;
-<a href=#454 id=454 data-nosnippet>454</a>
-<a href=#455 id=455 data-nosnippet>455</a>    <span class="kw">use </span>arrow_array::{
-<a href=#456 id=456 data-nosnippet>456</a>        Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
-<a href=#457 id=457 data-nosnippet>457</a>    };
-<a href=#458 id=458 data-nosnippet>458</a>    <span class="kw">use </span>arrow_schema::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-<a href=#460 id=460 data-nosnippet>460</a>
-<a href=#461 id=461 data-nosnippet>461</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::record_batch_transformer::RecordBatchTransformer;
-<a href=#462 id=462 data-nosnippet>462</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{Literal, NestedField, PrimitiveType, Schema, Type};
-<a href=#463 id=463 data-nosnippet>463</a>
-<a href=#464 id=464 data-nosnippet>464</a>    <span class="attr">#[test]
-<a href=#465 id=465 data-nosnippet>465</a>    </span><span class="kw">fn </span>build_field_id_to_source_schema_map_works() {
-<a href=#466 id=466 data-nosnippet>466</a>        <span class="kw">let </span>arrow_schema = arrow_schema_already_same_as_target();
-<a href=#467 id=467 data-nosnippet>467</a>
-<a href=#468 id=468 data-nosnippet>468</a>        <span class="kw">let </span>result =
-<a href=#469 id=469 data-nosnippet>469</a>            RecordBatchTransformer::build_field_id_to_arrow_schema_map(<span class="kw-2">&amp;</span>arrow_schema).unwrap();
-<a href=#470 id=470 data-nosnippet>470</a>
-<a href=#471 id=471 data-nosnippet>471</a>        <span class="kw">let </span>expected = HashMap::from_iter([
-<a href=#472 id=472 data-nosnippet>472</a>            (<span class="number">10</span>, (arrow_schema.fields()[<span class="number">0</span>].clone(), <span class="number">0</span>)),
-<a href=#473 id=473 data-nosnippet>473</a>            (<span class="number">11</span>, (arrow_schema.fields()[<span class="number">1</span>].clone(), <span class="number">1</span>)),
-<a href=#474 id=474 data-nosnippet>474</a>            (<span class="number">12</span>, (arrow_schema.fields()[<span class="number">2</span>].clone(), <span class="number">2</span>)),
-<a href=#475 id=475 data-nosnippet>475</a>            (<span class="number">14</span>, (arrow_schema.fields()[<span class="number">3</span>].clone(), <span class="number">3</span>)),
-<a href=#476 id=476 data-nosnippet>476</a>            (<span class="number">15</span>, (arrow_schema.fields()[<span class="number">4</span>].clone(), <span class="number">4</span>)),
-<a href=#477 id=477 data-nosnippet>477</a>        ]);
+<a href=#446 id=446 data-nosnippet>446</a>            (DataType::Null, <span class="kw">_</span>) =&gt; Arc::new(NullArray::new(num_rows)),
+<a href=#447 id=447 data-nosnippet>447</a>            (dt, <span class="kw">_</span>) =&gt; {
+<a href=#448 id=448 data-nosnippet>448</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#449 id=449 data-nosnippet>449</a>                    ErrorKind::Unexpected,
+<a href=#450 id=450 data-nosnippet>450</a>                    <span class="macro">format!</span>(<span class="string">"unexpected target column type {}"</span>, dt),
+<a href=#451 id=451 data-nosnippet>451</a>                ));
+<a href=#452 id=452 data-nosnippet>452</a>            }
+<a href=#453 id=453 data-nosnippet>453</a>        })
+<a href=#454 id=454 data-nosnippet>454</a>    }
+<a href=#455 id=455 data-nosnippet>455</a>}
+<a href=#456 id=456 data-nosnippet>456</a>
+<a href=#457 id=457 data-nosnippet>457</a><span class="attr">#[cfg(test)]
+<a href=#458 id=458 data-nosnippet>458</a></span><span class="kw">mod </span>test {
+<a href=#459 id=459 data-nosnippet>459</a>    <span class="kw">use </span>std::collections::HashMap;
+<a href=#460 id=460 data-nosnippet>460</a>    <span class="kw">use </span>std::sync::Arc;
+<a href=#461 id=461 data-nosnippet>461</a>
+<a href=#462 id=462 data-nosnippet>462</a>    <span class="kw">use </span>arrow_array::{
+<a href=#463 id=463 data-nosnippet>463</a>        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+<a href=#464 id=464 data-nosnippet>464</a>        StringArray,
+<a href=#465 id=465 data-nosnippet>465</a>    };
+<a href=#466 id=466 data-nosnippet>466</a>    <span class="kw">use </span>arrow_schema::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
+<a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+<a href=#468 id=468 data-nosnippet>468</a>
+<a href=#469 id=469 data-nosnippet>469</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::record_batch_transformer::RecordBatchTransformer;
+<a href=#470 id=470 data-nosnippet>470</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{Literal, NestedField, PrimitiveType, Schema, Type};
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a>    <span class="attr">#[test]
+<a href=#473 id=473 data-nosnippet>473</a>    </span><span class="kw">fn </span>build_field_id_to_source_schema_map_works() {
+<a href=#474 id=474 data-nosnippet>474</a>        <span class="kw">let </span>arrow_schema = arrow_schema_already_same_as_target();
+<a href=#475 id=475 data-nosnippet>475</a>
+<a href=#476 id=476 data-nosnippet>476</a>        <span class="kw">let </span>result =
+<a href=#477 id=477 data-nosnippet>477</a>            RecordBatchTransformer::build_field_id_to_arrow_schema_map(<span class="kw-2">&amp;</span>arrow_schema).unwrap();
 <a href=#478 id=478 data-nosnippet>478</a>
-<a href=#479 id=479 data-nosnippet>479</a>        <span class="macro">assert!</span>(result.eq(<span class="kw-2">&amp;</span>expected));
-<a href=#480 id=480 data-nosnippet>480</a>    }
-<a href=#481 id=481 data-nosnippet>481</a>
-<a href=#482 id=482 data-nosnippet>482</a>    <span class="attr">#[test]
-<a href=#483 id=483 data-nosnippet>483</a>    </span><span class="kw">fn </span>processor_returns_properly_shaped_record_batch_when_no_schema_migration_required() {
-<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span>snapshot_schema = Arc::new(iceberg_table_schema());
-<a href=#485 id=485 data-nosnippet>485</a>        <span class="kw">let </span>projected_iceberg_field_ids = [<span class="number">13</span>, <span class="number">14</span>];
+<a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">let </span>expected = HashMap::from_iter([
+<a href=#480 id=480 data-nosnippet>480</a>            (<span class="number">10</span>, (arrow_schema.fields()[<span class="number">0</span>].clone(), <span class="number">0</span>)),
+<a href=#481 id=481 data-nosnippet>481</a>            (<span class="number">11</span>, (arrow_schema.fields()[<span class="number">1</span>].clone(), <span class="number">1</span>)),
+<a href=#482 id=482 data-nosnippet>482</a>            (<span class="number">12</span>, (arrow_schema.fields()[<span class="number">2</span>].clone(), <span class="number">2</span>)),
+<a href=#483 id=483 data-nosnippet>483</a>            (<span class="number">14</span>, (arrow_schema.fields()[<span class="number">3</span>].clone(), <span class="number">3</span>)),
+<a href=#484 id=484 data-nosnippet>484</a>            (<span class="number">15</span>, (arrow_schema.fields()[<span class="number">4</span>].clone(), <span class="number">4</span>)),
+<a href=#485 id=485 data-nosnippet>485</a>        ]);
 <a href=#486 id=486 data-nosnippet>486</a>
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span><span class="kw-2">mut </span>inst = RecordBatchTransformer::build(snapshot_schema, <span class="kw-2">&amp;</span>projected_iceberg_field_ids);
-<a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>result = inst
-<a href=#490 id=490 data-nosnippet>490</a>            .process_record_batch(source_record_batch_no_migration_required())
-<a href=#491 id=491 data-nosnippet>491</a>            .unwrap();
-<a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>expected = source_record_batch_no_migration_required();
+<a href=#487 id=487 data-nosnippet>487</a>        <span class="macro">assert!</span>(result.eq(<span class="kw-2">&amp;</span>expected));
+<a href=#488 id=488 data-nosnippet>488</a>    }
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>    <span class="attr">#[test]
+<a href=#491 id=491 data-nosnippet>491</a>    </span><span class="kw">fn </span>processor_returns_properly_shaped_record_batch_when_no_schema_migration_required() {
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">let </span>snapshot_schema = Arc::new(iceberg_table_schema());
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>projected_iceberg_field_ids = [<span class="number">13</span>, <span class="number">14</span>];
 <a href=#494 id=494 data-nosnippet>494</a>
-<a href=#495 id=495 data-nosnippet>495</a>        <span class="macro">assert_eq!</span>(result, expected);
-<a href=#496 id=496 data-nosnippet>496</a>    }
-<a href=#497 id=497 data-nosnippet>497</a>
-<a href=#498 id=498 data-nosnippet>498</a>    <span class="attr">#[test]
-<a href=#499 id=499 data-nosnippet>499</a>    </span><span class="kw">fn </span>processor_returns_properly_shaped_record_batch_when_schema_migration_required() {
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="kw">let </span>snapshot_schema = Arc::new(iceberg_table_schema());
-<a href=#501 id=501 data-nosnippet>501</a>        <span class="kw">let </span>projected_iceberg_field_ids = [<span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>, <span class="number">14</span>, <span class="number">15</span>]; <span class="comment">// a, b, c, e, f
+<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">let </span><span class="kw-2">mut </span>inst = RecordBatchTransformer::build(snapshot_schema, <span class="kw-2">&amp;</span>projected_iceberg_field_ids);
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="kw">let </span>result = inst
+<a href=#498 id=498 data-nosnippet>498</a>            .process_record_batch(source_record_batch_no_migration_required())
+<a href=#499 id=499 data-nosnippet>499</a>            .unwrap();
+<a href=#500 id=500 data-nosnippet>500</a>
+<a href=#501 id=501 data-nosnippet>501</a>        <span class="kw">let </span>expected = source_record_batch_no_migration_required();
 <a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>inst = RecordBatchTransformer::build(snapshot_schema, <span class="kw-2">&amp;</span>projected_iceberg_field_ids);
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>        <span class="kw">let </span>result = inst.process_record_batch(source_record_batch()).unwrap();
-<a href=#506 id=506 data-nosnippet>506</a>
-<a href=#507 id=507 data-nosnippet>507</a>        <span class="kw">let </span>expected = expected_record_batch_migration_required();
-<a href=#508 id=508 data-nosnippet>508</a>
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="macro">assert_eq!</span>(result, expected);
-<a href=#510 id=510 data-nosnippet>510</a>    }
-<a href=#511 id=511 data-nosnippet>511</a>
-<a href=#512 id=512 data-nosnippet>512</a>    <span class="kw">pub fn </span>source_record_batch() -&gt; RecordBatch {
-<a href=#513 id=513 data-nosnippet>513</a>        RecordBatch::try_new(
-<a href=#514 id=514 data-nosnippet>514</a>            arrow_schema_promotion_addition_and_renaming_required(),
-<a href=#515 id=515 data-nosnippet>515</a>            <span class="macro">vec!</span>[
-<a href=#516 id=516 data-nosnippet>516</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1001</span>), <span class="prelude-val">Some</span>(<span class="number">1002</span>), <span class="prelude-val">Some</span>(<span class="number">1003</span>)])), <span class="comment">// b
-<a href=#517 id=517 data-nosnippet>517</a>                </span>Arc::new(Float32Array::from(<span class="macro">vec!</span>[
-<a href=#518 id=518 data-nosnippet>518</a>                    <span class="prelude-val">Some</span>(<span class="number">12.125</span>),
-<a href=#519 id=519 data-nosnippet>519</a>                    <span class="prelude-val">Some</span>(<span class="number">23.375</span>),
-<a href=#520 id=520 data-nosnippet>520</a>                    <span class="prelude-val">Some</span>(<span class="number">34.875</span>),
-<a href=#521 id=521 data-nosnippet>521</a>                ])), <span class="comment">// c
-<a href=#522 id=522 data-nosnippet>522</a>                </span>Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">2001</span>), <span class="prelude-val">Some</span>(<span class="number">2002</span>), <span class="prelude-val">Some</span>(<span class="number">2003</span>)])), <span class="comment">// d
-<a href=#523 id=523 data-nosnippet>523</a>                </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
-<a href=#524 id=524 data-nosnippet>524</a>                    <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
-<a href=#525 id=525 data-nosnippet>525</a>                    <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
-<a href=#526 id=526 data-nosnippet>526</a>                    <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
-<a href=#527 id=527 data-nosnippet>527</a>                ])), <span class="comment">// e
-<a href=#528 id=528 data-nosnippet>528</a>            </span>],
-<a href=#529 id=529 data-nosnippet>529</a>        )
-<a href=#530 id=530 data-nosnippet>530</a>        .unwrap()
-<a href=#531 id=531 data-nosnippet>531</a>    }
-<a href=#532 id=532 data-nosnippet>532</a>
-<a href=#533 id=533 data-nosnippet>533</a>    <span class="kw">pub fn </span>source_record_batch_no_migration_required() -&gt; RecordBatch {
-<a href=#534 id=534 data-nosnippet>534</a>        RecordBatch::try_new(
-<a href=#535 id=535 data-nosnippet>535</a>            arrow_schema_no_promotion_addition_or_renaming_required(),
-<a href=#536 id=536 data-nosnippet>536</a>            <span class="macro">vec!</span>[
-<a href=#537 id=537 data-nosnippet>537</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">2001</span>), <span class="prelude-val">Some</span>(<span class="number">2002</span>), <span class="prelude-val">Some</span>(<span class="number">2003</span>)])), <span class="comment">// d
-<a href=#538 id=538 data-nosnippet>538</a>                </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
-<a href=#539 id=539 data-nosnippet>539</a>                    <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
-<a href=#540 id=540 data-nosnippet>540</a>                    <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
-<a href=#541 id=541 data-nosnippet>541</a>                    <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
-<a href=#542 id=542 data-nosnippet>542</a>                ])), <span class="comment">// e
-<a href=#543 id=543 data-nosnippet>543</a>            </span>],
-<a href=#544 id=544 data-nosnippet>544</a>        )
-<a href=#545 id=545 data-nosnippet>545</a>        .unwrap()
-<a href=#546 id=546 data-nosnippet>546</a>    }
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>    <span class="kw">pub fn </span>expected_record_batch_migration_required() -&gt; RecordBatch {
-<a href=#549 id=549 data-nosnippet>549</a>        RecordBatch::try_new(arrow_schema_already_same_as_target(), <span class="macro">vec!</span>[
-<a href=#550 id=550 data-nosnippet>550</a>            Arc::new(StringArray::from(Vec::&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;::from([
-<a href=#551 id=551 data-nosnippet>551</a>                <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>,
-<a href=#552 id=552 data-nosnippet>552</a>            ]))), <span class="comment">// a
-<a href=#553 id=553 data-nosnippet>553</a>            </span>Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1001</span>), <span class="prelude-val">Some</span>(<span class="number">1002</span>), <span class="prelude-val">Some</span>(<span class="number">1003</span>)])), <span class="comment">// b
-<a href=#554 id=554 data-nosnippet>554</a>            </span>Arc::new(Float64Array::from(<span class="macro">vec!</span>[
-<a href=#555 id=555 data-nosnippet>555</a>                <span class="prelude-val">Some</span>(<span class="number">12.125</span>),
-<a href=#556 id=556 data-nosnippet>556</a>                <span class="prelude-val">Some</span>(<span class="number">23.375</span>),
-<a href=#557 id=557 data-nosnippet>557</a>                <span class="prelude-val">Some</span>(<span class="number">34.875</span>),
-<a href=#558 id=558 data-nosnippet>558</a>            ])), <span class="comment">// c
-<a href=#559 id=559 data-nosnippet>559</a>            </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
-<a href=#560 id=560 data-nosnippet>560</a>                <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
-<a href=#561 id=561 data-nosnippet>561</a>                <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
-<a href=#562 id=562 data-nosnippet>562</a>                <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
-<a href=#563 id=563 data-nosnippet>563</a>            ])), <span class="comment">// e (d skipped by projection)
-<a href=#564 id=564 data-nosnippet>564</a>            </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
-<a href=#565 id=565 data-nosnippet>565</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
-<a href=#566 id=566 data-nosnippet>566</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
-<a href=#567 id=567 data-nosnippet>567</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
-<a href=#568 id=568 data-nosnippet>568</a>            ])), <span class="comment">// f
-<a href=#569 id=569 data-nosnippet>569</a>        </span>])
-<a href=#570 id=570 data-nosnippet>570</a>        .unwrap()
-<a href=#571 id=571 data-nosnippet>571</a>    }
-<a href=#572 id=572 data-nosnippet>572</a>
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="kw">pub fn </span>iceberg_table_schema() -&gt; Schema {
-<a href=#574 id=574 data-nosnippet>574</a>        Schema::builder()
-<a href=#575 id=575 data-nosnippet>575</a>            .with_schema_id(<span class="number">2</span>)
-<a href=#576 id=576 data-nosnippet>576</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#577 id=577 data-nosnippet>577</a>                NestedField::optional(<span class="number">10</span>, <span class="string">"a"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#578 id=578 data-nosnippet>578</a>                NestedField::required(<span class="number">11</span>, <span class="string">"b"</span>, Type::Primitive(PrimitiveType::Long)).into(),
-<a href=#579 id=579 data-nosnippet>579</a>                NestedField::required(<span class="number">12</span>, <span class="string">"c"</span>, Type::Primitive(PrimitiveType::Double)).into(),
-<a href=#580 id=580 data-nosnippet>580</a>                NestedField::required(<span class="number">13</span>, <span class="string">"d"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#581 id=581 data-nosnippet>581</a>                NestedField::optional(<span class="number">14</span>, <span class="string">"e"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#582 id=582 data-nosnippet>582</a>                NestedField::required(<span class="number">15</span>, <span class="string">"f"</span>, Type::Primitive(PrimitiveType::String))
-<a href=#583 id=583 data-nosnippet>583</a>                    .with_initial_default(Literal::string(<span class="string">"(╯°□°）╯"</span>))
-<a href=#584 id=584 data-nosnippet>584</a>                    .into(),
-<a href=#585 id=585 data-nosnippet>585</a>            ])
-<a href=#586 id=586 data-nosnippet>586</a>            .build()
-<a href=#587 id=587 data-nosnippet>587</a>            .unwrap()
-<a href=#588 id=588 data-nosnippet>588</a>    }
-<a href=#589 id=589 data-nosnippet>589</a>
-<a href=#590 id=590 data-nosnippet>590</a>    <span class="kw">fn </span>arrow_schema_already_same_as_target() -&gt; Arc&lt;ArrowSchema&gt; {
-<a href=#591 id=591 data-nosnippet>591</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#592 id=592 data-nosnippet>592</a>            simple_field(<span class="string">"a"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"10"</span>),
-<a href=#593 id=593 data-nosnippet>593</a>            simple_field(<span class="string">"b"</span>, DataType::Int64, <span class="bool-val">false</span>, <span class="string">"11"</span>),
-<a href=#594 id=594 data-nosnippet>594</a>            simple_field(<span class="string">"c"</span>, DataType::Float64, <span class="bool-val">false</span>, <span class="string">"12"</span>),
-<a href=#595 id=595 data-nosnippet>595</a>            simple_field(<span class="string">"e"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
-<a href=#596 id=596 data-nosnippet>596</a>            simple_field(<span class="string">"f"</span>, DataType::Utf8, <span class="bool-val">false</span>, <span class="string">"15"</span>),
-<a href=#597 id=597 data-nosnippet>597</a>        ]))
-<a href=#598 id=598 data-nosnippet>598</a>    }
-<a href=#599 id=599 data-nosnippet>599</a>
-<a href=#600 id=600 data-nosnippet>600</a>    <span class="kw">fn </span>arrow_schema_promotion_addition_and_renaming_required() -&gt; Arc&lt;ArrowSchema&gt; {
-<a href=#601 id=601 data-nosnippet>601</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#602 id=602 data-nosnippet>602</a>            simple_field(<span class="string">"b"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"11"</span>),
-<a href=#603 id=603 data-nosnippet>603</a>            simple_field(<span class="string">"c"</span>, DataType::Float32, <span class="bool-val">false</span>, <span class="string">"12"</span>),
-<a href=#604 id=604 data-nosnippet>604</a>            simple_field(<span class="string">"d"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"13"</span>),
-<a href=#605 id=605 data-nosnippet>605</a>            simple_field(<span class="string">"e_old"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
-<a href=#606 id=606 data-nosnippet>606</a>        ]))
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="macro">assert_eq!</span>(result, expected);
+<a href=#504 id=504 data-nosnippet>504</a>    }
+<a href=#505 id=505 data-nosnippet>505</a>
+<a href=#506 id=506 data-nosnippet>506</a>    <span class="attr">#[test]
+<a href=#507 id=507 data-nosnippet>507</a>    </span><span class="kw">fn </span>processor_returns_properly_shaped_record_batch_when_schema_migration_required() {
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="kw">let </span>snapshot_schema = Arc::new(iceberg_table_schema());
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="kw">let </span>projected_iceberg_field_ids = [<span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>, <span class="number">14</span>, <span class="number">15</span>]; <span class="comment">// a, b, c, e, f
+<a href=#510 id=510 data-nosnippet>510</a>
+<a href=#511 id=511 data-nosnippet>511</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>inst = RecordBatchTransformer::build(snapshot_schema, <span class="kw-2">&amp;</span>projected_iceberg_field_ids);
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a>        <span class="kw">let </span>result = inst.process_record_batch(source_record_batch()).unwrap();
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>        <span class="kw">let </span>expected = expected_record_batch_migration_required();
+<a href=#516 id=516 data-nosnippet>516</a>
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="macro">assert_eq!</span>(result, expected);
+<a href=#518 id=518 data-nosnippet>518</a>    }
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="attr">#[test]
+<a href=#521 id=521 data-nosnippet>521</a>    </span><span class="kw">fn </span>schema_evolution_adds_date_column_with_nulls() {
+<a href=#522 id=522 data-nosnippet>522</a>        <span class="comment">// Reproduces TestSelect.readAndWriteWithBranchAfterSchemaChange from iceberg-spark.
+<a href=#523 id=523 data-nosnippet>523</a>        // When reading old snapshots after adding a DATE column, the transformer must
+<a href=#524 id=524 data-nosnippet>524</a>        // populate the new column with NULL values since old files lack this field.
+<a href=#525 id=525 data-nosnippet>525</a>        </span><span class="kw">let </span>snapshot_schema = Arc::new(
+<a href=#526 id=526 data-nosnippet>526</a>            Schema::builder()
+<a href=#527 id=527 data-nosnippet>527</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#528 id=528 data-nosnippet>528</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#529 id=529 data-nosnippet>529</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#530 id=530 data-nosnippet>530</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#531 id=531 data-nosnippet>531</a>                    NestedField::optional(<span class="number">3</span>, <span class="string">"date_col"</span>, Type::Primitive(PrimitiveType::Date))
+<a href=#532 id=532 data-nosnippet>532</a>                        .into(),
+<a href=#533 id=533 data-nosnippet>533</a>                ])
+<a href=#534 id=534 data-nosnippet>534</a>                .build()
+<a href=#535 id=535 data-nosnippet>535</a>                .unwrap(),
+<a href=#536 id=536 data-nosnippet>536</a>        );
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">let </span>projected_iceberg_field_ids = [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+<a href=#538 id=538 data-nosnippet>538</a>
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span><span class="kw-2">mut </span>transformer =
+<a href=#540 id=540 data-nosnippet>540</a>            RecordBatchTransformer::build(snapshot_schema, <span class="kw-2">&amp;</span>projected_iceberg_field_ids);
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a>        <span class="kw">let </span>file_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#543 id=543 data-nosnippet>543</a>            simple_field(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"1"</span>),
+<a href=#544 id=544 data-nosnippet>544</a>            simple_field(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"2"</span>),
+<a href=#545 id=545 data-nosnippet>545</a>        ]));
+<a href=#546 id=546 data-nosnippet>546</a>
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="kw">let </span>file_batch = RecordBatch::try_new(file_schema, <span class="macro">vec!</span>[
+<a href=#548 id=548 data-nosnippet>548</a>            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
+<a href=#549 id=549 data-nosnippet>549</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[
+<a href=#550 id=550 data-nosnippet>550</a>                <span class="prelude-val">Some</span>(<span class="string">"Alice"</span>),
+<a href=#551 id=551 data-nosnippet>551</a>                <span class="prelude-val">Some</span>(<span class="string">"Bob"</span>),
+<a href=#552 id=552 data-nosnippet>552</a>                <span class="prelude-val">Some</span>(<span class="string">"Charlie"</span>),
+<a href=#553 id=553 data-nosnippet>553</a>            ])),
+<a href=#554 id=554 data-nosnippet>554</a>        ])
+<a href=#555 id=555 data-nosnippet>555</a>        .unwrap();
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw">let </span>result = transformer.process_record_batch(file_batch).unwrap();
+<a href=#558 id=558 data-nosnippet>558</a>
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="macro">assert_eq!</span>(result.num_columns(), <span class="number">3</span>);
+<a href=#560 id=560 data-nosnippet>560</a>        <span class="macro">assert_eq!</span>(result.num_rows(), <span class="number">3</span>);
+<a href=#561 id=561 data-nosnippet>561</a>
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span>id_column = result
+<a href=#563 id=563 data-nosnippet>563</a>            .column(<span class="number">0</span>)
+<a href=#564 id=564 data-nosnippet>564</a>            .as_any()
+<a href=#565 id=565 data-nosnippet>565</a>            .downcast_ref::&lt;Int32Array&gt;()
+<a href=#566 id=566 data-nosnippet>566</a>            .unwrap();
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="macro">assert_eq!</span>(id_column.values(), <span class="kw-2">&amp;</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#568 id=568 data-nosnippet>568</a>
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">let </span>name_column = result
+<a href=#570 id=570 data-nosnippet>570</a>            .column(<span class="number">1</span>)
+<a href=#571 id=571 data-nosnippet>571</a>            .as_any()
+<a href=#572 id=572 data-nosnippet>572</a>            .downcast_ref::&lt;StringArray&gt;()
+<a href=#573 id=573 data-nosnippet>573</a>            .unwrap();
+<a href=#574 id=574 data-nosnippet>574</a>        <span class="macro">assert_eq!</span>(name_column.value(<span class="number">0</span>), <span class="string">"Alice"</span>);
+<a href=#575 id=575 data-nosnippet>575</a>        <span class="macro">assert_eq!</span>(name_column.value(<span class="number">1</span>), <span class="string">"Bob"</span>);
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="macro">assert_eq!</span>(name_column.value(<span class="number">2</span>), <span class="string">"Charlie"</span>);
+<a href=#577 id=577 data-nosnippet>577</a>
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>date_column = result
+<a href=#579 id=579 data-nosnippet>579</a>            .column(<span class="number">2</span>)
+<a href=#580 id=580 data-nosnippet>580</a>            .as_any()
+<a href=#581 id=581 data-nosnippet>581</a>            .downcast_ref::&lt;Date32Array&gt;()
+<a href=#582 id=582 data-nosnippet>582</a>            .unwrap();
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="macro">assert!</span>(date_column.is_null(<span class="number">0</span>));
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="macro">assert!</span>(date_column.is_null(<span class="number">1</span>));
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="macro">assert!</span>(date_column.is_null(<span class="number">2</span>));
+<a href=#586 id=586 data-nosnippet>586</a>    }
+<a href=#587 id=587 data-nosnippet>587</a>
+<a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">pub fn </span>source_record_batch() -&gt; RecordBatch {
+<a href=#589 id=589 data-nosnippet>589</a>        RecordBatch::try_new(
+<a href=#590 id=590 data-nosnippet>590</a>            arrow_schema_promotion_addition_and_renaming_required(),
+<a href=#591 id=591 data-nosnippet>591</a>            <span class="macro">vec!</span>[
+<a href=#592 id=592 data-nosnippet>592</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1001</span>), <span class="prelude-val">Some</span>(<span class="number">1002</span>), <span class="prelude-val">Some</span>(<span class="number">1003</span>)])), <span class="comment">// b
+<a href=#593 id=593 data-nosnippet>593</a>                </span>Arc::new(Float32Array::from(<span class="macro">vec!</span>[
+<a href=#594 id=594 data-nosnippet>594</a>                    <span class="prelude-val">Some</span>(<span class="number">12.125</span>),
+<a href=#595 id=595 data-nosnippet>595</a>                    <span class="prelude-val">Some</span>(<span class="number">23.375</span>),
+<a href=#596 id=596 data-nosnippet>596</a>                    <span class="prelude-val">Some</span>(<span class="number">34.875</span>),
+<a href=#597 id=597 data-nosnippet>597</a>                ])), <span class="comment">// c
+<a href=#598 id=598 data-nosnippet>598</a>                </span>Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">2001</span>), <span class="prelude-val">Some</span>(<span class="number">2002</span>), <span class="prelude-val">Some</span>(<span class="number">2003</span>)])), <span class="comment">// d
+<a href=#599 id=599 data-nosnippet>599</a>                </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
+<a href=#600 id=600 data-nosnippet>600</a>                    <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
+<a href=#601 id=601 data-nosnippet>601</a>                    <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
+<a href=#602 id=602 data-nosnippet>602</a>                    <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
+<a href=#603 id=603 data-nosnippet>603</a>                ])), <span class="comment">// e
+<a href=#604 id=604 data-nosnippet>604</a>            </span>],
+<a href=#605 id=605 data-nosnippet>605</a>        )
+<a href=#606 id=606 data-nosnippet>606</a>        .unwrap()
 <a href=#607 id=607 data-nosnippet>607</a>    }
 <a href=#608 id=608 data-nosnippet>608</a>
-<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">fn </span>arrow_schema_no_promotion_addition_or_renaming_required() -&gt; Arc&lt;ArrowSchema&gt; {
-<a href=#610 id=610 data-nosnippet>610</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#611 id=611 data-nosnippet>611</a>            simple_field(<span class="string">"d"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"13"</span>),
-<a href=#612 id=612 data-nosnippet>612</a>            simple_field(<span class="string">"e"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
-<a href=#613 id=613 data-nosnippet>613</a>        ]))
-<a href=#614 id=614 data-nosnippet>614</a>    }
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a>    <span class="doccomment">/// Create a simple arrow field with metadata.
-<a href=#617 id=617 data-nosnippet>617</a>    </span><span class="kw">fn </span>simple_field(name: <span class="kw-2">&amp;</span>str, ty: DataType, nullable: bool, value: <span class="kw-2">&amp;</span>str) -&gt; Field {
-<a href=#618 id=618 data-nosnippet>618</a>        Field::new(name, ty, nullable).with_metadata(HashMap::from([(
-<a href=#619 id=619 data-nosnippet>619</a>            PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#620 id=620 data-nosnippet>620</a>            value.to_string(),
-<a href=#621 id=621 data-nosnippet>621</a>        )]))
+<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">pub fn </span>source_record_batch_no_migration_required() -&gt; RecordBatch {
+<a href=#610 id=610 data-nosnippet>610</a>        RecordBatch::try_new(
+<a href=#611 id=611 data-nosnippet>611</a>            arrow_schema_no_promotion_addition_or_renaming_required(),
+<a href=#612 id=612 data-nosnippet>612</a>            <span class="macro">vec!</span>[
+<a href=#613 id=613 data-nosnippet>613</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">2001</span>), <span class="prelude-val">Some</span>(<span class="number">2002</span>), <span class="prelude-val">Some</span>(<span class="number">2003</span>)])), <span class="comment">// d
+<a href=#614 id=614 data-nosnippet>614</a>                </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
+<a href=#615 id=615 data-nosnippet>615</a>                    <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
+<a href=#616 id=616 data-nosnippet>616</a>                    <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
+<a href=#617 id=617 data-nosnippet>617</a>                    <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
+<a href=#618 id=618 data-nosnippet>618</a>                ])), <span class="comment">// e
+<a href=#619 id=619 data-nosnippet>619</a>            </span>],
+<a href=#620 id=620 data-nosnippet>620</a>        )
+<a href=#621 id=621 data-nosnippet>621</a>        .unwrap()
 <a href=#622 id=622 data-nosnippet>622</a>    }
-<a href=#623 id=623 data-nosnippet>623</a>}</code></pre></div></section></main></body></html>
+<a href=#623 id=623 data-nosnippet>623</a>
+<a href=#624 id=624 data-nosnippet>624</a>    <span class="kw">pub fn </span>expected_record_batch_migration_required() -&gt; RecordBatch {
+<a href=#625 id=625 data-nosnippet>625</a>        RecordBatch::try_new(arrow_schema_already_same_as_target(), <span class="macro">vec!</span>[
+<a href=#626 id=626 data-nosnippet>626</a>            Arc::new(StringArray::from(Vec::&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;::from([
+<a href=#627 id=627 data-nosnippet>627</a>                <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>,
+<a href=#628 id=628 data-nosnippet>628</a>            ]))), <span class="comment">// a
+<a href=#629 id=629 data-nosnippet>629</a>            </span>Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1001</span>), <span class="prelude-val">Some</span>(<span class="number">1002</span>), <span class="prelude-val">Some</span>(<span class="number">1003</span>)])), <span class="comment">// b
+<a href=#630 id=630 data-nosnippet>630</a>            </span>Arc::new(Float64Array::from(<span class="macro">vec!</span>[
+<a href=#631 id=631 data-nosnippet>631</a>                <span class="prelude-val">Some</span>(<span class="number">12.125</span>),
+<a href=#632 id=632 data-nosnippet>632</a>                <span class="prelude-val">Some</span>(<span class="number">23.375</span>),
+<a href=#633 id=633 data-nosnippet>633</a>                <span class="prelude-val">Some</span>(<span class="number">34.875</span>),
+<a href=#634 id=634 data-nosnippet>634</a>            ])), <span class="comment">// c
+<a href=#635 id=635 data-nosnippet>635</a>            </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
+<a href=#636 id=636 data-nosnippet>636</a>                <span class="prelude-val">Some</span>(<span class="string">"Apache"</span>),
+<a href=#637 id=637 data-nosnippet>637</a>                <span class="prelude-val">Some</span>(<span class="string">"Iceberg"</span>),
+<a href=#638 id=638 data-nosnippet>638</a>                <span class="prelude-val">Some</span>(<span class="string">"Rocks"</span>),
+<a href=#639 id=639 data-nosnippet>639</a>            ])), <span class="comment">// e (d skipped by projection)
+<a href=#640 id=640 data-nosnippet>640</a>            </span>Arc::new(StringArray::from(<span class="macro">vec!</span>[
+<a href=#641 id=641 data-nosnippet>641</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
+<a href=#642 id=642 data-nosnippet>642</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
+<a href=#643 id=643 data-nosnippet>643</a>                <span class="prelude-val">Some</span>(<span class="string">"(╯°□°）╯"</span>),
+<a href=#644 id=644 data-nosnippet>644</a>            ])), <span class="comment">// f
+<a href=#645 id=645 data-nosnippet>645</a>        </span>])
+<a href=#646 id=646 data-nosnippet>646</a>        .unwrap()
+<a href=#647 id=647 data-nosnippet>647</a>    }
+<a href=#648 id=648 data-nosnippet>648</a>
+<a href=#649 id=649 data-nosnippet>649</a>    <span class="kw">pub fn </span>iceberg_table_schema() -&gt; Schema {
+<a href=#650 id=650 data-nosnippet>650</a>        Schema::builder()
+<a href=#651 id=651 data-nosnippet>651</a>            .with_schema_id(<span class="number">2</span>)
+<a href=#652 id=652 data-nosnippet>652</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#653 id=653 data-nosnippet>653</a>                NestedField::optional(<span class="number">10</span>, <span class="string">"a"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#654 id=654 data-nosnippet>654</a>                NestedField::required(<span class="number">11</span>, <span class="string">"b"</span>, Type::Primitive(PrimitiveType::Long)).into(),
+<a href=#655 id=655 data-nosnippet>655</a>                NestedField::required(<span class="number">12</span>, <span class="string">"c"</span>, Type::Primitive(PrimitiveType::Double)).into(),
+<a href=#656 id=656 data-nosnippet>656</a>                NestedField::required(<span class="number">13</span>, <span class="string">"d"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#657 id=657 data-nosnippet>657</a>                NestedField::optional(<span class="number">14</span>, <span class="string">"e"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#658 id=658 data-nosnippet>658</a>                NestedField::required(<span class="number">15</span>, <span class="string">"f"</span>, Type::Primitive(PrimitiveType::String))
+<a href=#659 id=659 data-nosnippet>659</a>                    .with_initial_default(Literal::string(<span class="string">"(╯°□°）╯"</span>))
+<a href=#660 id=660 data-nosnippet>660</a>                    .into(),
+<a href=#661 id=661 data-nosnippet>661</a>            ])
+<a href=#662 id=662 data-nosnippet>662</a>            .build()
+<a href=#663 id=663 data-nosnippet>663</a>            .unwrap()
+<a href=#664 id=664 data-nosnippet>664</a>    }
+<a href=#665 id=665 data-nosnippet>665</a>
+<a href=#666 id=666 data-nosnippet>666</a>    <span class="kw">fn </span>arrow_schema_already_same_as_target() -&gt; Arc&lt;ArrowSchema&gt; {
+<a href=#667 id=667 data-nosnippet>667</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#668 id=668 data-nosnippet>668</a>            simple_field(<span class="string">"a"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"10"</span>),
+<a href=#669 id=669 data-nosnippet>669</a>            simple_field(<span class="string">"b"</span>, DataType::Int64, <span class="bool-val">false</span>, <span class="string">"11"</span>),
+<a href=#670 id=670 data-nosnippet>670</a>            simple_field(<span class="string">"c"</span>, DataType::Float64, <span class="bool-val">false</span>, <span class="string">"12"</span>),
+<a href=#671 id=671 data-nosnippet>671</a>            simple_field(<span class="string">"e"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
+<a href=#672 id=672 data-nosnippet>672</a>            simple_field(<span class="string">"f"</span>, DataType::Utf8, <span class="bool-val">false</span>, <span class="string">"15"</span>),
+<a href=#673 id=673 data-nosnippet>673</a>        ]))
+<a href=#674 id=674 data-nosnippet>674</a>    }
+<a href=#675 id=675 data-nosnippet>675</a>
+<a href=#676 id=676 data-nosnippet>676</a>    <span class="kw">fn </span>arrow_schema_promotion_addition_and_renaming_required() -&gt; Arc&lt;ArrowSchema&gt; {
+<a href=#677 id=677 data-nosnippet>677</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#678 id=678 data-nosnippet>678</a>            simple_field(<span class="string">"b"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"11"</span>),
+<a href=#679 id=679 data-nosnippet>679</a>            simple_field(<span class="string">"c"</span>, DataType::Float32, <span class="bool-val">false</span>, <span class="string">"12"</span>),
+<a href=#680 id=680 data-nosnippet>680</a>            simple_field(<span class="string">"d"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"13"</span>),
+<a href=#681 id=681 data-nosnippet>681</a>            simple_field(<span class="string">"e_old"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
+<a href=#682 id=682 data-nosnippet>682</a>        ]))
+<a href=#683 id=683 data-nosnippet>683</a>    }
+<a href=#684 id=684 data-nosnippet>684</a>
+<a href=#685 id=685 data-nosnippet>685</a>    <span class="kw">fn </span>arrow_schema_no_promotion_addition_or_renaming_required() -&gt; Arc&lt;ArrowSchema&gt; {
+<a href=#686 id=686 data-nosnippet>686</a>        Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#687 id=687 data-nosnippet>687</a>            simple_field(<span class="string">"d"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"13"</span>),
+<a href=#688 id=688 data-nosnippet>688</a>            simple_field(<span class="string">"e"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"14"</span>),
+<a href=#689 id=689 data-nosnippet>689</a>        ]))
+<a href=#690 id=690 data-nosnippet>690</a>    }
+<a href=#691 id=691 data-nosnippet>691</a>
+<a href=#692 id=692 data-nosnippet>692</a>    <span class="doccomment">/// Create a simple arrow field with metadata.
+<a href=#693 id=693 data-nosnippet>693</a>    </span><span class="kw">fn </span>simple_field(name: <span class="kw-2">&amp;</span>str, ty: DataType, nullable: bool, value: <span class="kw-2">&amp;</span>str) -&gt; Field {
+<a href=#694 id=694 data-nosnippet>694</a>        Field::new(name, ty, nullable).with_metadata(HashMap::from([(
+<a href=#695 id=695 data-nosnippet>695</a>            PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#696 id=696 data-nosnippet>696</a>            value.to_string(),
+<a href=#697 id=697 data-nosnippet>697</a>        )]))
+<a href=#698 id=698 data-nosnippet>698</a>    }
+<a href=#699 id=699 data-nosnippet>699</a>}</code></pre></div></section></main></body></html>
