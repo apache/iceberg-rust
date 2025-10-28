@@ -17,6 +17,8 @@
 
 //! Transform function used to compute partition values.
 
+use std::fmt::Debug;
+
 use arrow_array::ArrayRef;
 
 use crate::spec::{Datum, Transform};
@@ -29,7 +31,7 @@ mod truncate;
 mod void;
 
 /// TransformFunction is a trait that defines the interface for all transform functions.
-pub trait TransformFunction: Send + Sync {
+pub trait TransformFunction: Send + Sync + Debug {
     /// transform will take an input array and transform it into a new array.
     /// The implementation of this function will need to check and downcast the input to specific
     /// type.
