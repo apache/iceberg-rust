@@ -42,14 +42,14 @@ rust-version = "1.87"
 anyhow = "1.0.72"
 apache-avro = { version = "0.20", features = ["zstandard"] }
 array-init = "2"
-arrow-arith = { version = "55.1" }
-arrow-array = { version = "55.1" }
-arrow-buffer = { version = "55.1" }
-arrow-cast = { version = "55.1" }
-arrow-ord = { version = "55.1" }
-arrow-schema = { version = "55.1" }
-arrow-select = { version = "55.1" }
-arrow-string = { version = "55.1" }
+arrow-arith = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-array = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-buffer = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-cast = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-ord = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-schema = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-select = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
+arrow-string = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
 as-any = "0.3.2"
 async-trait = "0.1.88"
 aws-config = "1.8.1"
@@ -99,7 +99,7 @@ num-bigint = "0.4.6"
 once_cell = "1.20"
 opendal = "0.54.0"
 ordered-float = "4"
-parquet = "55.1"
+parquet = { git = "https://github.com/vustef/arrow-rs", branch = "feature/parquet-virtual-row-numbers" }
 pilota = "0.11.10"
 port_scanner = "0.1.5"
 pretty_assertions = "1.4"

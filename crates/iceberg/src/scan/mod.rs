@@ -31,6 +31,7 @@ use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
+pub use crate::arrow::{RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_POS}; // TODO @vustef: These should rather be defined here or in the spec mod
 use crate::arrow::ArrowReaderBuilder;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
@@ -59,6 +60,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    metadata_columns: Vec<String>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -77,6 +79,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            metadata_columns: vec![],
         }
     }
 
@@ -183,6 +186,14 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Sets the metadata columns to include in the result
+    ///
+    /// Metadata columns are virtual columns that provide metadata about the rows,
+    /// such as file paths or row positions. These come from https://iceberg.apache.org/spec/#identifier-field-ids
+    pub fn with_metadata_columns(mut self, metadata_columns: Vec<String>) -> Self {
+        self.metadata_columns = metadata_columns;
+        self
+    }
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
@@ -209,6 +220,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        metadata_columns: self.metadata_columns,
                     });
                 };
                 current_snapshot_id.clone()
@@ -299,6 +311,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            metadata_columns: self.metadata_columns,
         })
     }
 }
@@ -327,6 +340,7 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    metadata_columns: Vec<String>,
 }
 
 impl TableScan {
@@ -431,7 +445,8 @@ impl TableScan {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
             .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
             .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-            .with_row_selection_enabled(self.row_selection_enabled);
+            .with_row_selection_enabled(self.row_selection_enabled)
+            .with_metadata_columns(self.metadata_columns.clone());
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -577,6 +592,7 @@ pub mod tests {
     use tera::{Context, Tera};
     use uuid::Uuid;
 
+    use super::RESERVED_COL_NAME_POS;
     use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
@@ -1299,6 +1315,56 @@ pub mod tests {
 
         let col = batches[0].column_by_name("x").unwrap();
 
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+    }
+
+    #[tokio::test]
+    async fn test_open_parquet_with_row_numbers() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Create table scan for current snapshot and plan files
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metadata_columns(vec![RESERVED_COL_NAME_POS.to_string()])
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have batches
+        assert!(!batches.is_empty(), "Expected at least one batch");
+
+        // Check that the _pos column exists
+        let batch = &batches[0];
+        let pos_col = batch
+            .column_by_name(RESERVED_COL_NAME_POS)
+            .expect("Expected _pos column to exist");
+
+        // Verify it's an Int64Array
+        let pos_arr = pos_col
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Expected _pos column to be Int64Array");
+
+        // Verify row numbers start at 0 and are sequential
+        assert_eq!(pos_arr.len(), batch.num_rows());
+        for i in 0..pos_arr.len() {
+            assert_eq!(
+                pos_arr.value(i),
+                i as i64,
+                "Row number at index {} should be {}",
+                i,
+                i
+            );
+        }
+
+        // Also verify the data column still works
+        let col = batch.column_by_name("x").unwrap();
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 1);
     }

@@ -38,8 +38,8 @@ use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask, RowNumber};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
@@ -57,6 +57,12 @@ use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
+/// Reserved field ID for the row ordinal (_pos) column per Iceberg spec
+pub const RESERVED_FIELD_ID_POS: i32 = 2147483645;
+
+/// Column name for the row ordinal metadata column per Iceberg spec
+pub const RESERVED_COL_NAME_POS: &str = "_pos";
+
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
@@ -64,6 +70,7 @@ pub struct ArrowReaderBuilder {
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    metadata_columns: Vec<String>,
 }
 
 impl ArrowReaderBuilder {
@@ -77,6 +84,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            metadata_columns: vec![],
         }
     }
 
@@ -105,6 +113,15 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Sets the metadata columns to include in the result
+    ///
+    /// Metadata columns are virtual columns that provide metadata about the rows,
+    /// such as file paths or row positions. These come from https://iceberg.apache.org/spec/#identifier-field-ids
+    pub fn with_metadata_columns(mut self, metadata_columns: Vec<String>) -> Self {
+        self.metadata_columns = metadata_columns;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
@@ -117,6 +134,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            metadata_columns: self.metadata_columns,
         }
     }
 }
@@ -133,6 +151,7 @@ pub struct ArrowReader {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    metadata_columns: Vec<String>,
 }
 
 impl ArrowReader {
@@ -156,6 +175,7 @@ impl ArrowReader {
                     self.delete_file_loader.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
+                    self.metadata_columns.clone(),
                 )
             })
             .map_err(|err| {
@@ -175,18 +195,87 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
+        metadata_columns: Vec<String>,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
         let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
 
+        let mut virtual_columns: Vec<arrow_schema::Field> = vec![];
+        for metadata_column in metadata_columns {
+            if metadata_column == RESERVED_COL_NAME_POS {
+                let row_number_field = arrow_schema::Field::new(metadata_column, arrow_schema::DataType::Int64, false)
+                .with_metadata(std::collections::HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    RESERVED_FIELD_ID_POS.to_string(),
+                )]))
+                .with_extension_type(RowNumber);
+                virtual_columns.push(row_number_field);
+            } else {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported, // TODO @vustef: This is appropriate only for columns from iceberg spec.
+                    format!("Metadata column '{}' not supported", metadata_column),
+                ));
+            }
+        }
+
         let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
+            virtual_columns.clone(),
         )
         .await?;
+
+        // Extract field IDs from virtual columns and create Iceberg fields
+        let mut virtual_iceberg_fields = vec![];
+        let mut virtual_field_ids = vec![];
+
+        for field in &virtual_columns {
+            let field_id_str = field.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                .ok_or_else(|| Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Virtual field '{}' missing field ID metadata", field.name()),
+                ))?;
+            let field_id = field_id_str.parse::<i32>()?;
+
+            // Create an Iceberg NestedField for the virtual column
+            if field_id == RESERVED_FIELD_ID_POS {
+                virtual_field_ids.push(field_id);
+                let iceberg_field = NestedField::required(
+                    field_id,
+                    field.name(),
+                    Type::Primitive(PrimitiveType::Long),
+                );
+                virtual_iceberg_fields.push(Arc::new(iceberg_field));
+            } else {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported, // TODO @vustef: This is appropriate only for columns from iceberg spec.
+                    format!("Field ID '{}' not supported", field_id),
+                ));
+            }
+        }
+
+        // Create an extended schema that includes both regular fields and virtual fields
+        let extended_schema = if !virtual_iceberg_fields.is_empty() {
+            let mut all_fields: Vec<_> = task.schema.as_ref().as_struct().fields().iter().cloned().collect();
+            all_fields.extend(virtual_iceberg_fields);
+
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(task.schema.schema_id())
+                    .with_fields(all_fields)
+                    .build()
+                    .map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to build extended schema: {}", e)))?
+            )
+        } else {
+            task.schema_ref()
+        };
+
+        // Combine regular field IDs with virtual field IDs
+        let mut all_field_ids = task.project_field_ids.clone();
+        all_field_ids.extend(virtual_field_ids);
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
@@ -202,7 +291,7 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformer::build(extended_schema, &all_field_ids);
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -351,6 +440,7 @@ impl ArrowReader {
         data_file_path: &str,
         file_io: FileIO,
         should_load_page_index: bool,
+        virtual_columns: Vec<arrow_schema::Field>,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
@@ -365,7 +455,7 @@ impl ArrowReader {
         // Create the record batch stream builder, which wraps the parquet file reader
         let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
             parquet_file_reader,
-            ArrowReaderOptions::new(),
+            ArrowReaderOptions::new().with_virtual_columns(virtual_columns),
         )
         .await?;
         Ok(record_batch_stream_builder)
@@ -1434,9 +1524,9 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         async move {
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
-                .with_column_indexes(self.preload_column_index)
-                .with_page_indexes(self.preload_page_index)
-                .with_offset_indexes(self.preload_offset_index);
+                .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
+                .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
+                .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index));
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
@@ -1630,7 +1720,7 @@ message schema {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
             err.to_string(),
-            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+            "DataInvalid => Unsupported Arrow data type: Duration(µs)".to_string()
         );
 
         // Omitting field c2, we still get an error due to c3 being selected
