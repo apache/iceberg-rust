@@ -20,7 +20,7 @@ install:
 	uv sync --group dev --no-install-project
 
 build:
-	uv run --group dev maturin develop
+	uv run maturin develop
 
 test:
-	uv run --group dev pytest
+	uv run --no-sync pytest
