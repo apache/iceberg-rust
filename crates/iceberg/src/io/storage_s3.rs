@@ -19,13 +19,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
 use url::Url;
 
-use crate::io::is_truthy;
+use crate::io::{
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
+    Storage, StorageBuilder, is_truthy,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -212,5 +216,140 @@ impl CustomAwsCredentialLoader {
 impl AwsCredentialLoad for CustomAwsCredentialLoader {
     async fn load_credential(&self, client: Client) -> anyhow::Result<Option<AwsCredential>> {
         self.0.load_credential(client).await
+    }
+}
+
+/// S3 storage implementation using OpenDAL
+#[derive(Debug, Clone)]
+pub struct OpenDALS3Storage {
+    /// s3 storage could have `s3://` and `s3a://`.
+    /// Storing the scheme string here to return the correct path.
+    configured_scheme: String,
+    config: Arc<S3Config>,
+    customized_credential_load: Option<CustomAwsCredentialLoader>,
+}
+
+impl OpenDALS3Storage {
+    /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
+    fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
+        let op = s3_config_build(&self.config, &self.customized_credential_load, path)?;
+        let op_info = op.info();
+
+        // Check prefix of s3 path.
+        let prefix = format!("{}://{}/", self.configured_scheme, op_info.name());
+        if path.starts_with(&prefix) {
+            // Add retry layer for transient errors
+            let op = op.layer(opendal::layers::RetryLayer::new());
+            Ok((op, &path[prefix.len()..]))
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid s3 url: {}, should start with {}", path, prefix),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl Storage for OpenDALS3Storage {
+    async fn exists(&self, path: &str) -> Result<bool> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.exists(relative_path).await?)
+    }
+
+    async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let meta = op.stat(relative_path).await?;
+
+        Ok(FileMetadata {
+            size: meta.content_length(),
+        })
+    }
+
+    async fn read(&self, path: &str) -> Result<Bytes> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.read(relative_path).await?.to_bytes())
+    }
+
+    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(Box::new(op.reader(relative_path).await?))
+    }
+
+    async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
+        let mut writer = self.writer(path).await?;
+        writer.write(bs).await?;
+        writer.close().await
+    }
+
+    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(Box::new(op.writer(relative_path).await?))
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        Ok(op.delete(relative_path).await?)
+    }
+
+    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let (op, relative_path) = self.create_operator(path)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
+    }
+
+    fn new_input(&self, path: &str) -> Result<InputFile> {
+        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+    }
+
+    fn new_output(&self, path: &str) -> Result<OutputFile> {
+        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+    }
+}
+
+/// Builder for S3 storage
+#[derive(Debug)]
+pub struct OpenDALS3StorageBuilder;
+
+impl StorageBuilder for OpenDALS3StorageBuilder {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>> {
+        // Get the scheme string from the props or use "s3" as default
+        let scheme_str = props
+            .get(STORAGE_LOCATION_SCHEME)
+            .cloned()
+            .unwrap_or_else(|| "s3".to_string());
+
+        // Parse S3 config from props
+        let config = s3_config_parse(props)?;
+
+        // Get customized credential loader from extensions if available
+        let customized_credential_load = extensions
+            .get::<CustomAwsCredentialLoader>()
+            .map(Arc::unwrap_or_clone);
+
+        Ok(Arc::new(OpenDALS3Storage {
+            configured_scheme: scheme_str,
+            config: Arc::new(config),
+            customized_credential_load,
+        }))
     }
 }
