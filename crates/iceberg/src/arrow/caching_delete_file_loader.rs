@@ -224,12 +224,14 @@ impl CachingDeleteFileLoader {
                 let (sender, receiver) = channel();
                 del_filter.insert_equality_delete(&task.file_path, receiver);
 
-                // Equality deletes intentionally have partial schemas. Schema evolution would add
-                // NULL values for missing REQUIRED columns, causing Arrow validation to fail.
                 Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.file_path)
-                        .await?,
+                    batch_stream: BasicDeleteFileLoader::evolve_schema(
+                        basic_delete_file_loader
+                            .parquet_to_batch_stream(&task.file_path)
+                            .await?,
+                        schema,
+                    )
+                    .await?,
                     sender,
                     equality_ids: HashSet::from_iter(task.equality_ids.clone().unwrap()),
                 })
@@ -683,91 +685,6 @@ mod tests {
 
         let result = delete_filter.get_delete_vector(&file_scan_tasks[1]);
         assert!(result.is_none()); // no pos dels for file 3
-    }
-
-    /// Verifies that evolve_schema on partial-schema equality deletes fails with Arrow
-    /// validation errors when missing REQUIRED columns are filled with NULLs.
-    ///
-    /// Reproduces the issue that caused 14 TestSparkReaderDeletes failures in Iceberg Java.
-    #[tokio::test]
-    async fn test_partial_schema_equality_deletes_evolve_fails() {
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-
-        // Create table schema with REQUIRED fields
-        let table_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    crate::spec::NestedField::required(
-                        1,
-                        "id",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Int),
-                    )
-                    .into(),
-                    crate::spec::NestedField::required(
-                        2,
-                        "data",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
-                    )
-                    .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // Write equality delete file with PARTIAL schema (only 'data' column)
-        let delete_file_path = {
-            let data_vals = vec!["a", "d", "g"];
-            let data_col = Arc::new(StringArray::from(data_vals)) as ArrayRef;
-
-            let delete_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
-                "data",
-                DataType::Utf8,
-                false,
-                "2", // field ID
-            )]));
-
-            let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![data_col]).unwrap();
-
-            let path = format!("{}/partial-eq-deletes.parquet", &table_location);
-            let file = File::create(&path).unwrap();
-            let props = WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build();
-            let mut writer =
-                ArrowWriter::try_new(file, delete_batch.schema(), Some(props)).unwrap();
-            writer.write(&delete_batch).expect("Writing batch");
-            writer.close().unwrap();
-            path
-        };
-
-        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
-
-        let batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&delete_file_path)
-            .await
-            .unwrap();
-
-        let mut evolved_stream = BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema)
-            .await
-            .unwrap();
-
-        let result = evolved_stream.next().await.unwrap();
-
-        assert!(
-            result.is_err(),
-            "Expected error from evolve_schema adding NULL to non-nullable column"
-        );
-
-        let err = result.unwrap_err();
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("non-nullable") || err_msg.contains("null values"),
-            "Expected null value error, got: {}",
-            err_msg
-        );
     }
 
     /// Test loading a FileScanTask with BOTH positional and equality deletes.
