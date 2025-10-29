@@ -23,22 +23,26 @@ This project is used to build an Iceberg-rust powered core for [PyIceberg](https
 
 ## Setup
 
-Install Hatch:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```shell
-pip install hatch==1.12.0
+pip install uv==0.9.3
 ```
 
-Hatch uses [uv](https://docs.astral.sh/uv/) as a backend by default, so [make sure that it is installed](https://docs.astral.sh/uv/getting-started/installation/) as well.
+Set up the development environment:
+
+```shell
+make install
+```
 
 ## Build
 
 ```shell
-hatch run dev:develop
+make build
 ```
 
 ## Test
 
 ```shell
-hatch run dev:test
+make test
 ```

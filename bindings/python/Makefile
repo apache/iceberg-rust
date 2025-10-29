@@ -15,28 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-homepage = { workspace = true }
-name = "iceberg-catalog-s3tables"
-rust-version = { workspace = true }
-version = { workspace = true }
 
-categories = ["database"]
-description = "Apache Iceberg Rust S3Tables Catalog"
-keywords = ["iceberg", "sql", "catalog"]
-license = { workspace = true }
-repository = { workspace = true }
+install:
+	uv sync --group dev --no-install-project
 
-[dependencies]
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-aws-config = { workspace = true }
-aws-sdk-s3tables = { workspace = true }
-iceberg = { workspace = true }
+build:
+	uv run maturin develop
 
-
-[dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-itertools = { workspace = true }
-tokio = { workspace = true }
+test:
+	uv run --no-sync pytest
