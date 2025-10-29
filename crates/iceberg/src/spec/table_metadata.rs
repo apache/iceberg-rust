@@ -22,10 +22,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
+use std::io::Read as _;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -413,9 +415,30 @@ impl TableMetadata {
         file_io: &FileIO,
         metadata_location: impl AsRef<str>,
     ) -> Result<TableMetadata> {
+        let metadata_location = metadata_location.as_ref();
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        // Check if the file is compressed by looking for the gzip "magic number".
+        let metadata = if metadata_content.len() > 2
+            && metadata_content[0] == 0x1F
+            && metadata_content[1] == 0x8B
+        {
+            let mut decoder = GzDecoder::new(metadata_content.as_ref());
+            let mut decompressed_data = Vec::new();
+            decoder.read_to_end(&mut decompressed_data).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Trying to read compressed metadata file",
+                )
+                .with_context("file_path", metadata_location)
+                .with_source(e)
+            })?;
+            serde_json::from_slice(&decompressed_data)?
+        } else {
+            serde_json::from_slice(&metadata_content)?
+        };
+
         Ok(metadata)
     }
 
@@ -1314,6 +1337,7 @@ impl SnapshotLog {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
+    use std::io::Write as _;
     use std::sync::Arc;
 
     use anyhow::Result;
@@ -3040,6 +3064,30 @@ mod tests {
 
         // Read the metadata back
         let read_metadata = TableMetadata::read_from(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the metadata matches
+        assert_eq!(read_metadata, original_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_read_compressed() {
+        let temp_dir = TempDir::new().unwrap();
+        let metadata_location = temp_dir.path().join("v1.gz.metadata.json");
+
+        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        let json = serde_json::to_string(&original_metadata).unwrap();
+
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(json.as_bytes()).unwrap();
+        std::fs::write(&metadata_location, encoder.finish().unwrap())
+            .expect("failed to write metadata");
+
+        // Read the metadata back
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let metadata_location = metadata_location.to_str().unwrap();
+        let read_metadata = TableMetadata::read_from(&file_io, metadata_location)
             .await
             .unwrap();
 
