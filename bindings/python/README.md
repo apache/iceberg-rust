@@ -32,17 +32,17 @@ pip install uv==0.9.3
 Set up the development environment:
 
 ```shell
-uv sync --group dev
+make install
 ```
 
 ## Build
 
 ```shell
-uv run --group dev maturin develop
+make build
 ```
 
 ## Test
 
 ```shell
-uv run --group dev pytest
+make test
 ```
