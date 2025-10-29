@@ -58,7 +58,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.7.0
+        uses: apache/skywalking-eyes/header@v0.8.0
 
       - name: Check toml format
         run: make check-toml
@@ -89,6 +89,18 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
+      - name: Maximize build space (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        uses: easimon/maximize-build-space@master
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          root-reserve-mb: 10240
+          temp-reserve-mb: 10240
+
       - uses: actions/checkout@v5
 
       - name: Setup Rust toolchain

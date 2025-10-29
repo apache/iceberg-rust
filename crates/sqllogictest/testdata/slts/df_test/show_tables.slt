@@ -15,28 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-homepage = { workspace = true }
-name = "iceberg-catalog-s3tables"
-rust-version = { workspace = true }
-version = { workspace = true }
-
-categories = ["database"]
-description = "Apache Iceberg Rust S3Tables Catalog"
-keywords = ["iceberg", "sql", "catalog"]
-license = { workspace = true }
-repository = { workspace = true }
-
-[dependencies]
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-aws-config = { workspace = true }
-aws-sdk-s3tables = { workspace = true }
-iceberg = { workspace = true }
-
-
-[dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-itertools = { workspace = true }
-tokio = { workspace = true }
+query TTTT rowsort
+SHOW TABLES
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+default information_schema columns VIEW
+default information_schema df_settings VIEW
+default information_schema parameters VIEW
+default information_schema routines VIEW
+default information_schema schemata VIEW
+default information_schema tables VIEW
+default information_schema views VIEW

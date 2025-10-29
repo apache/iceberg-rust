@@ -44,3 +44,9 @@ impl From<anyhow::Error> for Error {
         Self(value)
     }
 }
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Self(value.into())
+    }
+}

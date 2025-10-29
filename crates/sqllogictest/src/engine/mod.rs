@@ -19,60 +19,53 @@ mod datafusion;
 
 use std::path::Path;
 
+use anyhow::anyhow;
+use sqllogictest::{AsyncDB, MakeConnection, Runner, parse_file};
 use toml::Table as TomlTable;
 
 use crate::engine::datafusion::DataFusionEngine;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
-const KEY_TYPE: &str = "type";
 const TYPE_DATAFUSION: &str = "datafusion";
 
 #[async_trait::async_trait]
-pub trait EngineRunner: Sized {
+pub trait EngineRunner: Send {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
-pub enum Engine {
-    DataFusion(DataFusionEngine),
+pub async fn load_engine_runner(
+    engine_type: &str,
+    cfg: TomlTable,
+) -> Result<Box<dyn EngineRunner>> {
+    match engine_type {
+        TYPE_DATAFUSION => Ok(Box::new(DataFusionEngine::new(cfg).await?)),
+        _ => Err(anyhow::anyhow!("Unsupported engine type: {}", engine_type).into()),
+    }
 }
 
-impl Engine {
-    pub async fn new(config: TomlTable) -> Result<Self> {
-        let engine_type = config
-            .get(KEY_TYPE)
-            .ok_or_else(|| anyhow::anyhow!("Missing required key: {KEY_TYPE}"))?
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Config value for {KEY_TYPE} must be a string"))?;
+pub async fn run_slt_with_runner<D, M>(
+    mut runner: Runner<D, M>,
+    step_slt_file: impl AsRef<Path>,
+) -> Result<()>
+where
+    D: AsyncDB + Send + 'static,
+    M: MakeConnection<Conn = D> + Send + 'static,
+{
+    let path = step_slt_file.as_ref().canonicalize()?;
+    let records = parse_file(&path).map_err(|e| Error(anyhow!("parsing slt file failed: {e}")))?;
 
-        match engine_type {
-            TYPE_DATAFUSION => {
-                let engine = DataFusionEngine::new(config).await?;
-                Ok(Engine::DataFusion(engine))
-            }
-            _ => Err(anyhow::anyhow!("Unsupported engine type: {engine_type}").into()),
+    for record in records {
+        if let Err(err) = runner.run_async(record).await {
+            return Err(Error(anyhow!("SLT record execution failed: {err}")));
         }
     }
 
-    pub async fn run_slt_file(&mut self, path: &Path) -> Result<()> {
-        match self {
-            Engine::DataFusion(engine) => engine.run_slt_file(path).await,
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use toml::Table as TomlTable;
-
-    use crate::engine::Engine;
-
-    #[tokio::test]
-    async fn test_engine_new_missing_type_key() {
-        let config = TomlTable::new();
-        let result = Engine::new(config).await;
-
-        assert!(result.is_err());
-    }
+    use crate::engine::{TYPE_DATAFUSION, load_engine_runner};
 
     #[tokio::test]
     async fn test_engine_invalid_type() {
@@ -81,8 +74,20 @@ mod tests {
             random = { type = "random_engine", url = "http://localhost:8181" }
         "#;
         let tbl = toml::from_str(input).unwrap();
-        let result = Engine::new(tbl).await;
+        let result = load_engine_runner("random_engine", tbl).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_load_datafusion() {
+        let input = r#"
+            [engines]
+            df = { type = "datafusion" }
+        "#;
+        let tbl = toml::from_str(input).unwrap();
+        let result = load_engine_runner(TYPE_DATAFUSION, tbl).await;
+
+        assert!(result.is_ok());
     }
 }

@@ -24,11 +24,11 @@ use serde::{Deserialize, Serialize};
 use toml::{Table as TomlTable, Value};
 use tracing::info;
 
-use crate::engine::Engine;
+use crate::engine::{EngineRunner, load_engine_runner};
 
 pub struct Schedule {
     /// Engine names to engine instances
-    engines: HashMap<String, Engine>,
+    engines: HashMap<String, Box<dyn EngineRunner>>,
     /// List of test steps to run
     steps: Vec<Step>,
     /// Path of the schedule file
@@ -44,7 +44,11 @@ pub struct Step {
 }
 
 impl Schedule {
-    pub fn new(engines: HashMap<String, Engine>, steps: Vec<Step>, schedule_file: String) -> Self {
+    pub fn new(
+        engines: HashMap<String, Box<dyn EngineRunner>>,
+        steps: Vec<Step>,
+        schedule_file: String,
+    ) -> Self {
         Self {
             engines,
             steps,
@@ -102,7 +106,9 @@ impl Schedule {
         Ok(())
     }
 
-    async fn parse_engines(table: &TomlTable) -> anyhow::Result<HashMap<String, Engine>> {
+    async fn parse_engines(
+        table: &TomlTable,
+    ) -> anyhow::Result<HashMap<String, Box<dyn EngineRunner>>> {
         let engines_tbl = table
             .get("engines")
             .with_context(|| "Schedule file must have an 'engines' table")?
@@ -117,9 +123,13 @@ impl Schedule {
                 .ok_or_else(|| anyhow!("Config of engine '{name}' is not a table"))?
                 .clone();
 
-            let engine = Engine::new(cfg_tbl)
-                .await
-                .with_context(|| format!("Failed to construct engine '{name}'"))?;
+            let engine_type = cfg_tbl
+                .get("type")
+                .ok_or_else(|| anyhow::anyhow!("Engine {name} doesn't have a 'type' field"))?
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Engine {name} type must be a string"))?;
+
+            let engine = load_engine_runner(engine_type, cfg_tbl.clone()).await?;
 
             if engines.insert(name.clone(), engine).is_some() {
                 return Err(anyhow!("Duplicate engine '{name}'"));

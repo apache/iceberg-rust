@@ -31,9 +31,9 @@ license = "Apache-2.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-arrow = { version = "55.1", features = ["pyarrow", "chrono-tz"] }
+arrow = { version = "56", features = ["pyarrow", "chrono-tz"] }
 iceberg = { path = "../../crates/iceberg" }
-pyo3 = { version = "0.24.1", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
-datafusion-ffi = { version = "48.0.1" }
+datafusion-ffi = { version = "50" }
 tokio = { version = "1.46.1", default-features = false }

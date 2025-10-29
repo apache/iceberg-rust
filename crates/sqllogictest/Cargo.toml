@@ -30,12 +30,24 @@ async-trait = { workspace = true }
 datafusion = { workspace = true }
 datafusion-sqllogictest = { workspace = true }
 enum-ordinalize = { workspace = true }
+env_logger = { workspace = true }
+iceberg = { workspace = true }
+iceberg-datafusion = { workspace = true }
 indicatif = { workspace = true }
+log = { workspace = true }
 sqllogictest = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+libtest-mimic = { workspace = true }
+
+[[test]]
+harness = false
+name = "sqllogictests"
+path = "tests/sqllogictests.rs"
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
