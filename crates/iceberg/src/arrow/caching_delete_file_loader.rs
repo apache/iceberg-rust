@@ -224,14 +224,22 @@ impl CachingDeleteFileLoader {
                 let (sender, receiver) = channel();
                 del_filter.insert_equality_delete(&task.file_path, receiver);
 
-                // Equality deletes intentionally have partial schemas. Schema evolution would add
-                // NULL values for missing REQUIRED columns, causing Arrow validation to fail.
-                Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: basic_delete_file_loader
+                // Per the Iceberg spec, evolve schema for equality deletes but only for the
+                // equality_ids columns, not all table columns.
+                let equality_ids_vec = task.equality_ids.clone().unwrap();
+                let evolved_stream = BasicDeleteFileLoader::evolve_schema(
+                    basic_delete_file_loader
                         .parquet_to_batch_stream(&task.file_path)
                         .await?,
+                    schema,
+                    &equality_ids_vec,
+                )
+                .await?;
+
+                Ok(DeleteFileContext::FreshEqDel {
+                    batch_stream: evolved_stream,
                     sender,
-                    equality_ids: HashSet::from_iter(task.equality_ids.clone().unwrap()),
+                    equality_ids: HashSet::from_iter(equality_ids_vec),
                 })
             }
 
