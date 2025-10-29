@@ -94,14 +94,14 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv sync --group dev --no-install-project
+          make install
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --reinstall dist/pyiceberg_core-*.whl
+          uv run pip install --reinstall dist/pyiceberg_core-*.whl
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv run --group dev --no-sync pytest
+          make test
