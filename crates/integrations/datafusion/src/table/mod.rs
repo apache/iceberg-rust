@@ -149,7 +149,7 @@ impl TableProvider for IcebergTableProvider {
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
@@ -157,6 +157,7 @@ impl TableProvider for IcebergTableProvider {
             self.schema.clone(),
             projection,
             filters,
+            limit,
         )))
     }
 
