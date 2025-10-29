@@ -21,16 +21,17 @@ header:
     copyright-owner: Apache Software Foundation
 
   paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '.gitattributes'
-    - '**/*.json'
+    - "LICENSE"
+    - "NOTICE"
+    - ".gitattributes"
+    - "**/*.json"
     # Generated content by mdbook
-    - 'website/book'
+    - "website/book"
     # Generated content by scripts
-    - '**/DEPENDENCIES.*.tsv'
+    - "**/DEPENDENCIES.*.tsv"
     # Release distributions
-    - 'dist/*'
-    - 'Cargo.lock'
-    - '.github/PULL_REQUEST_TEMPLATE.md'
+    - "dist/*"
+    - "Cargo.lock"
+    - "bindings/python/uv.lock"
+    - ".github/PULL_REQUEST_TEMPLATE.md"
   comment: on-failure
