@@ -534,6 +534,7 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
@@ -685,12 +686,13 @@ mod tests {
         assert!(result.is_none()); // no pos dels for file 3
     }
 
-    /// Verifies that evolve_schema on partial-schema equality deletes fails with Arrow
-    /// validation errors when missing REQUIRED columns are filled with NULLs.
+    /// Verifies that evolve_schema on partial-schema equality deletes works correctly
+    /// when only equality_ids columns are evolved, not all table columns.
     ///
-    /// Reproduces the issue that caused 14 TestSparkReaderDeletes failures in Iceberg Java.
+    /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
+    /// equality delete files can contain only a subset of columns.
     #[tokio::test]
-    async fn test_partial_schema_equality_deletes_evolve_fails() {
+    async fn test_partial_schema_equality_deletes_evolve_succeeds() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
 
@@ -750,23 +752,32 @@ mod tests {
             .await
             .unwrap();
 
-        let mut evolved_stream = BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema)
-            .await
-            .unwrap();
+        // Only evolve the equality_ids columns (field 2), not all table columns
+        let equality_ids = vec![2];
+        let evolved_stream =
+            BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema, &equality_ids)
+                .await
+                .unwrap();
 
-        let result = evolved_stream.next().await.unwrap();
+        let result = evolved_stream.try_collect::<Vec<_>>().await;
 
         assert!(
-            result.is_err(),
-            "Expected error from evolve_schema adding NULL to non-nullable column"
+            result.is_ok(),
+            "Expected success when evolving only equality_ids columns, got error: {:?}",
+            result.err()
         );
 
-        let err = result.unwrap_err();
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("non-nullable") || err_msg.contains("null values"),
-            "Expected null value error, got: {}",
-            err_msg
-        );
+        let batches = result.unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1); // Only 'data' column
+
+        // Verify the actual values are preserved after schema evolution
+        let data_col = batch.column(0).as_string::<i32>();
+        assert_eq!(data_col.value(0), "a");
+        assert_eq!(data_col.value(1), "d");
+        assert_eq!(data_col.value(2), "g");
     }
 }
