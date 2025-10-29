@@ -3516,6 +3516,7 @@ dependencies = [
  "ctor",
  "derive_builder",
  "expect-test",
+ "flate2",
  "fnv",
  "futures",
  "iceberg_test_utils",
