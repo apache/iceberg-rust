@@ -15,23 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
 
-  paths-ignore:
-    - "LICENSE"
-    - "NOTICE"
-    - ".gitattributes"
-    - "**/*.json"
-    # Generated content by mdbook
-    - "website/book"
-    # Generated content by scripts
-    - "**/DEPENDENCIES.*.tsv"
-    # Release distributions
-    - "dist/*"
-    - "Cargo.lock"
-    - "bindings/python/uv.lock"
-    - ".github/PULL_REQUEST_TEMPLATE.md"
-  comment: on-failure
+install:
+	uv sync --group dev --no-install-project
+
+build:
+	uv run maturin develop
+
+test:
+	uv run --no-sync pytest
