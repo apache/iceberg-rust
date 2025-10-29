@@ -35,4 +35,9 @@ mod value;
 
 pub use reader::*;
 pub use value::*;
-pub(crate) mod record_batch_partition_splitter;
+/// Partition value calculator for computing partition values
+pub mod partition_value_calculator;
+pub use partition_value_calculator::*;
+/// Record batch partition splitter for partitioned tables
+pub mod record_batch_partition_splitter;
+pub use record_batch_partition_splitter::*;
