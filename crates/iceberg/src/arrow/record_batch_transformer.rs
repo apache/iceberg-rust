@@ -274,36 +274,41 @@ impl RecordBatchTransformer {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
 
+        // Check if partition columns (initial_default) have field IDs that also exist in Parquet.
+        // This means the same field ID maps to different columns, requiring name-based mapping.
+        let has_field_id_conflict = projected_iceberg_field_ids.iter().any(|field_id| {
+            if let Some(iceberg_field) = snapshot_schema.field_by_id(*field_id) {
+                // If this field has initial_default (partition column) and its field ID exists in Parquet
+                iceberg_field.initial_default.is_some()
+                    && field_id_to_source_schema_map.contains_key(field_id)
+            } else {
+                false
+            }
+        });
+
+        // Build name-based mapping if there's a field ID conflict
+        let name_to_source_schema_map: HashMap<String, (FieldRef, usize)> = source_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| (field.name().clone(), (field.clone(), idx)))
+            .collect();
+
         projected_iceberg_field_ids.iter().map(|field_id|{
             let (target_field, _) = field_id_to_mapped_schema_map.get(field_id).ok_or(
                 Error::new(ErrorKind::Unexpected, "could not find field in schema")
             )?;
             let target_type = target_field.data_type();
 
-            Ok(if let Some((source_field, source_index)) = field_id_to_source_schema_map.get(field_id) {
-                // column present in source
+            // Partition columns (initial_default) use constant values, not Parquet data.
+            // See Iceberg Java: BaseParquetReaders.java PartitionUtil.constantsMap().
+            let iceberg_field = snapshot_schema.field_by_id(*field_id).ok_or(
+                Error::new(ErrorKind::Unexpected, "Field not found in snapshot schema")
+            )?;
 
-                if source_field.data_type().equals_datatype(target_type) {
-                    // no promotion required
-                    ColumnSource::PassThrough {
-                        source_index: *source_index
-                    }
-                } else {
-                    // promotion required
-                    ColumnSource::Promote {
-                        target_type: target_type.clone(),
-                        source_index: *source_index,
-                    }
-                }
-            } else {
-                // column must be added
-                let iceberg_field = snapshot_schema.field_by_id(*field_id).ok_or(
-                    Error::new(ErrorKind::Unexpected, "Field not found in snapshot schema")
-                )?;
-
-                let default_value = if let Some(iceberg_default_value) =
-                    &iceberg_field.initial_default
-                {
+            let column_source = if iceberg_field.initial_default.is_some() {
+                // This is a partition column - use the constant value, don't read from file
+                let default_value = if let Some(iceberg_default_value) = &iceberg_field.initial_default {
                     let Literal::Primitive(primitive_literal) = iceberg_default_value else {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
@@ -319,7 +324,54 @@ impl RecordBatchTransformer {
                     value: default_value,
                     target_type: target_type.clone(),
                 }
-            })
+            } else {
+                // For data columns (no initial_default), check if we need to use name-based or field ID-based mapping
+                let source_info = if has_field_id_conflict {
+                    // Use name-based mapping when partition columns conflict with Parquet field IDs
+                    name_to_source_schema_map.get(iceberg_field.name.as_str())
+                } else {
+                    // Use field ID-based mapping (normal case)
+                    field_id_to_source_schema_map.get(field_id)
+                };
+
+                if let Some((source_field, source_index)) = source_info {
+                    // column present in source
+                    if source_field.data_type().equals_datatype(target_type) {
+                        // no promotion required
+                        ColumnSource::PassThrough {
+                            source_index: *source_index
+                        }
+                    } else {
+                        // promotion required
+                        ColumnSource::Promote {
+                            target_type: target_type.clone(),
+                            source_index: *source_index,
+                        }
+                    }
+                } else {
+                    // column must be added (schema evolution case)
+                    let default_value = if let Some(iceberg_default_value) =
+                        &iceberg_field.initial_default
+                    {
+                        let Literal::Primitive(primitive_literal) = iceberg_default_value else {
+                            return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!("Default value for column must be primitive type, but encountered {:?}", iceberg_default_value)
+                            ));
+                        };
+                        Some(primitive_literal.clone())
+                    } else {
+                        None
+                    };
+
+                    ColumnSource::Add {
+                        value: default_value,
+                        target_type: target_type.clone(),
+                    }
+                }
+            };
+
+            Ok(column_source)
         }).collect()
     }
 
@@ -695,5 +747,100 @@ mod test {
             PARQUET_FIELD_ID_META_KEY.to_string(),
             value.to_string(),
         )]))
+    }
+
+    /// Test for add_files partition column handling with field ID conflicts.
+    ///
+    /// This reproduces the scenario from Iceberg Java's TestAddFilesProcedure where:
+    /// - Hive-style partitioned Parquet files are imported via add_files procedure
+    /// - Parquet files have field IDs: name (1), subdept (2)
+    /// - Iceberg schema assigns different field IDs: id (1), name (2), dept (3), subdept (4)
+    /// - Partition columns (id, dept) have initial_default values from manifests
+    ///
+    /// Without proper handling, this would incorrectly:
+    /// 1. Try to read partition column "id" (field_id=1) from Parquet field_id=1 ("name")
+    /// 2. Read data column "name" (field_id=2) from Parquet field_id=2 ("subdept")
+    ///
+    /// The fix ensures:
+    /// 1. Partition columns with initial_default are ALWAYS read as constants (never from Parquet)
+    /// 2. Data columns use name-based mapping when field ID conflicts are detected
+    ///
+    /// See: Iceberg Java TestAddFilesProcedure.addDataPartitionedByIdAndDept()
+    #[test]
+    fn add_files_partition_columns_with_field_id_conflict() {
+        // Iceberg schema after add_files: id (partition), name, dept (partition), subdept
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .with_initial_default(Literal::int(1))
+                        .into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String))
+                        .with_initial_default(Literal::string("hr"))
+                        .into(),
+                    NestedField::optional(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Parquet file schema: name (field_id=1), subdept (field_id=2)
+        // Note: Partition columns (id, dept) are NOT in the Parquet file - they're in directory paths
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("name", DataType::Utf8, true, "1"),
+            simple_field("subdept", DataType::Utf8, true, "2"),
+        ]));
+
+        let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
+
+        let mut transformer = RecordBatchTransformer::build(snapshot_schema, &projected_field_ids);
+
+        // Create a Parquet RecordBatch with data for: name="John Doe", subdept="communications"
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(StringArray::from(vec!["John Doe"])),
+            Arc::new(StringArray::from(vec!["communications"])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // Verify the transformed RecordBatch has:
+        // - id=1 (from initial_default, not from Parquet)
+        // - name="John Doe" (from Parquet, matched by name despite field ID conflict)
+        // - dept="hr" (from initial_default, not from Parquet)
+        // - subdept="communications" (from Parquet, matched by name)
+        assert_eq!(result.num_columns(), 4);
+        assert_eq!(result.num_rows(), 1);
+
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.value(0), 1);
+
+        let name_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_column.value(0), "John Doe");
+
+        let dept_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(dept_column.value(0), "hr");
+
+        let subdept_column = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(subdept_column.value(0), "communications");
     }
 }
