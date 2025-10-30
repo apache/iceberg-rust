@@ -3040,7 +3040,7 @@ mod tests {
             )])
         );
     }
-  
+
     #[test]
     fn test_build_declarative_table_metadata() {
         // This test mainly ensures that new fields added to the `TableMetadata` have
