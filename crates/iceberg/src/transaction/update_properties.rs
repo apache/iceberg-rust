@@ -87,10 +87,7 @@ impl TransactionAction for UpdatePropertiesAction {
         {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                format!(
-                    "Key {} is present in both removal set and update set",
-                    overlapping_key
-                ),
+                format!("Key {overlapping_key} is present in both removal set and update set"),
             ));
         }
 

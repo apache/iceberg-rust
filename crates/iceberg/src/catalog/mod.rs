@@ -662,7 +662,7 @@ impl TableRequirement {
                         let snapshot_ref = snapshot_ref.ok_or(
                             Error::new(
                                 ErrorKind::CatalogCommitConflicts,
-                                format!("Requirement failed: Branch or tag `{}` not found", r#ref),
+                                format!("Requirement failed: Branch or tag `{ref}` not found"),
                             )
                             .with_retryable(true),
                         )?;
@@ -670,8 +670,7 @@ impl TableRequirement {
                             return Err(Error::new(
                                 ErrorKind::CatalogCommitConflicts,
                                 format!(
-                                    "Requirement failed: Branch or tag `{}`'s snapshot has changed",
-                                    r#ref
+                                    "Requirement failed: Branch or tag `{ref}`'s snapshot has changed"
                                 ),
                             )
                             .with_context("expected", snapshot_id.to_string())
@@ -682,10 +681,7 @@ impl TableRequirement {
                         // a null snapshot ID means the ref should not exist already
                         return Err(Error::new(
                             ErrorKind::CatalogCommitConflicts,
-                            format!(
-                                "Requirement failed: Branch or tag `{}` already exists",
-                                r#ref
-                            ),
+                            format!("Requirement failed: Branch or tag `{ref}` already exists"),
                         )
                         .with_retryable(true));
                     }
