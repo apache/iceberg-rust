@@ -424,6 +424,7 @@ impl ArrowReader {
                     // the remainder of this row group and skip to the next row group
                     if next_deleted_row_idx >= next_row_group_base_idx {
                         results.push(RowSelector::select(row_group_num_rows as usize));
+                        current_row_group_base_idx += row_group_num_rows;
                         continue;
                     }
 
@@ -433,6 +434,7 @@ impl ArrowReader {
                 // If there are no more pos deletes, add a selector for the entirety of this row group.
                 _ => {
                     results.push(RowSelector::select(row_group_num_rows as usize));
+                    current_row_group_base_idx += row_group_num_rows;
                     continue;
                 }
             };
@@ -1496,8 +1498,10 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
-    use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -2279,5 +2283,188 @@ message schema {
         assert!(col_b.is_null(0));
         assert!(col_b.is_null(1));
         assert!(col_b.is_null(2));
+    }
+
+    /// Test for bug where position deletes in later row groups are not applied correctly.
+    ///
+    /// When a file has multiple row groups and a position delete targets a row in a later
+    /// row group, the `build_deletes_row_selection` function had a bug where it would
+    /// fail to increment `current_row_group_base_idx` when skipping row groups.
+    ///
+    /// This test creates:
+    /// - A data file with 200 rows split into 2 row groups (0-99, 100-199)
+    /// - A position delete file that deletes row 199 (last row in second row group)
+    ///
+    /// Expected behavior: Should return 199 rows (with id=200 deleted)
+    /// Bug behavior: Returns 200 rows (delete is not applied)
+    ///
+    /// This bug was discovered while running Apache Spark + Apache Iceberg integration tests
+    /// through DataFusion Comet. The following Iceberg Java tests failed due to this bug:
+    /// - `org.apache.iceberg.spark.extensions.TestMergeOnReadDelete::testDeleteWithMultipleRowGroupsParquet`
+    /// - `org.apache.iceberg.spark.extensions.TestMergeOnReadUpdate::testUpdateWithMultipleRowGroupsParquet`
+    #[tokio::test]
+    async fn test_position_delete_across_multiple_row_groups() {
+        use arrow_array::{Int32Array, Int64Array};
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        // Field IDs for positional delete schema
+        const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
+        const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        // Create table schema with a single 'id' column
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        // Step 1: Create data file with 200 rows in 2 row groups
+        // Row group 0: rows 0-99 (ids 1-100)
+        // Row group 1: rows 100-199 (ids 101-200)
+        let data_file_path = format!("{}/data.parquet", &table_location);
+
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(1..=100),
+        )])
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(101..=200),
+        )])
+        .unwrap();
+
+        // Force each batch into its own row group
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_max_row_group_size(100)
+            .build();
+
+        let file = File::create(&data_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch1).expect("Writing batch 1");
+        writer.write(&batch2).expect("Writing batch 2");
+        writer.close().unwrap();
+
+        // Verify we created 2 row groups
+        let verify_file = File::open(&data_file_path).unwrap();
+        let verify_reader = SerializedFileReader::new(verify_file).unwrap();
+        assert_eq!(
+            verify_reader.metadata().num_row_groups(),
+            2,
+            "Should have 2 row groups"
+        );
+
+        // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
+        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+
+        let delete_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
+            )])),
+        ]));
+
+        // Delete row at position 199 (0-indexed, so it's the last row: id=200)
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
+            Arc::new(Int64Array::from_iter_values(vec![199i64])),
+        ])
+        .unwrap();
+
+        let delete_props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let delete_file = File::create(&delete_file_path).unwrap();
+        let mut delete_writer =
+            ArrowWriter::try_new(delete_file, delete_schema, Some(delete_props)).unwrap();
+        delete_writer.write(&delete_batch).unwrap();
+        delete_writer.close().unwrap();
+
+        // Step 3: Read the data file with the delete applied
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: Some(200),
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: table_schema.clone(),
+            project_field_ids: vec![1],
+            predicate: None,
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: delete_file_path,
+                file_type: DataContentType::PositionDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+            }],
+        };
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Step 4: Verify we got 199 rows (not 200)
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+
+        println!("Total rows read: {}", total_rows);
+        println!("Expected: 199 rows (deleted row 199 which had id=200)");
+
+        // This assertion will FAIL before the fix and PASS after the fix
+        assert_eq!(
+            total_rows, 199,
+            "Expected 199 rows after deleting row 199, but got {} rows. \
+             The bug causes position deletes in later row groups to be ignored.",
+            total_rows
+        );
+
+        // Verify the deleted row (id=200) is not present
+        let all_ids: Vec<i32> = result
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        assert!(
+            !all_ids.contains(&200),
+            "Row with id=200 should be deleted but was found in results"
+        );
+
+        // Verify we have all other ids (1-199)
+        let expected_ids: Vec<i32> = (1..=199).collect();
+        assert_eq!(
+            all_ids, expected_ids,
+            "Should have ids 1-199 but got different values"
+        );
     }
 }
