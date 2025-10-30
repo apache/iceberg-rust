@@ -315,7 +315,7 @@ impl TableMetadata {
     pub fn snapshot_for_ref(&self, ref_name: &str) -> Option<&SnapshotRef> {
         self.refs.get(ref_name).map(|r| {
             self.snapshot_by_id(r.snapshot_id)
-                .unwrap_or_else(|| panic!("Snapshot id of ref {} doesn't exist", ref_name))
+                .unwrap_or_else(|| panic!("Snapshot id of ref {ref_name} doesn't exist"))
         })
     }
 
@@ -513,8 +513,7 @@ impl TableMetadata {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Snapshot for current snapshot id {} does not exist in the existing snapshots list",
-                        current_snapshot_id
+                        "Snapshot for current snapshot id {current_snapshot_id} does not exist in the existing snapshots list"
                     ),
                 ));
             }
@@ -956,10 +955,7 @@ pub(super) mod _serde {
                         .ok_or_else(|| {
                             Error::new(
                                 ErrorKind::DataInvalid,
-                                format!(
-                                    "No schema exists with the current schema id {}.",
-                                    schema_id
-                                ),
+                                format!("No schema exists with the current schema id {schema_id}."),
                             )
                         })?
                         .clone();
@@ -1346,7 +1342,7 @@ mod tests {
     }
 
     fn get_test_table_metadata(file_name: &str) -> TableMetadata {
-        let path = format!("testdata/table_metadata/{}", file_name);
+        let path = format!("testdata/table_metadata/{file_name}");
         let metadata: String = fs::read_to_string(path).unwrap();
 
         serde_json::from_str(&metadata).unwrap()
@@ -2118,7 +2114,6 @@ mod tests {
     "#;
 
         let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
-        println!("{}", err);
         assert!(err.to_string().contains(
             "Invalid snapshot with id 3055729675574597004 and sequence number 4 greater than last sequence number 1"
         ));
@@ -2805,8 +2800,7 @@ mod tests {
         let error_message = desered.unwrap_err().to_string();
         assert!(
             error_message.contains("No valid schema configuration found"),
-            "Expected error about no valid schema configuration, got: {}",
-            error_message
+            "Expected error about no valid schema configuration, got: {error_message}"
         );
     }
 
@@ -3033,7 +3027,7 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Define the metadata location
-        let metadata_location = format!("{}/metadata.json", temp_path);
+        let metadata_location = format!("{temp_path}/metadata.json");
 
         // Write the metadata
         original_metadata

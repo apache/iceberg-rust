@@ -101,7 +101,7 @@ where
                     res.build().map_err(|e| {
                         Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Failed to build data file: {}", e),
+                            format!("Failed to build data file: {e}"),
                         )
                     })
                 })

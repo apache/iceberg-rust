@@ -263,8 +263,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "The precision or scale ({},{}) of arrow decimal128 array is not compatible with iceberg decimal type ({},{})",
-                                arrow_precision, arrow_scale, precision, scale
+                                "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
                             ),
                         ));
                     }
@@ -505,8 +504,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "The struct partner is not a struct array, partner: {:?}",
-                        struct_partner
+                        "The struct partner is not a struct array, partner: {struct_partner:?}"
                     ),
                 )
             })?;

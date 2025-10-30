@@ -243,7 +243,7 @@ impl RestCatalogConfig {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
 
@@ -1273,7 +1273,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
         assert_eq!(headers, expected_headers);
@@ -1310,7 +1310,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
             (
                 HeaderName::from_static("customized-header"),

@@ -894,7 +894,7 @@ impl Transform {
         ) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Expected a numeric literal, got: {:?}", boundary),
+                format!("Expected a numeric literal, got: {boundary:?}"),
             ));
         }
 

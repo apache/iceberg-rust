@@ -30,7 +30,7 @@ pub fn from_thrift_error(error: impl std::error::Error) -> Error {
         ErrorKind::Unexpected,
         "Operation failed for hitting thrift error".to_string(),
     )
-    .with_source(anyhow!("thrift error: {:?}", error))
+    .with_source(anyhow!("thrift error: {error:?}"))
 }
 
 /// Format a thrift exception into iceberg error.
@@ -41,7 +41,7 @@ pub fn from_thrift_exception<T, E: Debug>(value: MaybeException<T, E>) -> Result
             ErrorKind::Unexpected,
             "Operation failed for hitting thrift error".to_string(),
         )
-        .with_source(anyhow!("thrift error: {:?}", err))),
+        .with_source(anyhow!("thrift error: {err:?}"))),
     }
 }
 

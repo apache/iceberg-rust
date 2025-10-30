@@ -121,10 +121,7 @@ impl Flag {
         } else {
             Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Unknown flag byte {} and bit {} combination",
-                    byte_idx, bit_idx
-                ),
+                format!("Unknown flag byte {byte_idx} and bit {bit_idx} combination"),
             ))
         }
     }
@@ -864,15 +861,14 @@ mod tests {
                     "blobs" : [
                         {{
                             "type" : "type-a",
-                            "fields" : [ {} ],
+                            "fields" : [ {out_of_i32_range_number} ],
                             "snapshot-id" : 14,
                             "sequence-number" : 3,
                             "offset" : 4,
                             "length" : 16
                         }}
                     ]
-                }}"#,
-                out_of_i32_range_number
+                }}"#
             ),
         )
         .await;
@@ -883,8 +879,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "DataInvalid => Given string is not valid JSON, source: invalid value: integer `{}`, expected i32 at line 5 column 51",
-                out_of_i32_range_number
+                "DataInvalid => Given string is not valid JSON, source: invalid value: integer `{out_of_i32_range_number}`, expected i32 at line 5 column 51"
             ),
         )
     }

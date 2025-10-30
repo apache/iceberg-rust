@@ -95,8 +95,8 @@ pub enum Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Type::Primitive(primitive) => write!(f, "{}", primitive),
-            Type::Struct(s) => write!(f, "{}", s),
+            Type::Primitive(primitive) => write!(f, "{primitive}"),
+            Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
         }
@@ -370,7 +370,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Decimal { precision, scale } => {
-                write!(f, "decimal({},{})", precision, scale)
+                write!(f, "decimal({precision},{scale})")
             }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
@@ -380,7 +380,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::TimestamptzNs => write!(f, "timestamptz_ns"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
-            PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
+            PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
         }
     }
@@ -673,7 +673,7 @@ impl fmt::Display for NestedField {
         }
         write!(f, "{} ", self.field_type)?;
         if let Some(doc) = &self.doc {
-            write!(f, "{}", doc)?;
+            write!(f, "{doc}")?;
         }
         Ok(())
     }

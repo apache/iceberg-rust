@@ -307,7 +307,7 @@ impl RecordBatchTransformer {
                     let Literal::Primitive(primitive_literal) = iceberg_default_value else {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            format!("Default value for column must be primitive type, but encountered {:?}", iceberg_default_value)
+                            format!("Default value for column must be primitive type, but encountered {iceberg_default_value:?}")
                         ));
                     };
                     Some(primitive_literal.clone())
@@ -341,7 +341,7 @@ impl RecordBatchTransformer {
                 .map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {}", e),
+                        format!("field id not parseable as an i32: {e}"),
                     )
                 })?;
 
@@ -447,7 +447,7 @@ impl RecordBatchTransformer {
             (dt, _) => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("unexpected target column type {}", dt),
+                    format!("unexpected target column type {dt}"),
                 ));
             }
         })

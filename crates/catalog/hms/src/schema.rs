@@ -100,7 +100,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
     }
 
     fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
-        Ok(format!("array<{}>", value))
+        Ok(format!("array<{value}>"))
     }
 
     fn map(
@@ -109,7 +109,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
         key_value: String,
         value: String,
     ) -> iceberg::Result<String> {
-        Ok(format!("map<{},{}>", key_value, value))
+        Ok(format!("map<{key_value},{value}>"))
     }
 
     fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<String> {
@@ -128,7 +128,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
             PrimitiveType::Decimal { precision, scale } => {
-                format!("decimal({},{})", precision, scale)
+                format!("decimal({precision},{scale})")
             }
             _ => {
                 return Err(Error::new(
