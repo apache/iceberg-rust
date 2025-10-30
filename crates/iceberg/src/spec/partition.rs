@@ -683,7 +683,7 @@ trait CorePartitionSpecValidator {
         if self.fields().iter().any(|f| f.name == name) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Cannot use partition name more than once: {}", name),
+                format!("Cannot use partition name more than once: {name}"),
             ));
         }
         Ok(())
@@ -715,10 +715,7 @@ trait CorePartitionSpecValidator {
         if self.fields().iter().any(|f| f.field_id == Some(field_id)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Cannot use field id more than once in one PartitionSpec: {}",
-                    field_id
-                ),
+                format!("Cannot use field id more than once in one PartitionSpec: {field_id}"),
             ));
         }
 

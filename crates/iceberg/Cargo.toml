@@ -102,7 +102,7 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 tempfile = { workspace = true }
-tera = { workspace = true }
+minijinja = { workspace = true }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version

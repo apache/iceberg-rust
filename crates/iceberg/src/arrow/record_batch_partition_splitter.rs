@@ -149,8 +149,7 @@ impl RecordBatchPartitionSplitter {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Partition column '{}' not found in batch",
-                            PROJECTED_PARTITION_VALUE_COLUMN
+                            "Partition column '{PROJECTED_PARTITION_VALUE_COLUMN}' not found in batch"
                         ),
                     )
                 })?;

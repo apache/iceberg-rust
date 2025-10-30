@@ -293,7 +293,7 @@ impl Catalog for GlueCatalog {
             }
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Database with name: {} does not exist", db_name),
+                format!("Database with name: {db_name} does not exist"),
             )),
         }
     }
@@ -531,8 +531,7 @@ impl Catalog for GlueCatalog {
             None => Err(Error::new(
                 ErrorKind::TableNotFound,
                 format!(
-                    "Table object for database: {} and table: {} does not exist",
-                    db_name, table_name
+                    "Table object for database: {db_name} and table: {table_name} does not exist"
                 ),
             )),
             Some(table) => {
@@ -643,8 +642,7 @@ impl Catalog for GlueCatalog {
             None => Err(Error::new(
                 ErrorKind::TableNotFound,
                 format!(
-                    "'Table' object for database: {} and table: {} does not exist",
-                    src_db_name, src_table_name
+                    "'Table' object for database: {src_db_name} and table: {src_table_name} does not exist"
                 ),
             )),
             Some(table) => {
@@ -672,10 +670,8 @@ impl Catalog for GlueCatalog {
                 match drop_src_table_result {
                     Ok(_) => Ok(()),
                     Err(_) => {
-                        let err_msg_src_table = format!(
-                            "Failed to drop old table {}.{}.",
-                            src_db_name, src_table_name
-                        );
+                        let err_msg_src_table =
+                            format!("Failed to drop old table {src_db_name}.{src_table_name}.");
 
                         let drop_dest_table_result = self.drop_table(dest).await;
 
@@ -683,15 +679,13 @@ impl Catalog for GlueCatalog {
                             Ok(_) => Err(Error::new(
                                 ErrorKind::Unexpected,
                                 format!(
-                                    "{} Rolled back table creation for {}.{}.",
-                                    err_msg_src_table, dest_db_name, dest_table_name
+                                    "{err_msg_src_table} Rolled back table creation for {dest_db_name}.{dest_table_name}."
                                 ),
                             )),
                             Err(_) => Err(Error::new(
                                 ErrorKind::Unexpected,
                                 format!(
-                                    "{} Failed to roll back table creation for {}.{}. Please clean up manually.",
-                                    err_msg_src_table, dest_db_name, dest_table_name
+                                    "{err_msg_src_table} Failed to roll back table creation for {dest_db_name}.{dest_table_name}. Please clean up manually."
                                 ),
                             )),
                         }
@@ -753,7 +747,7 @@ impl Catalog for GlueCatalog {
                     format!("Failed to register table {table_ident} due to AWS SDK error"),
                 ),
             }
-            .with_source(anyhow!("aws sdk error: {:?}", error))
+            .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
 
         Ok(Table::builder()
@@ -811,7 +805,7 @@ impl Catalog for GlueCatalog {
                     format!("Operation failed for table: {table_ident} for hitting aws sdk error"),
                 ),
             }
-            .with_source(anyhow!("aws sdk error: {:?}", error))
+            .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
 
         Ok(staged_table)

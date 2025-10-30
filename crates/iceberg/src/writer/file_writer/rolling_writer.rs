@@ -436,8 +436,7 @@ mod tests {
         let total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
         assert_eq!(
             total_records, expected_rows as u64,
-            "Expected {} total records across all files",
-            expected_rows
+            "Expected {expected_rows} total records across all files"
         );
 
         Ok(())
