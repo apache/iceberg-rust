@@ -103,9 +103,9 @@ pub const RESERVED_PROPERTIES: [&str; 9] = [
 pub type TableMetadataRef = Arc<TableMetadata>;
 
 #[derive(Debug, PartialEq, Deserialize, Eq, Clone, TypedBuilder)]
-#[builder(builder_method(name=declarative_builder))]
-#[builder(builder_type(name=TableMetadataDeclarativeBuilder, doc="Build a new [`TableMetadata`] in a declarative way. For imperative operations (e.g. `add_snapshot`) and creating new TableMetadata, use [`TableMetadataBuilder`] instead."))]
-#[builder(build_method(into = UnnormalizedTableMetadata))]
+#[builder(builder_method(name=declarative_builder, doc="Build a new [`TableMetadata`] in a declarative way. For imperative operations (e.g. `add_snapshot`) and creating new TableMetadata, use [`TableMetadataBuilder`] instead."))]
+#[builder(build_method(name=build_unchecked, doc="Build a new [`TableMetadata`] without validation. Consider running `try_normalize` after building to ensure validity."))]
+#[builder(builder_type(name=TableMetadataConstructor))]
 #[serde(try_from = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 ///
@@ -459,7 +459,7 @@ impl TableMetadata {
     /// We run this method after json deserialization.
     /// All constructors for `TableMetadata` which are part of `iceberg-rust`
     /// should return normalized `TableMetadata`.
-    pub(super) fn try_normalize(&mut self) -> Result<&mut Self> {
+    pub fn try_normalize(&mut self) -> Result<&mut Self> {
         self.validate_current_schema()?;
         self.normalize_current_snapshot()?;
         self.construct_refs();
@@ -671,35 +671,6 @@ impl TableMetadata {
         }
 
         Ok(())
-    }
-}
-
-impl TableMetadataDeclarativeBuilder {}
-
-/// Unnormalized table metadata, used as an intermediate type
-/// to build table metadata in a declarative way.
-#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
-pub struct UnnormalizedTableMetadata(TableMetadata);
-
-impl UnnormalizedTableMetadata {
-    /// Try to normalize the table metadata.
-    pub fn try_normalize(self) -> Result<TableMetadata> {
-        let mut metadata = self.0;
-        metadata.try_normalize()?;
-        Ok(metadata)
-    }
-}
-
-impl UnnormalizedTableMetadata {
-    /// Build a new [`UnnormalizedTableMetadata`] using the [`TableMetadataDeclarativeBuilder`].
-    pub fn builder() -> TableMetadataDeclarativeBuilder {
-        TableMetadata::declarative_builder()
-    }
-}
-
-impl From<TableMetadata> for UnnormalizedTableMetadata {
-    fn from(value: TableMetadata) -> Self {
-        UnnormalizedTableMetadata(value)
     }
 }
 
@@ -3071,7 +3042,10 @@ mod tests {
 
     #[test]
     fn test_build_declarative_table_metadata() {
-        let table_metadata = TableMetadata::declarative_builder()
+        // This test mainly ensures that new fields added to the `TableMetadata` have
+        // a default value set in the declarative builder, unless they are required, which
+        // would be a breaking change.
+        let mut table_metadata = TableMetadata::declarative_builder()
             .format_version(FormatVersion::V2)
             .table_uuid(Uuid::nil())
             .location("s3://db/table".to_string())
@@ -3092,9 +3066,8 @@ mod tests {
             .snapshot_log(vec![])
             .metadata_log(vec![])
             .refs(HashMap::new())
-            .build()
-            .try_normalize()
-            .unwrap();
+            .build_unchecked();
+        table_metadata.try_normalize().unwrap();
         assert_eq!(table_metadata.format_version, FormatVersion::V2);
         assert_eq!(table_metadata.table_uuid, Uuid::nil());
         assert_eq!(table_metadata.location, "s3://db/table");
