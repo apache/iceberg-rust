@@ -600,9 +600,10 @@ impl ManifestFile {
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash, Default)]
 pub enum ManifestContentType {
     /// The manifest content is data.
+    #[default]
     Data = 0,
     /// The manifest content is deletes.
     Deletes = 1,
@@ -795,8 +796,11 @@ pub(super) mod _serde {
         pub manifest_path: String,
         pub manifest_length: i64,
         pub partition_spec_id: i32,
+        #[serde(default = "v2_default_content_for_v1")]
         pub content: i32,
+        #[serde(default = "v2_default_sequence_number_for_v1")]
         pub sequence_number: i64,
+        #[serde(default = "v2_default_min_sequence_number_for_v1")]
         pub min_sequence_number: i64,
         pub added_snapshot_id: i64,
         #[serde(alias = "added_data_files_count", alias = "added_files_count")]
@@ -833,6 +837,18 @@ pub(super) mod _serde {
                 key_metadata: self.key_metadata.map(|b| b.into_vec()),
             })
         }
+    }
+
+    fn v2_default_content_for_v1() -> i32 {
+        super::ManifestContentType::Data as i32
+    }
+
+    fn v2_default_sequence_number_for_v1() -> i64 {
+        0
+    }
+
+    fn v2_default_min_sequence_number_for_v1() -> i64 {
+        0
     }
 
     impl ManifestFileV1 {
@@ -1303,7 +1319,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, Some(0), 1);
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1356,5 +1372,68 @@ mod test {
             _ => "".to_string(),
         };
         fields
+    }
+
+    #[test]
+    fn test_manifest_content_type_default() {
+        assert_eq!(ManifestContentType::default(), ManifestContentType::Data);
+    }
+
+    #[test]
+    fn test_manifest_content_type_default_value() {
+        assert_eq!(ManifestContentType::default() as i32, 0);
+    }
+
+    #[test]
+    fn test_manifest_file_v1_to_v2_projection() {
+        use crate::spec::manifest_list::_serde::ManifestFileV1;
+
+        // Create a V1 manifest file object (without V2 fields)
+        let v1_manifest = ManifestFileV1 {
+            manifest_path: "/test/manifest.avro".to_string(),
+            manifest_length: 5806,
+            partition_spec_id: 0,
+            added_snapshot_id: 1646658105718557341,
+            added_data_files_count: Some(3),
+            existing_data_files_count: Some(0),
+            deleted_data_files_count: Some(0),
+            added_rows_count: Some(3),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: None,
+            key_metadata: None,
+        };
+
+        // Convert V1 to V2 - this should apply defaults for missing V2 fields
+        let v2_manifest: ManifestFile = v1_manifest.try_into().unwrap();
+
+        // Verify V1→V2 projection defaults are applied correctly
+        assert_eq!(
+            v2_manifest.content,
+            ManifestContentType::Data,
+            "V1 manifest content should default to Data (0)"
+        );
+        assert_eq!(
+            v2_manifest.sequence_number, 0,
+            "V1 manifest sequence_number should default to 0"
+        );
+        assert_eq!(
+            v2_manifest.min_sequence_number, 0,
+            "V1 manifest min_sequence_number should default to 0"
+        );
+
+        // Verify other fields are preserved correctly
+        assert_eq!(v2_manifest.manifest_path, "/test/manifest.avro");
+        assert_eq!(v2_manifest.manifest_length, 5806);
+        assert_eq!(v2_manifest.partition_spec_id, 0);
+        assert_eq!(v2_manifest.added_snapshot_id, 1646658105718557341);
+        assert_eq!(v2_manifest.added_files_count, Some(3));
+        assert_eq!(v2_manifest.existing_files_count, Some(0));
+        assert_eq!(v2_manifest.deleted_files_count, Some(0));
+        assert_eq!(v2_manifest.added_rows_count, Some(3));
+        assert_eq!(v2_manifest.existing_rows_count, Some(0));
+        assert_eq!(v2_manifest.deleted_rows_count, Some(0));
+        assert_eq!(v2_manifest.partitions, None);
+        assert_eq!(v2_manifest.key_metadata, None);
     }
 }

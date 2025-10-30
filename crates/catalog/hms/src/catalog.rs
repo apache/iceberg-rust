@@ -29,14 +29,105 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
-use typed_builder::TypedBuilder;
 use volo_thrift::MaybeException;
 
 use super::utils::*;
 use crate::error::{from_io_error, from_thrift_error, from_thrift_exception};
+
+/// HMS catalog address
+pub const HMS_CATALOG_PROP_URI: &str = "uri";
+
+/// HMS Catalog thrift transport
+pub const HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str = "thrift_transport";
+/// HMS Catalog framed thrift transport
+pub const THRIFT_TRANSPORT_FRAMED: &str = "framed";
+/// HMS Catalog buffered thrift transport
+pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
+
+/// HMS Catalog warehouse location
+pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+
+/// Builder for [`RestCatalog`].
+#[derive(Debug)]
+pub struct HmsCatalogBuilder(HmsCatalogConfig);
+
+impl Default for HmsCatalogBuilder {
+    fn default() -> Self {
+        Self(HmsCatalogConfig {
+            name: None,
+            address: "".to_string(),
+            thrift_transport: HmsThriftTransport::default(),
+            warehouse: "".to_string(),
+            props: HashMap::new(),
+        })
+    }
+}
+
+impl CatalogBuilder for HmsCatalogBuilder {
+    type C = HmsCatalog;
+
+    fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send {
+        self.0.name = Some(name.into());
+
+        if props.contains_key(HMS_CATALOG_PROP_URI) {
+            self.0.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
+        }
+
+        if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
+            self.0.thrift_transport = match tt.to_lowercase().as_str() {
+                THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
+                THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
+                _ => HmsThriftTransport::default(),
+            };
+        }
+
+        if props.contains_key(HMS_CATALOG_PROP_WAREHOUSE) {
+            self.0.warehouse = props
+                .get(HMS_CATALOG_PROP_WAREHOUSE)
+                .cloned()
+                .unwrap_or_default();
+        }
+
+        self.0.props = props
+            .into_iter()
+            .filter(|(k, _)| {
+                k != HMS_CATALOG_PROP_URI
+                    && k != HMS_CATALOG_PROP_THRIFT_TRANSPORT
+                    && k != HMS_CATALOG_PROP_WAREHOUSE
+            })
+            .collect();
+
+        let result = {
+            if self.0.name.is_none() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name is required",
+                ))
+            } else if self.0.address.is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog address is required",
+                ))
+            } else if self.0.warehouse.is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse is required",
+                ))
+            } else {
+                HmsCatalog::new(self.0)
+            }
+        };
+
+        std::future::ready(result)
+    }
+}
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
@@ -50,12 +141,12 @@ pub enum HmsThriftTransport {
 }
 
 /// Hive metastore Catalog configuration.
-#[derive(Debug, TypedBuilder)]
-pub struct HmsCatalogConfig {
+#[derive(Debug)]
+pub(crate) struct HmsCatalogConfig {
+    name: Option<String>,
     address: String,
     thrift_transport: HmsThriftTransport,
     warehouse: String,
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
@@ -78,7 +169,7 @@ impl Debug for HmsCatalog {
 
 impl HmsCatalog {
     /// Create a new hms catalog.
-    pub fn new(config: HmsCatalogConfig) -> Result<Self> {
+    fn new(config: HmsCatalogConfig) -> Result<Self> {
         let address = config
             .address
             .as_str()
@@ -351,12 +442,10 @@ impl Catalog for HmsCatalog {
             .build()?
             .metadata;
 
-        let metadata_location = create_metadata_location(&location, 0)?;
+        let metadata_location =
+            MetadataLocation::new_with_table_location(location.clone()).to_string();
 
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(&metadata)?.into())
-            .await?;
+        metadata.write_to(&self.file_io, &metadata_location).await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
@@ -406,8 +495,7 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let metadata_content = self.file_io.new_input(&metadata_location)?.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
         Table::builder()
             .file_io(self.file_io())
@@ -502,6 +590,17 @@ impl Catalog for HmsCatalog {
             .map_err(from_thrift_error)?;
 
         Ok(())
+    }
+
+    async fn register_table(
+        &self,
+        _table_ident: &TableIdent,
+        _metadata_location: String,
+    ) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Registering a table is not supported yet",
+        ))
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {

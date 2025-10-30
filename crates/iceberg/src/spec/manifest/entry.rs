@@ -24,8 +24,8 @@ use typed_builder::TypedBuilder;
 use crate::avro::schema_to_avro_schema;
 use crate::error::Result;
 use crate::spec::{
-    DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, ManifestFile, MapType,
-    NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
+    DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, Literal, ManifestFile, MapType,
+    NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, StructType, Type,
 };
 use crate::{Error, ErrorKind};
 
@@ -232,11 +232,11 @@ static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
 
 static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            134,
-            "content",
-            Type::Primitive(PrimitiveType::Int),
-        ))
+        Arc::new(
+            NestedField::required(134, "content", Type::Primitive(PrimitiveType::Int))
+                // 0 refers to DataContentType::DATA
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(0))),
+        )
     })
 };
 

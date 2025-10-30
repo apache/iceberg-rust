@@ -41,6 +41,12 @@ fix-toml: install-taplo-cli
 check-toml: install-taplo-cli
 	taplo check
 
+NIGHTLY_VERSION := $(shell awk -F'"' '/^channel/ {print $$2}' rust-toolchain.toml)
+MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
+
+check-msrv:
+	cargo +$(MSRV_VERSION) check --workspace
+
 check: check-fmt check-clippy check-toml cargo-machete
 
 doc-test:

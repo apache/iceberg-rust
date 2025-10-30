@@ -22,8 +22,9 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
+    paths:
+      - ".github/workflows/website.yml"
+      - "website/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -35,12 +36,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: '0.4.36'
+          mdbook-version: "0.4.36"
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         working-directory: website

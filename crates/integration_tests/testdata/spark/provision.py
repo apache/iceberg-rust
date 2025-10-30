@@ -30,6 +30,8 @@ spark = (
         .getOrCreate()
 )
 
+spark.sql(f"""CREATE NAMESPACE IF NOT EXISTS rest.default""")
+
 spark.sql(
     f"""
 CREATE OR REPLACE TABLE rest.default.test_positional_merge_on_read_deletes (

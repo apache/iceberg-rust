@@ -49,6 +49,11 @@ pub const ADLS_CLIENT_ID: &str = "adls.client-id";
 /// The client-secret.
 pub const ADLS_CLIENT_SECRET: &str = "adls.client-secret";
 
+/// The authority host of the service principal.
+/// - required for client_credentials authentication
+/// - default value: `https://login.microsoftonline.com`
+pub const ADLS_AUTHORITY_HOST: &str = "adls.authority-host";
+
 /// Parses adls.* prefixed configuration properties.
 pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Result<AzdlsConfig> {
     let mut config = AzdlsConfig::default();
@@ -82,6 +87,10 @@ pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Res
 
     if let Some(client_secret) = properties.remove(ADLS_CLIENT_SECRET) {
         config.client_secret = Some(client_secret);
+    }
+
+    if let Some(authority_host) = properties.remove(ADLS_AUTHORITY_HOST) {
+        config.authority_host = Some(authority_host);
     }
 
     Ok(config)

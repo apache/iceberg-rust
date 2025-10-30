@@ -23,9 +23,9 @@ use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
-use iceberg::transaction::Transaction;
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -67,10 +67,16 @@ async fn get_catalog() -> RestCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
-    let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}", rest_socket_addr))
-        .build();
-    RestCatalog::new(config)
+    RestCatalogBuilder::default()
+        .load(
+            "rest",
+            HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                format!("http://{}", rest_socket_addr),
+            )]),
+        )
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -346,9 +352,12 @@ async fn test_update_table() {
         &TableIdent::new(ns.name().clone(), "t1".to_string())
     );
 
+    let tx = Transaction::new(&table);
     // Update table by committing transaction
-    let table2 = Transaction::new(&table)
-        .set_properties(HashMap::from([("prop1".to_string(), "v1".to_string())]))
+    let table2 = tx
+        .update_table_properties()
+        .set("prop1".to_string(), "v1".to_string())
+        .apply(tx)
         .unwrap()
         .commit(&catalog)
         .await
@@ -403,4 +412,40 @@ async fn test_list_empty_multi_level_namespace() {
         .await
         .unwrap();
     assert!(nss.is_empty());
+}
+
+#[tokio::test]
+async fn test_register_table() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    // Create the table, store the metadata location, drop the table
+    let empty_schema = Schema::builder().build().unwrap();
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(empty_schema)
+        .build();
+
+    let table = catalog.create_table(&ns, table_creation).await.unwrap();
+
+    let metadata_location = table.metadata_location().unwrap();
+    catalog.drop_table(table.identifier()).await.unwrap();
+
+    let new_table_identifier = TableIdent::from_strs(["ns", "t2"]).unwrap();
+    let table_registered = catalog
+        .register_table(&new_table_identifier, metadata_location.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        table.metadata_location(),
+        table_registered.metadata_location()
+    );
+    assert_ne!(
+        table.identifier().to_string(),
+        table_registered.identifier().to_string()
+    );
 }

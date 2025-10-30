@@ -39,7 +39,7 @@ pub enum ErrorKind {
     /// Iceberg data is invalid.
     ///
     /// This error is returned when we try to read a table from iceberg but
-    /// failed to parse it's metadata or data file correctly.
+    /// failed to parse its metadata or data file correctly.
     ///
     /// The table could be invalid or corrupted.
     DataInvalid,
@@ -50,16 +50,19 @@ pub enum ErrorKind {
     /// Iceberg table already exists at creation.
     TableAlreadyExists,
 
-    /// Iceberg namespace already exists at creation.
+    /// Iceberg namespace does not exist.
     NamespaceNotFound,
 
-    /// Iceberg table already exists at creation.
+    /// Iceberg table does not exist.
     TableNotFound,
 
     /// Iceberg feature is not supported.
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+
+    /// Catalog commit failed due to outdated metadata
+    CatalogCommitConflicts,
 }
 
 impl ErrorKind {
@@ -80,6 +83,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
+            ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
         }
     }
 }
@@ -134,6 +138,8 @@ pub struct Error {
 
     source: Option<anyhow::Error>,
     backtrace: Backtrace,
+
+    retryable: bool,
 }
 
 impl Display for Error {
@@ -225,7 +231,15 @@ impl Error {
             // `Backtrace::capture()` will check if backtrace has been enabled
             // internally. It's zero cost if backtrace is disabled.
             backtrace: Backtrace::capture(),
+
+            retryable: false,
         }
+    }
+
+    /// Set retryable of the error.
+    pub fn with_retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
     }
 
     /// Add more context in error.
@@ -264,7 +278,7 @@ impl Error {
     /// If you just want to print error with backtrace, use `Debug`, like `format!("{err:?}")`.
     ///
     /// If you use nightly rust, and want to access `iceberg::Error`'s backtrace in the standard way, you can
-    /// implement a newtype like this:
+    /// implement a new type like this:
     ///
     /// ```ignore
     /// // assume you already have `#![feature(error_generic_member_access)]` on the top of your crate
@@ -306,6 +320,11 @@ impl Error {
         self.kind
     }
 
+    /// Return error's retryable status
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+
     /// Return error's message.
     #[inline]
     pub fn message(&self) -> &str {
@@ -327,6 +346,12 @@ define_from_err!(
     std::str::Utf8Error,
     ErrorKind::Unexpected,
     "handling invalid utf-8 characters"
+);
+
+define_from_err!(
+    core::num::ParseIntError,
+    ErrorKind::Unexpected,
+    "parsing integer from string"
 );
 
 define_from_err!(

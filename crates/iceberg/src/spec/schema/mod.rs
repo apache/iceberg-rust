@@ -49,7 +49,8 @@ use crate::{Error, ErrorKind, ensure_data_valid};
 pub type SchemaId = i32;
 /// Reference to [`Schema`].
 pub type SchemaRef = Arc<Schema>;
-pub(crate) const DEFAULT_SCHEMA_ID: SchemaId = 0;
+/// Default schema id.
+pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -410,8 +411,13 @@ impl Schema {
     }
 
     /// Return A HashMap matching field ids to field names.
-    pub(crate) fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
+    pub fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
         &self.id_to_name
+    }
+
+    /// Return a hashmap matching field ids to nested fields.
+    pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
+        &self.id_to_field
     }
 }
 

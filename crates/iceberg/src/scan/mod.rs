@@ -437,10 +437,7 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder
-            .build()
-            .read(self.plan_files().await?)
-            .await
+        arrow_reader_builder.build().read(self.plan_files().await?)
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -752,7 +749,7 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                vec![],
+                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
@@ -964,7 +961,7 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                vec![],
+                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
@@ -1332,14 +1329,12 @@ pub mod tests {
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .await
             .unwrap();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .await
             .unwrap();
         let batch_2: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1777,7 +1772,6 @@ pub mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
@@ -1792,7 +1786,6 @@ pub mod tests {
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
-            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],

@@ -15,28 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-homepage = { workspace = true }
-name = "iceberg-catalog-memory"
-rust-version = { workspace = true }
-version = { workspace = true }
+[engines]
+df = { type = "datafusion" }
 
-categories = ["database"]
-description = "Apache Iceberg Rust Memory Catalog API"
-keywords = ["iceberg", "memory", "catalog"]
-license = { workspace = true }
-repository = { workspace = true }
-
-[dependencies]
-async-trait = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-itertools = { workspace = true }
-serde_json = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
-
-[dev-dependencies]
-regex = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+[[steps]]
+engine = "df"
+slt = "df_test/show_tables.slt"

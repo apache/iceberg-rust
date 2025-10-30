@@ -17,11 +17,23 @@
   ~ under the License.
 -->
 
-# Apache Iceberg Memory Catalog Official Native Rust Implementation
-
-[![crates.io](https://img.shields.io/crates/v/iceberg-catalog-memory.svg)](https://crates.io/crates/iceberg-catalog-memory)
-[![docs.rs](https://img.shields.io/docsrs/iceberg-catalog-memory.svg)](https://docs.rs/iceberg/latest/iceberg-catalog-memory/)
-
-This crate contains the official Native Rust implementation of Apache Iceberg Memory Catalog.
-
-See the [API documentation](https://docs.rs/iceberg-catalog-memory/latest) for examples and the full API.
+# OrbStack as a docker alternative on macOS
+1. Install OrbStack by downloading [installer](https://orbstack.dev/download) or using Homebrew.
+    ```shell
+    brew install orbstack
+    ```
+   
+2. Migrate Docker data
+    ```shell
+    orb migrate docker
+    ```
+   
+3. (Optional) Add registry mirrors
+   
+    You can edit the config directly at `~/.orbstack/config/docker.json` and restart the engine with `orb restart docker`.
+   
+    ```
+    {
+        "registry-mirrors": ["<mirror_addr>"]
+    }
+   ```

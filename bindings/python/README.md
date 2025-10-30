@@ -19,22 +19,30 @@
 
 # Pyiceberg Core
 
-This project is used to build an iceberg-rust powered core for pyiceberg.
+This project is used to build an Iceberg-rust powered core for [PyIceberg](https://py.iceberg.apache.org/).
 
 ## Setup
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
+
 ```shell
-pip install hatch==1.12.0
+pip install uv==0.9.3
+```
+
+Set up the development environment:
+
+```shell
+make install
 ```
 
 ## Build
 
 ```shell
-hatch run dev:develop
+make build
 ```
 
 ## Test
 
 ```shell
-hatch run dev:test
+make test
 ```

@@ -37,9 +37,9 @@ storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
-storage-s3 = ["opendal/services-s3"]
+storage-s3 = ["opendal/services-s3", "reqsign"]
 
-async-std = ["dep:async-std"]
+smol = ["dep:smol"]
 tokio = ["tokio/rt-multi-thread"]
 
 [dependencies]
@@ -54,13 +54,15 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
-async-std = { workspace = true, optional = true, features = ["attributes"] }
+as-any = { workspace = true }
 async-trait = { workspace = true }
+backon = { workspace = true }
 base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
+expect-test = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
@@ -72,6 +74,7 @@ opendal = { workspace = true }
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 rand = { workspace = true }
+reqsign = { version = "0.16.3", optional = true, default-features = false }
 reqwest = { workspace = true }
 roaring = { workspace = true }
 rust_decimal = { workspace = true }
@@ -81,6 +84,8 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
+smol = { workspace = true, optional = true }
+strum = { workspace = true, features = ["derive"] }
 thrift = { workspace = true }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
@@ -92,8 +97,10 @@ zstd = { workspace = true }
 ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+mockall = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
 

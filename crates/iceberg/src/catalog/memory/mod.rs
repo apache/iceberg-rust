@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg memory Catalog API implementation.
-
-#![deny(missing_docs)]
+//! Memory catalog implementation.
 
 mod catalog;
 mod namespace_state;

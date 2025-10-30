@@ -33,15 +33,16 @@ use iceberg::spec::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField,
     PrimitiveType, Schema, StructType, Type,
 };
-use iceberg::transaction::Transaction;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, TableCreation};
-use iceberg_catalog_rest::RestCatalog;
+use iceberg::{Catalog, CatalogBuilder, TableCreation};
+use iceberg_catalog_rest::RestCatalogBuilder;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
@@ -52,7 +53,10 @@ use crate::shared_tests::random_ns;
 #[tokio::test]
 async fn test_scan_all_type() {
     let fixture = get_shared_containers();
-    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let rest_catalog = RestCatalogBuilder::default()
+        .load("rest", fixture.catalog_config.clone())
+        .await
+        .unwrap();
     let ns = random_ns().await;
 
     let schema = Schema::builder()
@@ -152,12 +156,15 @@ async fn test_scan_all_type() {
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
         table.metadata().current_schema().clone(),
+    );
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
-    let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
 
     // Prepare data
     let col1 = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -309,9 +316,8 @@ async fn test_scan_all_type() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
+    let append_action = tx.fast_append().add_data_files(data_file.clone());
+    let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result

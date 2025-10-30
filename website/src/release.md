@@ -38,8 +38,8 @@ In the context of our release, we use several terms to describe different stages
 Here's an explanation of these terms:
 
 - `iceberg_version`: the version of Iceberg to be released, like `0.2.0`.
-- `release_version`: the version of release candidate, like `0.2.0-rc.1`.
 - `rc_version`: the minor version for voting round, like `rc.1`.
+- `release_version`: the version of release candidate, like `0.2.0-rc.1`.
 
 ## Preparation
 
@@ -117,14 +117,16 @@ Please note that this version is the exact version of the release, not the relea
 
 Download and setup `cargo-deny`. You can refer to [cargo-deny](https://embarkstudios.github.io/cargo-deny/cli/index.html).
 
-Running `python3 ./scripts/dependencies.py generate` to update the dependencies list of every package.
+Run `python3 ./scripts/dependencies.py generate` to update the dependencies list of every package.
+
+Run `python3 ./scripts/dependencies.py check` to verify the updated dependencies' license.
 
 ### Push release candidate tag
 
 After bump version PR gets merged, we can create a GitHub release for the release candidate:
 
-- Create a tag at `main` branch on the `Bump Version` / `Patch up version` commit: `git tag -s "v0.2.0-rc.1"`, please correctly check out the corresponding commit instead of directly tagging on the main branch.
-- Push tags to GitHub: `git push --tags`.
+- Create a tag at `main` branch on the `Bump Version` / `Patch up version` commit: `git tag -s "v${release_version}"`, please correctly check out the corresponding commit instead of directly tagging on the main branch.
+- Push tags to GitHub: `git push origin "v${release_version}"`.
 
 ## ASF Side
 
@@ -141,11 +143,10 @@ After GitHub Release has been created, we can start to create ASF Release.
     - This script will do the following things:
         - Create a new branch named by `release-${release_version}` from the tag
         - Generate the release candidate artifacts under `dist`, including:
-            - `apache-iceberg-rust-${release_version}-src.tar.gz`
-            - `apache-iceberg-rust-${release_version}-src.tar.gz.asc`
-            - `apache-iceberg-rust-${release_version}-src.tar.gz.sha512`
+            - `apache-iceberg-rust-${release_version}.tar.gz`
+            - `apache-iceberg-rust-${release_version}.tar.gz.asc`
+            - `apache-iceberg-rust-${release_version}.tar.gz.sha512`
         - Check the header of the source code. This step needs docker to run.
-- Push the newly created branch to GitHub
 
 This script will create a new release under `dist`.
 
@@ -154,16 +155,16 @@ For example:
 ```shell
 > tree dist
 dist
-├── apache-iceberg-rust-0.2.0-src.tar.gz
-├── apache-iceberg-rust-0.2.0-src.tar.gz.asc
-└── apache-iceberg-rust-0.2.0-src.tar.gz.sha512
+├── apache-iceberg-rust-0.2.0.tar.gz
+├── apache-iceberg-rust-0.2.0.tar.gz.asc
+└── apache-iceberg-rust-0.2.0.tar.gz.sha512
 ```
 
 ### Upload artifacts to the SVN dist repo
 
 SVN is required for this step.
 
-The svn repository of the dev branch is: <https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust>
+The svn repository of the dev branch is: <https://dist.apache.org/repos/dist/dev/iceberg/>
 
 First, checkout Iceberg to local directory:
 
@@ -178,22 +179,25 @@ Then, upload the artifacts:
 
 ```shell
 # create a directory named by version
-mkdir /tmp/iceberg-dist-dev/${release_version}
+mkdir /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
+
 # copy source code and signature package to the versioned directory
-cp ${repo_dir}/dist/* /tmp/iceberg-dist-dev/iceberg-rust-${release_version}/
+cp ./dist/* /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
+
 # change dir to the svn folder
 cd /tmp/iceberg-dist-dev/
+
 # check svn status
 svn status
+
 # add to svn
-svn add ${release_version}
-# check svn status
-svn status
+svn add apache-iceberg-rust-${release_version}
+
 # commit to SVN remote server
-svn commit -m "Prepare for ${release_version}"
+svn commit -m "Prepare for iceberg-rust ${release_version}"
 ```
 
-Visit <https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust/> to make sure the artifacts are uploaded correctly.
+Visit <https://dist.apache.org/repos/dist/dev/iceberg/> to make sure the artifacts are uploaded correctly.
 
 ### Rescue
 
@@ -209,7 +213,7 @@ Iceberg Community Vote should send email to: <dev@iceberg.apache.org>:
 Title:
 
 ```
-[VOTE] Release Apache Iceberg Rust ${release_version} RC1
+[VOTE] Release Apache Iceberg Rust ${iceberg_version} ${rc_version}
 ```
 
 Content:
@@ -219,11 +223,11 @@ Hello, Apache Iceberg Rust Community,
 
 This is a call for a vote to release Apache Iceberg rust version ${iceberg_version}.
 
-The tag to be voted on is ${iceberg_version}.
+The tag to be voted on is v${release_version}.
 
 The release candidate:
 
-https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust-${release_version}/
+https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-${release_version}/
 
 Keys to verify the release candidate:
 
@@ -231,7 +235,7 @@ https://downloads.apache.org/iceberg/KEYS
 
 Git tag for the release:
 
-https://github.com/apache/iceberg-rust/releases/tag/${release_version}
+https://github.com/apache/iceberg-rust/releases/tag/v${release_version}
 
 Please download, verify, and test.
 
@@ -253,15 +257,7 @@ Checklist for reference:
 [ ] All source files have ASF headers
 [ ] Can compile from source
 
-More detailed checklist please refer to:
-https://github.com/apache/iceberg-rust/tree/main/scripts
-
-To compile from source, please refer to:
-https://github.com/apache/iceberg-rust/blob/main/CONTRIBUTING.md
-
-Here is a Python script in release to help you verify the release candidate:
-
-./scripts/verify.py
+More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
 
 Thanks
 
@@ -275,7 +271,7 @@ After at least 3 `+1` binding vote (from Iceberg PMC member), claim the vote res
 Title:
 
 ```
-[RESULT][VOTE] Release Apache Iceberg Rust ${release_version} RC1
+[RESULT][VOTE] Release Apache Iceberg Rust ${iceberg_version} ${rc_version}
 ```
 
 Content:
@@ -306,23 +302,67 @@ ${name}
 
 Example: <https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6>
 
+## How to verify a release
+
+### Validating a source release
+
+A release contains links to following things:
+
+* A source tarball
+* A signature(.asc)
+* A checksum(.sha512)
+
+After downloading them, here are the instructions on how to verify them.
+
+* Import keys:
+
+  ```bash
+  curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+  gpg --import KEYS
+  ```
+* Verify the `.asc` file:
+  
+  ```bash
+  gpg --verify apache-iceberg-rust-*.tar.gz.asc
+  ```
+  Expects: `"apache-iceberg-rust-0.7.0.tar.gz: OK"`
+* Verify the checksums: 
+  
+  ```bash
+  shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
+  ```
+  Expects: `gpg: Good signature from ...`
+* Verify build and test:
+  
+  ```bash
+  tar -xzf apache-iceberg-rust-*.tar.gz
+  cd apache-iceberg-rust-*/
+  make build && make test
+  ```
+* Verify license headers: 
+  
+  ```bash
+  docker run -it --rm -v $(pwd):/github/workspace apache/skywalking-eyes header check
+  ```
+  Expects: `INFO Totally checked _ files, valid: _, invalid: 0, ignored: _, fixed: 0 `
+
 ## Official Release
 
 ### Push the release git tag
 
 ```shell
 # Checkout the tags that passed VOTE
-git checkout ${release_version}
+git checkout "v${release_version}"
 # Tag with the iceberg version
-git tag -s ${iceberg_version}
+git tag -s "v${iceberg_version}"
 # Push tags to github to trigger releases
-git push origin ${iceberg_version}
+git push origin "v${iceberg_version}"
 ```
 
 ### Publish artifacts to SVN RELEASE branch
 
 ```shell
-svn mv https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust-${release_version} https://dist.apache.org/repos/dist/release/iceberg/iceberg-rust-${iceberg_version} -m "Release Apache Iceberg Rust ${iceberg_version}"
+svn mv https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-${release_version} https://dist.apache.org/repos/dist/release/iceberg/apache-iceberg-rust-${iceberg_version} -m "Release Apache Iceberg Rust ${iceberg_version}"
 ```
 
 ### Change Iceberg Rust Website download link
@@ -372,6 +412,8 @@ https://github.com/apache/iceberg-rust/releases/tag/v${iceberg_version}
 Apache Iceberg Rust website: https://rust.iceberg.apache.org/
 
 Download Links: https://rust.iceberg.apache.org/download
+
+From official ASF distribution: https://dist.apache.org/repos/dist/release/iceberg/apache-iceberg-rust-${release_version}/
 
 Iceberg Resources:
 - Issue: https://github.com/apache/iceberg-rust/issues

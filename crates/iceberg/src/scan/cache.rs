@@ -155,7 +155,7 @@ impl ManifestEvaluatorCache {
             .unwrap()
             .insert(
                 spec_id,
-                Arc::new(ManifestEvaluator::new(partition_filter.as_ref().clone())),
+                Arc::new(ManifestEvaluator::builder(partition_filter.as_ref().clone()).build()),
             );
 
         let read = self

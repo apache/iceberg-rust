@@ -41,9 +41,6 @@ pub struct FileScanTask {
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
-    /// The content type of the file to scan.
-    pub data_file_content: DataContentType,
-
     /// The format of the file to scan.
     pub data_file_format: DataFileFormat,
 
@@ -115,6 +112,6 @@ pub struct FileScanTaskDeleteFile {
     /// partition id
     pub partition_spec_id: i32,
 
-    /// equality ids for equality deletes (empty for positional deletes)
-    pub equality_ids: Vec<i32>,
+    /// equality ids for equality deletes (null for anything other than equality-deletes)
+    pub equality_ids: Option<Vec<i32>>,
 }

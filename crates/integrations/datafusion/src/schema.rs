@@ -22,8 +22,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
-use datafusion::error::Result as DFResult;
+use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
+use iceberg::inspect::MetadataTableType;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
@@ -35,7 +36,7 @@ pub(crate) struct IcebergSchemaProvider {
     /// A `HashMap` where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
-    tables: HashMap<String, Arc<dyn TableProvider>>,
+    tables: HashMap<String, Arc<IcebergTableProvider>>,
 }
 
 impl IcebergSchemaProvider {
@@ -69,13 +70,10 @@ impl IcebergSchemaProvider {
         )
         .await?;
 
-        let tables: HashMap<String, Arc<dyn TableProvider>> = table_names
+        let tables: HashMap<String, Arc<IcebergTableProvider>> = table_names
             .into_iter()
             .zip(providers.into_iter())
-            .map(|(name, provider)| {
-                let provider = Arc::new(provider) as Arc<dyn TableProvider>;
-                (name, provider)
-            })
+            .map(|(name, provider)| (name, Arc::new(provider)))
             .collect();
 
         Ok(IcebergSchemaProvider { tables })
@@ -89,14 +87,43 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.keys().cloned().collect()
+        self.tables
+            .keys()
+            .flat_map(|table_name| {
+                [table_name.clone()]
+                    .into_iter()
+                    .chain(MetadataTableType::all_types().map(|metadata_table_name| {
+                        format!("{}${}", table_name.clone(), metadata_table_name.as_str())
+                    }))
+            })
+            .collect()
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
+        if let Some((table_name, metadata_table_name)) = name.split_once('$') {
+            self.tables.contains_key(table_name)
+                && MetadataTableType::try_from(metadata_table_name).is_ok()
+        } else {
+            self.tables.contains_key(name)
+        }
     }
 
     async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
-        Ok(self.tables.get(name).cloned())
+        if let Some((table_name, metadata_table_name)) = name.split_once('$') {
+            let metadata_table_type =
+                MetadataTableType::try_from(metadata_table_name).map_err(DataFusionError::Plan)?;
+            if let Some(table) = self.tables.get(table_name) {
+                let metadata_table = table.metadata_table(metadata_table_type);
+                return Ok(Some(Arc::new(metadata_table)));
+            } else {
+                return Ok(None);
+            }
+        }
+
+        Ok(self
+            .tables
+            .get(name)
+            .cloned()
+            .map(|t| t as Arc<dyn TableProvider>))
     }
 }

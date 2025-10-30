@@ -27,6 +27,43 @@ use crate::table::Table;
 #[derive(Debug)]
 pub struct MetadataTable<'a>(&'a Table);
 
+/// Metadata table type.
+#[derive(Debug, Clone, strum::EnumIter)]
+pub enum MetadataTableType {
+    /// [`SnapshotsTable`]
+    Snapshots,
+    /// [`ManifestsTable`]
+    Manifests,
+}
+
+impl MetadataTableType {
+    /// Returns the string representation of the metadata table type.
+    pub fn as_str(&self) -> &str {
+        match self {
+            MetadataTableType::Snapshots => "snapshots",
+            MetadataTableType::Manifests => "manifests",
+        }
+    }
+
+    /// Returns all the metadata table types.
+    pub fn all_types() -> impl Iterator<Item = Self> {
+        use strum::IntoEnumIterator;
+        Self::iter()
+    }
+}
+
+impl TryFrom<&str> for MetadataTableType {
+    type Error = String;
+
+    fn try_from(value: &str) -> std::result::Result<Self, String> {
+        match value {
+            "snapshots" => Ok(Self::Snapshots),
+            "manifests" => Ok(Self::Manifests),
+            _ => Err(format!("invalid metadata table type: {value}")),
+        }
+    }
+}
+
 impl<'a> MetadataTable<'a> {
     /// Creates a new metadata scan.
     pub fn new(table: &'a Table) -> Self {
@@ -41,71 +78,5 @@ impl<'a> MetadataTable<'a> {
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
         ManifestsTable::new(self.0)
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    //! Sharable tests for the metadata table.
-
-    use expect_test::Expect;
-    use futures::TryStreamExt;
-    use itertools::Itertools;
-
-    use crate::scan::ArrowRecordBatchStream;
-
-    /// Snapshot testing to check the resulting record batch.
-    ///
-    /// - `expected_schema/data`: put `expect![[""]]` as a placeholder,
-    ///   and then run test with `UPDATE_EXPECT=1 cargo test` to automatically update the result,
-    ///   or use rust-analyzer (see [video](https://github.com/rust-analyzer/expect-test)).
-    ///   Check the doc of [`expect_test`] for more details.
-    /// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
-    /// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
-    pub async fn check_record_batches(
-        batch_stream: ArrowRecordBatchStream,
-        expected_schema: Expect,
-        expected_data: Expect,
-        ignore_check_columns: &[&str],
-        sort_column: Option<&str>,
-    ) {
-        let record_batches = batch_stream.try_collect::<Vec<_>>().await.unwrap();
-        assert!(!record_batches.is_empty(), "Empty record batches");
-
-        // Combine record batches using the first batch's schema
-        let first_batch = record_batches.first().unwrap();
-        let record_batch =
-            arrow_select::concat::concat_batches(&first_batch.schema(), &record_batches).unwrap();
-
-        let mut columns = record_batch.columns().to_vec();
-        if let Some(sort_column) = sort_column {
-            let column = record_batch.column_by_name(sort_column).unwrap();
-            let indices = arrow_ord::sort::sort_to_indices(column, None, None).unwrap();
-            columns = columns
-                .iter()
-                .map(|column| arrow_select::take::take(column.as_ref(), &indices, None).unwrap())
-                .collect_vec();
-        }
-
-        expected_schema.assert_eq(&format!(
-            "{}",
-            record_batch.schema().fields().iter().format(",\n")
-        ));
-        expected_data.assert_eq(&format!(
-            "{}",
-            record_batch
-                .schema()
-                .fields()
-                .iter()
-                .zip_eq(columns)
-                .map(|(field, column)| {
-                    if ignore_check_columns.contains(&field.name().as_str()) {
-                        format!("{}: (skipped)", field.name())
-                    } else {
-                        format!("{}: {:?}", field.name(), column)
-                    }
-                })
-                .format(",\n")
-        ));
     }
 }

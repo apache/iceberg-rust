@@ -21,7 +21,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
-use crate::spec::{Literal, RawLiteral, StructType, Type};
+use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
 use crate::{Error, ErrorKind};
 
 #[derive(Serialize, Deserialize)]
@@ -40,7 +40,7 @@ impl ManifestEntryV2 {
             snapshot_id: value.snapshot_id,
             sequence_number: value.sequence_number,
             file_sequence_number: value.file_sequence_number,
-            data_file: DataFileSerde::try_from(value.data_file, partition_type, false)?,
+            data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V2)?,
         })
     }
 
@@ -74,7 +74,7 @@ impl ManifestEntryV1 {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id.unwrap_or_default(),
-            data_file: DataFileSerde::try_from(value.data_file, partition_type, true)?,
+            data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V1)?,
         })
     }
 
@@ -116,7 +116,6 @@ pub(super) struct DataFileSerde {
     upper_bounds: Option<Vec<BytesEntry>>,
     key_metadata: Option<serde_bytes::ByteBuf>,
     split_offsets: Option<Vec<i64>>,
-    #[serde(default)]
     equality_ids: Option<Vec<i32>>,
     sort_order_id: Option<i32>,
     first_row_id: Option<i64>,
@@ -129,9 +128,13 @@ impl DataFileSerde {
     pub fn try_from(
         value: super::DataFile,
         partition_type: &StructType,
-        is_version_1: bool,
+        format_version: FormatVersion,
     ) -> Result<Self, Error> {
-        let block_size_in_bytes = if is_version_1 { Some(0) } else { None };
+        let block_size_in_bytes = if format_version == FormatVersion::V1 {
+            Some(0)
+        } else {
+            None
+        };
         Ok(Self {
             content: value.content as i32,
             file_path: value.file_path,
@@ -151,7 +154,7 @@ impl DataFileSerde {
             upper_bounds: Some(to_bytes_entry(value.upper_bounds)?),
             key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
             split_offsets: Some(value.split_offsets),
-            equality_ids: Some(value.equality_ids),
+            equality_ids: value.equality_ids,
             sort_order_id: value.sort_order_id,
             first_row_id: value.first_row_id,
             referenced_data_file: value.referenced_data_file,
@@ -220,7 +223,7 @@ impl DataFileSerde {
                 .unwrap_or_default(),
             key_metadata: self.key_metadata.map(|v| v.to_vec()),
             split_offsets: self.split_offsets.unwrap_or_default(),
-            equality_ids: self.equality_ids.unwrap_or_default(),
+            equality_ids: self.equality_ids,
             sort_order_id: self.sort_order_id,
             partition_spec_id,
             first_row_id: self.first_row_id,
@@ -292,8 +295,9 @@ fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
     Ok(m)
 }
 
+#[allow(unused_mut)]
 fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
-    entries
+    let mut i64_entries = entries
         .iter()
         .map(|e| {
             Ok(I64Entry {
@@ -301,7 +305,13 @@ fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
                 value: (*e.1).try_into()?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    // Ensure that the order is deterministic during testing
+    #[cfg(test)]
+    i64_entries.sort_by_key(|e| e.key);
+
+    Ok(i64_entries)
 }
 
 #[cfg(test)]
@@ -330,9 +340,8 @@ mod tests {
         assert_eq!(ret, expected_ret, "Negative i64 entry should be ignored!");
     }
 
-    #[tokio::test]
-    async fn test_data_file_serialize_deserialize() {
-        let schema = Arc::new(
+    fn schema() -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![
                     Arc::new(NestedField::optional(
@@ -353,8 +362,11 @@ mod tests {
                 ])
                 .build()
                 .unwrap(),
-        );
-        let data_files = vec![DataFile {
+        )
+    }
+
+    fn data_files() -> Vec<DataFile> {
+        vec![DataFile {
             content: DataContentType::Data,
             file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
             file_format: DataFileFormat::Parquet,
@@ -369,14 +381,20 @@ mod tests {
             upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
             key_metadata: None,
             split_offsets: vec![4],
-            equality_ids: vec![],
+            equality_ids: None,
             sort_order_id: Some(0),
             partition_spec_id: 0,
             first_row_id: None,
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
-        }];
+        }]
+    }
+
+    #[tokio::test]
+    async fn test_data_file_serialize_deserialize() {
+        let schema = schema();
+        let data_files = data_files();
 
         let mut buffer = Vec::new();
         let _ = write_data_files_to_avro(
@@ -397,5 +415,179 @@ mod tests {
         .unwrap();
 
         assert_eq!(data_files, actual_data_file);
+    }
+
+    #[tokio::test]
+    async fn test_data_file_serialize_deserialize_v1_data_on_v2_reader() {
+        let schema = schema();
+        let data_files = data_files();
+
+        let mut buffer = Vec::new();
+        let _ = write_data_files_to_avro(
+            &mut buffer,
+            data_files.clone().into_iter(),
+            &StructType::new(vec![]),
+            FormatVersion::V1,
+        )
+        .unwrap();
+
+        let actual_data_file = read_data_files_from_avro(
+            &mut Cursor::new(buffer),
+            &schema,
+            0,
+            &StructType::new(vec![]),
+            FormatVersion::V2,
+        )
+        .unwrap();
+
+        assert_eq!(actual_data_file[0].content, DataContentType::Data)
+    }
+
+    #[test]
+    fn test_manifest_entry_v1_to_v2_projection() {
+        use crate::spec::manifest::_serde::{DataFileSerde, ManifestEntryV1};
+        use crate::spec::{Literal, RawLiteral, Struct, StructType};
+
+        let partition = RawLiteral::try_from(
+            Literal::Struct(Struct::empty()),
+            &Type::Struct(StructType::new(vec![])),
+        )
+        .unwrap();
+
+        // Create a V1 manifest entry struct (lacks V2 sequence number fields)
+        let v1_entry = ManifestEntryV1 {
+            status: 1, // Added
+            snapshot_id: 12345,
+            data_file: DataFileSerde {
+                content: 0, // DataFileSerde is shared between V1/V2
+                file_path: "test/path.parquet".to_string(),
+                file_format: "PARQUET".to_string(),
+                partition,
+                record_count: 100,
+                file_size_in_bytes: 1024,
+                block_size_in_bytes: Some(0), // V1 includes this field
+                column_sizes: None,
+                value_counts: None,
+                null_value_counts: None,
+                nan_value_counts: None,
+                lower_bounds: None,
+                upper_bounds: None,
+                key_metadata: None,
+                split_offsets: None,
+                equality_ids: None, // Will be converted to empty vec
+                sort_order_id: None,
+                first_row_id: None,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            },
+        };
+
+        // Test the explicit V1→V2 conversion logic in ManifestEntryV1::try_into()
+        let v2_entry = v1_entry
+            .try_into(
+                0, // partition_spec_id
+                &StructType::new(vec![]),
+                &schema(),
+            )
+            .unwrap();
+
+        // Verify that V1→V2 conversion adds the missing V2 sequence number fields
+        assert_eq!(
+            v2_entry.sequence_number,
+            Some(0),
+            "ManifestEntryV1::try_into() should set sequence_number to 0"
+        );
+        assert_eq!(
+            v2_entry.file_sequence_number,
+            Some(0),
+            "ManifestEntryV1::try_into() should set file_sequence_number to 0"
+        );
+        assert_eq!(
+            v2_entry.snapshot_id,
+            Some(12345),
+            "snapshot_id should be preserved during conversion"
+        );
+
+        // Verify that DataFileSerde conversion applies V2 defaults
+        assert_eq!(
+            v2_entry.data_file.content,
+            DataContentType::Data,
+            "DataFileSerde should convert content 0 to DataContentType::Data"
+        );
+        assert_eq!(
+            v2_entry.data_file.equality_ids, None,
+            "DataFileSerde should preserve None equality_ids as None"
+        );
+
+        // Verify other fields are preserved during conversion
+        assert_eq!(v2_entry.data_file.file_path, "test/path.parquet");
+        assert_eq!(v2_entry.data_file.record_count, 100);
+        assert_eq!(v2_entry.data_file.file_size_in_bytes, 1024);
+    }
+
+    #[test]
+    fn test_data_file_serde_v1_field_defaults() {
+        use crate::spec::manifest::_serde::DataFileSerde;
+        use crate::spec::{Literal, RawLiteral, Struct, StructType};
+
+        let partition = RawLiteral::try_from(
+            Literal::Struct(Struct::empty()),
+            &Type::Struct(StructType::new(vec![])),
+        )
+        .unwrap();
+
+        // Create a DataFileSerde that simulates V1 deserialization behavior
+        // (missing V2 fields would be None due to #[serde(default)])
+        let v1_style_data_file = DataFileSerde {
+            content: 0, // V1 doesn't have this field, defaults to 0 via #[serde(default)]
+            file_path: "test/data.parquet".to_string(),
+            file_format: "PARQUET".to_string(),
+            partition,
+            record_count: 500,
+            file_size_in_bytes: 2048,
+            block_size_in_bytes: Some(1024), // V1 includes this field, V2 skips it
+            column_sizes: None,
+            value_counts: None,
+            null_value_counts: None,
+            nan_value_counts: None,
+            lower_bounds: None,
+            upper_bounds: None,
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None, // V1 doesn't have this field, defaults to None via #[serde(default)]
+            sort_order_id: None,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        };
+
+        // Test the DataFileSerde::try_into() conversion that handles V1 field defaults
+        let data_file = v1_style_data_file
+            .try_into(
+                0, // partition_spec_id
+                &StructType::new(vec![]),
+                &schema(),
+            )
+            .unwrap();
+
+        // Verify that DataFileSerde::try_into() applies correct defaults for missing V2 fields
+        assert_eq!(
+            data_file.content,
+            DataContentType::Data,
+            "content 0 should convert to DataContentType::Data"
+        );
+        assert_eq!(
+            data_file.equality_ids, None,
+            "None equality_ids should remain as None"
+        );
+
+        // Verify other fields are handled correctly during conversion
+        assert_eq!(data_file.file_path, "test/data.parquet");
+        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
+        assert_eq!(data_file.record_count, 500);
+        assert_eq!(data_file.file_size_in_bytes, 2048);
+        assert_eq!(data_file.partition_spec_id, 0);
     }
 }

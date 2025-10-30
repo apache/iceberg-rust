@@ -38,6 +38,7 @@ use super::{
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
+use crate::io::FileIO;
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -45,59 +46,6 @@ pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
-
-/// Reserved table property for table format version.
-///
-/// Iceberg will default a new table's format version to the latest stable and recommended
-/// version. This reserved property keyword allows users to override the Iceberg format version of
-/// the table metadata.
-///
-/// If this table property exists when creating a table, the table will use the specified format
-/// version. If a table updates this property, it will try to upgrade to the specified format
-/// version.
-pub const PROPERTY_FORMAT_VERSION: &str = "format-version";
-/// Reserved table property for table UUID.
-pub const PROPERTY_UUID: &str = "uuid";
-/// Reserved table property for the total number of snapshots.
-pub const PROPERTY_SNAPSHOT_COUNT: &str = "snapshot-count";
-/// Reserved table property for current snapshot summary.
-pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &str = "current-snapshot-summary";
-/// Reserved table property for current snapshot id.
-pub const PROPERTY_CURRENT_SNAPSHOT_ID: &str = "current-snapshot-id";
-/// Reserved table property for current snapshot timestamp.
-pub const PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &str = "current-snapshot-timestamp-ms";
-/// Reserved table property for the JSON representation of current schema.
-pub const PROPERTY_CURRENT_SCHEMA: &str = "current-schema";
-/// Reserved table property for the JSON representation of current(default) partition spec.
-pub const PROPERTY_DEFAULT_PARTITION_SPEC: &str = "default-partition-spec";
-/// Reserved table property for the JSON representation of current(default) sort order.
-pub const PROPERTY_DEFAULT_SORT_ORDER: &str = "default-sort-order";
-
-/// Property key for max number of previous versions to keep.
-pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str = "write.metadata.previous-versions-max";
-/// Default value for max number of previous versions to keep.
-pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
-
-/// Property key for max number of partitions to keep summary stats for.
-pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
-/// Default value for the max number of partitions to keep summary stats for.
-pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
-
-/// Reserved Iceberg table properties list.
-///
-/// Reserved table properties are only used to control behaviors when creating or updating a
-/// table. The value of these properties are not persisted as a part of the table metadata.
-pub const RESERVED_PROPERTIES: [&str; 9] = [
-    PROPERTY_FORMAT_VERSION,
-    PROPERTY_UUID,
-    PROPERTY_SNAPSHOT_COUNT,
-    PROPERTY_CURRENT_SNAPSHOT_ID,
-    PROPERTY_CURRENT_SNAPSHOT_SUMMARY,
-    PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP,
-    PROPERTY_CURRENT_SCHEMA,
-    PROPERTY_DEFAULT_PARTITION_SPEC,
-    PROPERTY_DEFAULT_SORT_ORDER,
-];
 
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
@@ -167,7 +115,7 @@ pub struct TableMetadata {
     /// that encodes changes to the previous metadata files for the table.
     /// Each time a new metadata file is created, a new entry of the
     /// previous metadata file location should be added to the list.
-    /// Tables can be configured to remove oldest metadata log entries and
+    /// Tables can be configured to remove the oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
     #[builder(default)]
     pub(crate) metadata_log: Vec<MetadataLog>,
@@ -211,6 +159,22 @@ impl TableMetadata {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
     }
 
+    /// Check if a partition field name exists in any partition spec.
+    #[inline]
+    pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
+        self.partition_specs
+            .values()
+            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
+    }
+
+    /// Check if a field name exists in any schema.
+    #[inline]
+    pub(crate) fn name_exists_in_any_schema(&self, name: &str) -> bool {
+        self.schemas
+            .values()
+            .any(|schema| schema.field_by_name(name).is_some())
+    }
+
     /// Returns format version of this metadata.
     #[inline]
     pub fn format_version(&self) -> FormatVersion {
@@ -245,6 +209,18 @@ impl TableMetadata {
             FormatVersion::V1 => INITIAL_SEQUENCE_NUMBER,
             _ => self.last_sequence_number + 1,
         }
+    }
+
+    /// Returns the last column id.
+    #[inline]
+    pub fn last_column_id(&self) -> i32 {
+        self.last_column_id
+    }
+
+    /// Returns the last partition_id
+    #[inline]
+    pub fn last_partition_id(&self) -> i32 {
+        self.last_partition_id
     }
 
     /// Returns last updated time.
@@ -450,6 +426,29 @@ impl TableMetadata {
     #[inline]
     pub fn encryption_key(&self, key_id: &str) -> Option<&String> {
         self.encryption_keys.get(key_id)
+    }
+
+    /// Read table metadata from the given location.
+    pub async fn read_from(
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<TableMetadata> {
+        let input_file = file_io.new_input(metadata_location)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+        Ok(metadata)
+    }
+
+    /// Write table metadata to the given location.
+    pub async fn write_to(
+        &self,
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<()> {
+        file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(self)?.into())
+            .await
     }
 
     /// Normalize this partition spec.
@@ -1343,10 +1342,12 @@ mod tests {
 
     use anyhow::Result;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::TableCreation;
+    use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PartitionStatisticsFile,
@@ -3039,7 +3040,7 @@ mod tests {
             )])
         );
     }
-
+  
     #[test]
     fn test_build_declarative_table_metadata() {
         // This test mainly ensures that new fields added to the `TableMetadata` have
@@ -3098,5 +3099,263 @@ mod tests {
         assert_eq!(table_metadata.statistics.len(), 0);
         assert_eq!(table_metadata.partition_statistics.len(), 0);
         assert_eq!(table_metadata.encryption_keys.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_read_write() {
+        // Create a temporary directory for our test
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        // Use an existing test metadata from the test files
+        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+
+        // Define the metadata location
+        let metadata_location = format!("{}/metadata.json", temp_path);
+
+        // Write the metadata
+        original_metadata
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the file exists
+        assert!(fs::metadata(&metadata_location).is_ok());
+
+        // Read the metadata back
+        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the metadata matches
+        assert_eq!(read_metadata, original_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_read_nonexistent_file() {
+        // Create a FileIO instance
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        // Try to read a non-existent file
+        let result = TableMetadata::read_from(&file_io, "/nonexistent/path/metadata.json").await;
+
+        // Verify it returns an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_partition_name_exists() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "partition_col", Type::Primitive(PrimitiveType::Int))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec1 = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_partition_field("data", "data_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let spec2 = PartitionSpec::builder(schema.clone())
+            .with_spec_id(2)
+            .add_partition_field("partition_col", "partition_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Build metadata with these specs
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            spec1.clone().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .add_partition_spec(spec2.into_unbound())
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        assert!(metadata.partition_name_exists("data_partition"));
+        assert!(metadata.partition_name_exists("partition_bucket"));
+
+        assert!(!metadata.partition_name_exists("nonexistent_field"));
+        assert!(!metadata.partition_name_exists("data")); // schema field name, not partition field name
+        assert!(!metadata.partition_name_exists(""));
+    }
+
+    #[test]
+    fn test_partition_name_exists_empty_specs() {
+        // Create metadata with no partition specs (unpartitioned table)
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        assert!(!metadata.partition_name_exists("any_field"));
+        assert!(!metadata.partition_name_exists("data"));
+    }
+
+    #[test]
+    fn test_name_exists_in_any_schema() {
+        // Create multiple schemas with different fields
+        let schema1 = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "field1", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "field2", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let schema2 = Schema::builder()
+            .with_schema_id(2)
+            .with_fields(vec![
+                NestedField::required(1, "field1", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "field3", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema1,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .add_current_schema(schema2)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        assert!(metadata.name_exists_in_any_schema("field1")); // exists in both schemas
+        assert!(metadata.name_exists_in_any_schema("field2")); // exists only in schema1 (historical)
+        assert!(metadata.name_exists_in_any_schema("field3")); // exists only in schema2 (current)
+
+        assert!(!metadata.name_exists_in_any_schema("nonexistent_field"));
+        assert!(!metadata.name_exists_in_any_schema("field4"));
+        assert!(!metadata.name_exists_in_any_schema(""));
+    }
+
+    #[test]
+    fn test_name_exists_in_any_schema_empty_schemas() {
+        let schema = Schema::builder().with_fields(vec![]).build().unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        assert!(!metadata.name_exists_in_any_schema("any_field"));
+    }
+
+    #[test]
+    fn test_helper_methods_multi_version_scenario() {
+        // Test a realistic multi-version scenario
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(
+                    3,
+                    "deprecated_field",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let evolved_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(
+                    3,
+                    "deprecated_field",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
+                NestedField::required(4, "new_field", Type::Primitive(PrimitiveType::Double))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Then add a third schema that removes the deprecated field
+        let _final_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(4, "new_field", Type::Primitive(PrimitiveType::Double))
+                    .into(),
+                NestedField::required(5, "latest_field", Type::Primitive(PrimitiveType::Boolean))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let final_metadata = metadata
+            .add_current_schema(evolved_schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert!(!final_metadata.partition_name_exists("nonexistent_partition")); // unpartitioned table
+
+        assert!(final_metadata.name_exists_in_any_schema("id")); // exists in both schemas
+        assert!(final_metadata.name_exists_in_any_schema("name")); // exists in both schemas
+        assert!(final_metadata.name_exists_in_any_schema("deprecated_field")); // exists in both schemas
+        assert!(final_metadata.name_exists_in_any_schema("new_field")); // only in current schema
+        assert!(!final_metadata.name_exists_in_any_schema("never_existed"));
     }
 }
