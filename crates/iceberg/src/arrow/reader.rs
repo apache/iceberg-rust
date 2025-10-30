@@ -410,7 +410,7 @@ impl ArrowReader {
                     // Note: advance_to() positions the iterator without consuming elements,
                     // so we must NOT call next() here or we'll incorrectly consume a delete
                     // that belongs to a later selected row group.
-                    delete_vector_iter.advance_to(next_row_group_base_idx);\
+                    delete_vector_iter.advance_to(next_row_group_base_idx);
 
                     // still increment the current page base index but then skip to the next row group
                     // in the file
