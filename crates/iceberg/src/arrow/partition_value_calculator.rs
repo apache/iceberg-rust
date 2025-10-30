@@ -159,7 +159,7 @@ impl PartitionValueCalculator {
             .map_err(|e| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Failed to create partition struct array: {}", e),
+                    format!("Failed to create partition struct array: {e}"),
                 )
             })?;
 

@@ -128,7 +128,7 @@ pub(crate) fn convert_to_database(
                     _ => {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Invalid value for setting 'owner_type': {}", v),
+                            format!("Invalid value for setting 'owner_type': {v}"),
                         ));
                     }
                 };
@@ -214,8 +214,7 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid database name: {:?}, hierarchical namespaces are not supported",
-                namespace
+                "Invalid database name: {namespace:?}, hierarchical namespaces are not supported"
             ),
         ));
     }
@@ -257,7 +256,7 @@ pub(crate) fn get_metadata_location(
             Some(location) => Ok(location.to_string()),
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("No '{}' set on table", METADATA_LOCATION),
+                format!("No '{METADATA_LOCATION}' set on table"),
             )),
         },
         None => Err(Error::new(
@@ -272,7 +271,7 @@ fn format_location_uri(location: String) -> String {
     let mut location = location;
 
     if !location.starts_with('/') {
-        location = format!("/{}", location);
+        location = format!("/{location}");
     }
 
     if location.ends_with('/') && location.len() > 1 {
@@ -292,8 +291,7 @@ fn validate_owner_settings(properties: &HashMap<String, String>) -> Result<()> {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Setting '{}' without setting '{}' is not allowed",
-                HMS_DB_OWNER_TYPE, HMS_DB_OWNER
+                "Setting '{HMS_DB_OWNER_TYPE}' without setting '{HMS_DB_OWNER}' is not allowed"
             ),
         ));
     }

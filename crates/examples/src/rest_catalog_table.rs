@@ -96,6 +96,6 @@ async fn main() {
 
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();
-    println!("Table {TABLE_NAME} loaded!\n\nTable: {:?}", loaded_table);
+    println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
     // ANCHOR_END: load_table
 }

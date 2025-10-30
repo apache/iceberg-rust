@@ -72,7 +72,7 @@ async fn get_catalog() -> RestCatalog {
             "rest",
             HashMap::from([(
                 REST_CATALOG_PROP_URI.to_string(),
-                format!("http://{}", rest_socket_addr),
+                format!("http://{rest_socket_addr}"),
             )]),
         )
         .await

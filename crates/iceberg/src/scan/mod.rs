@@ -193,7 +193,7 @@ impl<'a> TableScanBuilder<'a> {
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Snapshot with id {} not found", snapshot_id),
+                        format!("Snapshot with id {snapshot_id} not found"),
                     )
                 })?
                 .clone(),
@@ -223,10 +223,7 @@ impl<'a> TableScanBuilder<'a> {
                 if schema.field_by_name(column_name).is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "Column {} not found in table. Schema: {}",
-                            column_name, schema
-                        ),
+                        format!("Column {column_name} not found in table. Schema: {schema}"),
                     ));
                 }
             }
@@ -246,10 +243,7 @@ impl<'a> TableScanBuilder<'a> {
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "Column {} not found in table. Schema: {}",
-                        column_name, schema
-                    ),
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
                 )
             })?;
 
@@ -260,8 +254,7 @@ impl<'a> TableScanBuilder<'a> {
                     Error::new(
                         ErrorKind::FeatureUnsupported,
                         format!(
-                            "Column {} is not a direct child of schema but a nested field, which is not supported now. Schema: {}",
-                            column_name, schema
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
                         ),
                     )
                 })?;

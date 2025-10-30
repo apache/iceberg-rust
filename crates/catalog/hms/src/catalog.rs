@@ -321,7 +321,7 @@ impl Catalog for HmsCatalog {
                 ErrorKind::Unexpected,
                 "Operation failed for hitting thrift error".to_string(),
             )
-            .with_source(anyhow!("thrift error: {:?}", exception))),
+            .with_source(anyhow!("thrift error: {exception:?}"))),
             Err(err) => Err(from_thrift_error(err)),
         }
     }
@@ -554,7 +554,7 @@ impl Catalog for HmsCatalog {
                 ErrorKind::Unexpected,
                 "Operation failed for hitting thrift error".to_string(),
             )
-            .with_source(anyhow!("thrift error: {:?}", exception))),
+            .with_source(anyhow!("thrift error: {exception:?}"))),
             Err(err) => Err(from_thrift_error(err)),
         }
     }

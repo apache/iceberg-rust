@@ -230,10 +230,7 @@ impl Day {
         let delta = Duration::new(secs, nanos).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Failed to create 'TimeDelta' from seconds {} and nanos {}",
-                    secs, nanos
-                ),
+                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
             )
         })?;
 
@@ -259,10 +256,7 @@ impl Day {
         let delta = Duration::new(secs, nanos).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Failed to create 'TimeDelta' from seconds {} and nanos {}",
-                    secs, nanos
-                ),
+                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
             )
         })?;
 
