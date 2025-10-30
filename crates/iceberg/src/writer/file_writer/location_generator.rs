@@ -63,7 +63,7 @@ impl DefaultLocationGenerator {
         let data_location = if let Some(data_location) = configured_data_location {
             data_location.clone()
         } else {
-            format!("{}{}", table_location, DEFAULT_DATA_DIR)
+            format!("{table_location}{DEFAULT_DATA_DIR}")
         };
         Ok(Self { data_location })
     }
@@ -114,7 +114,7 @@ impl DefaultFileNameGenerator {
     /// Create a new `FileNameGenerator`.
     pub fn new(prefix: String, suffix: Option<String>, format: DataFileFormat) -> Self {
         let suffix = if let Some(suffix) = suffix {
-            format!("-{}", suffix)
+            format!("-{suffix}")
         } else {
             "".to_string()
         };

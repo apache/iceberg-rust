@@ -232,10 +232,7 @@ impl ExecutionPlan for IcebergWriteExec {
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!(
-                    "File format {} is not supported for insert_into yet!",
-                    file_format
-                ),
+                format!("File format {file_format} is not supported for insert_into yet!"),
             )));
         }
 
@@ -515,7 +512,7 @@ mod tests {
             .map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    format!("Failed to create record batch: {}", e),
+                    format!("Failed to create record batch: {e}"),
                 )
             })?;
 
@@ -532,7 +529,7 @@ mod tests {
         let stream = write_exec.execute(0, task_ctx).map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
-                format!("Failed to execute plan: {}", e),
+                format!("Failed to execute plan: {e}"),
             )
         })?;
 
@@ -541,7 +538,7 @@ mod tests {
         let mut stream = stream;
         while let Some(batch) = stream.next().await {
             results.push(batch.map_err(|e| {
-                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {}", e))
+                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {e}"))
             })?);
         }
 

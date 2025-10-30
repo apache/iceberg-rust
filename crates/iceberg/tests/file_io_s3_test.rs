@@ -60,7 +60,7 @@ mod tests {
 
         FileIOBuilder::new("s3")
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{}", minio_socket_addr)),
+                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
@@ -208,7 +208,7 @@ mod tests {
         let file_io_with_custom_creds = FileIOBuilder::new("s3")
             .with_extension(custom_loader)
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{}", minio_socket_addr)),
+                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
                 (S3_REGION, "us-east-1".to_string()),
             ])
             .build()
@@ -237,7 +237,7 @@ mod tests {
         let file_io_with_custom_creds = FileIOBuilder::new("s3")
             .with_extension(custom_loader)
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{}", minio_socket_addr)),
+                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
                 (S3_REGION, "us-east-1".to_string()),
             ])
             .build()

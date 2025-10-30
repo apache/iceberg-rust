@@ -653,10 +653,7 @@ impl TableMetadataBuilder {
         let _schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set current schema to unknown schema with id: '{}'",
-                    schema_id
-                ),
+                format!("Cannot set current schema to unknown schema with id: '{schema_id}'"),
             )
         })?;
 
@@ -706,9 +703,8 @@ impl TableMetadataBuilder {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Cannot add schema field '{}' because it conflicts with existing partition field name. \
-                         Schema evolution cannot introduce field names that match existing partition field names.",
-                        field_name
+                        "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
+                         Schema evolution cannot introduce field names that match existing partition field names."
                     ),
                 ));
             }
@@ -1209,8 +1205,7 @@ impl TableMetadataBuilder {
                            Error::new(
                                ErrorKind::Unexpected,
                                format!(
-                                   "Cannot find source column with name {} for sort column in re-assigned schema.",
-                                   source_field_name
+                                   "Cannot find source column with name {source_field_name} for sort column in re-assigned schema."
                                ),
                            )
                        })?.id;

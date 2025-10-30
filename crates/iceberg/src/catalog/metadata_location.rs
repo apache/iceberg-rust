@@ -53,10 +53,7 @@ impl MetadataLocation {
     fn parse_metadata_path_prefix(path: &str) -> Result<String> {
         let prefix = path.strip_suffix("/metadata").ok_or(Error::new(
             ErrorKind::Unexpected,
-            format!(
-                "Metadata location not under \"/metadata\" subdirectory: {}",
-                path
-            ),
+            format!("Metadata location not under \"/metadata\" subdirectory: {path}"),
         ))?;
 
         Ok(prefix.to_string())
@@ -68,12 +65,12 @@ impl MetadataLocation {
             .strip_suffix(".metadata.json")
             .ok_or(Error::new(
                 ErrorKind::Unexpected,
-                format!("Invalid metadata file ending: {}", file_name),
+                format!("Invalid metadata file ending: {file_name}"),
             ))?
             .split_once('-')
             .ok_or(Error::new(
                 ErrorKind::Unexpected,
-                format!("Invalid metadata file name format: {}", file_name),
+                format!("Invalid metadata file name format: {file_name}"),
             ))?;
 
         Ok((version.parse::<i32>()?, Uuid::parse_str(id)?))
@@ -96,7 +93,7 @@ impl FromStr for MetadataLocation {
     fn from_str(s: &str) -> Result<Self> {
         let (path, file_name) = s.rsplit_once('/').ok_or(Error::new(
             ErrorKind::Unexpected,
-            format!("Invalid metadata location: {}", s),
+            format!("Invalid metadata location: {s}"),
         ))?;
 
         let prefix = Self::parse_metadata_path_prefix(path)?;

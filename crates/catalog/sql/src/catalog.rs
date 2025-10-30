@@ -410,7 +410,7 @@ impl Catalog for SqlCatalog {
         if exists {
             return Err(Error::new(
                 iceberg::ErrorKind::Unexpected,
-                format!("Namespace {:?} already exists", namespace),
+                format!("Namespace {namespace:?} already exists"),
             ));
         }
 
@@ -1608,7 +1608,7 @@ mod tests {
 
         assert_eq!(
             err.message(),
-            format!("No such namespace: {:?}", namespace_ident)
+            format!("No such namespace: {namespace_ident:?}")
         );
     }
 
@@ -1630,7 +1630,7 @@ mod tests {
 
         assert_eq!(
             err.message(),
-            format!("No such namespace: {:?}", namespace_ident)
+            format!("No such namespace: {namespace_ident:?}")
         );
     }
 
@@ -1714,10 +1714,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1735,10 +1732,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1785,10 +1779,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            ),
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -1850,10 +1841,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            namespace_location, UUID_REGEX_STR,
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",);
 
         let table = catalog
             .create_table(
@@ -1908,8 +1897,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            nested_namespace_location, UUID_REGEX_STR,
+            "^{nested_namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",
         );
 
         let table = catalog
@@ -1947,10 +1935,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_loc, UUID_REGEX_STR
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{warehouse_loc}/a/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$");
 
         let table = catalog
             .create_table(
@@ -1986,10 +1972,8 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_loc, UUID_REGEX_STR
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{warehouse_loc}/a/b/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$");
 
         let table = catalog
             .create_table(
@@ -2152,10 +2136,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_dst_namespace_ident
-            ),
+            format!("Unexpected => No such namespace: {non_existent_dst_namespace_ident:?}"),
         );
     }
 
@@ -2174,7 +2155,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such table: {:?}", src_table_ident),
+            format!("Unexpected => No such table: {src_table_ident:?}"),
         );
     }
 

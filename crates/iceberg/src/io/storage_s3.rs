@@ -127,8 +127,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Invalid {}: {}. Expected one of (custom, kms, s3, none)",
-                        S3_SSE_TYPE, sse_type
+                        "Invalid {S3_SSE_TYPE}: {sse_type}. Expected one of (custom, kms, s3, none)"
                     ),
                 ));
             }
@@ -164,7 +163,7 @@ pub(crate) fn s3_config_build(
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid s3 url: {}, missing bucket", path),
+            format!("Invalid s3 url: {path}, missing bucket"),
         )
     })?;
 
