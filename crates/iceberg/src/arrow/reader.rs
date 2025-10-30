@@ -2488,8 +2488,8 @@ message schema {
     ///
     /// The bug occurs when processing row group 0 (unselected):
     /// ```rust
-    /// delete_vector_iter.advance_to(next_row_group_base_idx);  // Position at first delete >= 100
-    /// next_deleted_row_idx_opt = delete_vector_iter.next();     // BUG: Consumes delete at 199!
+    /// delete_vector_iter.advance_to(next_row_group_base_idx); // Position at first delete >= 100
+    /// next_deleted_row_idx_opt = delete_vector_iter.next(); // BUG: Consumes delete at 199!
     /// ```
     ///
     /// The fix is to NOT call `next()` after `advance_to()` when skipping unselected row groups,
@@ -2518,9 +2518,10 @@ message schema {
         );
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([
-                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
-            ])),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
         ]));
 
         // Step 1: Create data file with 200 rows in 2 row groups
@@ -2528,17 +2529,15 @@ message schema {
         // Row group 1: rows 100-199 (ids 101-200)
         let data_file_path = format!("{}/data.parquet", &table_location);
 
-        let batch1 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![Arc::new(Int32Array::from_iter_values(1..=100))],
-        )
-            .unwrap();
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(1..=100),
+        )])
+        .unwrap();
 
-        let batch2 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![Arc::new(Int32Array::from_iter_values(101..=200))],
-        )
-            .unwrap();
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(101..=200),
+        )])
+        .unwrap();
 
         // Force each batch into its own row group
         let props = WriterProperties::builder()
@@ -2565,29 +2564,22 @@ message schema {
         let delete_file_path = format!("{}/deletes.parquet", &table_location);
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([
-                (
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-                ),
-            ])),
-            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([
-                (
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-                ),
-            ])),
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
+            )])),
         ]));
 
         // Delete row at position 199 (0-indexed, so it's the last row: id=200)
-        let delete_batch = RecordBatch::try_new(
-            delete_schema.clone(),
-            vec![
-                Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
-                Arc::new(Int64Array::from_iter_values(vec![199i64])),
-            ],
-        )
-            .unwrap();
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
+            Arc::new(Int64Array::from_iter_values(vec![199i64])),
+        ])
+        .unwrap();
 
         let delete_props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
@@ -2642,9 +2634,6 @@ message schema {
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
-            partition: None,
-            partition_spec_id: None,
-            partition_spec: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2696,5 +2685,4 @@ message schema {
             "Should have ids 101-199 but got different values"
         );
     }
-
 }
