@@ -26,3 +26,6 @@ mod schema;
 pub mod table;
 pub use table::table_provider_factory::IcebergTableProviderFactory;
 pub use table::*;
+
+pub mod task_writer;
+pub use task_writer::*;

@@ -38,9 +38,6 @@ pub const PROJECTED_PARTITION_VALUE_COLUMN: &str = "_partition";
 /// The splitter supports two modes for obtaining partition values:
 /// - **Computed mode** (`calculator` is `Some`): Computes partition values from source columns using transforms
 /// - **Pre-computed mode** (`calculator` is `None`): Expects a `_partition` column in the input batch
-// # TODO
-// Remove this after partition writer supported.
-#[allow(dead_code)]
 pub struct RecordBatchPartitionSplitter {
     schema: SchemaRef,
     partition_spec: PartitionSpecRef,
@@ -48,9 +45,6 @@ pub struct RecordBatchPartitionSplitter {
     partition_type: StructType,
 }
 
-// # TODO
-// Remove this after partition writer supported.
-#[allow(dead_code)]
 impl RecordBatchPartitionSplitter {
     /// Create a new RecordBatchPartitionSplitter.
     ///
