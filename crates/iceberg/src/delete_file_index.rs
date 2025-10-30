@@ -107,6 +107,26 @@ impl DeleteFileIndex {
             _ => unreachable!("Cannot be any other state than loaded"),
         }
     }
+
+    pub(crate) async fn positional_deletes(&self) -> Vec<FileScanTaskDeleteFile> {
+        let notifier = {
+            let guard = self.state.read().unwrap();
+            match *guard {
+                DeleteFileIndexState::Populating(ref notifier) => notifier.clone(),
+                DeleteFileIndexState::Populated(ref index) => {
+                    return index.positional_deletes();
+                }
+            }
+        };
+
+        notifier.notified().await;
+
+        let guard = self.state.read().unwrap();
+        match guard.deref() {
+            DeleteFileIndexState::Populated(index) => index.positional_deletes(),
+            _ => unreachable!("Cannot be any other state than loaded"),
+        }
+    }
 }
 
 impl PopulatedDeleteFileIndex {
@@ -209,6 +229,14 @@ impl PopulatedDeleteFileIndex {
         }
 
         results
+    }
+
+    fn positional_deletes(&self) -> Vec<FileScanTaskDeleteFile> {
+        self.pos_deletes_by_partition
+            .values()
+            .flatten()
+            .map(|ctx| ctx.as_ref().into())
+            .collect()
     }
 }
 

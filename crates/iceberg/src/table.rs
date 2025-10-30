@@ -24,6 +24,7 @@ use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::scan::TableScanBuilder;
+use crate::scan::incremental::IncrementalTableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
@@ -222,6 +223,15 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+
+    /// Creates an incremental table scan between two snapshots.
+    pub fn incremental_scan(
+        &self,
+        from_snapshot_id: i64,
+        to_snapshot_id: i64,
+    ) -> IncrementalTableScanBuilder<'_> {
+        IncrementalTableScanBuilder::new(self, from_snapshot_id, to_snapshot_id)
     }
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.
