@@ -33,19 +33,23 @@ use crate::spec::{
 };
 use crate::{Error, ErrorKind, Result};
 
+pub(crate) type ManifestEntryFilterFn = dyn Fn(&ManifestEntryRef) -> bool + Send + Sync;
+
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
-    manifest_file: ManifestFile,
+    pub manifest_file: ManifestFile,
 
-    sender: Sender<ManifestEntryContext>,
+    pub sender: Sender<ManifestEntryContext>,
 
-    field_ids: Arc<Vec<i32>>,
-    bound_predicates: Option<Arc<BoundPredicates>>,
-    object_cache: Arc<ObjectCache>,
-    snapshot_schema: SchemaRef,
-    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: DeleteFileIndex,
+    pub field_ids: Arc<Vec<i32>>,
+    pub bound_predicates: Option<Arc<BoundPredicates>>,
+    pub object_cache: Arc<ObjectCache>,
+    pub snapshot_schema: SchemaRef,
+    pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    pub delete_file_index: DeleteFileIndex,
+
+    pub filter_fn: Option<Arc<ManifestEntryFilterFn>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -74,12 +78,15 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
+            filter_fn,
             ..
         } = self;
 
+        let filter_fn = filter_fn.unwrap_or_else(|| Arc::new(|_| true));
+
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
-        for manifest_entry in manifest.entries() {
+        for manifest_entry in manifest.entries().iter().filter(|e| filter_fn(e)) {
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -189,7 +196,6 @@ impl PlanContext {
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let manifest_files = manifest_list.entries().iter();
 
-        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
@@ -224,6 +230,7 @@ impl PlanContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
+                None,
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -238,6 +245,7 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
+        filter_fn: Option<Arc<ManifestEntryFilterFn>>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -260,6 +268,7 @@ impl PlanContext {
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
+            filter_fn,
         }
     }
 }

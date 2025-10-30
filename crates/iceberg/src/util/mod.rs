@@ -15,31 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Conversion between Iceberg and Arrow schema
-
-mod schema;
-pub use schema::*;
-
-mod nan_val_cnt_visitor;
-pub(crate) use nan_val_cnt_visitor::*;
-pub(crate) mod caching_delete_file_loader;
-/// Delete File loader
-pub mod delete_file_loader;
-pub(crate) mod delete_filter;
-
-mod reader;
-/// RecordBatch projection utilities
-pub mod record_batch_projector;
-pub(crate) mod record_batch_transformer;
-mod value;
-
-mod incremental;
-pub use incremental::*;
-pub use reader::*;
-pub use value::*;
-/// Partition value calculator for computing partition values
-pub mod partition_value_calculator;
-pub use partition_value_calculator::*;
-/// Record batch partition splitter for partitioned tables
-pub mod record_batch_partition_splitter;
-pub use record_batch_partition_splitter::*;
+/// Utilities for working with snapshots.
+pub mod snapshot;
