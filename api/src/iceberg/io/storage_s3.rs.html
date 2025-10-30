@@ -127,90 +127,89 @@
 <a href=#127 id=127 data-nosnippet>127</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#128 id=128 data-nosnippet>128</a>                    ErrorKind::DataInvalid,
 <a href=#129 id=129 data-nosnippet>129</a>                    <span class="macro">format!</span>(
-<a href=#130 id=130 data-nosnippet>130</a>                        <span class="string">"Invalid {}: {}. Expected one of (custom, kms, s3, none)"</span>,
-<a href=#131 id=131 data-nosnippet>131</a>                        S3_SSE_TYPE, sse_type
-<a href=#132 id=132 data-nosnippet>132</a>                    ),
-<a href=#133 id=133 data-nosnippet>133</a>                ));
-<a href=#134 id=134 data-nosnippet>134</a>            }
-<a href=#135 id=135 data-nosnippet>135</a>        }
-<a href=#136 id=136 data-nosnippet>136</a>    };
-<a href=#137 id=137 data-nosnippet>137</a>
-<a href=#138 id=138 data-nosnippet>138</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS) {
-<a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">if </span>is_truthy(allow_anonymous.to_lowercase().as_str()) {
-<a href=#140 id=140 data-nosnippet>140</a>            cfg.allow_anonymous = <span class="bool-val">true</span>;
-<a href=#141 id=141 data-nosnippet>141</a>        }
-<a href=#142 id=142 data-nosnippet>142</a>    }
-<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA) {
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw">if </span>is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
-<a href=#145 id=145 data-nosnippet>145</a>            cfg.disable_ec2_metadata = <span class="bool-val">true</span>;
-<a href=#146 id=146 data-nosnippet>146</a>        }
-<a href=#147 id=147 data-nosnippet>147</a>    };
-<a href=#148 id=148 data-nosnippet>148</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD) {
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">if </span>is_truthy(disable_config_load.to_lowercase().as_str()) {
-<a href=#150 id=150 data-nosnippet>150</a>            cfg.disable_config_load = <span class="bool-val">true</span>;
-<a href=#151 id=151 data-nosnippet>151</a>        }
-<a href=#152 id=152 data-nosnippet>152</a>    };
-<a href=#153 id=153 data-nosnippet>153</a>
-<a href=#154 id=154 data-nosnippet>154</a>    <span class="prelude-val">Ok</span>(cfg)
-<a href=#155 id=155 data-nosnippet>155</a>}
-<a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a><span class="doccomment">/// Build new opendal operator from give path.
-<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(
-<a href=#159 id=159 data-nosnippet>159</a>    cfg: <span class="kw-2">&amp;</span>S3Config,
-<a href=#160 id=160 data-nosnippet>160</a>    customized_credential_load: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
-<a href=#161 id=161 data-nosnippet>161</a>    path: <span class="kw-2">&amp;</span>str,
-<a href=#162 id=162 data-nosnippet>162</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
-<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
-<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
-<a href=#165 id=165 data-nosnippet>165</a>        Error::new(
-<a href=#166 id=166 data-nosnippet>166</a>            ErrorKind::DataInvalid,
-<a href=#167 id=167 data-nosnippet>167</a>            <span class="macro">format!</span>(<span class="string">"Invalid s3 url: {}, missing bucket"</span>, path),
-<a href=#168 id=168 data-nosnippet>168</a>        )
-<a href=#169 id=169 data-nosnippet>169</a>    })<span class="question-mark">?</span>;
-<a href=#170 id=170 data-nosnippet>170</a>
-<a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">let </span><span class="kw-2">mut </span>builder = cfg
-<a href=#172 id=172 data-nosnippet>172</a>        .clone()
-<a href=#173 id=173 data-nosnippet>173</a>        .into_builder()
-<a href=#174 id=174 data-nosnippet>174</a>        <span class="comment">// Set bucket name.
-<a href=#175 id=175 data-nosnippet>175</a>        </span>.bucket(bucket);
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(customized_credential_load) = customized_credential_load {
-<a href=#178 id=178 data-nosnippet>178</a>        builder = builder
-<a href=#179 id=179 data-nosnippet>179</a>            .customized_credential_load(customized_credential_load.clone().into_opendal_loader());
-<a href=#180 id=180 data-nosnippet>180</a>    }
-<a href=#181 id=181 data-nosnippet>181</a>
-<a href=#182 id=182 data-nosnippet>182</a>    <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
-<a href=#183 id=183 data-nosnippet>183</a>}
-<a href=#184 id=184 data-nosnippet>184</a>
-<a href=#185 id=185 data-nosnippet>185</a><span class="doccomment">/// Custom AWS credential loader.
-<a href=#186 id=186 data-nosnippet>186</a>/// This can be used to load credentials from a custom source, such as the AWS SDK.
-<a href=#187 id=187 data-nosnippet>187</a>///
-<a href=#188 id=188 data-nosnippet>188</a>/// This should be set as an extension on `FileIOBuilder`.
-<a href=#189 id=189 data-nosnippet>189</a></span><span class="attr">#[derive(Clone)]
-<a href=#190 id=190 data-nosnippet>190</a></span><span class="kw">pub struct </span>CustomAwsCredentialLoader(Arc&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt;);
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a><span class="kw">impl </span>std::fmt::Debug <span class="kw">for </span>CustomAwsCredentialLoader {
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
-<a href=#194 id=194 data-nosnippet>194</a>        f.debug_struct(<span class="string">"CustomAwsCredentialLoader"</span>)
-<a href=#195 id=195 data-nosnippet>195</a>            .finish_non_exhaustive()
-<a href=#196 id=196 data-nosnippet>196</a>    }
-<a href=#197 id=197 data-nosnippet>197</a>}
-<a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a><span class="kw">impl </span>CustomAwsCredentialLoader {
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="doccomment">/// Create a new custom AWS credential loader.
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">pub fn </span>new(loader: Arc&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt;) -&gt; <span class="self">Self </span>{
-<a href=#202 id=202 data-nosnippet>202</a>        <span class="self">Self</span>(loader)
-<a href=#203 id=203 data-nosnippet>203</a>    }
-<a href=#204 id=204 data-nosnippet>204</a>
-<a href=#205 id=205 data-nosnippet>205</a>    <span class="doccomment">/// Convert this loader into an opendal compatible loader for customized AWS credentials.
-<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub fn </span>into_opendal_loader(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt; {
-<a href=#207 id=207 data-nosnippet>207</a>        Box::new(<span class="self">self</span>)
-<a href=#208 id=208 data-nosnippet>208</a>    }
-<a href=#209 id=209 data-nosnippet>209</a>}
-<a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a><span class="attr">#[async_trait]
-<a href=#212 id=212 data-nosnippet>212</a></span><span class="kw">impl </span>AwsCredentialLoad <span class="kw">for </span>CustomAwsCredentialLoader {
-<a href=#213 id=213 data-nosnippet>213</a>    <span class="kw">async fn </span>load_credential(<span class="kw-2">&amp;</span><span class="self">self</span>, client: Client) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;AwsCredential&gt;&gt; {
-<a href=#214 id=214 data-nosnippet>214</a>        <span class="self">self</span>.<span class="number">0</span>.load_credential(client).<span class="kw">await
-<a href=#215 id=215 data-nosnippet>215</a>    </span>}
-<a href=#216 id=216 data-nosnippet>216</a>}</code></pre></div></section></main></body></html>
+<a href=#130 id=130 data-nosnippet>130</a>                        <span class="string">"Invalid {S3_SSE_TYPE}: {sse_type}. Expected one of (custom, kms, s3, none)"
+<a href=#131 id=131 data-nosnippet>131</a>                    </span>),
+<a href=#132 id=132 data-nosnippet>132</a>                ));
+<a href=#133 id=133 data-nosnippet>133</a>            }
+<a href=#134 id=134 data-nosnippet>134</a>        }
+<a href=#135 id=135 data-nosnippet>135</a>    };
+<a href=#136 id=136 data-nosnippet>136</a>
+<a href=#137 id=137 data-nosnippet>137</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS) {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">if </span>is_truthy(allow_anonymous.to_lowercase().as_str()) {
+<a href=#139 id=139 data-nosnippet>139</a>            cfg.allow_anonymous = <span class="bool-val">true</span>;
+<a href=#140 id=140 data-nosnippet>140</a>        }
+<a href=#141 id=141 data-nosnippet>141</a>    }
+<a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA) {
+<a href=#143 id=143 data-nosnippet>143</a>        <span class="kw">if </span>is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
+<a href=#144 id=144 data-nosnippet>144</a>            cfg.disable_ec2_metadata = <span class="bool-val">true</span>;
+<a href=#145 id=145 data-nosnippet>145</a>        }
+<a href=#146 id=146 data-nosnippet>146</a>    };
+<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD) {
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">if </span>is_truthy(disable_config_load.to_lowercase().as_str()) {
+<a href=#149 id=149 data-nosnippet>149</a>            cfg.disable_config_load = <span class="bool-val">true</span>;
+<a href=#150 id=150 data-nosnippet>150</a>        }
+<a href=#151 id=151 data-nosnippet>151</a>    };
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a>    <span class="prelude-val">Ok</span>(cfg)
+<a href=#154 id=154 data-nosnippet>154</a>}
+<a href=#155 id=155 data-nosnippet>155</a>
+<a href=#156 id=156 data-nosnippet>156</a><span class="doccomment">/// Build new opendal operator from give path.
+<a href=#157 id=157 data-nosnippet>157</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(
+<a href=#158 id=158 data-nosnippet>158</a>    cfg: <span class="kw-2">&amp;</span>S3Config,
+<a href=#159 id=159 data-nosnippet>159</a>    customized_credential_load: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
+<a href=#160 id=160 data-nosnippet>160</a>    path: <span class="kw-2">&amp;</span>str,
+<a href=#161 id=161 data-nosnippet>161</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
+<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
+<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
+<a href=#164 id=164 data-nosnippet>164</a>        Error::new(
+<a href=#165 id=165 data-nosnippet>165</a>            ErrorKind::DataInvalid,
+<a href=#166 id=166 data-nosnippet>166</a>            <span class="macro">format!</span>(<span class="string">"Invalid s3 url: {path}, missing bucket"</span>),
+<a href=#167 id=167 data-nosnippet>167</a>        )
+<a href=#168 id=168 data-nosnippet>168</a>    })<span class="question-mark">?</span>;
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">let </span><span class="kw-2">mut </span>builder = cfg
+<a href=#171 id=171 data-nosnippet>171</a>        .clone()
+<a href=#172 id=172 data-nosnippet>172</a>        .into_builder()
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="comment">// Set bucket name.
+<a href=#174 id=174 data-nosnippet>174</a>        </span>.bucket(bucket);
+<a href=#175 id=175 data-nosnippet>175</a>
+<a href=#176 id=176 data-nosnippet>176</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(customized_credential_load) = customized_credential_load {
+<a href=#177 id=177 data-nosnippet>177</a>        builder = builder
+<a href=#178 id=178 data-nosnippet>178</a>            .customized_credential_load(customized_credential_load.clone().into_opendal_loader());
+<a href=#179 id=179 data-nosnippet>179</a>    }
+<a href=#180 id=180 data-nosnippet>180</a>
+<a href=#181 id=181 data-nosnippet>181</a>    <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
+<a href=#182 id=182 data-nosnippet>182</a>}
+<a href=#183 id=183 data-nosnippet>183</a>
+<a href=#184 id=184 data-nosnippet>184</a><span class="doccomment">/// Custom AWS credential loader.
+<a href=#185 id=185 data-nosnippet>185</a>/// This can be used to load credentials from a custom source, such as the AWS SDK.
+<a href=#186 id=186 data-nosnippet>186</a>///
+<a href=#187 id=187 data-nosnippet>187</a>/// This should be set as an extension on `FileIOBuilder`.
+<a href=#188 id=188 data-nosnippet>188</a></span><span class="attr">#[derive(Clone)]
+<a href=#189 id=189 data-nosnippet>189</a></span><span class="kw">pub struct </span>CustomAwsCredentialLoader(Arc&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt;);
+<a href=#190 id=190 data-nosnippet>190</a>
+<a href=#191 id=191 data-nosnippet>191</a><span class="kw">impl </span>std::fmt::Debug <span class="kw">for </span>CustomAwsCredentialLoader {
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#193 id=193 data-nosnippet>193</a>        f.debug_struct(<span class="string">"CustomAwsCredentialLoader"</span>)
+<a href=#194 id=194 data-nosnippet>194</a>            .finish_non_exhaustive()
+<a href=#195 id=195 data-nosnippet>195</a>    }
+<a href=#196 id=196 data-nosnippet>196</a>}
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a><span class="kw">impl </span>CustomAwsCredentialLoader {
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Create a new custom AWS credential loader.
+<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">pub fn </span>new(loader: Arc&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt;) -&gt; <span class="self">Self </span>{
+<a href=#201 id=201 data-nosnippet>201</a>        <span class="self">Self</span>(loader)
+<a href=#202 id=202 data-nosnippet>202</a>    }
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="doccomment">/// Convert this loader into an opendal compatible loader for customized AWS credentials.
+<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">pub fn </span>into_opendal_loader(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>AwsCredentialLoad&gt; {
+<a href=#206 id=206 data-nosnippet>206</a>        Box::new(<span class="self">self</span>)
+<a href=#207 id=207 data-nosnippet>207</a>    }
+<a href=#208 id=208 data-nosnippet>208</a>}
+<a href=#209 id=209 data-nosnippet>209</a>
+<a href=#210 id=210 data-nosnippet>210</a><span class="attr">#[async_trait]
+<a href=#211 id=211 data-nosnippet>211</a></span><span class="kw">impl </span>AwsCredentialLoad <span class="kw">for </span>CustomAwsCredentialLoader {
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">async fn </span>load_credential(<span class="kw-2">&amp;</span><span class="self">self</span>, client: Client) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;AwsCredential&gt;&gt; {
+<a href=#213 id=213 data-nosnippet>213</a>        <span class="self">self</span>.<span class="number">0</span>.load_credential(client).<span class="kw">await
+<a href=#214 id=214 data-nosnippet>214</a>    </span>}
+<a href=#215 id=215 data-nosnippet>215</a>}</code></pre></div></section></main></body></html>

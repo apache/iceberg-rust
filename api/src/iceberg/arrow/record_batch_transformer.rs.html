@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>                    <span class="kw">let </span>Literal::Primitive(primitive_literal) = iceberg_default_value <span class="kw">else </span>{
 <a href=#308 id=308 data-nosnippet>308</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#309 id=309 data-nosnippet>309</a>                            ErrorKind::Unexpected,
-<a href=#310 id=310 data-nosnippet>310</a>                            <span class="macro">format!</span>(<span class="string">"Default value for column must be primitive type, but encountered {:?}"</span>, iceberg_default_value)
+<a href=#310 id=310 data-nosnippet>310</a>                            <span class="macro">format!</span>(<span class="string">"Default value for column must be primitive type, but encountered {iceberg_default_value:?}"</span>)
 <a href=#311 id=311 data-nosnippet>311</a>                        ));
 <a href=#312 id=312 data-nosnippet>312</a>                    };
 <a href=#313 id=313 data-nosnippet>313</a>                    <span class="prelude-val">Some</span>(primitive_literal.clone())
@@ -341,7 +341,7 @@
 <a href=#341 id=341 data-nosnippet>341</a>                .map_err(|e| {
 <a href=#342 id=342 data-nosnippet>342</a>                    Error::new(
 <a href=#343 id=343 data-nosnippet>343</a>                        ErrorKind::DataInvalid,
-<a href=#344 id=344 data-nosnippet>344</a>                        <span class="macro">format!</span>(<span class="string">"field id not parseable as an i32: {}"</span>, e),
+<a href=#344 id=344 data-nosnippet>344</a>                        <span class="macro">format!</span>(<span class="string">"field id not parseable as an i32: {e}"</span>),
 <a href=#345 id=345 data-nosnippet>345</a>                    )
 <a href=#346 id=346 data-nosnippet>346</a>                })<span class="question-mark">?</span>;
 <a href=#347 id=347 data-nosnippet>347</a>
@@ -447,7 +447,7 @@
 <a href=#447 id=447 data-nosnippet>447</a>            (dt, <span class="kw">_</span>) =&gt; {
 <a href=#448 id=448 data-nosnippet>448</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#449 id=449 data-nosnippet>449</a>                    ErrorKind::Unexpected,
-<a href=#450 id=450 data-nosnippet>450</a>                    <span class="macro">format!</span>(<span class="string">"unexpected target column type {}"</span>, dt),
+<a href=#450 id=450 data-nosnippet>450</a>                    <span class="macro">format!</span>(<span class="string">"unexpected target column type {dt}"</span>),
 <a href=#451 id=451 data-nosnippet>451</a>                ));
 <a href=#452 id=452 data-nosnippet>452</a>            }
 <a href=#453 id=453 data-nosnippet>453</a>        })

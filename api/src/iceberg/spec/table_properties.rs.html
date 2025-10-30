@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>    properties.get(key).map_or(<span class="prelude-val">Ok</span>(default), |value| {
 <a href=#31 id=31 data-nosnippet>31</a>        value
 <a href=#32 id=32 data-nosnippet>32</a>            .parse::&lt;T&gt;()
-<a href=#33 id=33 data-nosnippet>33</a>            .map_err(|e| <span class="macro">anyhow::anyhow!</span>(<span class="string">"Invalid value for {}: {}"</span>, key, e))
+<a href=#33 id=33 data-nosnippet>33</a>            .map_err(|e| <span class="macro">anyhow::anyhow!</span>(<span class="string">"Invalid value for {key}: {e}"</span>))
 <a href=#34 id=34 data-nosnippet>34</a>    })
 <a href=#35 id=35 data-nosnippet>35</a>}
 <a href=#36 id=36 data-nosnippet>36</a>

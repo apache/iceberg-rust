@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>        ErrorKind::Unexpected,
 <a href=#31 id=31 data-nosnippet>31</a>        <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
 <a href=#32 id=32 data-nosnippet>32</a>    )
-<a href=#33 id=33 data-nosnippet>33</a>    .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {:?}"</span>, error))
+<a href=#33 id=33 data-nosnippet>33</a>    .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {error:?}"</span>))
 <a href=#34 id=34 data-nosnippet>34</a>}
 <a href=#35 id=35 data-nosnippet>35</a>
 <a href=#36 id=36 data-nosnippet>36</a><span class="doccomment">/// Format a thrift exception into iceberg error.
@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>            ErrorKind::Unexpected,
 <a href=#42 id=42 data-nosnippet>42</a>            <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
 <a href=#43 id=43 data-nosnippet>43</a>        )
-<a href=#44 id=44 data-nosnippet>44</a>        .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {:?}"</span>, err))),
+<a href=#44 id=44 data-nosnippet>44</a>        .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {err:?}"</span>))),
 <a href=#45 id=45 data-nosnippet>45</a>    }
 <a href=#46 id=46 data-nosnippet>46</a>}
 <a href=#47 id=47 data-nosnippet>47</a>

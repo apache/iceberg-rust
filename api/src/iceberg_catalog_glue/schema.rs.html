@@ -143,7 +143,7 @@
 <a href=#143 id=143 data-nosnippet>143</a>    }
 <a href=#144 id=144 data-nosnippet>144</a>
 <a href=#145 id=145 data-nosnippet>145</a>    <span class="kw">fn </span>list(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _list: <span class="kw-2">&amp;</span>iceberg::spec::ListType, value: String) -&gt; iceberg::Result&lt;String&gt; {
-<a href=#146 id=146 data-nosnippet>146</a>        <span class="prelude-val">Ok</span>(<span class="macro">format!</span>(<span class="string">"array&lt;{}&gt;"</span>, value))
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="prelude-val">Ok</span>(<span class="macro">format!</span>(<span class="string">"array&lt;{value}&gt;"</span>))
 <a href=#147 id=147 data-nosnippet>147</a>    }
 <a href=#148 id=148 data-nosnippet>148</a>
 <a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>map(
@@ -152,7 +152,7 @@
 <a href=#152 id=152 data-nosnippet>152</a>        key_value: String,
 <a href=#153 id=153 data-nosnippet>153</a>        value: String,
 <a href=#154 id=154 data-nosnippet>154</a>    ) -&gt; iceberg::Result&lt;String&gt; {
-<a href=#155 id=155 data-nosnippet>155</a>        <span class="prelude-val">Ok</span>(<span class="macro">format!</span>(<span class="string">"map&lt;{},{}&gt;"</span>, key_value, value))
+<a href=#155 id=155 data-nosnippet>155</a>        <span class="prelude-val">Ok</span>(<span class="macro">format!</span>(<span class="string">"map&lt;{key_value},{value}&gt;"</span>))
 <a href=#156 id=156 data-nosnippet>156</a>    }
 <a href=#157 id=157 data-nosnippet>157</a>
 <a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">fn </span>primitive(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: <span class="kw-2">&amp;</span>iceberg::spec::PrimitiveType) -&gt; iceberg::Result&lt;<span class="self">Self</span>::T&gt; {
@@ -171,7 +171,7 @@
 <a href=#171 id=171 data-nosnippet>171</a>            }
 <a href=#172 id=172 data-nosnippet>172</a>            PrimitiveType::Binary | PrimitiveType::Fixed(<span class="kw">_</span>) =&gt; <span class="string">"binary"</span>.to_string(),
 <a href=#173 id=173 data-nosnippet>173</a>            PrimitiveType::Decimal { precision, scale } =&gt; {
-<a href=#174 id=174 data-nosnippet>174</a>                <span class="macro">format!</span>(<span class="string">"decimal({},{})"</span>, precision, scale)
+<a href=#174 id=174 data-nosnippet>174</a>                <span class="macro">format!</span>(<span class="string">"decimal({precision},{scale})"</span>)
 <a href=#175 id=175 data-nosnippet>175</a>            }
 <a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">_ </span>=&gt; {
 <a href=#177 id=177 data-nosnippet>177</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(

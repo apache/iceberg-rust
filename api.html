@@ -260,10 +260,7 @@
 <span class="boring">
 </span><span class="boring">    // List all namespaces already in the catalog.
 </span><span class="boring">    let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-</span><span class="boring">    println!(
-</span><span class="boring">        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
-</span><span class="boring">        existing_namespaces
-</span><span class="boring">    );
+</span><span class="boring">    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
 </span><span class="boring">
 </span><span class="boring">    // Create a new namespace identifier.
 </span><span class="boring">    let namespace_ident =
@@ -283,10 +280,10 @@
 </span><span class="boring">        )
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
-</span><span class="boring">    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
+</span><span class="boring">    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
 </span><span class="boring">
 </span><span class="boring">    let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
-</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
 </span><span class="boring">}</span></code></pre>
 <p>You can run following code to list all root namespaces:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -333,10 +330,7 @@
 </span><span class="boring">
 </span>    // List all namespaces already in the catalog.
     let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-    println!(
-        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
-        existing_namespaces
-    );
+    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
 <span class="boring">
 </span><span class="boring">    // Create a new namespace identifier.
 </span><span class="boring">    let namespace_ident =
@@ -356,10 +350,10 @@
 </span><span class="boring">        )
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
-</span><span class="boring">    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
+</span><span class="boring">    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
 </span><span class="boring">
 </span><span class="boring">    let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
-</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
 </span><span class="boring">}</span></code></pre>
 <p>Then you can run following code to create namespace:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -406,10 +400,7 @@
 </span><span class="boring">
 </span><span class="boring">    // List all namespaces already in the catalog.
 </span><span class="boring">    let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-</span><span class="boring">    println!(
-</span><span class="boring">        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
-</span><span class="boring">        existing_namespaces
-</span><span class="boring">    );
+</span><span class="boring">    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
 </span><span class="boring">
 </span>    // Create a new namespace identifier.
     let namespace_ident =
@@ -429,10 +420,10 @@
         )
         .await
         .unwrap();
-    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
+    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
 
     let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
-    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
+    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
 <span class="boring">}</span></code></pre>
 <h1 id="table"><a class="header" href="#table">Table</a></h1>
 <p>After creating <code>Catalog</code>, we can manipulate tables through <code>Catalog</code>.</p>
@@ -532,7 +523,7 @@
 </span><span class="boring">
 </span><span class="boring">    // Load the table back from the catalog. It should be identical to the created table.
 </span><span class="boring">    let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
-</span><span class="boring">    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {:?}&quot;, loaded_table);
+</span><span class="boring">    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}&quot;);
 </span><span class="boring">}</span></code></pre>
 <p>Also, you can load a table directly:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -630,7 +621,7 @@
 
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
-    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {:?}&quot;, loaded_table);
+    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}&quot;);
 <span class="boring">}</span></code></pre>
 
                     </main>

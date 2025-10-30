@@ -321,7 +321,7 @@
 <a href=#321 id=321 data-nosnippet>321</a>                ErrorKind::Unexpected,
 <a href=#322 id=322 data-nosnippet>322</a>                <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
 <a href=#323 id=323 data-nosnippet>323</a>            )
-<a href=#324 id=324 data-nosnippet>324</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {:?}"</span>, exception))),
+<a href=#324 id=324 data-nosnippet>324</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {exception:?}"</span>))),
 <a href=#325 id=325 data-nosnippet>325</a>            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(from_thrift_error(err)),
 <a href=#326 id=326 data-nosnippet>326</a>        }
 <a href=#327 id=327 data-nosnippet>327</a>    }
@@ -554,7 +554,7 @@
 <a href=#554 id=554 data-nosnippet>554</a>                ErrorKind::Unexpected,
 <a href=#555 id=555 data-nosnippet>555</a>                <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
 <a href=#556 id=556 data-nosnippet>556</a>            )
-<a href=#557 id=557 data-nosnippet>557</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {:?}"</span>, exception))),
+<a href=#557 id=557 data-nosnippet>557</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {exception:?}"</span>))),
 <a href=#558 id=558 data-nosnippet>558</a>            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(from_thrift_error(err)),
 <a href=#559 id=559 data-nosnippet>559</a>        }
 <a href=#560 id=560 data-nosnippet>560</a>    }

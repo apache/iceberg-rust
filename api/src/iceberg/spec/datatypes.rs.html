@@ -95,8 +95,8 @@
 <a href=#95 id=95 data-nosnippet>95</a><span class="kw">impl </span>fmt::Display <span class="kw">for </span>Type {
 <a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter) -&gt; fmt::Result {
 <a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#98 id=98 data-nosnippet>98</a>            Type::Primitive(primitive) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, primitive),
-<a href=#99 id=99 data-nosnippet>99</a>            Type::Struct(s) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, s),
+<a href=#98 id=98 data-nosnippet>98</a>            Type::Primitive(primitive) =&gt; <span class="macro">write!</span>(f, <span class="string">"{primitive}"</span>),
+<a href=#99 id=99 data-nosnippet>99</a>            Type::Struct(s) =&gt; <span class="macro">write!</span>(f, <span class="string">"{s}"</span>),
 <a href=#100 id=100 data-nosnippet>100</a>            Type::List(<span class="kw">_</span>) =&gt; <span class="macro">write!</span>(f, <span class="string">"list"</span>),
 <a href=#101 id=101 data-nosnippet>101</a>            Type::Map(<span class="kw">_</span>) =&gt; <span class="macro">write!</span>(f, <span class="string">"map"</span>),
 <a href=#102 id=102 data-nosnippet>102</a>        }
@@ -370,7 +370,7 @@
 <a href=#370 id=370 data-nosnippet>370</a>            PrimitiveType::Float =&gt; <span class="macro">write!</span>(f, <span class="string">"float"</span>),
 <a href=#371 id=371 data-nosnippet>371</a>            PrimitiveType::Double =&gt; <span class="macro">write!</span>(f, <span class="string">"double"</span>),
 <a href=#372 id=372 data-nosnippet>372</a>            PrimitiveType::Decimal { precision, scale } =&gt; {
-<a href=#373 id=373 data-nosnippet>373</a>                <span class="macro">write!</span>(f, <span class="string">"decimal({},{})"</span>, precision, scale)
+<a href=#373 id=373 data-nosnippet>373</a>                <span class="macro">write!</span>(f, <span class="string">"decimal({precision},{scale})"</span>)
 <a href=#374 id=374 data-nosnippet>374</a>            }
 <a href=#375 id=375 data-nosnippet>375</a>            PrimitiveType::Date =&gt; <span class="macro">write!</span>(f, <span class="string">"date"</span>),
 <a href=#376 id=376 data-nosnippet>376</a>            PrimitiveType::Time =&gt; <span class="macro">write!</span>(f, <span class="string">"time"</span>),
@@ -380,7 +380,7 @@
 <a href=#380 id=380 data-nosnippet>380</a>            PrimitiveType::TimestamptzNs =&gt; <span class="macro">write!</span>(f, <span class="string">"timestamptz_ns"</span>),
 <a href=#381 id=381 data-nosnippet>381</a>            PrimitiveType::String =&gt; <span class="macro">write!</span>(f, <span class="string">"string"</span>),
 <a href=#382 id=382 data-nosnippet>382</a>            PrimitiveType::Uuid =&gt; <span class="macro">write!</span>(f, <span class="string">"uuid"</span>),
-<a href=#383 id=383 data-nosnippet>383</a>            PrimitiveType::Fixed(size) =&gt; <span class="macro">write!</span>(f, <span class="string">"fixed({})"</span>, size),
+<a href=#383 id=383 data-nosnippet>383</a>            PrimitiveType::Fixed(size) =&gt; <span class="macro">write!</span>(f, <span class="string">"fixed({size})"</span>),
 <a href=#384 id=384 data-nosnippet>384</a>            PrimitiveType::Binary =&gt; <span class="macro">write!</span>(f, <span class="string">"binary"</span>),
 <a href=#385 id=385 data-nosnippet>385</a>        }
 <a href=#386 id=386 data-nosnippet>386</a>    }
@@ -673,7 +673,7 @@
 <a href=#673 id=673 data-nosnippet>673</a>        }
 <a href=#674 id=674 data-nosnippet>674</a>        <span class="macro">write!</span>(f, <span class="string">"{} "</span>, <span class="self">self</span>.field_type)<span class="question-mark">?</span>;
 <a href=#675 id=675 data-nosnippet>675</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(doc) = <span class="kw-2">&amp;</span><span class="self">self</span>.doc {
-<a href=#676 id=676 data-nosnippet>676</a>            <span class="macro">write!</span>(f, <span class="string">"{}"</span>, doc)<span class="question-mark">?</span>;
+<a href=#676 id=676 data-nosnippet>676</a>            <span class="macro">write!</span>(f, <span class="string">"{doc}"</span>)<span class="question-mark">?</span>;
 <a href=#677 id=677 data-nosnippet>677</a>        }
 <a href=#678 id=678 data-nosnippet>678</a>        <span class="prelude-val">Ok</span>(())
 <a href=#679 id=679 data-nosnippet>679</a>    }

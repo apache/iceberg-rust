@@ -186,7 +186,7 @@
 <a href=#186 id=186 data-nosnippet>186</a>        <span class="kw">if </span>!<span class="self">self</span>.schemas.contains_key(<span class="kw-2">&amp;</span>schema_id) {
 <a href=#187 id=187 data-nosnippet>187</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#188 id=188 data-nosnippet>188</a>                ErrorKind::DataInvalid,
-<a href=#189 id=189 data-nosnippet>189</a>                <span class="macro">format!</span>(<span class="string">"No schema exists with the schema id {}."</span>, schema_id),
+<a href=#189 id=189 data-nosnippet>189</a>                <span class="macro">format!</span>(<span class="string">"No schema exists with the schema id {schema_id}."</span>),
 <a href=#190 id=190 data-nosnippet>190</a>            ));
 <a href=#191 id=191 data-nosnippet>191</a>        }
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="prelude-val">Ok</span>(())
@@ -426,7 +426,7 @@
 <a href=#426 id=426 data-nosnippet>426</a>    }
 <a href=#427 id=427 data-nosnippet>427</a>
 <a href=#428 id=428 data-nosnippet>428</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_test_view_metadata(file_name: <span class="kw-2">&amp;</span>str) -&gt; ViewMetadata {
-<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"testdata/view_metadata/{}"</span>, file_name);
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"testdata/view_metadata/{file_name}"</span>);
 <a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>metadata: String = fs::read_to_string(path).unwrap();
 <a href=#431 id=431 data-nosnippet>431</a>
 <a href=#432 id=432 data-nosnippet>432</a>        serde_json::from_str(<span class="kw-2">&amp;</span>metadata).unwrap()

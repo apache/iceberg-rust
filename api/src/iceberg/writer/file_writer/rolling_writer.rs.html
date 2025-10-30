@@ -436,10 +436,9 @@
 <a href=#436 id=436 data-nosnippet>436</a>        </span><span class="kw">let </span>total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
 <a href=#437 id=437 data-nosnippet>437</a>        <span class="macro">assert_eq!</span>(
 <a href=#438 id=438 data-nosnippet>438</a>            total_records, expected_rows <span class="kw">as </span>u64,
-<a href=#439 id=439 data-nosnippet>439</a>            <span class="string">"Expected {} total records across all files"</span>,
-<a href=#440 id=440 data-nosnippet>440</a>            expected_rows
-<a href=#441 id=441 data-nosnippet>441</a>        );
-<a href=#442 id=442 data-nosnippet>442</a>
-<a href=#443 id=443 data-nosnippet>443</a>        <span class="prelude-val">Ok</span>(())
-<a href=#444 id=444 data-nosnippet>444</a>    }
-<a href=#445 id=445 data-nosnippet>445</a>}</code></pre></div></section></main></body></html>
+<a href=#439 id=439 data-nosnippet>439</a>            <span class="string">"Expected {expected_rows} total records across all files"
+<a href=#440 id=440 data-nosnippet>440</a>        </span>);
+<a href=#441 id=441 data-nosnippet>441</a>
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="prelude-val">Ok</span>(())
+<a href=#443 id=443 data-nosnippet>443</a>    }
+<a href=#444 id=444 data-nosnippet>444</a>}</code></pre></div></section></main></body></html>

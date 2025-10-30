@@ -637,7 +637,7 @@
 <a href=#637 id=637 data-nosnippet>637</a>                    <span class="string">"Operation failed for hitting aws sdk error"</span>,
 <a href=#638 id=638 data-nosnippet>638</a>                ),
 <a href=#639 id=639 data-nosnippet>639</a>            }
-<a href=#640 id=640 data-nosnippet>640</a>            .with_source(anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"aws sdk error: {:?}"</span>, error)))
+<a href=#640 id=640 data-nosnippet>640</a>            .with_source(anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"aws sdk error: {error:?}"</span>)))
 <a href=#641 id=641 data-nosnippet>641</a>        })<span class="question-mark">?</span>;
 <a href=#642 id=642 data-nosnippet>642</a>
 <a href=#643 id=643 data-nosnippet>643</a>        <span class="prelude-val">Ok</span>(staged_table)
@@ -649,7 +649,7 @@
 <a href=#649 id=649 data-nosnippet>649</a><span class="kw">where </span>T: std::fmt::Debug {
 <a href=#650 id=650 data-nosnippet>650</a>    Error::new(
 <a href=#651 id=651 data-nosnippet>651</a>        ErrorKind::Unexpected,
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">format!</span>(<span class="string">"Operation failed for hitting aws sdk error: {:?}"</span>, error),
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">format!</span>(<span class="string">"Operation failed for hitting aws sdk error: {error:?}"</span>),
 <a href=#653 id=653 data-nosnippet>653</a>    )
 <a href=#654 id=654 data-nosnippet>654</a>}
 <a href=#655 id=655 data-nosnippet>655</a>
@@ -682,7 +682,7 @@
 <a href=#682 id=682 data-nosnippet>682</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#683 id=683 data-nosnippet>683</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#684 id=684 data-nosnippet>684</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#685 id=685 data-nosnippet>685</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#685 id=685 data-nosnippet>685</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#686 id=686 data-nosnippet>686</a>        };
 <a href=#687 id=687 data-nosnippet>687</a>
 <a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">let </span>namespaces = catalog.list_namespaces(<span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
@@ -694,7 +694,7 @@
 <a href=#694 id=694 data-nosnippet>694</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#695 id=695 data-nosnippet>695</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#696 id=696 data-nosnippet>696</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#697 id=697 data-nosnippet>697</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#697 id=697 data-nosnippet>697</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#698 id=698 data-nosnippet>698</a>        };
 <a href=#699 id=699 data-nosnippet>699</a>
 <a href=#700 id=700 data-nosnippet>700</a>        <span class="kw">let </span>tables = catalog
@@ -709,7 +709,7 @@
 <a href=#709 id=709 data-nosnippet>709</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#710 id=710 data-nosnippet>710</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#711 id=711 data-nosnippet>711</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#712 id=712 data-nosnippet>712</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#712 id=712 data-nosnippet>712</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#713 id=713 data-nosnippet>713</a>        };
 <a href=#714 id=714 data-nosnippet>714</a>
 <a href=#715 id=715 data-nosnippet>715</a>        <span class="kw">let </span>table = catalog
@@ -719,7 +719,7 @@
 <a href=#719 id=719 data-nosnippet>719</a>            ))
 <a href=#720 id=720 data-nosnippet>720</a>            .<span class="kw">await
 <a href=#721 id=721 data-nosnippet>721</a>            </span>.unwrap();
-<a href=#722 id=722 data-nosnippet>722</a>        <span class="macro">println!</span>(<span class="string">"{:?}"</span>, table);
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="macro">println!</span>(<span class="string">"{table:?}"</span>);
 <a href=#723 id=723 data-nosnippet>723</a>    }
 <a href=#724 id=724 data-nosnippet>724</a>
 <a href=#725 id=725 data-nosnippet>725</a>    <span class="attr">#[tokio::test]
@@ -727,7 +727,7 @@
 <a href=#727 id=727 data-nosnippet>727</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#728 id=728 data-nosnippet>728</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#729 id=729 data-nosnippet>729</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#730 id=730 data-nosnippet>730</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#730 id=730 data-nosnippet>730</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#731 id=731 data-nosnippet>731</a>        };
 <a href=#732 id=732 data-nosnippet>732</a>
 <a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_s3tables_create_delete_namespace"</span>.to_string());
@@ -745,7 +745,7 @@
 <a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#746 id=746 data-nosnippet>746</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#747 id=747 data-nosnippet>747</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#748 id=748 data-nosnippet>748</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#748 id=748 data-nosnippet>748</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#749 id=749 data-nosnippet>749</a>        };
 <a href=#750 id=750 data-nosnippet>750</a>
 <a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>creation = {
@@ -788,7 +788,7 @@
 <a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">let </span>catalog = <span class="kw">match </span>load_s3tables_catalog_from_env().<span class="kw">await </span>{
 <a href=#789 id=789 data-nosnippet>789</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(catalog)) =&gt; catalog,
 <a href=#790 id=790 data-nosnippet>790</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">return</span>,
-<a href=#791 id=791 data-nosnippet>791</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {}"</span>, e),
+<a href=#791 id=791 data-nosnippet>791</a>            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"Error loading catalog: {e}"</span>),
 <a href=#792 id=792 data-nosnippet>792</a>        };
 <a href=#793 id=793 data-nosnippet>793</a>
 <a href=#794 id=794 data-nosnippet>794</a>        <span class="comment">// Create a test namespace and table

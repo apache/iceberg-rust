@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>            ),
 <a href=#244 id=244 data-nosnippet>244</a>            (
 <a href=#245 id=245 data-nosnippet>245</a>                header::USER_AGENT,
-<a href=#246 id=246 data-nosnippet>246</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{}"</span>, CARGO_PKG_VERSION)).unwrap(),
+<a href=#246 id=246 data-nosnippet>246</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{CARGO_PKG_VERSION}"</span>)).unwrap(),
 <a href=#247 id=247 data-nosnippet>247</a>            ),
 <a href=#248 id=248 data-nosnippet>248</a>        ]);
 <a href=#249 id=249 data-nosnippet>249</a>
@@ -1273,7 +1273,7 @@
 <a href=#1273 id=1273 data-nosnippet>1273</a>            ),
 <a href=#1274 id=1274 data-nosnippet>1274</a>            (
 <a href=#1275 id=1275 data-nosnippet>1275</a>                header::USER_AGENT,
-<a href=#1276 id=1276 data-nosnippet>1276</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{}"</span>, CARGO_PKG_VERSION)).unwrap(),
+<a href=#1276 id=1276 data-nosnippet>1276</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{CARGO_PKG_VERSION}"</span>)).unwrap(),
 <a href=#1277 id=1277 data-nosnippet>1277</a>            ),
 <a href=#1278 id=1278 data-nosnippet>1278</a>        ]);
 <a href=#1279 id=1279 data-nosnippet>1279</a>        <span class="macro">assert_eq!</span>(headers, expected_headers);
@@ -1310,7 +1310,7 @@
 <a href=#1310 id=1310 data-nosnippet>1310</a>            ),
 <a href=#1311 id=1311 data-nosnippet>1311</a>            (
 <a href=#1312 id=1312 data-nosnippet>1312</a>                header::USER_AGENT,
-<a href=#1313 id=1313 data-nosnippet>1313</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{}"</span>, CARGO_PKG_VERSION)).unwrap(),
+<a href=#1313 id=1313 data-nosnippet>1313</a>                HeaderValue::from_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"iceberg-rs/{CARGO_PKG_VERSION}"</span>)).unwrap(),
 <a href=#1314 id=1314 data-nosnippet>1314</a>            ),
 <a href=#1315 id=1315 data-nosnippet>1315</a>            (
 <a href=#1316 id=1316 data-nosnippet>1316</a>                HeaderName::from_static(<span class="string">"customized-header"</span>),

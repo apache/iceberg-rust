@@ -360,7 +360,7 @@
 <a href=#360 id=360 data-nosnippet>360</a>            <span class="number">2 </span>=&gt; <span class="prelude-val">Ok</span>(DataContentType::EqualityDeletes),
 <a href=#361 id=361 data-nosnippet>361</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
 <a href=#362 id=362 data-nosnippet>362</a>                ErrorKind::DataInvalid,
-<a href=#363 id=363 data-nosnippet>363</a>                <span class="macro">format!</span>(<span class="string">"data content type {} is invalid"</span>, v),
+<a href=#363 id=363 data-nosnippet>363</a>                <span class="macro">format!</span>(<span class="string">"data content type {v} is invalid"</span>),
 <a href=#364 id=364 data-nosnippet>364</a>            )),
 <a href=#365 id=365 data-nosnippet>365</a>        }
 <a href=#366 id=366 data-nosnippet>366</a>    }
@@ -390,7 +390,7 @@
 <a href=#390 id=390 data-nosnippet>390</a>            <span class="string">"puffin" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Puffin),
 <a href=#391 id=391 data-nosnippet>391</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
 <a href=#392 id=392 data-nosnippet>392</a>                ErrorKind::DataInvalid,
-<a href=#393 id=393 data-nosnippet>393</a>                <span class="macro">format!</span>(<span class="string">"Unsupported data file format: {}"</span>, s),
+<a href=#393 id=393 data-nosnippet>393</a>                <span class="macro">format!</span>(<span class="string">"Unsupported data file format: {s}"</span>),
 <a href=#394 id=394 data-nosnippet>394</a>            )),
 <a href=#395 id=395 data-nosnippet>395</a>        }
 <a href=#396 id=396 data-nosnippet>396</a>    }

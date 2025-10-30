@@ -39,7 +39,7 @@
 <a href=#39 id=39 data-nosnippet>39</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>EngineRunner&gt;&gt; {
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">match </span>engine_type {
 <a href=#41 id=41 data-nosnippet>41</a>        TYPE_DATAFUSION =&gt; <span class="prelude-val">Ok</span>(Box::new(DataFusionEngine::new(cfg).<span class="kw">await</span><span class="question-mark">?</span>)),
-<a href=#42 id=42 data-nosnippet>42</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">anyhow::anyhow!</span>(<span class="string">"Unsupported engine type: {}"</span>, engine_type).into()),
+<a href=#42 id=42 data-nosnippet>42</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">anyhow::anyhow!</span>(<span class="string">"Unsupported engine type: {engine_type}"</span>).into()),
 <a href=#43 id=43 data-nosnippet>43</a>    }
 <a href=#44 id=44 data-nosnippet>44</a>}
 <a href=#45 id=45 data-nosnippet>45</a>

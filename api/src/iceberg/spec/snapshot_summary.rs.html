@@ -824,9 +824,9 @@
 <a href=#824 id=824 data-nosnippet>824</a>        <span class="macro">assert!</span>(props.contains_key(<span class="kw-2">&amp;</span>partition_key));
 <a href=#825 id=825 data-nosnippet>825</a>
 <a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span>partition_summary = props.get(<span class="kw-2">&amp;</span>partition_key).unwrap();
-<a href=#827 id=827 data-nosnippet>827</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}=200"</span>, ADDED_FILE_SIZE)));
-<a href=#828 id=828 data-nosnippet>828</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}=1"</span>, ADDED_DATA_FILES)));
-<a href=#829 id=829 data-nosnippet>829</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}=20"</span>, ADDED_RECORDS)));
+<a href=#827 id=827 data-nosnippet>827</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_FILE_SIZE}=200"</span>)));
+<a href=#828 id=828 data-nosnippet>828</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_DATA_FILES}=1"</span>)));
+<a href=#829 id=829 data-nosnippet>829</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_RECORDS}=20"</span>)));
 <a href=#830 id=830 data-nosnippet>830</a>    }
 <a href=#831 id=831 data-nosnippet>831</a>
 <a href=#832 id=832 data-nosnippet>832</a>    <span class="attr">#[test]
