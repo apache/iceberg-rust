@@ -407,10 +407,16 @@ impl ArrowReader {
                     selected_row_groups_idx += 1;
                 } else {
                     // Advance iterator past all deletes in the skipped row group.
-                    // Note: advance_to() positions the iterator without consuming elements,
-                    // so we must NOT call next() here or we'll incorrectly consume a delete
-                    // that belongs to a later selected row group.
+                    // advance_to() positions the iterator to the first delete >= next_row_group_base_idx.
+                    // However, if our cached next_deleted_row_idx_opt is in the skipped range,
+                    // we need to call next() to update the cache with the newly positioned value.
                     delete_vector_iter.advance_to(next_row_group_base_idx);
+                    // Only update the cache if the cached value is stale (in the skipped range)
+                    if let Some(cached_idx) = next_deleted_row_idx_opt {
+                        if cached_idx < next_row_group_base_idx {
+                            next_deleted_row_idx_opt = delete_vector_iter.next();
+                        }
+                    }
 
                     // still increment the current page base index but then skip to the next row group
                     // in the file
@@ -2683,6 +2689,202 @@ message schema {
         assert_eq!(
             all_ids, expected_ids,
             "Should have ids 101-199 but got different values"
+        );
+    }
+    /// Test for bug where stale cached delete causes infinite loop when skipping row groups.
+    ///
+    /// This test exposes the inverse scenario of `test_position_delete_with_row_group_selection`:
+    /// - Position delete targets a row in the SKIPPED row group (not the selected one)
+    /// - After calling advance_to(), the cached delete index is stale
+    /// - Without updating the cache, the code enters an infinite loop
+    ///
+    /// This test creates:
+    /// - A data file with 200 rows split into 2 row groups (0-99, 100-199)
+    /// - A position delete file that deletes row 0 (first row in SKIPPED row group 0)
+    /// - Row group selection that reads ONLY row group 1 (rows 100-199)
+    ///
+    /// The bug occurs when skipping row group 0:
+    /// ```rust
+    /// let mut next_deleted_row_idx_opt = delete_vector_iter.next(); // Some(0)
+    /// // ... skip to row group 1 ...
+    /// delete_vector_iter.advance_to(100); // Iterator advances past delete at 0
+    /// // BUG: next_deleted_row_idx_opt is still Some(0) - STALE!
+    /// // When processing row group 1:
+    /// //   current_idx = 100, next_deleted_row_idx = 0, next_row_group_base_idx = 200
+    /// //   Loop condition: 0 < 200 (true)
+    /// //   But: current_idx (100) > next_deleted_row_idx (0)
+    /// //   And: current_idx (100) != next_deleted_row_idx (0)
+    /// //   Neither branch executes -> INFINITE LOOP!
+    /// ```
+    ///
+    /// Expected behavior: Should return 100 rows (delete at 0 doesn't affect row group 1)
+    /// Bug behavior: Infinite loop in build_deletes_row_selection
+    #[tokio::test]
+    async fn test_position_delete_in_skipped_row_group() {
+        use arrow_array::{Int32Array, Int64Array};
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        // Field IDs for positional delete schema
+        const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
+        const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        // Create table schema with a single 'id' column
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        // Step 1: Create data file with 200 rows in 2 row groups
+        // Row group 0: rows 0-99 (ids 1-100)
+        // Row group 1: rows 100-199 (ids 101-200)
+        let data_file_path = format!("{}/data.parquet", &table_location);
+
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(1..=100),
+        )])
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(101..=200),
+        )])
+        .unwrap();
+
+        // Force each batch into its own row group
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_max_row_group_size(100)
+            .build();
+
+        let file = File::create(&data_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch1).expect("Writing batch 1");
+        writer.write(&batch2).expect("Writing batch 2");
+        writer.close().unwrap();
+
+        // Verify we created 2 row groups
+        let verify_file = File::open(&data_file_path).unwrap();
+        let verify_reader = SerializedFileReader::new(verify_file).unwrap();
+        assert_eq!(
+            verify_reader.metadata().num_row_groups(),
+            2,
+            "Should have 2 row groups"
+        );
+
+        // Step 2: Create position delete file that deletes row 0 (id=1, first row in row group 0)
+        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+
+        let delete_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
+            )])),
+        ]));
+
+        // Delete row at position 0 (0-indexed, so it's the first row: id=1)
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
+            Arc::new(Int64Array::from_iter_values(vec![0i64])),
+        ])
+        .unwrap();
+
+        let delete_props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let delete_file = File::create(&delete_file_path).unwrap();
+        let mut delete_writer =
+            ArrowWriter::try_new(delete_file, delete_schema, Some(delete_props)).unwrap();
+        delete_writer.write(&delete_batch).unwrap();
+        delete_writer.close().unwrap();
+
+        // Step 3: Get byte ranges to read ONLY row group 1 (rows 100-199)
+        // This exercises the row group selection code path where row group 0 is skipped
+        let metadata_file = File::open(&data_file_path).unwrap();
+        let metadata_reader = SerializedFileReader::new(metadata_file).unwrap();
+        let metadata = metadata_reader.metadata();
+
+        let row_group_0 = metadata.row_group(0);
+        let row_group_1 = metadata.row_group(1);
+
+        let rg0_start = 4u64; // Parquet files start with 4-byte magic "PAR1"
+        let rg1_start = rg0_start + row_group_0.compressed_size() as u64;
+        let rg1_length = row_group_1.compressed_size() as u64;
+
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        // Create FileScanTask that reads ONLY row group 1 via byte range filtering
+        let task = FileScanTask {
+            start: rg1_start,
+            length: rg1_length,
+            record_count: Some(100), // Row group 1 has 100 rows
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: table_schema.clone(),
+            project_field_ids: vec![1],
+            predicate: None,
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: delete_file_path,
+                file_type: DataContentType::PositionDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+            }],
+        };
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Step 4: Verify we got 100 rows (all of row group 1)
+        // The delete at position 0 is in row group 0, which is skipped, so it doesn't affect us
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+
+        assert_eq!(
+            total_rows, 100,
+            "Expected 100 rows from row group 1 (delete at position 0 is in skipped row group 0). \
+             If this hangs or fails, it indicates the cached delete index was not updated after advance_to()."
+        );
+
+        // Verify we have all ids from row group 1 (101-200)
+        let all_ids: Vec<i32> = result
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        let expected_ids: Vec<i32> = (101..=200).collect();
+        assert_eq!(
+            all_ids, expected_ids,
+            "Should have ids 101-200 (all of row group 1)"
         );
     }
 }
