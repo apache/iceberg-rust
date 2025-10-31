@@ -63,6 +63,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
 expect-test = { workspace = true }
+flate2 = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
