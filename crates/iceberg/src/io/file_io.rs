@@ -142,12 +142,20 @@ impl FileIO {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
+
+        // ADLS requires append mode for writes
+        #[cfg(feature = "storage-azdls")]
+        let append_file = matches!(self.inner.as_ref(), OpenDalStorage::Azdls { .. });
+        #[cfg(not(feature = "storage-azdls"))]
+        let append_file = false;
+
         Ok(OutputFile::new_with_op(
             self.inner.clone(),
             path,
             op,
             relative_path_pos,
             self.get_write_chunk_size()?,
+            append_file,
         ))
     }
 
@@ -379,6 +387,8 @@ pub struct OutputFile {
     op: Option<Operator>,
     // Chunk size for write operations to ensure consistent size of multipart chunks
     chunk_size: Option<usize>,
+    // Whether to use append mode for writes (required for some storage backends like AZDLS)
+    append_file: bool,
 }
 
 impl OutputFile {
@@ -390,6 +400,7 @@ impl OutputFile {
             relative_path_pos: None,
             op: None,
             chunk_size: None,
+            append_file: false,
         }
     }
 
@@ -399,6 +410,7 @@ impl OutputFile {
         op: Operator,
         relative_path_pos: usize,
         chunk_size: Option<usize>,
+        append_file: bool,
     ) -> Self {
         Self {
             storage,
@@ -406,6 +418,7 @@ impl OutputFile {
             relative_path_pos: Some(relative_path_pos),
             op: Some(op),
             chunk_size,
+            append_file,
         }
     }
 
@@ -453,7 +466,9 @@ impl OutputFile {
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
         if let (Some(op), Some(relative_path_pos)) = (&self.op, self.relative_path_pos) {
-            let mut writer = op.writer_with(&self.path[relative_path_pos..]);
+            let mut writer = op
+                .writer_with(&self.path[relative_path_pos..])
+                .append(self.append_file);
             if let Some(chunk_size) = self.chunk_size {
                 writer = writer.chunk(chunk_size);
             }
