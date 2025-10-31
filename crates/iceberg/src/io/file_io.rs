@@ -145,11 +145,19 @@ impl FileIO {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
+        
+        // ADLS requires append mode for writes
+        #[cfg(feature = "storage-azdls")]
+        let append_file = matches!(self.inner.as_ref(), Storage::Azdls { .. });
+        #[cfg(not(feature = "storage-azdls"))]
+        let append_file = false;
+        
         Ok(OutputFile {
             op,
             path,
             relative_path_pos,
             chunk_size: self.get_write_chunk_size()?,
+            append_file,
         })
     }
 
@@ -353,6 +361,8 @@ pub struct OutputFile {
     relative_path_pos: usize,
     // Chunk size for write operations to ensure consistent size of multipart chunks
     chunk_size: Option<usize>,
+    // Whether to use append mode for writes (required for some storage backends like AZDLS)
+    append_file: bool,
 }
 
 impl OutputFile {
@@ -393,7 +403,10 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        let mut writer = self.op.writer_with(&self.path[self.relative_path_pos..]);
+        let mut writer = self
+            .op
+            .writer_with(&self.path[self.relative_path_pos..])
+            .append(self.append_file);
         if let Some(chunk_size) = self.chunk_size {
             writer = writer.chunk(chunk_size);
         }
