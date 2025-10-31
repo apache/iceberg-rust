@@ -1888,6 +1888,17 @@ impl Literal {
                         date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
                     ))))
                 }
+                (PrimitiveType::Date, JsonValue::Number(number)) => {
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
+                        number
+                            .as_i64()
+                            .ok_or(Error::new(
+                                crate::ErrorKind::DataInvalid,
+                                "Failed to convert json number to date (days since epoch)",
+                            ))?
+                            .try_into()?,
+                    ))))
+                }
                 (PrimitiveType::Time, JsonValue::String(s)) => {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(
                         time::time_to_microseconds(&NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
@@ -3941,5 +3952,45 @@ mod tests {
         ];
 
         assert_eq!(double_sorted, double_expected);
+    }
+
+    /// Test Date deserialization from JSON as number (days since epoch).
+    ///
+    /// This reproduces the scenario from Iceberg Java's TestAddFilesProcedure where:
+    /// - Date partition columns have initial_default values in manifests
+    /// - These values are serialized as days since epoch (e.g., 18628 for 2021-01-01)
+    /// - The JSON schema includes: {"type":"date","initial-default":18628}
+    ///
+    /// Prior to this fix, Date values in JSON were only parsed from String format ("2021-01-01"),
+    /// causing initial_default values to be lost during schema deserialization.
+    ///
+    /// This test ensures both formats are supported:
+    /// - String format: "2021-01-01" (used in table metadata)
+    /// - Number format: 18628 (used in initial-default values from add_files)
+    ///
+    /// See: Iceberg Java TestAddFilesProcedure.addDataPartitionedByDateToPartitioned()
+    #[test]
+    fn test_date_from_json_as_number() {
+        use serde_json::json;
+
+        // Test Date as number (days since epoch) - used in initial-default from add_files
+        let date_number = json!(18628); // 2021-01-01 is 18628 days since 1970-01-01
+        let result =
+            Literal::try_from_json(date_number, &Type::Primitive(PrimitiveType::Date)).unwrap();
+        assert_eq!(
+            result,
+            Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
+        );
+
+        // Test Date as string - traditional format
+        let date_string = json!("2021-01-01");
+        let result =
+            Literal::try_from_json(date_string, &Type::Primitive(PrimitiveType::Date)).unwrap();
+        assert_eq!(
+            result,
+            Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
+        );
+
+        // Both formats should produce the same Literal value
     }
 }
