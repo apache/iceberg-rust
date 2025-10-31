@@ -24,7 +24,7 @@ pub fn from_datafusion_error(error: datafusion::error::DataFusionError) -> Error
         ErrorKind::Unexpected,
         "Operation failed for hitting datafusion error".to_string(),
     )
-    .with_source(anyhow!("datafusion error: {:?}", error))
+    .with_source(anyhow!("datafusion error: {error:?}"))
 }
 /// Converts an iceberg error into a datafusion error.
 pub fn to_datafusion_error(error: Error) -> datafusion::error::DataFusionError {

@@ -25,10 +25,7 @@ pub fn try_insert_field<V>(map: &mut HashMap<i32, V>, field_id: i32, value: V) -
         |_| {
             Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Found duplicate 'field.id' {}. Field ids must be unique.",
-                    field_id
-                ),
+                format!("Found duplicate 'field.id' {field_id}. Field ids must be unique."),
             ))
         },
     )

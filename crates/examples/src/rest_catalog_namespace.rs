@@ -45,10 +45,7 @@ async fn main() {
     // ANCHOR: list_all_namespace
     // List all namespaces already in the catalog.
     let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-    println!(
-        "Namespaces alreading in the existing catalog: {:?}",
-        existing_namespaces
-    );
+    println!("Namespaces alreading in the existing catalog: {existing_namespaces:?}");
     // ANCHOR_END: list_all_namespace
 
     // ANCHOR: create_namespace
@@ -70,9 +67,9 @@ async fn main() {
         )
         .await
         .unwrap();
-    println!("Namespace {:?} created!", namespace_ident);
+    println!("Namespace {namespace_ident:?} created!");
 
     let loaded_namespace = catalog.get_namespace(&namespace_ident).await.unwrap();
-    println!("Namespace loaded!\n\nNamespace: {:#?}", loaded_namespace,);
+    println!("Namespace loaded!\n\nNamespace: {loaded_namespace:#?}",);
     // ANCHOR_END: create_namespace
 }

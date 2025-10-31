@@ -66,7 +66,7 @@ impl BasicDeleteFileLoader {
         )
         .await?
         .build()?
-        .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{}", e)));
+        .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{e}")));
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }

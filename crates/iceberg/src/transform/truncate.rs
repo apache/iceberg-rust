@@ -322,7 +322,7 @@ mod test {
         fixture.assert_projection(
             &fixture.set_predicate(PredicateOperator::In, vec![
                 Datum::string(value),
-                Datum::string(format!("{}abc", value)),
+                Datum::string(format!("{value}abc")),
             ]),
             Some(r#"name IN ("abcde")"#),
         )?;
@@ -330,7 +330,7 @@ mod test {
         fixture.assert_projection(
             &fixture.set_predicate(PredicateOperator::NotIn, vec![
                 Datum::string(value),
-                Datum::string(format!("{}abc", value)),
+                Datum::string(format!("{value}abc")),
             ]),
             None,
         )?;

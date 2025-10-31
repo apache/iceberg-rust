@@ -101,8 +101,7 @@ where
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "The input is not sorted! Cannot write to partition that was previously closed: {:?}",
-                    partition_key
+                    "The input is not sorted! Cannot write to partition that was previously closed: {partition_key:?}"
                 ),
             ));
         }
@@ -511,8 +510,7 @@ mod tests {
         let error = result.unwrap_err();
         assert!(
             error.to_string().contains("The input is not sorted"),
-            "Expected 'input is not sorted' error, got: {}",
-            error
+            "Expected 'input is not sorted' error, got: {error}"
         );
 
         Ok(())
