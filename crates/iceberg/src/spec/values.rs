@@ -351,11 +351,11 @@ impl PartialOrd for Datum {
 impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
-            (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{}", val),
-            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{}", val),
-            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Float(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Double(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
+            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{val}"),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{val}"),
+            (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
+            (_, PrimitiveLiteral::Double(val)) => write!(f, "{val}"),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
                 write!(f, "{}", days_to_date(*val))
             }
@@ -374,7 +374,7 @@ impl Display for Datum {
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", nanoseconds_to_datetimetz(*val))
             }
-            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
+            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{val}""#),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", Uuid::from_u128(*val))
             }
@@ -398,7 +398,7 @@ impl Display for Datum {
 fn display_bytes(bytes: &[u8], f: &mut Formatter<'_>) -> std::fmt::Result {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push_str(&format!("{:02X}", b));
+        s.push_str(&format!("{b:02X}"));
     }
     f.write_str(&s)
 }
@@ -482,7 +482,7 @@ impl Datum {
                 PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {:?}", bytes),
+                        format!("Can't convert bytes to i128: {bytes:?}"),
                     )
                 })?)
             }
@@ -526,8 +526,7 @@ impl Datum {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "PrimitiveType Decimal must has valid precision but got {}",
-                            precision
+                            "PrimitiveType Decimal must has valid precision but got {precision}"
                         ),
                     ));
                 };
@@ -1134,10 +1133,7 @@ impl Datum {
         if actual_bytes.len() > available_bytes {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Decimal value {} is too large for precision {}",
-                    decimal, precision
-                ),
+                format!("Decimal value {decimal} is too large for precision {precision}"),
             ));
         }
 
@@ -1892,6 +1888,17 @@ impl Literal {
                         date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
                     ))))
                 }
+                (PrimitiveType::Date, JsonValue::Number(number)) => {
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
+                        number
+                            .as_i64()
+                            .ok_or(Error::new(
+                                crate::ErrorKind::DataInvalid,
+                                "Failed to convert json number to date (days since epoch)",
+                            ))?
+                            .try_into()?,
+                    ))))
+                }
                 (PrimitiveType::Time, JsonValue::String(s)) => {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(
                         time::time_to_microseconds(&NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
@@ -1933,10 +1940,7 @@ impl Literal {
                 (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(Error::new(
                     crate::ErrorKind::DataInvalid,
-                    format!(
-                        "The json value {} doesn't fit to the iceberg type {}.",
-                        j, i
-                    ),
+                    format!("The json value {j} doesn't fit to the iceberg type {i}."),
                 )),
             },
             Type::Struct(schema) => {
@@ -2081,7 +2085,7 @@ impl Literal {
                 (_, PrimitiveLiteral::Binary(val)) => Ok(JsonValue::String(val.iter().fold(
                     String::new(),
                     |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
+                        acc.push_str(&format!("{x:x}"));
                         acc
                     },
                 ))),
@@ -2139,10 +2143,7 @@ impl Literal {
             }
             (value, r#type) => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "The iceberg value {:?} doesn't fit to the iceberg type {}.",
-                    value, r#type
-                ),
+                format!("The iceberg value {value:?} doesn't fit to the iceberg type {type}."),
             )),
         }
     }
@@ -2515,7 +2516,7 @@ mod _serde {
                     } else {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Type {} should be a struct", ty),
+                            format!("Type {ty} should be a struct"),
                         ));
                     }
                     RawLiteralEnum::Record(Record { required, optional })
@@ -2538,7 +2539,7 @@ mod _serde {
                     } else {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Type {} should be a list", ty),
+                            format!("Type {ty} should be a list"),
                         ));
                     }
                 }
@@ -2606,7 +2607,7 @@ mod _serde {
                     } else {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Type {} should be a map", ty),
+                            format!("Type {ty} should be a map"),
                         ));
                     }
                 }
@@ -2619,8 +2620,7 @@ mod _serde {
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Unable to convert raw literal ({}) fail convert to type {} for: type mismatch",
-                        v, ty
+                        "Unable to convert raw literal ({v}) fail convert to type {ty} for: type mismatch"
                     ),
                 )
             };
@@ -2628,8 +2628,7 @@ mod _serde {
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Unable to convert raw literal ({}) fail convert to type {} for: {}",
-                        v, ty, reason
+                        "Unable to convert raw literal ({v}) fail convert to type {ty} for: {reason}"
                     ),
                 )
             };
@@ -3301,7 +3300,7 @@ mod tests {
                 Decimal::new(decimal_num, expect_scale),
                 expect_precision,
             );
-            assert!(result.is_err(), "expect error but got {:?}", result);
+            assert!(result.is_err(), "expect error but got {result:?}");
             assert_eq!(
                 result.unwrap_err().kind(),
                 ErrorKind::DataInvalid,
@@ -3953,5 +3952,45 @@ mod tests {
         ];
 
         assert_eq!(double_sorted, double_expected);
+    }
+
+    /// Test Date deserialization from JSON as number (days since epoch).
+    ///
+    /// This reproduces the scenario from Iceberg Java's TestAddFilesProcedure where:
+    /// - Date partition columns have initial_default values in manifests
+    /// - These values are serialized as days since epoch (e.g., 18628 for 2021-01-01)
+    /// - The JSON schema includes: {"type":"date","initial-default":18628}
+    ///
+    /// Prior to this fix, Date values in JSON were only parsed from String format ("2021-01-01"),
+    /// causing initial_default values to be lost during schema deserialization.
+    ///
+    /// This test ensures both formats are supported:
+    /// - String format: "2021-01-01" (used in table metadata)
+    /// - Number format: 18628 (used in initial-default values from add_files)
+    ///
+    /// See: Iceberg Java TestAddFilesProcedure.addDataPartitionedByDateToPartitioned()
+    #[test]
+    fn test_date_from_json_as_number() {
+        use serde_json::json;
+
+        // Test Date as number (days since epoch) - used in initial-default from add_files
+        let date_number = json!(18628); // 2021-01-01 is 18628 days since 1970-01-01
+        let result =
+            Literal::try_from_json(date_number, &Type::Primitive(PrimitiveType::Date)).unwrap();
+        assert_eq!(
+            result,
+            Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
+        );
+
+        // Test Date as string - traditional format
+        let date_string = json!("2021-01-01");
+        let result =
+            Literal::try_from_json(date_string, &Type::Primitive(PrimitiveType::Date)).unwrap();
+        assert_eq!(
+            result,
+            Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
+        );
+
+        // Both formats should produce the same Literal value
     }
 }

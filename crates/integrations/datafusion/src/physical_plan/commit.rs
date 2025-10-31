@@ -176,8 +176,7 @@ impl ExecutionPlan for IcebergCommitExec {
         // IcebergCommitExec only has one partition (partition 0)
         if partition != 0 {
             return Err(DataFusionError::Internal(format!(
-                "IcebergCommitExec only has one partition, but got partition {}",
-                partition
+                "IcebergCommitExec only has one partition, but got partition {partition}"
             )));
         }
 
