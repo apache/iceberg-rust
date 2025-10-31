@@ -425,7 +425,7 @@ impl Display for Schema {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "table {{")?;
         for field in self.as_struct().fields() {
-            writeln!(f, "  {}", field)?;
+            writeln!(f, "  {field}")?;
         }
         writeln!(f, "}}")
     }
@@ -731,8 +731,7 @@ table {
             assert_eq!(
                 Some(name),
                 schema.name_by_field_id(id),
-                "Column name for field id {} not match.",
-                id
+                "Column name for field id {id} not match."
             );
         }
     }
@@ -754,8 +753,7 @@ table {
             assert_eq!(
                 Some(name),
                 schema.name_by_field_id(id),
-                "Column name for field id {} not match.",
-                id
+                "Column name for field id {id} not match."
             );
         }
     }
@@ -956,8 +954,7 @@ table {
             assert_eq!(
                 Some(&field),
                 schema.field_by_id(id).map(|f| f.as_ref()),
-                "Field for {} not match.",
-                id
+                "Field for {id} not match."
             );
         }
     }

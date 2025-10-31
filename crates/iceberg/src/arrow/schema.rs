@@ -701,10 +701,7 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
 
         (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            format!(
-                "Converting datum from type {:?} to arrow not supported yet.",
-                primitive_type
-            ),
+            format!("Converting datum from type {primitive_type:?} to arrow not supported yet."),
         )),
     }
 }
@@ -789,7 +786,7 @@ pub(crate) fn get_parquet_stat_min_as_datum(
                 PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {:?}", bytes),
+                        format!("Can't convert bytes to i128: {bytes:?}"),
                     )
                 })?),
             ))
@@ -936,7 +933,7 @@ pub(crate) fn get_parquet_stat_max_as_datum(
                 PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {:?}", bytes),
+                        format!("Can't convert bytes to i128: {bytes:?}"),
                     )
                 })?),
             ))
@@ -1745,9 +1742,7 @@ mod tests {
 
             assert!(
                 matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
-                "Expected {:?} to map to {:?}",
-                arrow_type,
-                expected_iceberg_type
+                "Expected {arrow_type:?} to map to {expected_iceberg_type:?}"
             );
         }
 

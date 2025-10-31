@@ -568,7 +568,7 @@ mod tests {
         )
         .await
         .expect("error parsing batch stream");
-        println!("{}", parsed_eq_delete);
+        println!("{parsed_eq_delete}");
 
         let expected = "((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) AND ((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5))".to_string();
 

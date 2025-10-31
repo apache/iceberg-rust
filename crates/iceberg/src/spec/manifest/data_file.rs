@@ -360,7 +360,7 @@ impl TryFrom<i32> for DataContentType {
             2 => Ok(DataContentType::EqualityDeletes),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("data content type {} is invalid", v),
+                format!("data content type {v} is invalid"),
             )),
         }
     }
@@ -390,7 +390,7 @@ impl FromStr for DataFileFormat {
             "puffin" => Ok(Self::Puffin),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Unsupported data file format: {}", s),
+                format!("Unsupported data file format: {s}"),
             )),
         }
     }

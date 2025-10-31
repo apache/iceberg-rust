@@ -39,7 +39,7 @@ pub async fn load_engine_runner(
 ) -> Result<Box<dyn EngineRunner>> {
     match engine_type {
         TYPE_DATAFUSION => Ok(Box::new(DataFusionEngine::new(cfg).await?)),
-        _ => Err(anyhow::anyhow!("Unsupported engine type: {}", engine_type).into()),
+        _ => Err(anyhow::anyhow!("Unsupported engine type: {engine_type}").into()),
     }
 }
 
