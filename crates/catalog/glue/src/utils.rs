@@ -185,8 +185,7 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid database name: {:?}, hierarchical namespaces are not supported",
-                namespace
+                "Invalid database name: {namespace:?}, hierarchical namespaces are not supported"
             ),
         ));
     }
@@ -236,7 +235,7 @@ pub(crate) fn get_metadata_location(
             Some(location) => Ok(location.to_string()),
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("No '{}' set on table", METADATA_LOCATION),
+                format!("No '{METADATA_LOCATION}' set on table"),
             )),
         },
         None => Err(Error::new(
