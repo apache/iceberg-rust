@@ -32,9 +32,6 @@ use iceberg::table::Table;
 
 use crate::to_datafusion_error;
 
-/// Column name for the combined partition values struct
-pub(crate) const PARTITION_VALUES_COLUMN: &str = "_partition";
-
 /// Extends an ExecutionPlan with partition value calculations for Iceberg tables.
 ///
 /// This function takes an input ExecutionPlan and extends it with an additional column

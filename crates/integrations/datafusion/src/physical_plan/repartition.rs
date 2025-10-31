@@ -23,9 +23,8 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
-
-use crate::physical_plan::project::PARTITION_VALUES_COLUMN;
 /// Creates an Iceberg-aware repartition execution plan that optimizes data distribution
 /// for parallel processing while respecting Iceberg table partitioning semantics.
 ///
@@ -96,43 +95,10 @@ pub(crate) fn repartition(
     let partitioning_strategy =
         determine_partitioning_strategy(&input, &table_metadata, target_partitions)?;
 
-    if !needs_repartitioning(&input, &partitioning_strategy) {
-        return Ok(input);
-    }
-
     Ok(Arc::new(RepartitionExec::try_new(
         input,
         partitioning_strategy,
     )?))
-}
-
-/// Returns whether repartitioning is actually needed by comparing input and desired partitioning
-fn needs_repartitioning(input: &Arc<dyn ExecutionPlan>, desired: &Partitioning) -> bool {
-    let input_partitioning = input.properties().output_partitioning();
-    match (input_partitioning, desired) {
-        (Partitioning::RoundRobinBatch(a), Partitioning::RoundRobinBatch(b)) => a != b,
-        (Partitioning::Hash(a_exprs, a_n), Partitioning::Hash(b_exprs, b_n)) => {
-            a_n != b_n || !same_columns(a_exprs, b_exprs)
-        }
-        _ => true,
-    }
-}
-
-/// Helper function to check if two sets of column expressions are the same
-fn same_columns(a_exprs: &[Arc<dyn PhysicalExpr>], b_exprs: &[Arc<dyn PhysicalExpr>]) -> bool {
-    if a_exprs.len() != b_exprs.len() {
-        return false;
-    }
-    a_exprs.iter().zip(b_exprs.iter()).all(|(a, b)| {
-        if let (Some(a_col), Some(b_col)) = (
-            a.as_any().downcast_ref::<Column>(),
-            b.as_any().downcast_ref::<Column>(),
-        ) {
-            a_col.name() == b_col.name() && a_col.index() == b_col.index()
-        } else {
-            std::ptr::eq(a.as_ref(), b.as_ref())
-        }
-    })
 }
 
 /// Determine the optimal partitioning strategy based on table metadata.
@@ -171,14 +137,16 @@ fn determine_partitioning_strategy(
         .iter()
         .any(|pf| matches!(pf.transform, Transform::Identity | Transform::Bucket(_)));
 
-    let partition_col_result = input_schema.index_of(PARTITION_VALUES_COLUMN);
+    let partition_col_result = input_schema.index_of(PROJECTED_PARTITION_VALUE_COLUMN);
     let is_partitioned_table = !partition_spec.is_unpartitioned();
 
     match (is_partitioned_table, partition_col_result) {
         // Case 1: Partitioned table with _partition column present
         (true, Ok(partition_col_idx)) => {
-            let partition_expr = Arc::new(Column::new(PARTITION_VALUES_COLUMN, partition_col_idx))
-                as Arc<dyn PhysicalExpr>;
+            let partition_expr = Arc::new(Column::new(
+                PROJECTED_PARTITION_VALUE_COLUMN,
+                partition_col_idx,
+            )) as Arc<dyn PhysicalExpr>;
 
             if has_hash_friendly_transforms {
                 Ok(Partitioning::Hash(
@@ -194,7 +162,7 @@ fn determine_partitioning_strategy(
         (true, Err(_)) => Err(DataFusionError::Plan(format!(
             "Partitioned table input missing {} column. \
              Ensure projection happens before repartitioning.",
-            PARTITION_VALUES_COLUMN
+            PROJECTED_PARTITION_VALUE_COLUMN
         ))),
 
         // Case 3: Unpartitioned table, always use RoundRobinBatch
@@ -507,7 +475,7 @@ mod tests {
             ArrowField::new("user_id", ArrowDataType::Int64, false),
             ArrowField::new("amount", ArrowDataType::Int64, false),
             ArrowField::new(
-                PARTITION_VALUES_COLUMN,
+                PROJECTED_PARTITION_VALUE_COLUMN,
                 ArrowDataType::Struct(Fields::empty()),
                 false,
             ),
@@ -540,7 +508,7 @@ mod tests {
                     .collect();
 
                 assert!(
-                    column_names.contains(&PARTITION_VALUES_COLUMN.to_string()),
+                    column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
                     "Should use _partition column, got: {:?}",
                     column_names
                 );
@@ -663,7 +631,7 @@ mod tests {
             ArrowField::new("date", ArrowDataType::Date32, false),
             ArrowField::new("amount", ArrowDataType::Int64, false),
             ArrowField::new(
-                PARTITION_VALUES_COLUMN,
+                PROJECTED_PARTITION_VALUE_COLUMN,
                 ArrowDataType::Struct(Fields::empty()),
                 false,
             ),
@@ -739,7 +707,7 @@ mod tests {
             ArrowField::new("user_id", ArrowDataType::Int64, false),
             ArrowField::new("amount", ArrowDataType::Int64, false),
             ArrowField::new(
-                PARTITION_VALUES_COLUMN,
+                PROJECTED_PARTITION_VALUE_COLUMN,
                 ArrowDataType::Struct(Fields::empty()),
                 false,
             ),
@@ -765,7 +733,7 @@ mod tests {
                     })
                     .collect();
                 assert!(
-                    column_names.contains(&PARTITION_VALUES_COLUMN.to_string()),
+                    column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
                     "Should use _partition column for mixed transforms with Identity, got: {:?}",
                     column_names
                 );
@@ -826,7 +794,7 @@ mod tests {
             ),
             ArrowField::new("amount", ArrowDataType::Int64, false),
             ArrowField::new(
-                PARTITION_VALUES_COLUMN,
+                PROJECTED_PARTITION_VALUE_COLUMN,
                 ArrowDataType::Struct(Fields::empty()),
                 false,
             ),
@@ -895,7 +863,7 @@ mod tests {
             ArrowField::new("user_id", ArrowDataType::Int64, false),
             ArrowField::new("amount", ArrowDataType::Int64, false),
             ArrowField::new(
-                PARTITION_VALUES_COLUMN,
+                PROJECTED_PARTITION_VALUE_COLUMN,
                 ArrowDataType::Struct(Fields::empty()),
                 false,
             ),
