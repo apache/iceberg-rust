@@ -1216,4 +1216,49 @@ mod tests {
             assert!(ty.compatible(&literal));
         }
     }
+
+    #[test]
+    fn struct_type_with_type_field() {
+        // Test that StructType properly deserializes JSON with "type":"struct" field
+        // This was previously broken because the deserializer wasn't consuming the type field value
+        let json = r#"
+        {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let struct_type: StructType = serde_json::from_str(json)
+            .expect("Should successfully deserialize StructType with type field");
+
+        assert_eq!(struct_type.fields().len(), 1);
+        assert_eq!(struct_type.fields()[0].name, "field1");
+    }
+
+    #[test]
+    fn struct_type_rejects_wrong_type() {
+        // Test that StructType validation rejects incorrect type field values
+        let json = r#"
+        {
+            "type": "list",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let result = serde_json::from_str::<StructType>(json);
+        assert!(
+            result.is_err(),
+            "Should reject StructType with wrong type field"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected type 'struct'")
+        );
+    }
 }
