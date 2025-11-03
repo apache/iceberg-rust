@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
-
-use std::sync::Arc;
 
 use crate::Result;
 use crate::expr::BoundPredicate;
