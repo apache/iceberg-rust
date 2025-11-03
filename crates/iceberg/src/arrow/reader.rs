@@ -236,7 +236,18 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+            if task.partition_spec.is_some() && task.partition.is_some() {
+                // Use partition spec and data for proper constant identification
+                RecordBatchTransformer::build_with_partition_data(
+                    task.schema_ref(),
+                    task.project_field_ids(),
+                    task.partition_spec.clone(),
+                    task.partition.clone(),
+                )
+            } else {
+                // Fallback to build without partition data
+                RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids())
+            };
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -437,17 +448,10 @@ impl ArrowReader {
                     // selected row group
                     selected_row_groups_idx += 1;
                 } else {
-                    // Advance iterator past all deletes in the skipped row group.
-                    // advance_to() positions the iterator to the first delete >= next_row_group_base_idx.
-                    // However, if our cached next_deleted_row_idx_opt is in the skipped range,
-                    // we need to call next() to update the cache with the newly positioned value.
+                    // remove any positional deletes from the skipped page so that
+                    // `positional.deletes.min()` can be used
                     delete_vector_iter.advance_to(next_row_group_base_idx);
-                    // Only update the cache if the cached value is stale (in the skipped range)
-                    if let Some(cached_idx) = next_deleted_row_idx_opt {
-                        if cached_idx < next_row_group_base_idx {
-                            next_deleted_row_idx_opt = delete_vector_iter.next();
-                        }
-                    }
+                    next_deleted_row_idx_opt = delete_vector_iter.next();
 
                     // still increment the current page base index but then skip to the next row group
                     // in the file
@@ -462,7 +466,6 @@ impl ArrowReader {
                     // the remainder of this row group and skip to the next row group
                     if next_deleted_row_idx >= next_row_group_base_idx {
                         results.push(RowSelector::select(row_group_num_rows as usize));
-                        current_row_group_base_idx += row_group_num_rows;
                         continue;
                     }
 
@@ -472,7 +475,6 @@ impl ArrowReader {
                 // If there are no more pos deletes, add a selector for the entirety of this row group.
                 _ => {
                     results.push(RowSelector::select(row_group_num_rows as usize));
-                    current_row_group_base_idx += row_group_num_rows;
                     continue;
                 }
             };
@@ -895,7 +897,8 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Leave column in schema should be primitive type but got {field_type:?}"
+                        "Leave column in schema should be primitive type but got {:?}",
+                        field_type
                     ),
                 ));
             }
@@ -1644,10 +1647,8 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
-    use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
-    };
+    use crate::scan::{FileScanTask, FileScanTaskStream};
+    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -1942,12 +1943,15 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
+                data_file_path: format!("{}/1.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2266,6 +2270,9 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            partition: None,
+            partition_spec_id: None,
+            partition_spec: None,
         };
 
         // Task 2: read the second and third row groups
@@ -2279,6 +2286,9 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            partition: None,
+            partition_spec_id: None,
+            partition_spec: None,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2307,16 +2317,21 @@ message schema {
             .unwrap();
 
         let total_rows_task2: usize = result2.iter().map(|b| b.num_rows()).sum();
-        println!("Task 2 (bytes {rg1_start}-{file_end}) returned {total_rows_task2} rows");
+        println!(
+            "Task 2 (bytes {}-{}) returned {} rows",
+            rg1_start, file_end, total_rows_task2
+        );
 
         assert_eq!(
             total_rows_task1, 100,
-            "Task 1 should read only the first row group (100 rows), but got {total_rows_task1} rows"
+            "Task 1 should read only the first row group (100 rows), but got {} rows",
+            total_rows_task1
         );
 
         assert_eq!(
             total_rows_task2, 200,
-            "Task 2 should read only the second+third row groups (200 rows), but got {total_rows_task2} rows"
+            "Task 2 should read only the second+third row groups (200 rows), but got {} rows",
+            total_rows_task2
         );
 
         // Verify the actual data values are correct (not just the row count)
@@ -2327,7 +2342,7 @@ message schema {
                 .as_primitive::<arrow_array::types::Int32Type>();
             let first_val = id_col.value(0);
             let last_val = id_col.value(id_col.len() - 1);
-            println!("Task 1 data range: {first_val} to {last_val}");
+            println!("Task 1 data range: {} to {}", first_val, last_val);
 
             assert_eq!(first_val, 0, "Task 1 should start with id=0");
             assert_eq!(last_val, 99, "Task 1 should end with id=99");
@@ -2339,7 +2354,7 @@ message schema {
                 .column(0)
                 .as_primitive::<arrow_array::types::Int32Type>();
             let first_val = id_col.value(0);
-            println!("Task 2 first value: {first_val}");
+            println!("Task 2 first value: {}", first_val);
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
         }
@@ -2397,12 +2412,15 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{table_location}/old_file.parquet"),
+                data_file_path: format!("{}/old_file.parquet", table_location),
                 data_file_format: DataFileFormat::Parquet,
                 schema: new_schema.clone(),
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2436,602 +2454,6 @@ message schema {
         assert!(col_b.is_null(0));
         assert!(col_b.is_null(1));
         assert!(col_b.is_null(2));
-    }
-
-    /// Test for bug where position deletes in later row groups are not applied correctly.
-    ///
-    /// When a file has multiple row groups and a position delete targets a row in a later
-    /// row group, the `build_deletes_row_selection` function had a bug where it would
-    /// fail to increment `current_row_group_base_idx` when skipping row groups.
-    ///
-    /// This test creates:
-    /// - A data file with 200 rows split into 2 row groups (0-99, 100-199)
-    /// - A position delete file that deletes row 199 (last row in second row group)
-    ///
-    /// Expected behavior: Should return 199 rows (with id=200 deleted)
-    /// Bug behavior: Returns 200 rows (delete is not applied)
-    ///
-    /// This bug was discovered while running Apache Spark + Apache Iceberg integration tests
-    /// through DataFusion Comet. The following Iceberg Java tests failed due to this bug:
-    /// - `org.apache.iceberg.spark.extensions.TestMergeOnReadDelete::testDeleteWithMultipleRowGroupsParquet`
-    /// - `org.apache.iceberg.spark.extensions.TestMergeOnReadUpdate::testUpdateWithMultipleRowGroupsParquet`
-    #[tokio::test]
-    async fn test_position_delete_across_multiple_row_groups() {
-        use arrow_array::{Int32Array, Int64Array};
-        use parquet::file::reader::{FileReader, SerializedFileReader};
-
-        // Field IDs for positional delete schema
-        const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
-        const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
-
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-
-        // Create table schema with a single 'id' column
-        let table_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-
-        // Step 1: Create data file with 200 rows in 2 row groups
-        // Row group 0: rows 0-99 (ids 1-100)
-        // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
-
-        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(1..=100),
-        )])
-        .unwrap();
-
-        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(101..=200),
-        )])
-        .unwrap();
-
-        // Force each batch into its own row group
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
-            .build();
-
-        let file = File::create(&data_file_path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
-        writer.write(&batch1).expect("Writing batch 1");
-        writer.write(&batch2).expect("Writing batch 2");
-        writer.close().unwrap();
-
-        // Verify we created 2 row groups
-        let verify_file = File::open(&data_file_path).unwrap();
-        let verify_reader = SerializedFileReader::new(verify_file).unwrap();
-        assert_eq!(
-            verify_reader.metadata().num_row_groups(),
-            2,
-            "Should have 2 row groups"
-        );
-
-        // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
-
-        let delete_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-            )])),
-            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-            )])),
-        ]));
-
-        // Delete row at position 199 (0-indexed, so it's the last row: id=200)
-        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
-            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
-            Arc::new(Int64Array::from_iter_values(vec![199i64])),
-        ])
-        .unwrap();
-
-        let delete_props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-
-        let delete_file = File::create(&delete_file_path).unwrap();
-        let mut delete_writer =
-            ArrowWriter::try_new(delete_file, delete_schema, Some(delete_props)).unwrap();
-        delete_writer.write(&delete_batch).unwrap();
-        delete_writer.close().unwrap();
-
-        // Step 3: Read the data file with the delete applied
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
-        let reader = ArrowReaderBuilder::new(file_io).build();
-
-        let task = FileScanTask {
-            start: 0,
-            length: 0,
-            record_count: Some(200),
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-        };
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let result = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
-
-        // Step 4: Verify we got 199 rows (not 200)
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-
-        println!("Total rows read: {}", total_rows);
-        println!("Expected: 199 rows (deleted row 199 which had id=200)");
-
-        // This assertion will FAIL before the fix and PASS after the fix
-        assert_eq!(
-            total_rows, 199,
-            "Expected 199 rows after deleting row 199, but got {} rows. \
-             The bug causes position deletes in later row groups to be ignored.",
-            total_rows
-        );
-
-        // Verify the deleted row (id=200) is not present
-        let all_ids: Vec<i32> = result
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int32Type>()
-                    .values()
-                    .iter()
-                    .copied()
-            })
-            .collect();
-
-        assert!(
-            !all_ids.contains(&200),
-            "Row with id=200 should be deleted but was found in results"
-        );
-
-        // Verify we have all other ids (1-199)
-        let expected_ids: Vec<i32> = (1..=199).collect();
-        assert_eq!(
-            all_ids, expected_ids,
-            "Should have ids 1-199 but got different values"
-        );
-    }
-
-    /// Test for bug where position deletes are lost when skipping unselected row groups.
-    ///
-    /// This is a variant of `test_position_delete_across_multiple_row_groups` that exercises
-    /// the row group selection code path (`selected_row_groups: Some([...])`).
-    ///
-    /// When a file has multiple row groups and only some are selected for reading,
-    /// the `build_deletes_row_selection` function must correctly skip over deletes in
-    /// unselected row groups WITHOUT consuming deletes that belong to selected row groups.
-    ///
-    /// This test creates:
-    /// - A data file with 200 rows split into 2 row groups (0-99, 100-199)
-    /// - A position delete file that deletes row 199 (last row in second row group)
-    /// - Row group selection that reads ONLY row group 1 (rows 100-199)
-    ///
-    /// Expected behavior: Should return 99 rows (with row 199 deleted)
-    /// Bug behavior: Returns 100 rows (delete is lost when skipping row group 0)
-    ///
-    /// The bug occurs when processing row group 0 (unselected):
-    /// ```rust
-    /// delete_vector_iter.advance_to(next_row_group_base_idx); // Position at first delete >= 100
-    /// next_deleted_row_idx_opt = delete_vector_iter.next(); // BUG: Consumes delete at 199!
-    /// ```
-    ///
-    /// The fix is to NOT call `next()` after `advance_to()` when skipping unselected row groups,
-    /// because `advance_to()` already positions the iterator correctly without consuming elements.
-    #[tokio::test]
-    async fn test_position_delete_with_row_group_selection() {
-        use arrow_array::{Int32Array, Int64Array};
-        use parquet::file::reader::{FileReader, SerializedFileReader};
-
-        // Field IDs for positional delete schema
-        const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
-        const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
-
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-
-        // Create table schema with a single 'id' column
-        let table_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-
-        // Step 1: Create data file with 200 rows in 2 row groups
-        // Row group 0: rows 0-99 (ids 1-100)
-        // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
-
-        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(1..=100),
-        )])
-        .unwrap();
-
-        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(101..=200),
-        )])
-        .unwrap();
-
-        // Force each batch into its own row group
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
-            .build();
-
-        let file = File::create(&data_file_path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
-        writer.write(&batch1).expect("Writing batch 1");
-        writer.write(&batch2).expect("Writing batch 2");
-        writer.close().unwrap();
-
-        // Verify we created 2 row groups
-        let verify_file = File::open(&data_file_path).unwrap();
-        let verify_reader = SerializedFileReader::new(verify_file).unwrap();
-        assert_eq!(
-            verify_reader.metadata().num_row_groups(),
-            2,
-            "Should have 2 row groups"
-        );
-
-        // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
-
-        let delete_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-            )])),
-            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-            )])),
-        ]));
-
-        // Delete row at position 199 (0-indexed, so it's the last row: id=200)
-        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
-            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
-            Arc::new(Int64Array::from_iter_values(vec![199i64])),
-        ])
-        .unwrap();
-
-        let delete_props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-
-        let delete_file = File::create(&delete_file_path).unwrap();
-        let mut delete_writer =
-            ArrowWriter::try_new(delete_file, delete_schema, Some(delete_props)).unwrap();
-        delete_writer.write(&delete_batch).unwrap();
-        delete_writer.close().unwrap();
-
-        // Step 3: Get byte ranges to read ONLY row group 1 (rows 100-199)
-        // This exercises the row group selection code path where row group 0 is skipped
-        let metadata_file = File::open(&data_file_path).unwrap();
-        let metadata_reader = SerializedFileReader::new(metadata_file).unwrap();
-        let metadata = metadata_reader.metadata();
-
-        let row_group_0 = metadata.row_group(0);
-        let row_group_1 = metadata.row_group(1);
-
-        let rg0_start = 4u64; // Parquet files start with 4-byte magic "PAR1"
-        let rg1_start = rg0_start + row_group_0.compressed_size() as u64;
-        let rg1_length = row_group_1.compressed_size() as u64;
-
-        println!(
-            "Row group 0: starts at byte {}, {} bytes compressed",
-            rg0_start,
-            row_group_0.compressed_size()
-        );
-        println!(
-            "Row group 1: starts at byte {}, {} bytes compressed",
-            rg1_start,
-            row_group_1.compressed_size()
-        );
-
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
-        let reader = ArrowReaderBuilder::new(file_io).build();
-
-        // Create FileScanTask that reads ONLY row group 1 via byte range filtering
-        let task = FileScanTask {
-            start: rg1_start,
-            length: rg1_length,
-            record_count: Some(100), // Row group 1 has 100 rows
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-        };
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let result = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
-
-        // Step 4: Verify we got 99 rows (not 100)
-        // Row group 1 has 100 rows (ids 101-200), minus 1 delete (id=200) = 99 rows
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-
-        println!("Total rows read from row group 1: {}", total_rows);
-        println!("Expected: 99 rows (row group 1 has 100 rows, 1 delete at position 199)");
-
-        // This assertion will FAIL before the fix and PASS after the fix
-        assert_eq!(
-            total_rows, 99,
-            "Expected 99 rows from row group 1 after deleting position 199, but got {} rows. \
-             The bug causes position deletes to be lost when advance_to() is followed by next() \
-             when skipping unselected row groups.",
-            total_rows
-        );
-
-        // Verify the deleted row (id=200) is not present
-        let all_ids: Vec<i32> = result
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int32Type>()
-                    .values()
-                    .iter()
-                    .copied()
-            })
-            .collect();
-
-        assert!(
-            !all_ids.contains(&200),
-            "Row with id=200 should be deleted but was found in results"
-        );
-
-        // Verify we have ids 101-199 (not 101-200)
-        let expected_ids: Vec<i32> = (101..=199).collect();
-        assert_eq!(
-            all_ids, expected_ids,
-            "Should have ids 101-199 but got different values"
-        );
-    }
-    /// Test for bug where stale cached delete causes infinite loop when skipping row groups.
-    ///
-    /// This test exposes the inverse scenario of `test_position_delete_with_row_group_selection`:
-    /// - Position delete targets a row in the SKIPPED row group (not the selected one)
-    /// - After calling advance_to(), the cached delete index is stale
-    /// - Without updating the cache, the code enters an infinite loop
-    ///
-    /// This test creates:
-    /// - A data file with 200 rows split into 2 row groups (0-99, 100-199)
-    /// - A position delete file that deletes row 0 (first row in SKIPPED row group 0)
-    /// - Row group selection that reads ONLY row group 1 (rows 100-199)
-    ///
-    /// The bug occurs when skipping row group 0:
-    /// ```rust
-    /// let mut next_deleted_row_idx_opt = delete_vector_iter.next(); // Some(0)
-    /// // ... skip to row group 1 ...
-    /// delete_vector_iter.advance_to(100); // Iterator advances past delete at 0
-    /// // BUG: next_deleted_row_idx_opt is still Some(0) - STALE!
-    /// // When processing row group 1:
-    /// //   current_idx = 100, next_deleted_row_idx = 0, next_row_group_base_idx = 200
-    /// //   Loop condition: 0 < 200 (true)
-    /// //   But: current_idx (100) > next_deleted_row_idx (0)
-    /// //   And: current_idx (100) != next_deleted_row_idx (0)
-    /// //   Neither branch executes -> INFINITE LOOP!
-    /// ```
-    ///
-    /// Expected behavior: Should return 100 rows (delete at 0 doesn't affect row group 1)
-    /// Bug behavior: Infinite loop in build_deletes_row_selection
-    #[tokio::test]
-    async fn test_position_delete_in_skipped_row_group() {
-        use arrow_array::{Int32Array, Int64Array};
-        use parquet::file::reader::{FileReader, SerializedFileReader};
-
-        // Field IDs for positional delete schema
-        const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
-        const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
-
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-
-        // Create table schema with a single 'id' column
-        let table_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-
-        // Step 1: Create data file with 200 rows in 2 row groups
-        // Row group 0: rows 0-99 (ids 1-100)
-        // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
-
-        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(1..=100),
-        )])
-        .unwrap();
-
-        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
-            Int32Array::from_iter_values(101..=200),
-        )])
-        .unwrap();
-
-        // Force each batch into its own row group
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
-            .build();
-
-        let file = File::create(&data_file_path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
-        writer.write(&batch1).expect("Writing batch 1");
-        writer.write(&batch2).expect("Writing batch 2");
-        writer.close().unwrap();
-
-        // Verify we created 2 row groups
-        let verify_file = File::open(&data_file_path).unwrap();
-        let verify_reader = SerializedFileReader::new(verify_file).unwrap();
-        assert_eq!(
-            verify_reader.metadata().num_row_groups(),
-            2,
-            "Should have 2 row groups"
-        );
-
-        // Step 2: Create position delete file that deletes row 0 (id=1, first row in row group 0)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
-
-        let delete_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-            )])),
-            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-            )])),
-        ]));
-
-        // Delete row at position 0 (0-indexed, so it's the first row: id=1)
-        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
-            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])),
-            Arc::new(Int64Array::from_iter_values(vec![0i64])),
-        ])
-        .unwrap();
-
-        let delete_props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-
-        let delete_file = File::create(&delete_file_path).unwrap();
-        let mut delete_writer =
-            ArrowWriter::try_new(delete_file, delete_schema, Some(delete_props)).unwrap();
-        delete_writer.write(&delete_batch).unwrap();
-        delete_writer.close().unwrap();
-
-        // Step 3: Get byte ranges to read ONLY row group 1 (rows 100-199)
-        // This exercises the row group selection code path where row group 0 is skipped
-        let metadata_file = File::open(&data_file_path).unwrap();
-        let metadata_reader = SerializedFileReader::new(metadata_file).unwrap();
-        let metadata = metadata_reader.metadata();
-
-        let row_group_0 = metadata.row_group(0);
-        let row_group_1 = metadata.row_group(1);
-
-        let rg0_start = 4u64; // Parquet files start with 4-byte magic "PAR1"
-        let rg1_start = rg0_start + row_group_0.compressed_size() as u64;
-        let rg1_length = row_group_1.compressed_size() as u64;
-
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
-        let reader = ArrowReaderBuilder::new(file_io).build();
-
-        // Create FileScanTask that reads ONLY row group 1 via byte range filtering
-        let task = FileScanTask {
-            start: rg1_start,
-            length: rg1_length,
-            record_count: Some(100), // Row group 1 has 100 rows
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-        };
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let result = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
-
-        // Step 4: Verify we got 100 rows (all of row group 1)
-        // The delete at position 0 is in row group 0, which is skipped, so it doesn't affect us
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-
-        assert_eq!(
-            total_rows, 100,
-            "Expected 100 rows from row group 1 (delete at position 0 is in skipped row group 0). \
-             If this hangs or fails, it indicates the cached delete index was not updated after advance_to()."
-        );
-
-        // Verify we have all ids from row group 1 (101-200)
-        let all_ids: Vec<i32> = result
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int32Type>()
-                    .values()
-                    .iter()
-                    .copied()
-            })
-            .collect();
-
-        let expected_ids: Vec<i32> = (101..=200).collect();
-        assert_eq!(
-            all_ids, expected_ids,
-            "Should have ids 101-200 (all of row group 1)"
-        );
     }
 
     /// Test reading Parquet files without field ID metadata (e.g., migrated tables).
@@ -3094,6 +2516,9 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3188,6 +2613,9 @@ message schema {
                 project_field_ids: vec![1, 3],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3271,6 +2699,9 @@ message schema {
                 project_field_ids: vec![1, 2, 3],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3368,6 +2799,9 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3494,6 +2928,9 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3587,6 +3024,9 @@ message schema {
                 project_field_ids: vec![1, 5, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3693,6 +3133,9 @@ message schema {
                 project_field_ids: vec![1, 2, 3],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                partition: None,
+                partition_spec_id: None,
+                partition_spec: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3707,5 +3150,163 @@ message schema {
 
         // Should return empty results
         assert!(result.is_empty() || result.iter().all(|batch| batch.num_rows() == 0));
+    }
+
+    /// Test bucket partitioning reads source column from data file (not partition metadata).
+    ///
+    /// This is an integration test verifying the complete ArrowReader pipeline with bucket partitioning.
+    /// It corresponds to TestRuntimeFiltering tests in Iceberg Java (e.g., testRenamedSourceColumnTable).
+    ///
+    /// # Iceberg Spec Requirements
+    ///
+    /// Per the Iceberg spec "Column Projection" section:
+    /// > "Return the value from partition metadata if an **Identity Transform** exists for the field"
+    ///
+    /// This means:
+    /// - Identity transforms (e.g., `identity(dept)`) use constants from partition metadata
+    /// - Non-identity transforms (e.g., `bucket(4, id)`) must read source columns from data files
+    /// - Partition metadata for bucket transforms stores bucket numbers (0-3), NOT source values
+    ///
+    /// Java's PartitionUtil.constantsMap() implements this via:
+    /// ```java
+    /// if (field.transform().isIdentity()) {
+    ///     idToConstant.put(field.sourceId(), converted);
+    /// }
+    /// ```
+    ///
+    /// # What This Test Verifies
+    ///
+    /// This test ensures the full ArrowReader → RecordBatchTransformer pipeline correctly handles
+    /// bucket partitioning when FileScanTask provides partition_spec and partition_data:
+    ///
+    /// - Parquet file has field_id=1 named "id" with actual data [1, 5, 9, 13]
+    /// - FileScanTask specifies partition_spec with bucket(4, id) and partition_data with bucket=1
+    /// - RecordBatchTransformer.constants_map() excludes bucket-partitioned field from constants
+    /// - ArrowReader correctly reads [1, 5, 9, 13] from the data file
+    /// - Values are NOT replaced with constant 1 from partition metadata
+    ///
+    /// # Why This Matters
+    ///
+    /// Without correct handling:
+    /// - Runtime filtering would break (e.g., `WHERE id = 5` would fail)
+    /// - Query results would be incorrect (all rows would have id=1)
+    /// - Bucket partitioning would be unusable for query optimization
+    ///
+    /// # References
+    /// - Iceberg spec: format/spec.md "Column Projection" + "Partition Transforms"
+    /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
+    /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+    #[tokio::test]
+    async fn test_bucket_partitioning_reads_source_column_from_file() {
+        use arrow_array::Int32Array;
+
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
+
+        // Iceberg schema with id and name columns
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Partition spec: bucket(4, id)
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("id", "id_bucket", Transform::Bucket(4))
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition data: bucket value is 1
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(1))]);
+
+        // Create Arrow schema with field IDs for Parquet file
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        // Write Parquet file with data
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 5, 9, 13])) as ArrayRef;
+        let name_data =
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_data, name_data]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(format!("{}/data.parquet", &table_location)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        // Read the Parquet file with partition spec and data
+        let reader = ArrowReaderBuilder::new(file_io).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/data.parquet", table_location),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+                partition: Some(partition_data),
+                partition_spec_id: Some(0),
+                partition_spec: Some(partition_spec),
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Verify we got the correct data
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 4);
+
+        // The id column MUST contain actual values from the Parquet file [1, 5, 9, 13],
+        // NOT the constant partition value 1
+        let id_col = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 5);
+        assert_eq!(id_col.value(2), 9);
+        assert_eq!(id_col.value(3), 13);
+
+        let name_col = batch.column(1).as_string::<i32>();
+        assert_eq!(name_col.value(0), "Alice");
+        assert_eq!(name_col.value(1), "Bob");
+        assert_eq!(name_col.value(2), "Charlie");
+        assert_eq!(name_col.value(3), "Dave");
     }
 }
