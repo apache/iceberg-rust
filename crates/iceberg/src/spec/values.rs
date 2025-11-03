@@ -2682,12 +2682,33 @@ mod _serde {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
                     _ => Err(invalid_err("string")),
                 },
-                // # TODO:https://github.com/apache/iceberg-rust/issues/86
-                // rust avro don't support deserialize any bytes representation now.
-                RawLiteralEnum::Bytes(_) => Err(invalid_err_with_reason(
-                    "bytes",
-                    "todo: rust avro doesn't support deserialize any bytes representation now",
-                )),
+                RawLiteralEnum::Bytes(v) => match ty {
+                    Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
+                    Type::Primitive(PrimitiveType::Fixed(_)) => {
+                        Ok(Some(Literal::fixed(v.to_vec())))
+                    }
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        if v.len() == 16 {
+                            let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
+                                invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
+                            })?;
+                            Ok(Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                                u128::from_be_bytes(bytes),
+                            ))))
+                        } else {
+                            Err(invalid_err_with_reason(
+                                "bytes",
+                                "UUID must be exactly 16 bytes",
+                            ))
+                        }
+                    }
+                    Type::Primitive(PrimitiveType::Decimal { .. }) => {
+                        Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(
+                            i128::from_be_bytes(v.as_slice().try_into().unwrap()),
+                        ))))
+                    }
+                    _ => Err(invalid_err("bytes")),
+                },
                 RawLiteralEnum::List(v) => match ty {
                     Type::List(ty) => Ok(Some(Literal::List(
                         v.list
