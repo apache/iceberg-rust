@@ -423,7 +423,15 @@ impl<'de> Deserialize<'de> for StructType {
                 let mut fields = None;
                 while let Some(key) = map.next_key()? {
                     match key {
-                        Field::Type => (),
+                        Field::Type => {
+                            let type_val: String = map.next_value()?;
+                            if type_val != "struct" {
+                                return Err(serde::de::Error::custom(format!(
+                                    "expected type 'struct', got '{}'",
+                                    type_val
+                                )));
+                            }
+                        }
                         Field::Fields => {
                             if fields.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fields"));
