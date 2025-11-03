@@ -59,16 +59,21 @@ pub struct FileScanTask {
     /// The list of delete files that may need to be applied to this data file
     pub deletes: Vec<FileScanTaskDeleteFile>,
 
-    /// Partition data tuple from the manifest entry.
-    /// Schema based on the partition spec, using partition field ids for struct field ids.
+    /// Partition data from the manifest entry, used to identify which columns can use
+    /// constant values from partition metadata vs. reading from the data file.
+    /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
     #[serde(skip)]
     pub partition: Option<Struct>,
 
-    /// The partition spec ID for this file.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The partition spec ID for this file, required to look up the correct
+    /// partition spec and determine which fields are identity-transformed.
+    /// Not serialized as partition data is runtime-only and populated from manifest entries.
+    #[serde(skip)]
     pub partition_spec_id: Option<i32>,
 
-    /// The partition spec for this file (for computing constants from partition data).
+    /// The partition spec for this file, used to distinguish identity transforms
+    /// (which use partition metadata constants) from non-identity transforms like
+    /// bucket/truncate (which must read source columns from the data file).
     #[serde(skip)]
     pub partition_spec: Option<Arc<PartitionSpec>>,
 }
