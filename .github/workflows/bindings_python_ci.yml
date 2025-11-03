@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"
           enable-cache: true
@@ -90,7 +90,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --out dist --sdist
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"
           enable-cache: true
