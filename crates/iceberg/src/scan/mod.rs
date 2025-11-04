@@ -2057,63 +2057,93 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_select_called_twice_uses_last_selection() {
+    async fn test_select_with_repeated_column_names() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        // Call select twice - first with x and y, then with only z and _file
-        // The second call should override the first
+        // Select with repeated column names - both regular columns and virtual columns
+        // Repeated columns should appear multiple times in the result (duplicates are allowed)
         let table_scan = fixture
             .table
             .scan()
-            .select(["x", "y", RESERVED_COL_NAME_FILE]) // This should be ignored
-            .select(["z", RESERVED_COL_NAME_FILE]) // This should be used
+            .select([
+                "x",
+                RESERVED_COL_NAME_FILE,
+                "x", // x repeated
+                "y",
+                RESERVED_COL_NAME_FILE, // _file repeated
+                "y",                    // y repeated
+            ])
+            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        // Verify we have exactly 2 columns: z and _file (NOT x or y)
+        // Verify we have exactly 6 columns (duplicates are allowed and preserved)
         assert_eq!(
             batches[0].num_columns(),
-            2,
-            "Should have exactly 2 columns from the last select"
+            6,
+            "Should have exactly 6 columns with duplicates"
         );
 
         let schema = batches[0].schema();
 
-        // Verify the columns are z and _file in that order
-        assert_eq!(schema.field(0).name(), "z", "First column should be z");
+        // Verify columns appear in the exact order requested: x, _file, x, y, _file, y
+        assert_eq!(schema.field(0).name(), "x", "Column 0 should be x");
         assert_eq!(
             schema.field(1).name(),
             RESERVED_COL_NAME_FILE,
-            "Second column should be _file"
+            "Column 1 should be _file"
+        );
+        assert_eq!(
+            schema.field(2).name(),
+            "x",
+            "Column 2 should be x (duplicate)"
+        );
+        assert_eq!(schema.field(3).name(), "y", "Column 3 should be y");
+        assert_eq!(
+            schema.field(4).name(),
+            RESERVED_COL_NAME_FILE,
+            "Column 4 should be _file (duplicate)"
+        );
+        assert_eq!(
+            schema.field(5).name(),
+            "y",
+            "Column 5 should be y (duplicate)"
         );
 
-        // Verify x and y are NOT present
+        // Verify all columns have correct data types
         assert!(
-            batches[0].column_by_name("x").is_none(),
-            "Column x should not be present (it was only in the first select)"
+            matches!(schema.field(0).data_type(), arrow_schema::DataType::Int64),
+            "Column x should be Int64"
         );
         assert!(
-            batches[0].column_by_name("y").is_none(),
-            "Column y should not be present (it was only in the first select)"
+            matches!(schema.field(2).data_type(), arrow_schema::DataType::Int64),
+            "Column x (duplicate) should be Int64"
         );
-
-        // Verify z column has data
-        let z_col = batches[0].column_by_name("z").unwrap();
-        let z_arr = z_col.as_primitive::<arrow_array::types::Int64Type>();
-        assert!(z_arr.len() > 0, "Column z should have data");
-
-        // Verify _file column exists and is properly formatted
-        let file_col = batches[0].column_by_name(RESERVED_COL_NAME_FILE).unwrap();
+        assert!(
+            matches!(schema.field(3).data_type(), arrow_schema::DataType::Int64),
+            "Column y should be Int64"
+        );
+        assert!(
+            matches!(schema.field(5).data_type(), arrow_schema::DataType::Int64),
+            "Column y (duplicate) should be Int64"
+        );
         assert!(
             matches!(
-                file_col.data_type(),
+                schema.field(1).data_type(),
                 arrow_schema::DataType::RunEndEncoded(_, _)
             ),
             "_file column should use RunEndEncoded type"
+        );
+        assert!(
+            matches!(
+                schema.field(4).data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_file column (duplicate) should use RunEndEncoded type"
         );
     }
 }
