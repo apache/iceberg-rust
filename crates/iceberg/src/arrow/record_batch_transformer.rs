@@ -537,9 +537,8 @@ impl RecordBatchTransformer {
                     // - When name mapping is present, field ID matches alone aren't sufficient
                     // - We verify the field NAME also matches to ensure it's the correct field
                     // - If names don't match, we treat the field as "not present" and use name mapping
-                    let field_by_id = field_id_to_source_schema_map
-                        .get(field_id)
-                        .and_then(|(source_field, source_index)| {
+                    let field_by_id = field_id_to_source_schema_map.get(field_id).and_then(
+                        |(source_field, source_index)| {
                             let name_matches = source_field.name() == &iceberg_field.name;
 
                             if name_mapping.is_some() && !name_matches {
@@ -560,7 +559,8 @@ impl RecordBatchTransformer {
                                     source_index: *source_index,
                                 })
                             }
-                        });
+                        },
+                    );
 
                     if let Some(source) = field_by_id {
                         source
