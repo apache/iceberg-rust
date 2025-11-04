@@ -99,13 +99,6 @@ pub struct FileScanTask {
     /// Name mapping from table metadata (property: schema.name-mapping.default),
     /// used to resolve field IDs from column names when Parquet files lack field IDs
     /// or have field ID conflicts.
-    ///
-    /// Per Iceberg spec rule #2: "Use schema.name-mapping.default metadata to map
-    /// field id to columns without field id".
-    ///
-    /// This is essential for scenarios like:
-    /// - Hive table migrations via add_files where Parquet has no field IDs
-    /// - Field ID conflicts where partition columns conflict with data column IDs
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_not_implemented")]

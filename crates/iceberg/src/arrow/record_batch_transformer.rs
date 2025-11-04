@@ -37,56 +37,18 @@ use crate::{Error, ErrorKind, Result};
 
 /// Build a map of field ID to constant value for identity-partitioned fields.
 ///
-/// This implements the Iceberg spec's "Column Projection" rule #1
-/// (https://iceberg.apache.org/spec/#column-projection):
-/// > "Return the value from partition metadata if an Identity Transform exists for the field
-/// >  and the partition value is present in the `partition` struct on `data_file` object
-/// >  in the manifest."
+/// Implements Iceberg spec "Column Projection" rule #1: use partition metadata constants
+/// only for identity-transformed fields. Non-identity transforms (bucket, truncate, year, etc.)
+/// store derived values in partition metadata, so source columns must be read from data files.
 ///
-/// This matches Java's `PartitionUtil.constantsMap()` which only adds fields where:
-/// ```java
-/// if (field.transform().isIdentity()) {
-///     idToConstant.put(field.sourceId(), converted);
-/// }
-/// ```
+/// Example: For `bucket(4, id)`, partition metadata has `id_bucket = 2` (bucket number),
+/// but the actual `id` values (100, 200, 300) are only in the data file.
 ///
-/// # Why only identity transforms?
-///
-/// Non-identity transforms (bucket, truncate, year, month, day, hour) produce DERIVED values
-/// that differ from the source column values. For example:
-/// - `bucket(4, id)` produces hash values 0-3, not the actual `id` values
-/// - `day(timestamp)` produces day-since-epoch integers, not the timestamp values
-///
-/// These source columns MUST be read from the data file because partition metadata only
-/// stores the transformed values (e.g., bucket number), not the original column values.
-///
-/// # Java Implementation Reference
-///
-/// This matches Java's `PartitionUtil.constantsMap()` (util/PartitionUtil.java):
-/// ```java
-/// public static Map<Integer, Object> constantsMap(PartitionData data, PartitionSpec spec) {
-///   Map<Integer, Object> idToConstant = Maps.newHashMap();
-///   for (int pos = 0; pos < spec.fields().size(); pos += 1) {
-///     PartitionField field = spec.fields().get(pos);
-///     if (field.transform().isIdentity()) {  // <-- ONLY identity transforms
-///       Object converted = convertConstant(field.sourceId(), data.get(pos, javaClass));
-///       idToConstant.put(field.sourceId(), converted);
-///     }
-///   }
-///   return idToConstant;
-/// }
-/// ```
-///
-/// # Example: Bucket Partitioning
-///
-/// For a table partitioned by `bucket(4, id)`:
-/// - Partition metadata stores: `id_bucket = 2` (the bucket number)
-/// - Data file contains: `id = 100, 200, 300` (the actual values)
-/// - Reading must use data from the file, not the constant `2` from partition metadata
+/// Matches Java's `PartitionUtil.constantsMap()` which filters `if (field.transform().isIdentity())`.
 ///
 /// # References
-/// - Iceberg spec: format/spec.md "Column Projection" section
-/// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java:constantsMap()
+/// - Spec: https://iceberg.apache.org/spec/#column-projection
+/// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java:constantsMap()
 fn constants_map(
     partition_spec: &PartitionSpec,
     partition_data: &Struct,
@@ -191,8 +153,6 @@ pub(crate) struct RecordBatchTransformer {
     partition_data: Option<Struct>,
 
     // Optional name mapping for resolving field IDs from column names
-    // Per Iceberg spec rule #2: "Use schema.name-mapping.default metadata
-    // to map field id to columns without field id"
     name_mapping: Option<Arc<NameMapping>>,
 
     // BatchTransform gets lazily constructed based on the schema of
@@ -218,70 +178,28 @@ impl RecordBatchTransformer {
 
     /// Build a RecordBatchTransformer with partition spec and data for proper constant identification.
     ///
-    /// # Overview
-    ///
-    /// This method implements the Iceberg spec's "Column Projection" rules
-    /// (https://iceberg.apache.org/spec/#column-projection) for resolving field IDs that are
-    /// "not present" in a data file:
-    ///
+    /// Implements the Iceberg spec's "Column Projection" rules for resolving field IDs "not present" in data files:
     /// 1. Return the value from partition metadata if an Identity Transform exists
     /// 2. Use schema.name-mapping.default metadata to map field id to columns without field id
     /// 3. Return the default value if it has a defined initial-default
     /// 4. Return null in all other cases
     ///
-    /// # Why this method was added
+    /// # Why this method exists
     ///
-    /// The gap in iceberg-rust was that `FileScanTask` had no way to pass partition information
-    /// to `RecordBatchTransformer`. This caused two problems:
+    /// 1. **Bucket partitioning**: Distinguish identity transforms (use partition metadata constants)
+    ///    from non-identity transforms like bucket (read from data file) to enable runtime filtering on
+    ///    bucket-partitioned columns.
     ///
-    /// 1. **Incorrect handling of bucket partitioning**: Without partition spec information,
-    ///    iceberg-rust couldn't distinguish between:
-    ///    - Identity transforms (use constants from partition metadata)
-    ///    - Non-identity transforms like bucket (read from data file)
+    /// 2. **Add_files field ID conflicts**: When importing Hive tables, partition columns can have field IDs
+    ///    conflicting with Parquet data columns (e.g., Parquet has field_id=1→"name", but Iceberg expects
+    ///    field_id=1→"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
     ///
-    ///    This caused bucket-partitioned source columns to be incorrectly treated as constants,
-    ///    breaking runtime filtering and returning incorrect query results.
-    ///
-    /// 2. **Add_files field ID conflicts**: When importing Hive tables via add_files,
-    ///    partition columns with `initial_default` values could have field IDs that conflicted
-    ///    with data column field IDs in the Parquet file.
-    ///
-    ///    Example:
-    ///    - Parquet file written with: field_id=1→"name", field_id=2→"dept"
-    ///    - Imported via add_files: field_id=1→"id" (partition), field_id=2→"name", field_id=3→"dept"
-    ///
-    ///    When looking for field_id=1 ("id"), we find field_id=1 in the Parquet file, but it's
-    ///    the WRONG field (it's "name"). Per the spec, the correct field (id=1, name="id") is
-    ///    "not present" in the file and should be resolved via name mapping (rule #2) or
-    ///    initial-default (rule #3).
-    ///
-    /// # The fix
-    ///
-    /// This method accepts `partition_spec`, `partition_data`, and `name_mapping`, which are used to:
-    /// - Build a `constants_map` that ONLY includes identity-transformed partition fields
-    ///   (matching Java's `PartitionUtil.constantsMap()` behavior)
-    /// - Detect field ID conflicts by verifying both field ID AND name match (when name mapping present)
-    /// - Apply name mapping when field IDs are missing or conflicting (spec rule #2)
-    ///
-    /// This matches Java's approach (ParquetSchemaUtil.applyNameMapping, ReadConf.java lines 83-85)
-    /// which rewrites Parquet schema field IDs based on names before projection. Our implementation
-    /// detects conflicts during projection but achieves the same result.
-    ///
-    /// # What was changed
-    ///
-    /// To enable this fix, the following fields were added to `FileScanTask`:
-    /// - `partition: Option<Struct>` - The partition data for this file
-    /// - `partition_spec: Option<Arc<PartitionSpec>>` - The actual partition spec
-    /// - `name_mapping: Option<Arc<NameMapping>>` - The name mapping from table metadata
-    ///
-    /// These fields should be populated by any system that reads Iceberg tables and provides
-    /// FileScanTasks to the ArrowReader.
+    /// This matches Java's ParquetSchemaUtil.applyNameMapping approach but detects conflicts during projection.
     ///
     /// # References
-    /// - Iceberg spec: https://iceberg.apache.org/spec/#column-projection
-    /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
-    /// - Java impl: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
-    /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
+    /// - Spec: https://iceberg.apache.org/spec/#column-projection
+    /// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+    /// - Java: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
     pub(crate) fn build_with_partition_data(
         snapshot_schema: Arc<IcebergSchema>,
         projected_iceberg_field_ids: &[i32],

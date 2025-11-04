@@ -235,8 +235,6 @@ impl ArrowReader {
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering.
-        // Always use build_with_partition_data to ensure name_mapping is passed through,
-        // even when partition spec/data aren't available.
         let mut record_batch_transformer = RecordBatchTransformer::build_with_partition_data(
             task.schema_ref(),
             task.project_field_ids(),
@@ -1949,7 +1947,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1],
@@ -2323,21 +2321,16 @@ message schema {
             .unwrap();
 
         let total_rows_task2: usize = result2.iter().map(|b| b.num_rows()).sum();
-        println!(
-            "Task 2 (bytes {}-{}) returned {} rows",
-            rg1_start, file_end, total_rows_task2
-        );
+        println!("Task 2 (bytes {rg1_start}-{file_end}) returned {total_rows_task2} rows");
 
         assert_eq!(
             total_rows_task1, 100,
-            "Task 1 should read only the first row group (100 rows), but got {} rows",
-            total_rows_task1
+            "Task 1 should read only the first row group (100 rows), but got {total_rows_task1} rows"
         );
 
         assert_eq!(
             total_rows_task2, 200,
-            "Task 2 should read only the second+third row groups (200 rows), but got {} rows",
-            total_rows_task2
+            "Task 2 should read only the second+third row groups (200 rows), but got {total_rows_task2} rows"
         );
 
         // Verify the actual data values are correct (not just the row count)
@@ -2348,7 +2341,7 @@ message schema {
                 .as_primitive::<arrow_array::types::Int32Type>();
             let first_val = id_col.value(0);
             let last_val = id_col.value(id_col.len() - 1);
-            println!("Task 1 data range: {} to {}", first_val, last_val);
+            println!("Task 1 data range: {first_val} to {last_val}");
 
             assert_eq!(first_val, 0, "Task 1 should start with id=0");
             assert_eq!(last_val, 99, "Task 1 should end with id=99");
@@ -2360,7 +2353,7 @@ message schema {
                 .column(0)
                 .as_primitive::<arrow_array::types::Int32Type>();
             let first_val = id_col.value(0);
-            println!("Task 2 first value: {}", first_val);
+            println!("Task 2 first value: {first_val}");
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
         }
@@ -2418,7 +2411,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/old_file.parquet", table_location),
+                data_file_path: format!("{table_location}/old_file.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: new_schema.clone(),
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
