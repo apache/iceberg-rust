@@ -2370,6 +2370,170 @@ message schema {
         assert!(col_b.is_null(2));
     }
 
+    #[test]
+    fn test_add_file_path_column_ree() {
+        use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+
+        // Create a simple test batch with 2 columns and 3 rows
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let id_array = Int32Array::from(vec![1, 2, 3]);
+        let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(id_array),
+            Arc::new(name_array),
+        ])
+        .unwrap();
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+
+        // Add file path column with REE
+        let file_path = "/path/to/data/file.parquet";
+        let result = ArrowReader::add_file_path_column_ree(
+            batch,
+            file_path,
+            RESERVED_COL_NAME_FILE,
+            RESERVED_FIELD_ID_FILE,
+        );
+        assert!(result.is_ok(), "Should successfully add file path column");
+
+        let new_batch = result.unwrap();
+
+        // Verify the new batch has 3 columns
+        assert_eq!(new_batch.num_columns(), 3);
+        assert_eq!(new_batch.num_rows(), 3);
+
+        // Verify schema has the _file column
+        let schema = new_batch.schema();
+        assert_eq!(schema.fields().len(), 3);
+
+        let file_field = schema.field(2);
+        assert_eq!(file_field.name(), RESERVED_COL_NAME_FILE);
+        assert!(!file_field.is_nullable());
+
+        // Verify the field has the correct metadata
+        let metadata = file_field.metadata();
+        assert_eq!(
+            metadata.get(PARQUET_FIELD_ID_META_KEY),
+            Some(&RESERVED_FIELD_ID_FILE.to_string())
+        );
+
+        // Verify the data type is RunEndEncoded
+        match file_field.data_type() {
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                assert_eq!(run_ends_field.name(), "run_ends");
+                assert_eq!(run_ends_field.data_type(), &DataType::Int32);
+                assert!(!run_ends_field.is_nullable());
+
+                assert_eq!(values_field.name(), "values");
+                assert_eq!(values_field.data_type(), &DataType::Utf8);
+            }
+            _ => panic!("Expected RunEndEncoded data type for _file column"),
+        }
+
+        // Verify the original columns are intact
+        let id_col = new_batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(id_col.values(), &[1, 2, 3]);
+
+        let name_col = new_batch.column(1).as_string::<i32>();
+        assert_eq!(name_col.value(0), "Alice");
+        assert_eq!(name_col.value(1), "Bob");
+        assert_eq!(name_col.value(2), "Charlie");
+
+        // Verify the file path column contains the correct value
+        // The _file column is a RunArray, so we need to decode it
+        let file_col = new_batch.column(2);
+        let run_array = file_col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .expect("Expected RunArray for _file column");
+
+        // Verify the run array structure (should be optimally encoded)
+        let run_ends = run_array.run_ends();
+        assert_eq!(run_ends.values().len(), 1, "Should have only 1 run end");
+        assert_eq!(
+            run_ends.values()[0],
+            new_batch.num_rows() as i32,
+            "Run end should equal number of rows"
+        );
+
+        // Check that the single value in the RunArray is the expected file path
+        let values = run_array.values();
+        let string_values = values.as_string::<i32>();
+        assert_eq!(string_values.len(), 1, "Should have only 1 value");
+        assert_eq!(string_values.value(0), file_path);
+
+        assert!(
+            string_values
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .all(|v| v == Some(file_path))
+        )
+    }
+
+    #[test]
+    fn test_add_file_path_column_ree_empty_batch() {
+        use arrow_array::RecordBatch;
+        use arrow_schema::{DataType, Field, Schema};
+        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+        // Create an empty batch
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let id_array = arrow_array::Int32Array::from(Vec::<i32>::new());
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(id_array)]).unwrap();
+
+        assert_eq!(batch.num_rows(), 0);
+
+        // Add file path column to empty batch with REE
+        let file_path = "/empty/file.parquet";
+        let result = ArrowReader::add_file_path_column_ree(
+            batch,
+            file_path,
+            RESERVED_COL_NAME_FILE,
+            RESERVED_FIELD_ID_FILE,
+        );
+
+        // Should succeed with empty RunArray for empty batches
+        assert!(result.is_ok());
+        let new_batch = result.unwrap();
+        assert_eq!(new_batch.num_rows(), 0);
+        assert_eq!(new_batch.num_columns(), 2);
+
+        // Verify the _file column exists with correct schema
+        let schema = new_batch.schema();
+        let file_field = schema.field(1);
+        assert_eq!(file_field.name(), RESERVED_COL_NAME_FILE);
+
+        // Should use RunEndEncoded even for empty batches
+        match file_field.data_type() {
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                assert_eq!(run_ends_field.data_type(), &DataType::Int32);
+                assert_eq!(values_field.data_type(), &DataType::Utf8);
+            }
+            _ => panic!("Expected RunEndEncoded data type for _file column"),
+        }
+
+        // Verify metadata with reserved field ID
+        assert_eq!(
+            file_field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            Some(&RESERVED_FIELD_ID_FILE.to_string())
+        );
+
+        // Verify the file path column is empty but properly structured
+        let file_path_column = new_batch.column(1);
+        assert_eq!(file_path_column.len(), 0);
+    }
+
     /// Test for bug where position deletes in later row groups are not applied correctly.
     ///
     /// When a file has multiple row groups and a position delete targets a row in a later
