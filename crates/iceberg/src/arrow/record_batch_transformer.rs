@@ -218,7 +218,6 @@ impl RecordBatchTransformer {
     ///
     /// To enable this fix, the following fields were added to `FileScanTask`:
     /// - `partition: Option<Struct>` - The partition data for this file
-    /// - `partition_spec_id: Option<i32>` - The spec ID for the partition
     /// - `partition_spec: Option<Arc<PartitionSpec>>` - The actual partition spec
     ///
     /// These fields should be populated by any system that reads Iceberg tables and provides

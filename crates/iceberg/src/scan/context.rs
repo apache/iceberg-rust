@@ -129,9 +129,8 @@ impl ManifestEntryContext {
 
             deletes,
 
-            // Include partition data and spec ID from manifest entry
+            // Include partition data and spec from manifest entry
             partition: Some(self.manifest_entry.data_file.partition.clone()),
-            partition_spec_id: Some(self.partition_spec_id),
             // TODO: Pass actual PartitionSpec through context chain for native flow
             partition_spec: None,
         })

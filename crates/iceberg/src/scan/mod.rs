@@ -1778,7 +1778,6 @@ pub mod tests {
             data_file_format: DataFileFormat::Parquet,
             deletes: vec![],
             partition: None,
-            partition_spec_id: None,
             partition_spec: None,
         };
         test_fn(task);
@@ -1795,7 +1794,6 @@ pub mod tests {
             data_file_format: DataFileFormat::Avro,
             deletes: vec![],
             partition: None,
-            partition_spec_id: None,
             partition_spec: None,
         };
         test_fn(task);
