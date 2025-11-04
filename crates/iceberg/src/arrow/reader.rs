@@ -3385,6 +3385,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3479,6 +3480,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 3],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3562,6 +3564,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3659,6 +3662,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3785,6 +3789,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3878,6 +3883,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 5, 2],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3984,6 +3990,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
