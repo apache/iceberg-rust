@@ -113,7 +113,6 @@ impl IncrementalPlanContext {
             (manifest_files, filter_fn)
         };
 
-        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut mfcs = vec![];
         for manifest_file in &manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {

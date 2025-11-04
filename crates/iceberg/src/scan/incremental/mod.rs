@@ -406,11 +406,14 @@ impl IncrementalTableScan {
                             } else if manifest_entry_context.manifest_entry.status()
                                 == ManifestStatus::Deleted
                             {
-                                // TODO (RAI-43291): Process deleted files
-                                Err(Error::new(
-                                    ErrorKind::FeatureUnsupported,
-                                    "Processing deleted data files is not supported yet in incremental scans",
-                                ))
+                                spawn(async move {
+                                    Self::process_deleted_data_manifest_entry(
+                                        tx,
+                                        manifest_entry_context,
+                                    )
+                                    .await
+                                })
+                                .await
                             } else {
                                 Ok(())
                             }
@@ -424,33 +427,63 @@ impl IncrementalTableScan {
             }
         });
 
-        // Collect all append tasks.
-        let mut tasks = file_scan_task_rx.try_collect::<Vec<_>>().await?;
+        // Collect all tasks from manifest processing.
+        let all_tasks = file_scan_task_rx.try_collect::<Vec<_>>().await?;
 
-        // Compute those file paths that have been appended.
-        let appended_files = tasks
-            .iter()
-            .filter_map(|task| match task {
+        // Separate tasks by type and compute file path sets in a single pass
+        let mut append_tasks = Vec::new();
+        let mut delete_tasks = Vec::new();
+        let mut appended_files = HashSet::new();
+        let mut deleted_files = HashSet::new();
+
+        for task in all_tasks {
+            match task {
                 IncrementalFileScanTask::Append(append_task) => {
-                    Some(append_task.data_file_path.clone())
+                    appended_files.insert(append_task.data_file_path().to_string());
+                    append_tasks.push(append_task);
                 }
-                _ => None,
-            })
-            .collect::<HashSet<String>>();
+                IncrementalFileScanTask::Delete(delete_task) => {
+                    deleted_files.insert(delete_task.data_file_path().to_string());
+                    delete_tasks.push(delete_task);
+                }
+                _ => {}
+            }
+        }
 
-        // Augment `tasks` with delete tasks.
-        // First collect paths to process (paths that weren't appended in this scan range)
-        let delete_paths: Vec<String> = delete_filter.with_read(|state| {
+        // Build final task list with net changes
+        // We filter out tasks for files that appear in both sets (cancelled out)
+        let mut final_tasks: Vec<IncrementalFileScanTask> = Vec::new();
+
+        // Add net append tasks (only files not in deleted_files)
+        for append_task in append_tasks {
+            if !deleted_files.contains(append_task.data_file_path()) {
+                final_tasks.push(IncrementalFileScanTask::Append(append_task));
+            }
+        }
+
+        // Add net delete tasks (only files not in appended_files)
+        for delete_task in delete_tasks {
+            if !appended_files.contains(delete_task.data_file_path()) {
+                final_tasks.push(IncrementalFileScanTask::Delete(delete_task));
+            }
+        }
+
+        // Add positional delete tasks (only for files that haven't been deleted)
+        let positional_delete_paths: Vec<String> = delete_filter.with_read(|state| {
             Ok(state
                 .delete_vectors()
                 .keys()
-                .filter(|path| !appended_files.contains::<String>(path))
+                .filter(|path| {
+                    // Only include positional deletes for files that were not appended in
+                    // this range and not deleted.
+                    !appended_files.contains::<str>(path) && !deleted_files.contains::<str>(path)
+                })
                 .cloned()
                 .collect())
         })?;
 
         // Now remove and take ownership of each delete vector
-        for path in delete_paths {
+        for path in positional_delete_paths {
             let delete_vector_arc = delete_filter.with_write(|state| {
                 state.remove_delete_vector(&path).ok_or_else(|| {
                     Error::new(
@@ -474,13 +507,14 @@ impl IncrementalTableScan {
                         .with_source(e)
                 })?;
 
-            let delete_task = IncrementalFileScanTask::Delete(path, delete_vector_inner);
-            tasks.push(delete_task);
+            let positional_delete_task =
+                IncrementalFileScanTask::PositionalDeletes(path, delete_vector_inner);
+            final_tasks.push(positional_delete_task);
         }
 
         // We actually would not need a stream here, but we can keep it compatible with
         // other scan types.
-        Ok(futures::stream::iter(tasks).map(Ok).boxed())
+        Ok(futures::stream::iter(final_tasks).map(Ok).boxed())
     }
 
     /// Returns an [`CombinedIncrementalBatchRecordStream`] for this incremental table scan.
@@ -578,6 +612,35 @@ impl IncrementalTableScan {
             &manifest_entry_context,
             delete_filter,
         );
+
+        file_scan_task_tx.send(Ok(file_scan_task)).await?;
+        Ok(())
+    }
+
+    async fn process_deleted_data_manifest_entry(
+        mut file_scan_task_tx: Sender<Result<IncrementalFileScanTask>>,
+        manifest_entry_context: ManifestEntryContext,
+    ) -> Result<()> {
+        // Abort the plan if we encounter a manifest entry for a delete file
+        if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Encountered an entry for a delete file in a data file manifest",
+            ));
+        }
+
+        let data_file_path = manifest_entry_context.manifest_entry.file_path();
+        let file_scan_task = IncrementalFileScanTask::Delete(DeletedFileScanTask {
+            base: BaseIncrementalFileScanTask {
+                start: 0,
+                length: manifest_entry_context.manifest_entry.file_size_in_bytes(),
+                record_count: Some(manifest_entry_context.manifest_entry.record_count()),
+                data_file_path: data_file_path.to_string(),
+                data_file_format: manifest_entry_context.manifest_entry.file_format(),
+                schema: manifest_entry_context.snapshot_schema.clone(),
+                project_field_ids: manifest_entry_context.field_ids.as_ref().clone(),
+            },
+        });
 
         file_scan_task_tx.send(Ok(file_scan_task)).await?;
         Ok(())

@@ -78,6 +78,12 @@ pub(crate) const RESERVED_FIELD_ID_FILE_PATH: i32 = 2147483546;
 /// Column name for the file path metadata column used in delete file reading.
 pub(crate) const RESERVED_COL_NAME_FILE_PATH: &str = "file_path";
 
+/// Reserved field ID for the position column used in delete file reading.
+pub(crate) const RESERVED_FIELD_ID_POS: i32 = 2147483545;
+
+/// Column name for the position metadata column used in delete file reading.
+pub(crate) const RESERVED_COL_NAME_POS: &str = "pos";
+
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
