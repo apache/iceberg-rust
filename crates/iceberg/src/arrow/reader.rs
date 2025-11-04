@@ -59,6 +59,14 @@ use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
+/// Column name for the file path metadata column per Iceberg spec
+/// This is dead code for now but will be used when we add the _file column support.
+#[allow(dead_code)]
+pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
+
+/// Reserved field ID for the file path column used in delete file reading.
+pub(crate) const RESERVED_FIELD_ID_FILE_PATH: i32 = 2147483546;
+
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
