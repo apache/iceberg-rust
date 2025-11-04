@@ -133,6 +133,8 @@ impl ManifestEntryContext {
             partition: Some(self.manifest_entry.data_file.partition.clone()),
             // TODO: Pass actual PartitionSpec through context chain for native flow
             partition_spec: None,
+            // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
+            name_mapping: None,
         })
     }
 }

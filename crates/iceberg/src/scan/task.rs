@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestEntryRef, PartitionSpec, Schema, SchemaRef, Struct,
+    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
+    SchemaRef, Struct,
 };
 
 /// A stream of [`FileScanTask`].
@@ -80,6 +81,8 @@ pub struct FileScanTask {
     /// Partition data from the manifest entry, used to identify which columns can use
     /// constant values from partition metadata vs. reading from the data file.
     /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_not_implemented")]
     #[serde(deserialize_with = "deserialize_not_implemented")]
     pub partition: Option<Struct>,
@@ -87,9 +90,27 @@ pub struct FileScanTask {
     /// The partition spec for this file, used to distinguish identity transforms
     /// (which use partition metadata constants) from non-identity transforms like
     /// bucket/truncate (which must read source columns from the data file).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_not_implemented")]
     #[serde(deserialize_with = "deserialize_not_implemented")]
     pub partition_spec: Option<Arc<PartitionSpec>>,
+
+    /// Name mapping from table metadata (property: schema.name-mapping.default),
+    /// used to resolve field IDs from column names when Parquet files lack field IDs
+    /// or have field ID conflicts.
+    ///
+    /// Per Iceberg spec rule #2: "Use schema.name-mapping.default metadata to map
+    /// field id to columns without field id".
+    ///
+    /// This is essential for scenarios like:
+    /// - Hive table migrations via add_files where Parquet has no field IDs
+    /// - Field ID conflicts where partition columns conflict with data column IDs
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    pub name_mapping: Option<Arc<NameMapping>>,
 }
 
 impl FileScanTask {
