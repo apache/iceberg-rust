@@ -23,11 +23,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
-use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Datum as ArrowDatum, Int32Array, RecordBatch, RunArray, Scalar,
+    StringArray,
+};
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{
-    ArrowError, DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    ArrowError, DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use arrow_string::like::starts_with;
 use bytes::Bytes;
@@ -59,13 +62,11 @@ use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
-/// Column name for the file path metadata column per Iceberg spec
-/// This is dead code for now but will be used when we add the _file column support.
-#[allow(dead_code)]
-pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
+/// Reserved field ID for the file path (_file) column per Iceberg spec
+pub(crate) const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
 
-/// Reserved field ID for the file path column used in delete file reading.
-pub(crate) const RESERVED_FIELD_ID_FILE_PATH: i32 = 2147483546;
+/// Column name for the file path metadata column per Iceberg spec
+pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -344,13 +345,33 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        // Get the _file column position from the task (if requested)
+        let file_column_position = task.file_column_position;
+        let data_file_path = task.data_file_path.clone();
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let record_batch_stream =
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Ok(batch) => {
+                        let processed_batch =
+                            record_batch_transformer.process_record_batch(batch)?;
+
+                        // Add the _file column if requested at the correct position
+                        if let Some(position) = file_column_position {
+                            Self::add_file_path_column_ree_at_position(
+                                processed_batch,
+                                &data_file_path,
+                                RESERVED_COL_NAME_FILE,
+                                RESERVED_FIELD_ID_FILE,
+                                position,
+                            )
+                        } else {
+                            Ok(processed_batch)
+                        }
+                    }
                     Err(err) => Err(err.into()),
                 });
 
@@ -500,22 +521,34 @@ impl ArrowReader {
         Ok(results.into())
     }
 
-    /// Helper function to add a `_file` column to a RecordBatch.
-    /// Takes the array and field to add, reducing code duplication.
-    fn create_file_field(
+    /// Helper function to add a `_file` column to a RecordBatch at a specific position.
+    /// Takes the array, field to add, and position where to insert.
+    fn create_file_field_at_position(
         batch: RecordBatch,
         file_array: ArrayRef,
         file_field: Field,
         field_id: i32,
+        position: usize,
     ) -> Result<RecordBatch> {
-        let mut columns = batch.columns().to_vec();
-        columns.push(file_array);
-
-        let mut fields: Vec<_> = batch.schema().fields().iter().cloned().collect();
-        fields.push(Arc::new(file_field.with_metadata(HashMap::from([(
+        let file_field_with_metadata = Arc::new(file_field.with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             field_id.to_string(),
-        )]))));
+        )])));
+
+        // Build columns vector in a single pass without insert
+        let original_columns = batch.columns();
+        let mut columns = Vec::with_capacity(original_columns.len() + 1);
+        columns.extend_from_slice(&original_columns[..position]);
+        columns.push(file_array);
+        columns.extend_from_slice(&original_columns[position..]);
+
+        // Build fields vector in a single pass without insert
+        let schema = batch.schema();
+        let original_fields = schema.fields();
+        let mut fields = Vec::with_capacity(original_fields.len() + 1);
+        fields.extend(original_fields[..position].iter().cloned());
+        fields.push(file_field_with_metadata);
+        fields.extend(original_fields[position..].iter().cloned());
 
         let schema = Arc::new(ArrowSchema::new(fields));
         RecordBatch::try_new(schema, columns).map_err(|e| {
@@ -527,24 +560,18 @@ impl ArrowReader {
         })
     }
 
-    /// Adds a `_file` column to the RecordBatch containing the file path.
-    /// Uses Run-End Encoding (REE) for maximum memory efficiency when the same
-    /// file path is repeated across all rows.
-    /// Note: This is only used in tests for now, for production usage we use the
-    /// non-REE version as it is Julia-compatible.
-    #[allow(dead_code)]
-    pub(crate) fn add_file_path_column_ree(
+    /// Adds a `_file` column to the RecordBatch at a specific position.
+    /// Uses Run-End Encoding (REE) for maximum memory efficiency.
+    pub(crate) fn add_file_path_column_ree_at_position(
         batch: RecordBatch,
         file_path: &str,
         field_name: &str,
         field_id: i32,
+        position: usize,
     ) -> Result<RecordBatch> {
         let num_rows = batch.num_rows();
 
         // Use Run-End Encoded array for optimal memory efficiency
-        // For a constant value repeated num_rows times, this stores:
-        // - run_ends: [num_rows] (one i32) for non-empty batches, or [] for empty batches
-        // - values: [file_path] (one string) for non-empty batches, or [] for empty batches
         let run_ends = if num_rows == 0 {
             Int32Array::from(Vec::<i32>::new())
         } else {
@@ -564,9 +591,6 @@ impl ArrowReader {
             .with_source(e)
         })?;
 
-        // Per Iceberg spec, the _file column has reserved field ID RESERVED_FIELD_ID_FILE
-        // DataType is RunEndEncoded with Int32 run ends and Utf8 values
-        // Note: values field is nullable to match what RunArray::try_new(..) expects.
         let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
         let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
         let file_field = Field::new(
@@ -575,7 +599,13 @@ impl ArrowReader {
             false,
         );
 
-        Self::create_file_field(batch, Arc::new(file_array), file_field, field_id)
+        Self::create_file_field_at_position(
+            batch,
+            Arc::new(file_array),
+            file_field,
+            field_id,
+            position,
+        )
     }
 
     fn build_field_id_set_and_map(
@@ -1573,6 +1603,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use as_any::Downcast;
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::{ArrowWriter, ProjectionMask};
@@ -1586,7 +1617,9 @@ mod tests {
 
     use crate::ErrorKind;
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
-    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::arrow::{
+        ArrowReader, ArrowReaderBuilder, RESERVED_COL_NAME_FILE, RESERVED_FIELD_ID_FILE,
+    };
     use crate::delete_vector::DeleteVector;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
@@ -1887,6 +1920,7 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -2205,6 +2239,7 @@ message schema {
             schema: schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
+            file_column_position: None,
             deletes: vec![],
         };
 
@@ -2218,6 +2253,7 @@ message schema {
             schema: schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
+            file_column_position: None,
             deletes: vec![],
         };
 
@@ -2342,6 +2378,7 @@ message schema {
                 schema: new_schema.clone(),
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -2401,13 +2438,14 @@ message schema {
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
 
-        // Add file path column with REE
+        // Add file path column with REE at the end (position 2)
         let file_path = "/path/to/data/file.parquet";
-        let result = ArrowReader::add_file_path_column_ree(
+        let result = ArrowReader::add_file_path_column_ree_at_position(
             batch,
             file_path,
             RESERVED_COL_NAME_FILE,
             RESERVED_FIELD_ID_FILE,
+            2, // Position at the end after id and name columns
         );
         assert!(result.is_ok(), "Should successfully add file path column");
 
@@ -2502,13 +2540,14 @@ message schema {
 
         assert_eq!(batch.num_rows(), 0);
 
-        // Add file path column to empty batch with REE
+        // Add file path column to empty batch with REE at position 1 (after id column)
         let file_path = "/empty/file.parquet";
-        let result = ArrowReader::add_file_path_column_ree(
+        let result = ArrowReader::add_file_path_column_ree_at_position(
             batch,
             file_path,
             RESERVED_COL_NAME_FILE,
             RESERVED_FIELD_ID_FILE,
+            1, // Position 1, after the id column
         );
 
         // Should succeed with empty RunArray for empty batches
@@ -2669,6 +2708,7 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
+            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
@@ -2884,6 +2924,7 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
+            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
@@ -3092,6 +3133,7 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
+            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,

@@ -338,6 +338,7 @@ pub(crate) mod tests {
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![pos_del_1, pos_del_2.clone()],
             },
             FileScanTask {
@@ -349,6 +350,7 @@ pub(crate) mod tests {
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
+                file_column_position: None,
                 deletes: vec![pos_del_3],
             },
         ];
