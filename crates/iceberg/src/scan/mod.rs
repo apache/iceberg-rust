@@ -51,8 +51,9 @@ use crate::{Error, ErrorKind, Result};
 /// # Example
 /// ```no_run
 /// # use iceberg::scan::RESERVED_COL_NAME_FILE;
+/// # use iceberg::table::Table;
 /// # async fn example() -> iceberg::Result<()> {
-/// # let table = todo!();
+/// # let table: Table = todo!();
 /// // Select regular columns along with the file path
 /// let scan = table
 ///     .scan()
