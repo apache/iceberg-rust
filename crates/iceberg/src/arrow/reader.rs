@@ -492,6 +492,84 @@ impl ArrowReader {
         Ok(results.into())
     }
 
+    /// Helper function to add a `_file` column to a RecordBatch.
+    /// Takes the array and field to add, reducing code duplication.
+    fn create_file_field(
+        batch: RecordBatch,
+        file_array: ArrayRef,
+        file_field: Field,
+        field_id: i32,
+    ) -> Result<RecordBatch> {
+        let mut columns = batch.columns().to_vec();
+        columns.push(file_array);
+
+        let mut fields: Vec<_> = batch.schema().fields().iter().cloned().collect();
+        fields.push(Arc::new(file_field.with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            field_id.to_string(),
+        )]))));
+
+        let schema = Arc::new(ArrowSchema::new(fields));
+        RecordBatch::try_new(schema, columns).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to add _file column to RecordBatch",
+            )
+            .with_source(e)
+        })
+    }
+
+    /// Adds a `_file` column to the RecordBatch containing the file path.
+    /// Uses Run-End Encoding (REE) for maximum memory efficiency when the same
+    /// file path is repeated across all rows.
+    /// Note: This is only used in tests for now, for production usage we use the
+    /// non-REE version as it is Julia-compatible.
+    #[allow(dead_code)]
+    pub(crate) fn add_file_path_column_ree(
+        batch: RecordBatch,
+        file_path: &str,
+        field_name: &str,
+        field_id: i32,
+    ) -> Result<RecordBatch> {
+        let num_rows = batch.num_rows();
+
+        // Use Run-End Encoded array for optimal memory efficiency
+        // For a constant value repeated num_rows times, this stores:
+        // - run_ends: [num_rows] (one i32) for non-empty batches, or [] for empty batches
+        // - values: [file_path] (one string) for non-empty batches, or [] for empty batches
+        let run_ends = if num_rows == 0 {
+            Int32Array::from(Vec::<i32>::new())
+        } else {
+            Int32Array::from(vec![num_rows as i32])
+        };
+        let values = if num_rows == 0 {
+            StringArray::from(Vec::<&str>::new())
+        } else {
+            StringArray::from(vec![file_path])
+        };
+
+        let file_array = RunArray::try_new(&run_ends, &values).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Failed to create RunArray for _file column",
+            )
+            .with_source(e)
+        })?;
+
+        // Per Iceberg spec, the _file column has reserved field ID RESERVED_FIELD_ID_FILE
+        // DataType is RunEndEncoded with Int32 run ends and Utf8 values
+        // Note: values field is nullable to match what RunArray::try_new(..) expects.
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+        let file_field = Field::new(
+            field_name,
+            DataType::RunEndEncoded(run_ends_field, values_field),
+            false,
+        );
+
+        Self::create_file_field(batch, Arc::new(file_array), file_field, field_id)
+    }
+
     fn build_field_id_set_and_map(
         parquet_schema: &SchemaDescriptor,
         predicate: &BoundPredicate,
