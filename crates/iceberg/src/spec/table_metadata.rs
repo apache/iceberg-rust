@@ -47,96 +47,10 @@ pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 
-/// Reserved table property for table format version.
-///
-/// Iceberg will default a new table's format version to the latest stable and recommended
-/// version. This reserved property keyword allows users to override the Iceberg format version of
-/// the table metadata.
-///
-/// If this table property exists when creating a table, the table will use the specified format
-/// version. If a table updates this property, it will try to upgrade to the specified format
-/// version.
-pub const PROPERTY_FORMAT_VERSION: &str = "format-version";
-/// Reserved table property for table UUID.
-pub const PROPERTY_UUID: &str = "uuid";
-/// Reserved table property for the total number of snapshots.
-pub const PROPERTY_SNAPSHOT_COUNT: &str = "snapshot-count";
-/// Reserved table property for current snapshot summary.
-pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &str = "current-snapshot-summary";
-/// Reserved table property for current snapshot id.
-pub const PROPERTY_CURRENT_SNAPSHOT_ID: &str = "current-snapshot-id";
-/// Reserved table property for current snapshot timestamp.
-pub const PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &str = "current-snapshot-timestamp-ms";
-/// Reserved table property for the JSON representation of current schema.
-pub const PROPERTY_CURRENT_SCHEMA: &str = "current-schema";
-/// Reserved table property for the JSON representation of current(default) partition spec.
-pub const PROPERTY_DEFAULT_PARTITION_SPEC: &str = "default-partition-spec";
-/// Reserved table property for the JSON representation of current(default) sort order.
-pub const PROPERTY_DEFAULT_SORT_ORDER: &str = "default-sort-order";
-
-/// Property key for max number of previous versions to keep.
-pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str = "write.metadata.previous-versions-max";
-/// Default value for max number of previous versions to keep.
-pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
-
-/// Property key for max number of partitions to keep summary stats for.
-pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
-/// Default value for the max number of partitions to keep summary stats for.
-pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
-
-/// Reserved Iceberg table properties list.
-///
-/// Reserved table properties are only used to control behaviors when creating or updating a
-/// table. The value of these properties are not persisted as a part of the table metadata.
-pub const RESERVED_PROPERTIES: [&str; 9] = [
-    PROPERTY_FORMAT_VERSION,
-    PROPERTY_UUID,
-    PROPERTY_SNAPSHOT_COUNT,
-    PROPERTY_CURRENT_SNAPSHOT_ID,
-    PROPERTY_CURRENT_SNAPSHOT_SUMMARY,
-    PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP,
-    PROPERTY_CURRENT_SCHEMA,
-    PROPERTY_DEFAULT_PARTITION_SPEC,
-    PROPERTY_DEFAULT_SORT_ORDER,
-];
-
-/// Property key for number of commit retries.
-pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
-/// Default value for number of commit retries.
-pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
-
-/// Property key for minimum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
-/// Default value for minimum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
-
-/// Property key for maximum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
-/// Default value for maximum wait time (ms) between retries.
-pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
-
-/// Property key for total maximum retry time (ms).
-pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
-/// Default value for total maximum retry time (ms).
-pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
-
-/// Default file format for data files
-pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
-/// Default file format for delete files
-pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.default";
-/// Default value for data file format
-pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
-
-/// Target file size for newly written files.
-pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
-/// Default target file size
-pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
-
 /// Initial row id for row lineage for new v3 tables and older tables upgrading to v3.
 pub const INITIAL_ROW_ID: u64 = 0;
 /// Minimum format version that supports row lineage (v3).
 pub const MIN_FORMAT_VERSION_ROW_LINEAGE: FormatVersion = FormatVersion::V3;
-
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
@@ -408,7 +322,7 @@ impl TableMetadata {
     pub fn snapshot_for_ref(&self, ref_name: &str) -> Option<&SnapshotRef> {
         self.refs.get(ref_name).map(|r| {
             self.snapshot_by_id(r.snapshot_id)
-                .unwrap_or_else(|| panic!("Snapshot id of ref {} doesn't exist", ref_name))
+                .unwrap_or_else(|| panic!("Snapshot id of ref {ref_name} doesn't exist"))
         })
     }
 
@@ -612,8 +526,7 @@ impl TableMetadata {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Snapshot for current snapshot id {} does not exist in the existing snapshots list",
-                        current_snapshot_id
+                        "Snapshot for current snapshot id {current_snapshot_id} does not exist in the existing snapshots list"
                     ),
                 ));
             }
@@ -1201,10 +1114,7 @@ pub(super) mod _serde {
                         .ok_or_else(|| {
                             Error::new(
                                 ErrorKind::DataInvalid,
-                                format!(
-                                    "No schema exists with the current schema id {}.",
-                                    schema_id
-                                ),
+                                format!("No schema exists with the current schema id {schema_id}."),
                             )
                         })?
                         .clone();
@@ -1636,7 +1546,7 @@ mod tests {
     }
 
     fn get_test_table_metadata(file_name: &str) -> TableMetadata {
-        let path = format!("testdata/table_metadata/{}", file_name);
+        let path = format!("testdata/table_metadata/{file_name}");
         let metadata: String = fs::read_to_string(path).unwrap();
 
         serde_json::from_str(&metadata).unwrap()
@@ -2587,7 +2497,6 @@ mod tests {
     "#;
 
         let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
-        println!("{}", err);
         assert!(err.to_string().contains(
             "Invalid snapshot with id 3055729675574597004 and sequence number 4 greater than last sequence number 1"
         ));
@@ -3368,8 +3277,7 @@ mod tests {
         let error_message = desered.unwrap_err().to_string();
         assert!(
             error_message.contains("No valid schema configuration found"),
-            "Expected error about no valid schema configuration, got: {}",
-            error_message
+            "Expected error about no valid schema configuration, got: {error_message}"
         );
     }
 
@@ -3596,7 +3504,7 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Define the metadata location
-        let metadata_location = format!("{}/metadata.json", temp_path);
+        let metadata_location = format!("{temp_path}/metadata.json");
 
         // Write the metadata
         original_metadata

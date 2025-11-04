@@ -28,7 +28,7 @@ use super::{
     Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
 };
 use crate::error::Result;
-use crate::spec::{Struct, StructType};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
 use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
@@ -51,6 +51,7 @@ pub struct DataFile {
     ///
     /// Partition data tuple, schema based on the partition spec output using
     /// partition field ids for the struct field ids
+    #[builder(default = "Struct::empty()")]
     pub(crate) partition: Struct,
     /// field id: 103
     ///
@@ -158,6 +159,7 @@ pub struct DataFile {
     pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
+    #[builder(default = "DEFAULT_PARTITION_SPEC_ID")]
     pub(crate) partition_spec_id: i32,
     /// field id: 143
     ///
@@ -362,7 +364,7 @@ impl TryFrom<i32> for DataContentType {
             2 => Ok(DataContentType::EqualityDeletes),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("data content type {} is invalid", v),
+                format!("data content type {v} is invalid"),
             )),
         }
     }
@@ -392,7 +394,7 @@ impl FromStr for DataFileFormat {
             "puffin" => Ok(Self::Puffin),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Unsupported data file format: {}", s),
+                format!("Unsupported data file format: {s}"),
             )),
         }
     }

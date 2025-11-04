@@ -186,7 +186,7 @@ impl ViewMetadata {
         if !self.schemas.contains_key(&schema_id) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("No schema exists with the schema id {}.", schema_id),
+                format!("No schema exists with the schema id {schema_id}."),
             ));
         }
         Ok(())
@@ -426,7 +426,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn get_test_view_metadata(file_name: &str) -> ViewMetadata {
-        let path = format!("testdata/view_metadata/{}", file_name);
+        let path = format!("testdata/view_metadata/{file_name}");
         let metadata: String = fs::read_to_string(path).unwrap();
 
         serde_json::from_str(&metadata).unwrap()

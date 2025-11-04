@@ -24,10 +24,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
-    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType,
-    Summary, update_snapshot_summaries,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -325,15 +324,15 @@ impl<'a> SnapshotProducer<'a> {
 
         let partition_summary_limit = if let Some(limit) = table_metadata
             .properties()
-            .get(PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
+            .get(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
         {
             if let Ok(limit) = limit.parse::<u64>() {
                 limit
             } else {
-                PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
             }
         } else {
-            PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+            TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
         };
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
@@ -384,18 +383,9 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
-            .await?;
+        let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
-
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
-        let manifest_list_path = self.generate_manifest_list_file_path(0);
-
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
@@ -422,6 +412,18 @@ impl<'a> SnapshotProducer<'a> {
                 Some(first_row_id),
             ),
         };
+
+        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
+        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // being generated.
+        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
+
+        let new_manifests = self
+            .manifest_file(&snapshot_produce_operation, &process)
+            .await?;
+
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
         manifest_list_writer.close().await?;

@@ -76,7 +76,7 @@ async fn main_inner() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("ICEBERG PLAYGROUND v{}", ICEBERG_PLAYGROUND_VERSION);
+        println!("ICEBERG PLAYGROUND v{ICEBERG_PLAYGROUND_VERSION}");
     }
 
     let session_config = SessionConfig::from_env()?.with_information_schema(true);

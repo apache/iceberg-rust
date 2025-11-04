@@ -32,12 +32,11 @@ repository = { workspace = true }
 async-trait = { workspace = true }
 iceberg = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
-typed-builder = { workspace = true }
+strum = { workspace = true }
 
 [dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
-regex = "1.10.5"
+regex = { workspace = true }
 sqlx = { version = "0.8.1", features = [
   "tls-rustls",
   "runtime-tokio",

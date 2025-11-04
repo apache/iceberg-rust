@@ -22,11 +22,10 @@ use uuid::Uuid;
 
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
-    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, PartitionSpec, PartitionSpecBuilder,
-    PartitionStatisticsFile, RESERVED_PROPERTIES, Schema, SchemaRef, Snapshot, SnapshotLog,
-    SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableMetadata, UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
+    ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
+    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
+    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
+    UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -255,7 +254,7 @@ impl TableMetadataBuilder {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
             .keys()
-            .filter(|key| RESERVED_PROPERTIES.contains(&key.as_str()))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -293,7 +292,7 @@ impl TableMetadataBuilder {
         // disallow removal of reserved properties
         let reserved_properties = properties
             .iter()
-            .filter(|key| RESERVED_PROPERTIES.contains(&key.as_str()))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -702,10 +701,7 @@ impl TableMetadataBuilder {
         let _schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set current schema to unknown schema with id: '{}'",
-                    schema_id
-                ),
+                format!("Cannot set current schema to unknown schema with id: '{schema_id}'"),
             )
         })?;
 
@@ -755,9 +751,8 @@ impl TableMetadataBuilder {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Cannot add schema field '{}' because it conflicts with existing partition field name. \
-                         Schema evolution cannot introduce field names that match existing partition field names.",
-                        field_name
+                        "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
+                         Schema evolution cannot introduce field names that match existing partition field names."
                     ),
                 ));
             }
@@ -1134,9 +1129,9 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
-            .get(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
+            .get(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
+            .unwrap_or(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
             .max(1);
 
         if self.metadata.metadata_log.len() > max_size {
@@ -1283,8 +1278,7 @@ impl TableMetadataBuilder {
                            Error::new(
                                ErrorKind::Unexpected,
                                format!(
-                                   "Cannot find source column with name {} for sort column in re-assigned schema.",
-                                   source_field_name
+                                   "Cannot find source column with name {source_field_name} for sort column in re-assigned schema."
                                ),
                            )
                        })?.id;
@@ -1433,8 +1427,8 @@ mod tests {
     use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
-        UnboundPartitionField,
+        SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
+        Transform, Type, UnboundPartitionField,
     };
     use crate::table::Table;
 
@@ -2372,7 +2366,7 @@ mod tests {
         let builder = builder_without_changes(FormatVersion::V2);
         let metadata = builder
             .set_properties(HashMap::from_iter(vec![(
-                PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
                 "2".to_string(),
             )]))
             .unwrap()

@@ -167,7 +167,7 @@ impl DisplayAs for IcebergTableScan {
                 .map_or(String::new(), |v| v.join(",")),
             self.predicates
                 .clone()
-                .map_or(String::from(""), |p| format!("{}", p))
+                .map_or(String::from(""), |p| format!("{p}"))
         )
     }
 }

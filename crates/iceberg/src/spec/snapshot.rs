@@ -184,7 +184,7 @@ impl Snapshot {
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Schema with id {} not found", schema_id),
+                        format!("Schema with id {schema_id} not found"),
                     )
                 })?
                 .clone(),

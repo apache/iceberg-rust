@@ -46,7 +46,7 @@ pub fn set_test_fixture(func: &str) -> TestFixture {
     let catalog_config = HashMap::from([
         (
             REST_CATALOG_PROP_URI.to_string(),
-            format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT),
+            format!("http://{rest_catalog_ip}:{REST_CATALOG_PORT}"),
         ),
         (
             S3_ENDPOINT.to_string(),

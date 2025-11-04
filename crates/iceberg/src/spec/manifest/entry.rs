@@ -172,7 +172,7 @@ impl TryFrom<i32> for ManifestStatus {
             2 => Ok(ManifestStatus::Deleted),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("manifest status {} is invalid", v),
+                format!("manifest status {v} is invalid"),
             )),
         }
     }

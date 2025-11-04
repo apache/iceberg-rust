@@ -74,8 +74,8 @@ opendal = { workspace = true }
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 rand = { workspace = true }
-reqwest = { workspace = true }
 reqsign = { version = "0.16.3", optional = true, default-features = false }
+reqwest = { workspace = true }
 roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -102,7 +102,7 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 tempfile = { workspace = true }
-tera = { workspace = true }
+minijinja = { workspace = true }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version

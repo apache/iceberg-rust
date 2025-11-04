@@ -52,8 +52,6 @@
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
 
-use std::collections::HashMap;
-
 pub use action::*;
 mod append;
 mod snapshot;
@@ -69,12 +67,7 @@ use std::time::Duration;
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 
 use crate::error::Result;
-use crate::spec::{
-    PROPERTY_COMMIT_MAX_RETRY_WAIT_MS, PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
-    PROPERTY_COMMIT_MIN_RETRY_WAIT_MS, PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
-    PROPERTY_COMMIT_NUM_RETRIES, PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
-    PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS, PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
-};
+use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
@@ -170,7 +163,12 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let backoff = Self::build_backoff(self.table.metadata().properties())?;
+        let table_props =
+            TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
+                Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+            })?;
+
+        let backoff = Self::build_backoff(table_props)?;
         let tx = self;
 
         (|mut tx: Transaction| async {
@@ -185,53 +183,14 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: &HashMap<String, String>) -> Result<ExponentialBackoff> {
-        let min_delay = match props.get(PROPERTY_COMMIT_MIN_RETRY_WAIT_MS) {
-            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid value for commit.retry.min-wait-ms",
-                )
-                .with_source(e)
-            })?,
-            None => PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
-        };
-        let max_delay = match props.get(PROPERTY_COMMIT_MAX_RETRY_WAIT_MS) {
-            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid value for commit.retry.max-wait-ms",
-                )
-                .with_source(e)
-            })?,
-            None => PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
-        };
-        let total_delay = match props.get(PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS) {
-            Some(value_str) => value_str.parse::<u64>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid value for commit.retry.total-timeout-ms",
-                )
-                .with_source(e)
-            })?,
-            None => PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
-        };
-        let max_times = match props.get(PROPERTY_COMMIT_NUM_RETRIES) {
-            Some(value_str) => value_str.parse::<usize>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid value for commit.retry.num-retries",
-                )
-                .with_source(e)
-            })?,
-            None => PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
-        };
-
+    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(min_delay))
-            .with_max_delay(Duration::from_millis(max_delay))
-            .with_total_delay(Some(Duration::from_millis(total_delay)))
-            .with_max_times(max_times)
+            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
+            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))
+            .with_total_delay(Some(Duration::from_millis(
+                props.commit_total_retry_timeout_ms,
+            )))
+            .with_max_times(props.commit_num_retries)
             .with_factor(2.0)
             .build())
     }
