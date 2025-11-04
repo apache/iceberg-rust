@@ -1994,7 +1994,7 @@ pub mod tests {
         }
 
         // We should have multiple files (the test creates 1.parquet and 3.parquet)
-        assert!(file_paths.len() >= 1, "Should have at least one file path");
+        assert!(!file_paths.is_empty(), "Should have at least one file path");
 
         // All paths should end with .parquet
         for path in &file_paths {
