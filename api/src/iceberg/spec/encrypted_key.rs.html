@@ -26,16 +26,16 @@
 <a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub struct </span>EncryptedKey {
 <a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// Unique identifier for the key
 <a href=#28 id=28 data-nosnippet>28</a>    </span><span class="attr">#[builder(setter(into))]
-<a href=#29 id=29 data-nosnippet>29</a>    </span>key_id: String,
+<a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) key_id: String,
 <a href=#30 id=30 data-nosnippet>30</a>    <span class="doccomment">/// Encrypted key metadata as binary data
 <a href=#31 id=31 data-nosnippet>31</a>    </span><span class="attr">#[builder(setter(into))]
-<a href=#32 id=32 data-nosnippet>32</a>    </span>encrypted_key_metadata: Vec&lt;u8&gt;,
+<a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) encrypted_key_metadata: Vec&lt;u8&gt;,
 <a href=#33 id=33 data-nosnippet>33</a>    <span class="doccomment">/// Identifier of the entity that encrypted this key
-<a href=#34 id=34 data-nosnippet>34</a>    </span><span class="attr">#[builder(setter(into))]
-<a href=#35 id=35 data-nosnippet>35</a>    </span>encrypted_by_id: String,
+<a href=#34 id=34 data-nosnippet>34</a>    </span><span class="attr">#[builder(default, setter(into, strip_option))]
+<a href=#35 id=35 data-nosnippet>35</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) encrypted_by_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#36 id=36 data-nosnippet>36</a>    <span class="doccomment">/// Additional properties associated with the key
 <a href=#37 id=37 data-nosnippet>37</a>    </span><span class="attr">#[builder(default)]
-<a href=#38 id=38 data-nosnippet>38</a>    </span>properties: HashMap&lt;String, String&gt;,
+<a href=#38 id=38 data-nosnippet>38</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) properties: HashMap&lt;String, String&gt;,
 <a href=#39 id=39 data-nosnippet>39</a>}
 <a href=#40 id=40 data-nosnippet>40</a>
 <a href=#41 id=41 data-nosnippet>41</a><span class="kw">impl </span>EncryptedKey {
@@ -50,8 +50,8 @@
 <a href=#50 id=50 data-nosnippet>50</a>    }
 <a href=#51 id=51 data-nosnippet>51</a>
 <a href=#52 id=52 data-nosnippet>52</a>    <span class="doccomment">/// Returns the ID of the entity that encrypted this key
-<a href=#53 id=53 data-nosnippet>53</a>    </span><span class="kw">pub fn </span>encrypted_by_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-<a href=#54 id=54 data-nosnippet>54</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.encrypted_by_id
+<a href=#53 id=53 data-nosnippet>53</a>    </span><span class="kw">pub fn </span>encrypted_by_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt; {
+<a href=#54 id=54 data-nosnippet>54</a>        <span class="self">self</span>.encrypted_by_id.as_deref()
 <a href=#55 id=55 data-nosnippet>55</a>    }
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="doccomment">/// Returns the properties map
@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>EncryptedKeySerde {
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">pub </span>key_id: String,
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">pub </span>encrypted_key_metadata: String, <span class="comment">// Base64 encoded
-<a href=#75 id=75 data-nosnippet>75</a>        </span><span class="kw">pub </span>encrypted_by_id: String,
+<a href=#75 id=75 data-nosnippet>75</a>        </span><span class="kw">pub </span>encrypted_by_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#76 id=76 data-nosnippet>76</a>        <span class="attr">#[serde(default, skip_serializing_if = <span class="string">"HashMap::is_empty"</span>)]
 <a href=#77 id=77 data-nosnippet>77</a>        </span><span class="kw">pub </span>properties: HashMap&lt;String, String&gt;,
 <a href=#78 id=78 data-nosnippet>78</a>    }

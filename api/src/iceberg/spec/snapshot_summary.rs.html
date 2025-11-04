@@ -850,169 +850,171 @@
 <a href=#850 id=850 data-nosnippet>850</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">50</span>),
 <a href=#851 id=851 data-nosnippet>851</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
 <a href=#852 id=852 data-nosnippet>852</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#853 id=853 data-nosnippet>853</a>        };
-<a href=#854 id=854 data-nosnippet>854</a>
-<a href=#855 id=855 data-nosnippet>855</a>        collector
-<a href=#856 id=856 data-nosnippet>856</a>            .partition_metrics
-<a href=#857 id=857 data-nosnippet>857</a>            .insert(<span class="string">"dummy"</span>.to_string(), UpdateMetrics::default());
-<a href=#858 id=858 data-nosnippet>858</a>        collector.add_manifest(<span class="kw-2">&amp;</span>manifest);
-<a href=#859 id=859 data-nosnippet>859</a>
-<a href=#860 id=860 data-nosnippet>860</a>        <span class="kw">let </span>props = collector.build();
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"3"</span>);
-<a href=#862 id=862 data-nosnippet>862</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_DATA_FILES).unwrap(), <span class="string">"1"</span>);
-<a href=#863 id=863 data-nosnippet>863</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"100"</span>);
-<a href=#864 id=864 data-nosnippet>864</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_RECORDS).unwrap(), <span class="string">"50"</span>);
-<a href=#865 id=865 data-nosnippet>865</a>    }
-<a href=#866 id=866 data-nosnippet>866</a>
-<a href=#867 id=867 data-nosnippet>867</a>    <span class="attr">#[test]
-<a href=#868 id=868 data-nosnippet>868</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_merge() {
-<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#870 id=870 data-nosnippet>870</a>            Schema::builder()
-<a href=#871 id=871 data-nosnippet>871</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#872 id=872 data-nosnippet>872</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#873 id=873 data-nosnippet>873</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#874 id=874 data-nosnippet>874</a>                ])
-<a href=#875 id=875 data-nosnippet>875</a>                .build()
-<a href=#876 id=876 data-nosnippet>876</a>                .unwrap(),
-<a href=#877 id=877 data-nosnippet>877</a>        );
-<a href=#878 id=878 data-nosnippet>878</a>
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="kw">let </span>partition_spec = Arc::new(
-<a href=#880 id=880 data-nosnippet>880</a>            PartitionSpec::builder(schema.clone())
-<a href=#881 id=881 data-nosnippet>881</a>                .add_unbound_fields(<span class="macro">vec!</span>[
-<a href=#882 id=882 data-nosnippet>882</a>                    UnboundPartitionField::builder()
-<a href=#883 id=883 data-nosnippet>883</a>                        .source_id(<span class="number">2</span>)
-<a href=#884 id=884 data-nosnippet>884</a>                        .name(<span class="string">"year"</span>.to_string())
-<a href=#885 id=885 data-nosnippet>885</a>                        .transform(Transform::Identity)
-<a href=#886 id=886 data-nosnippet>886</a>                        .build(),
-<a href=#887 id=887 data-nosnippet>887</a>                ])
-<a href=#888 id=888 data-nosnippet>888</a>                .unwrap()
-<a href=#889 id=889 data-nosnippet>889</a>                .with_spec_id(<span class="number">1</span>)
-<a href=#890 id=890 data-nosnippet>890</a>                .build()
-<a href=#891 id=891 data-nosnippet>891</a>                .unwrap(),
-<a href=#892 id=892 data-nosnippet>892</a>        );
-<a href=#893 id=893 data-nosnippet>893</a>
-<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_one = SnapshotSummaryCollector::default();
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_two = SnapshotSummaryCollector::default();
-<a href=#896 id=896 data-nosnippet>896</a>
-<a href=#897 id=897 data-nosnippet>897</a>        summary_one.add_file(
-<a href=#898 id=898 data-nosnippet>898</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#899 id=899 data-nosnippet>899</a>                content: DataContentType::Data,
-<a href=#900 id=900 data-nosnippet>900</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#901 id=901 data-nosnippet>901</a>                file_format: DataFileFormat::Parquet,
-<a href=#902 id=902 data-nosnippet>902</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#903 id=903 data-nosnippet>903</a>                record_count: <span class="number">10</span>,
-<a href=#904 id=904 data-nosnippet>904</a>                file_size_in_bytes: <span class="number">100</span>,
-<a href=#905 id=905 data-nosnippet>905</a>                column_sizes: HashMap::new(),
-<a href=#906 id=906 data-nosnippet>906</a>                value_counts: HashMap::new(),
-<a href=#907 id=907 data-nosnippet>907</a>                null_value_counts: HashMap::new(),
-<a href=#908 id=908 data-nosnippet>908</a>                nan_value_counts: HashMap::new(),
-<a href=#909 id=909 data-nosnippet>909</a>                lower_bounds: HashMap::new(),
-<a href=#910 id=910 data-nosnippet>910</a>                upper_bounds: HashMap::new(),
-<a href=#911 id=911 data-nosnippet>911</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#912 id=912 data-nosnippet>912</a>                split_offsets: <span class="macro">vec!</span>[],
-<a href=#913 id=913 data-nosnippet>913</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#914 id=914 data-nosnippet>914</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#915 id=915 data-nosnippet>915</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#916 id=916 data-nosnippet>916</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#917 id=917 data-nosnippet>917</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#918 id=918 data-nosnippet>918</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#919 id=919 data-nosnippet>919</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#920 id=920 data-nosnippet>920</a>            },
-<a href=#921 id=921 data-nosnippet>921</a>            schema.clone(),
-<a href=#922 id=922 data-nosnippet>922</a>            partition_spec.clone(),
-<a href=#923 id=923 data-nosnippet>923</a>        );
-<a href=#924 id=924 data-nosnippet>924</a>
-<a href=#925 id=925 data-nosnippet>925</a>        summary_two.add_file(
-<a href=#926 id=926 data-nosnippet>926</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#927 id=927 data-nosnippet>927</a>                content: DataContentType::Data,
-<a href=#928 id=928 data-nosnippet>928</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#929 id=929 data-nosnippet>929</a>                file_format: DataFileFormat::Parquet,
-<a href=#930 id=930 data-nosnippet>930</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#931 id=931 data-nosnippet>931</a>                record_count: <span class="number">20</span>,
-<a href=#932 id=932 data-nosnippet>932</a>                file_size_in_bytes: <span class="number">200</span>,
-<a href=#933 id=933 data-nosnippet>933</a>                column_sizes: HashMap::new(),
-<a href=#934 id=934 data-nosnippet>934</a>                value_counts: HashMap::new(),
-<a href=#935 id=935 data-nosnippet>935</a>                null_value_counts: HashMap::new(),
-<a href=#936 id=936 data-nosnippet>936</a>                nan_value_counts: HashMap::new(),
-<a href=#937 id=937 data-nosnippet>937</a>                lower_bounds: HashMap::new(),
-<a href=#938 id=938 data-nosnippet>938</a>                upper_bounds: HashMap::new(),
-<a href=#939 id=939 data-nosnippet>939</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#940 id=940 data-nosnippet>940</a>                split_offsets: <span class="macro">vec!</span>[],
-<a href=#941 id=941 data-nosnippet>941</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#942 id=942 data-nosnippet>942</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#943 id=943 data-nosnippet>943</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#944 id=944 data-nosnippet>944</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#945 id=945 data-nosnippet>945</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#946 id=946 data-nosnippet>946</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#947 id=947 data-nosnippet>947</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#948 id=948 data-nosnippet>948</a>            },
-<a href=#949 id=949 data-nosnippet>949</a>            schema.clone(),
-<a href=#950 id=950 data-nosnippet>950</a>            partition_spec.clone(),
-<a href=#951 id=951 data-nosnippet>951</a>        );
-<a href=#952 id=952 data-nosnippet>952</a>
-<a href=#953 id=953 data-nosnippet>953</a>        summary_one.merge(summary_two);
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>props = summary_one.build();
-<a href=#955 id=955 data-nosnippet>955</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"30"</span>);
-<a href=#957 id=957 data-nosnippet>957</a>
-<a href=#958 id=958 data-nosnippet>958</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_three = SnapshotSummaryCollector::default();
-<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_four = SnapshotSummaryCollector::default();
-<a href=#960 id=960 data-nosnippet>960</a>
-<a href=#961 id=961 data-nosnippet>961</a>        summary_three.add_manifest(<span class="kw-2">&amp;</span>ManifestFile {
-<a href=#962 id=962 data-nosnippet>962</a>            manifest_path: <span class="string">"test.manifest"</span>.to_string(),
-<a href=#963 id=963 data-nosnippet>963</a>            manifest_length: <span class="number">0</span>,
-<a href=#964 id=964 data-nosnippet>964</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#965 id=965 data-nosnippet>965</a>            content: ManifestContentType::Data,
-<a href=#966 id=966 data-nosnippet>966</a>            sequence_number: <span class="number">0</span>,
-<a href=#967 id=967 data-nosnippet>967</a>            min_sequence_number: <span class="number">0</span>,
-<a href=#968 id=968 data-nosnippet>968</a>            added_snapshot_id: <span class="number">0</span>,
-<a href=#969 id=969 data-nosnippet>969</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
-<a href=#970 id=970 data-nosnippet>970</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#971 id=971 data-nosnippet>971</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#972 id=972 data-nosnippet>972</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">5</span>),
-<a href=#973 id=973 data-nosnippet>973</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#974 id=974 data-nosnippet>974</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#975 id=975 data-nosnippet>975</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
-<a href=#976 id=976 data-nosnippet>976</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#977 id=977 data-nosnippet>977</a>        });
-<a href=#978 id=978 data-nosnippet>978</a>
-<a href=#979 id=979 data-nosnippet>979</a>        summary_four.add_file(
-<a href=#980 id=980 data-nosnippet>980</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#981 id=981 data-nosnippet>981</a>                content: DataContentType::Data,
-<a href=#982 id=982 data-nosnippet>982</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#983 id=983 data-nosnippet>983</a>                file_format: DataFileFormat::Parquet,
-<a href=#984 id=984 data-nosnippet>984</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#985 id=985 data-nosnippet>985</a>                record_count: <span class="number">1</span>,
-<a href=#986 id=986 data-nosnippet>986</a>                file_size_in_bytes: <span class="number">10</span>,
-<a href=#987 id=987 data-nosnippet>987</a>                column_sizes: HashMap::new(),
-<a href=#988 id=988 data-nosnippet>988</a>                value_counts: HashMap::new(),
-<a href=#989 id=989 data-nosnippet>989</a>                null_value_counts: HashMap::new(),
-<a href=#990 id=990 data-nosnippet>990</a>                nan_value_counts: HashMap::new(),
-<a href=#991 id=991 data-nosnippet>991</a>                lower_bounds: HashMap::new(),
-<a href=#992 id=992 data-nosnippet>992</a>                upper_bounds: HashMap::new(),
-<a href=#993 id=993 data-nosnippet>993</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#994 id=994 data-nosnippet>994</a>                split_offsets: <span class="macro">vec!</span>[],
-<a href=#995 id=995 data-nosnippet>995</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#996 id=996 data-nosnippet>996</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#997 id=997 data-nosnippet>997</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#998 id=998 data-nosnippet>998</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#999 id=999 data-nosnippet>999</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#1000 id=1000 data-nosnippet>1000</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#1001 id=1001 data-nosnippet>1001</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#1002 id=1002 data-nosnippet>1002</a>            },
-<a href=#1003 id=1003 data-nosnippet>1003</a>            schema.clone(),
-<a href=#1004 id=1004 data-nosnippet>1004</a>            partition_spec.clone(),
-<a href=#1005 id=1005 data-nosnippet>1005</a>        );
-<a href=#1006 id=1006 data-nosnippet>1006</a>
-<a href=#1007 id=1007 data-nosnippet>1007</a>        summary_three.merge(summary_four);
-<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="kw">let </span>props = summary_three.build();
-<a href=#1009 id=1009 data-nosnippet>1009</a>
-<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
-<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"6"</span>);
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="macro">assert!</span>(
-<a href=#1013 id=1013 data-nosnippet>1013</a>            props
-<a href=#1014 id=1014 data-nosnippet>1014</a>                .iter()
-<a href=#1015 id=1015 data-nosnippet>1015</a>                .all(|(k, <span class="kw">_</span>)| !k.starts_with(CHANGED_PARTITION_PREFIX))
-<a href=#1016 id=1016 data-nosnippet>1016</a>        );
-<a href=#1017 id=1017 data-nosnippet>1017</a>    }
-<a href=#1018 id=1018 data-nosnippet>1018</a>}</code></pre></div></section></main></body></html>
+<a href=#853 id=853 data-nosnippet>853</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#854 id=854 data-nosnippet>854</a>        };
+<a href=#855 id=855 data-nosnippet>855</a>
+<a href=#856 id=856 data-nosnippet>856</a>        collector
+<a href=#857 id=857 data-nosnippet>857</a>            .partition_metrics
+<a href=#858 id=858 data-nosnippet>858</a>            .insert(<span class="string">"dummy"</span>.to_string(), UpdateMetrics::default());
+<a href=#859 id=859 data-nosnippet>859</a>        collector.add_manifest(<span class="kw-2">&amp;</span>manifest);
+<a href=#860 id=860 data-nosnippet>860</a>
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>props = collector.build();
+<a href=#862 id=862 data-nosnippet>862</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"3"</span>);
+<a href=#863 id=863 data-nosnippet>863</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_DATA_FILES).unwrap(), <span class="string">"1"</span>);
+<a href=#864 id=864 data-nosnippet>864</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"100"</span>);
+<a href=#865 id=865 data-nosnippet>865</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_RECORDS).unwrap(), <span class="string">"50"</span>);
+<a href=#866 id=866 data-nosnippet>866</a>    }
+<a href=#867 id=867 data-nosnippet>867</a>
+<a href=#868 id=868 data-nosnippet>868</a>    <span class="attr">#[test]
+<a href=#869 id=869 data-nosnippet>869</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_merge() {
+<a href=#870 id=870 data-nosnippet>870</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#871 id=871 data-nosnippet>871</a>            Schema::builder()
+<a href=#872 id=872 data-nosnippet>872</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#873 id=873 data-nosnippet>873</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#874 id=874 data-nosnippet>874</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#875 id=875 data-nosnippet>875</a>                ])
+<a href=#876 id=876 data-nosnippet>876</a>                .build()
+<a href=#877 id=877 data-nosnippet>877</a>                .unwrap(),
+<a href=#878 id=878 data-nosnippet>878</a>        );
+<a href=#879 id=879 data-nosnippet>879</a>
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span>partition_spec = Arc::new(
+<a href=#881 id=881 data-nosnippet>881</a>            PartitionSpec::builder(schema.clone())
+<a href=#882 id=882 data-nosnippet>882</a>                .add_unbound_fields(<span class="macro">vec!</span>[
+<a href=#883 id=883 data-nosnippet>883</a>                    UnboundPartitionField::builder()
+<a href=#884 id=884 data-nosnippet>884</a>                        .source_id(<span class="number">2</span>)
+<a href=#885 id=885 data-nosnippet>885</a>                        .name(<span class="string">"year"</span>.to_string())
+<a href=#886 id=886 data-nosnippet>886</a>                        .transform(Transform::Identity)
+<a href=#887 id=887 data-nosnippet>887</a>                        .build(),
+<a href=#888 id=888 data-nosnippet>888</a>                ])
+<a href=#889 id=889 data-nosnippet>889</a>                .unwrap()
+<a href=#890 id=890 data-nosnippet>890</a>                .with_spec_id(<span class="number">1</span>)
+<a href=#891 id=891 data-nosnippet>891</a>                .build()
+<a href=#892 id=892 data-nosnippet>892</a>                .unwrap(),
+<a href=#893 id=893 data-nosnippet>893</a>        );
+<a href=#894 id=894 data-nosnippet>894</a>
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_one = SnapshotSummaryCollector::default();
+<a href=#896 id=896 data-nosnippet>896</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_two = SnapshotSummaryCollector::default();
+<a href=#897 id=897 data-nosnippet>897</a>
+<a href=#898 id=898 data-nosnippet>898</a>        summary_one.add_file(
+<a href=#899 id=899 data-nosnippet>899</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#900 id=900 data-nosnippet>900</a>                content: DataContentType::Data,
+<a href=#901 id=901 data-nosnippet>901</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#902 id=902 data-nosnippet>902</a>                file_format: DataFileFormat::Parquet,
+<a href=#903 id=903 data-nosnippet>903</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#904 id=904 data-nosnippet>904</a>                record_count: <span class="number">10</span>,
+<a href=#905 id=905 data-nosnippet>905</a>                file_size_in_bytes: <span class="number">100</span>,
+<a href=#906 id=906 data-nosnippet>906</a>                column_sizes: HashMap::new(),
+<a href=#907 id=907 data-nosnippet>907</a>                value_counts: HashMap::new(),
+<a href=#908 id=908 data-nosnippet>908</a>                null_value_counts: HashMap::new(),
+<a href=#909 id=909 data-nosnippet>909</a>                nan_value_counts: HashMap::new(),
+<a href=#910 id=910 data-nosnippet>910</a>                lower_bounds: HashMap::new(),
+<a href=#911 id=911 data-nosnippet>911</a>                upper_bounds: HashMap::new(),
+<a href=#912 id=912 data-nosnippet>912</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#913 id=913 data-nosnippet>913</a>                split_offsets: <span class="macro">vec!</span>[],
+<a href=#914 id=914 data-nosnippet>914</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#915 id=915 data-nosnippet>915</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#916 id=916 data-nosnippet>916</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#917 id=917 data-nosnippet>917</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#918 id=918 data-nosnippet>918</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#919 id=919 data-nosnippet>919</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#920 id=920 data-nosnippet>920</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#921 id=921 data-nosnippet>921</a>            },
+<a href=#922 id=922 data-nosnippet>922</a>            schema.clone(),
+<a href=#923 id=923 data-nosnippet>923</a>            partition_spec.clone(),
+<a href=#924 id=924 data-nosnippet>924</a>        );
+<a href=#925 id=925 data-nosnippet>925</a>
+<a href=#926 id=926 data-nosnippet>926</a>        summary_two.add_file(
+<a href=#927 id=927 data-nosnippet>927</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#928 id=928 data-nosnippet>928</a>                content: DataContentType::Data,
+<a href=#929 id=929 data-nosnippet>929</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#930 id=930 data-nosnippet>930</a>                file_format: DataFileFormat::Parquet,
+<a href=#931 id=931 data-nosnippet>931</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#932 id=932 data-nosnippet>932</a>                record_count: <span class="number">20</span>,
+<a href=#933 id=933 data-nosnippet>933</a>                file_size_in_bytes: <span class="number">200</span>,
+<a href=#934 id=934 data-nosnippet>934</a>                column_sizes: HashMap::new(),
+<a href=#935 id=935 data-nosnippet>935</a>                value_counts: HashMap::new(),
+<a href=#936 id=936 data-nosnippet>936</a>                null_value_counts: HashMap::new(),
+<a href=#937 id=937 data-nosnippet>937</a>                nan_value_counts: HashMap::new(),
+<a href=#938 id=938 data-nosnippet>938</a>                lower_bounds: HashMap::new(),
+<a href=#939 id=939 data-nosnippet>939</a>                upper_bounds: HashMap::new(),
+<a href=#940 id=940 data-nosnippet>940</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#941 id=941 data-nosnippet>941</a>                split_offsets: <span class="macro">vec!</span>[],
+<a href=#942 id=942 data-nosnippet>942</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#943 id=943 data-nosnippet>943</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#944 id=944 data-nosnippet>944</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#945 id=945 data-nosnippet>945</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#946 id=946 data-nosnippet>946</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#947 id=947 data-nosnippet>947</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#948 id=948 data-nosnippet>948</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#949 id=949 data-nosnippet>949</a>            },
+<a href=#950 id=950 data-nosnippet>950</a>            schema.clone(),
+<a href=#951 id=951 data-nosnippet>951</a>            partition_spec.clone(),
+<a href=#952 id=952 data-nosnippet>952</a>        );
+<a href=#953 id=953 data-nosnippet>953</a>
+<a href=#954 id=954 data-nosnippet>954</a>        summary_one.merge(summary_two);
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>props = summary_one.build();
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"30"</span>);
+<a href=#958 id=958 data-nosnippet>958</a>
+<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_three = SnapshotSummaryCollector::default();
+<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_four = SnapshotSummaryCollector::default();
+<a href=#961 id=961 data-nosnippet>961</a>
+<a href=#962 id=962 data-nosnippet>962</a>        summary_three.add_manifest(<span class="kw-2">&amp;</span>ManifestFile {
+<a href=#963 id=963 data-nosnippet>963</a>            manifest_path: <span class="string">"test.manifest"</span>.to_string(),
+<a href=#964 id=964 data-nosnippet>964</a>            manifest_length: <span class="number">0</span>,
+<a href=#965 id=965 data-nosnippet>965</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#966 id=966 data-nosnippet>966</a>            content: ManifestContentType::Data,
+<a href=#967 id=967 data-nosnippet>967</a>            sequence_number: <span class="number">0</span>,
+<a href=#968 id=968 data-nosnippet>968</a>            min_sequence_number: <span class="number">0</span>,
+<a href=#969 id=969 data-nosnippet>969</a>            added_snapshot_id: <span class="number">0</span>,
+<a href=#970 id=970 data-nosnippet>970</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+<a href=#971 id=971 data-nosnippet>971</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#972 id=972 data-nosnippet>972</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#973 id=973 data-nosnippet>973</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">5</span>),
+<a href=#974 id=974 data-nosnippet>974</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#975 id=975 data-nosnippet>975</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#976 id=976 data-nosnippet>976</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
+<a href=#977 id=977 data-nosnippet>977</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#978 id=978 data-nosnippet>978</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#979 id=979 data-nosnippet>979</a>        });
+<a href=#980 id=980 data-nosnippet>980</a>
+<a href=#981 id=981 data-nosnippet>981</a>        summary_four.add_file(
+<a href=#982 id=982 data-nosnippet>982</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#983 id=983 data-nosnippet>983</a>                content: DataContentType::Data,
+<a href=#984 id=984 data-nosnippet>984</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#985 id=985 data-nosnippet>985</a>                file_format: DataFileFormat::Parquet,
+<a href=#986 id=986 data-nosnippet>986</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#987 id=987 data-nosnippet>987</a>                record_count: <span class="number">1</span>,
+<a href=#988 id=988 data-nosnippet>988</a>                file_size_in_bytes: <span class="number">10</span>,
+<a href=#989 id=989 data-nosnippet>989</a>                column_sizes: HashMap::new(),
+<a href=#990 id=990 data-nosnippet>990</a>                value_counts: HashMap::new(),
+<a href=#991 id=991 data-nosnippet>991</a>                null_value_counts: HashMap::new(),
+<a href=#992 id=992 data-nosnippet>992</a>                nan_value_counts: HashMap::new(),
+<a href=#993 id=993 data-nosnippet>993</a>                lower_bounds: HashMap::new(),
+<a href=#994 id=994 data-nosnippet>994</a>                upper_bounds: HashMap::new(),
+<a href=#995 id=995 data-nosnippet>995</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#996 id=996 data-nosnippet>996</a>                split_offsets: <span class="macro">vec!</span>[],
+<a href=#997 id=997 data-nosnippet>997</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#998 id=998 data-nosnippet>998</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#999 id=999 data-nosnippet>999</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#1000 id=1000 data-nosnippet>1000</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#1001 id=1001 data-nosnippet>1001</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#1002 id=1002 data-nosnippet>1002</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#1003 id=1003 data-nosnippet>1003</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#1004 id=1004 data-nosnippet>1004</a>            },
+<a href=#1005 id=1005 data-nosnippet>1005</a>            schema.clone(),
+<a href=#1006 id=1006 data-nosnippet>1006</a>            partition_spec.clone(),
+<a href=#1007 id=1007 data-nosnippet>1007</a>        );
+<a href=#1008 id=1008 data-nosnippet>1008</a>
+<a href=#1009 id=1009 data-nosnippet>1009</a>        summary_three.merge(summary_four);
+<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="kw">let </span>props = summary_three.build();
+<a href=#1011 id=1011 data-nosnippet>1011</a>
+<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
+<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"6"</span>);
+<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="macro">assert!</span>(
+<a href=#1015 id=1015 data-nosnippet>1015</a>            props
+<a href=#1016 id=1016 data-nosnippet>1016</a>                .iter()
+<a href=#1017 id=1017 data-nosnippet>1017</a>                .all(|(k, <span class="kw">_</span>)| !k.starts_with(CHANGED_PARTITION_PREFIX))
+<a href=#1018 id=1018 data-nosnippet>1018</a>        );
+<a href=#1019 id=1019 data-nosnippet>1019</a>    }
+<a href=#1020 id=1020 data-nosnippet>1020</a>}</code></pre></div></section></main></body></html>
