@@ -26,16 +26,16 @@ use serde::{Deserialize, Serialize};
 pub struct EncryptedKey {
     /// Unique identifier for the key
     #[builder(setter(into))]
-    key_id: String,
+    pub(crate) key_id: String,
     /// Encrypted key metadata as binary data
     #[builder(setter(into))]
-    encrypted_key_metadata: Vec<u8>,
+    pub(crate) encrypted_key_metadata: Vec<u8>,
     /// Identifier of the entity that encrypted this key
-    #[builder(setter(into))]
-    encrypted_by_id: String,
+    #[builder(default, setter(into, strip_option))]
+    pub(crate) encrypted_by_id: Option<String>,
     /// Additional properties associated with the key
     #[builder(default)]
-    properties: HashMap<String, String>,
+    pub(crate) properties: HashMap<String, String>,
 }
 
 impl EncryptedKey {
@@ -50,8 +50,8 @@ impl EncryptedKey {
     }
 
     /// Returns the ID of the entity that encrypted this key
-    pub fn encrypted_by_id(&self) -> &str {
-        &self.encrypted_by_id
+    pub fn encrypted_by_id(&self) -> Option<&str> {
+        self.encrypted_by_id.as_deref()
     }
 
     /// Returns the properties map
@@ -72,7 +72,7 @@ pub(super) mod _serde {
     pub(super) struct EncryptedKeySerde {
         pub key_id: String,
         pub encrypted_key_metadata: String, // Base64 encoded
-        pub encrypted_by_id: String,
+        pub encrypted_by_id: Option<String>,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         pub properties: HashMap<String, String>,
     }
