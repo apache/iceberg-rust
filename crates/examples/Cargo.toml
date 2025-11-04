@@ -32,6 +32,7 @@ geo-types = "0.7.17"
 geojson = "0.24"
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+parquet.workspace = true
 tokio = { workspace = true, features = ["full"] }
 wkb = "0.9.1"
 

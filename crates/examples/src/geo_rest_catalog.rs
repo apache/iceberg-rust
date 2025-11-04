@@ -1,21 +1,28 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch, StringArray};
+use arrow_array::types::Int32Type;
+use arrow_array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, RecordBatch, StringArray,
+};
 use futures::TryStreamExt;
-use geo_types::{Coord, Geometry, LineString, Point, Polygon};
+use geo_types::{Coord, Geometry, LineString, Point, Polygon, geometry};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
+use parquet::file::properties::WriterProperties;
 
-static REST_URI: &str = "http://localhost:8081";
-static NAMESPACE: &str = "geo_data";
-static TABLE_NAME: &str = "cities";
+static REST_URI: &str = "http://localhost:8181";
+static NAMESPACE: &str = "ns1";
+static TABLE_NAME: &str = "cities_table";
 
 #[derive(Debug, Clone)]
 struct GeoFeature {
@@ -137,11 +144,12 @@ async fn main() {
     println!("Connected to REST Catalog at {}", REST_URI);
 
     let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
-    let table_ident = TableIdent::new(namespace_ident, TABLE_NAME.to_string());
+    let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
     if catalog.table_exists(&table_ident).await.unwrap() {
-        println!("Table '{}' already exists, dropping it", TABLE_NAME);
+        println!("Table {TABLE_NAME} already exists, dropping now.");
         catalog.drop_table(&table_ident).await.unwrap();
     }
+
     let iceberg_schema = Schema::builder()
         .with_fields(vec![
             NestedField::required(1, "id".to_string(), Type::Primitive(PrimitiveType::Int)).into(),
@@ -206,5 +214,105 @@ async fn main() {
         .with_identifier_field_ids(vec![1])
         .build()
         .unwrap();
-    todo!()
+    let table_creation = TableCreation::builder()
+        .name(table_ident.name.clone())
+        .schema(iceberg_schema.clone())
+        .properties(HashMap::from([("geo".to_string(), "geotestx".to_string())]))
+        .build();
+    let _created_table = catalog
+        .create_table(&table_ident.namespace, table_creation)
+        .await
+        .unwrap();
+    println!("Table {TABLE_NAME} created.");
+    assert!(
+        catalog
+            .list_tables(&namespace_ident)
+            .await
+            .unwrap()
+            .contains(&table_ident)
+    );
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        _created_table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator =
+        DefaultLocationGenerator::new(_created_table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "geo_type_example".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        _created_table.metadata().current_schema().clone(),
+    );
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        _created_table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
+
+    let features = mock_sample_features();
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(features.iter().map(|f| f.id)));
+    let names: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features.iter().map(|f| f.name.as_str()),
+    ));
+    let geometries_wkb: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(
+        features.iter().map(|f| f.to_wkb()),
+    ));
+    let geometry_types: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features.iter().map(|f| f.geometry_type()),
+    ));
+    let srids: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        features.iter().map(|f| f.srid),
+    ));
+    let bbox_min_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features.iter().map(|f| f.bbox().0),
+    ));
+    let bbox_min_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features.iter().map(|f| f.bbox().1),
+    ));
+    let bbox_max_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features.iter().map(|f| f.bbox().2),
+    ));
+    let bbox_max_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features.iter().map(|f| f.bbox().3),
+    ));
+
+    let countries: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.properties.get("country").unwrap().as_str()),
+    ));
+    let populations: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.properties.get("population").unwrap().as_str()),
+    ));
+    let record_batch = RecordBatch::try_new(schema.clone(), vec![
+        ids,
+        names,
+        geometries_wkb,
+        geometry_types,
+        srids,
+        bbox_min_xs,
+        bbox_min_ys,
+        bbox_max_xs,
+        bbox_max_ys,
+        countries,
+        populations,
+    ])
+    .unwrap();
+    data_file_writer.write(record_batch.clone()).await.unwrap();
+    let data_file = data_file_writer.close().await.unwrap();
+
+    let loaded_table = catalog.load_table(&table_ident).await.unwrap();
+    println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
 }
