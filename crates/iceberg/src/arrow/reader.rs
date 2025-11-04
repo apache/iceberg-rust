@@ -234,21 +234,16 @@ impl ArrowReader {
 
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
-        // and column re-ordering
-        let mut record_batch_transformer =
-            if task.partition_spec.is_some() && task.partition.is_some() {
-                // Use partition spec and data for proper constant identification
-                RecordBatchTransformer::build_with_partition_data(
-                    task.schema_ref(),
-                    task.project_field_ids(),
-                    task.partition_spec.clone(),
-                    task.partition.clone(),
-                    task.name_mapping.clone(),
-                )
-            } else {
-                // Fallback to build without partition data
-                RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids())
-            };
+        // and column re-ordering.
+        // Always use build_with_partition_data to ensure name_mapping is passed through,
+        // even when partition spec/data aren't available.
+        let mut record_batch_transformer = RecordBatchTransformer::build_with_partition_data(
+            task.schema_ref(),
+            task.project_field_ids(),
+            task.partition_spec.clone(),
+            task.partition.clone(),
+            task.name_mapping.clone(),
+        );
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -1962,7 +1957,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2431,7 +2426,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3134,7 +3129,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3231,7 +3226,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3317,7 +3312,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3417,7 +3412,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3546,7 +3541,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3642,7 +3637,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3751,7 +3746,7 @@ message schema {
                 deletes: vec![],
                 partition: None,
                 partition_spec: None,
-            name_mapping: None,
+                name_mapping: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;

@@ -37,7 +37,8 @@ use crate::{Error, ErrorKind, Result};
 
 /// Build a map of field ID to constant value for identity-partitioned fields.
 ///
-/// This implements the behavior specified in the Iceberg spec section on "Column Projection":
+/// This implements the Iceberg spec's "Column Projection" rule #1
+/// (https://iceberg.apache.org/spec/#column-projection):
 /// > "Return the value from partition metadata if an Identity Transform exists for the field
 /// >  and the partition value is present in the `partition` struct on `data_file` object
 /// >  in the manifest."
@@ -58,6 +59,23 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// These source columns MUST be read from the data file because partition metadata only
 /// stores the transformed values (e.g., bucket number), not the original column values.
+///
+/// # Java Implementation Reference
+///
+/// This matches Java's `PartitionUtil.constantsMap()` (util/PartitionUtil.java):
+/// ```java
+/// public static Map<Integer, Object> constantsMap(PartitionData data, PartitionSpec spec) {
+///   Map<Integer, Object> idToConstant = Maps.newHashMap();
+///   for (int pos = 0; pos < spec.fields().size(); pos += 1) {
+///     PartitionField field = spec.fields().get(pos);
+///     if (field.transform().isIdentity()) {  // <-- ONLY identity transforms
+///       Object converted = convertConstant(field.sourceId(), data.get(pos, javaClass));
+///       idToConstant.put(field.sourceId(), converted);
+///     }
+///   }
+///   return idToConstant;
+/// }
+/// ```
 ///
 /// # Example: Bucket Partitioning
 ///
@@ -189,10 +207,27 @@ impl RecordBatchTransformer {
         snapshot_schema: Arc<IcebergSchema>,
         projected_iceberg_field_ids: &[i32],
     ) -> Self {
-        Self::build_with_partition_data(snapshot_schema, projected_iceberg_field_ids, None, None, None)
+        Self::build_with_partition_data(
+            snapshot_schema,
+            projected_iceberg_field_ids,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Build a RecordBatchTransformer with partition spec and data for proper constant identification.
+    ///
+    /// # Overview
+    ///
+    /// This method implements the Iceberg spec's "Column Projection" rules
+    /// (https://iceberg.apache.org/spec/#column-projection) for resolving field IDs that are
+    /// "not present" in a data file:
+    ///
+    /// 1. Return the value from partition metadata if an Identity Transform exists
+    /// 2. Use schema.name-mapping.default metadata to map field id to columns without field id
+    /// 3. Return the default value if it has a defined initial-default
+    /// 4. Return null in all other cases
     ///
     /// # Why this method was added
     ///
@@ -209,15 +244,28 @@ impl RecordBatchTransformer {
     ///
     /// 2. **Add_files field ID conflicts**: When importing Hive tables via add_files,
     ///    partition columns with `initial_default` values could have field IDs that conflicted
-    ///    with data column field IDs in the Parquet file. Without detecting this conflict,
-    ///    name-based mapping wouldn't be used, causing incorrect column reads.
+    ///    with data column field IDs in the Parquet file.
+    ///
+    ///    Example:
+    ///    - Parquet file written with: field_id=1→"name", field_id=2→"dept"
+    ///    - Imported via add_files: field_id=1→"id" (partition), field_id=2→"name", field_id=3→"dept"
+    ///
+    ///    When looking for field_id=1 ("id"), we find field_id=1 in the Parquet file, but it's
+    ///    the WRONG field (it's "name"). Per the spec, the correct field (id=1, name="id") is
+    ///    "not present" in the file and should be resolved via name mapping (rule #2) or
+    ///    initial-default (rule #3).
     ///
     /// # The fix
     ///
     /// This method accepts `partition_spec`, `partition_data`, and `name_mapping`, which are used to:
     /// - Build a `constants_map` that ONLY includes identity-transformed partition fields
     ///   (matching Java's `PartitionUtil.constantsMap()` behavior)
+    /// - Detect field ID conflicts by verifying both field ID AND name match (when name mapping present)
     /// - Apply name mapping when field IDs are missing or conflicting (spec rule #2)
+    ///
+    /// This matches Java's approach (ParquetSchemaUtil.applyNameMapping, ReadConf.java lines 83-85)
+    /// which rewrites Parquet schema field IDs based on names before projection. Our implementation
+    /// detects conflicts during projection but achieves the same result.
     ///
     /// # What was changed
     ///
@@ -230,8 +278,9 @@ impl RecordBatchTransformer {
     /// FileScanTasks to the ArrowReader.
     ///
     /// # References
-    /// - Iceberg spec: format/spec.md "Column Projection" section
+    /// - Iceberg spec: https://iceberg.apache.org/spec/#column-projection
     /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+    /// - Java impl: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
     /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
     pub(crate) fn build_with_partition_data(
         snapshot_schema: Arc<IcebergSchema>,
@@ -446,52 +495,106 @@ impl RecordBatchTransformer {
                 //     without field id as described below and use the column if it is present."
                 // 3. "Return the default value if it has a defined initial-default"
                 // 4. "Return null in all other cases"
+
                 let column_source = if let Some(constant_value) = constants_map.get(field_id) {
                     // Spec rule #1: Identity-partitioned column - use constant from partition metadata
                     ColumnSource::Add {
                         value: Some(constant_value.clone()),
                         target_type: target_type.clone(),
                     }
-                } else if let Some((source_field, source_index)) =
-                    field_id_to_source_schema_map.get(field_id)
-                {
-                    // Field exists in Parquet by field ID - read it
-                    if source_field.data_type().equals_datatype(target_type) {
-                        ColumnSource::PassThrough {
-                            source_index: *source_index,
-                        }
-                    } else {
-                        ColumnSource::Promote {
-                            target_type: target_type.clone(),
-                            source_index: *source_index,
-                        }
-                    }
                 } else {
-                    // Field NOT in Parquet by field ID - try spec rule #2 (name mapping)
+                    // Check if field ID exists in Parquet, but verify it's the CORRECT field.
                     //
-                    // This handles scenarios like Hive table migrations where Parquet files may:
-                    // - Have no field IDs at all
-                    // - Have conflicting field IDs (e.g., add_files with partition columns)
+                    // Per the Iceberg spec (https://iceberg.apache.org/spec/#column-projection):
+                    // "Values for field ids which are NOT PRESENT in a data file must be resolved
+                    // according the following rules..."
                     //
-                    // Per Java's implementation (ReadConf.java lines 83-85):
+                    // The key insight: In add_files scenarios (Hive table migrations), Parquet files
+                    // may have field IDs that conflict with the Iceberg schema's field IDs:
+                    //
+                    // Example:
+                    // - Parquet file written with: field_id=1→"name", field_id=2→"dept"
+                    // - Imported via add_files with: field_id=1→"id" (partition), field_id=2→"name", field_id=3→"dept"
+                    //
+                    // When we look for Iceberg field_id=1 ("id"), we find a field_id=1 in the Parquet file,
+                    // but it's the WRONG field (it's "name", not "id"). The correct field (id=1, name="id")
+                    // is NOT PRESENT in the Parquet file - it only exists as partition metadata.
+                    //
+                    // Per the spec: when a field is "not present", we should apply rules 2-4 (name mapping,
+                    // initial-default, or null).
+                    //
+                    // Java's approach (ParquetSchemaUtil.applyNameMapping, ReadConf.java lines 83-85):
+                    // Java REWRITES the Parquet schema's field IDs based on names BEFORE projection:
                     // ```java
-                    // } else if (nameMapping != null) {
+                    // if (nameMapping != null) {
                     //   typeWithIds = ParquetSchemaUtil.applyNameMapping(fileSchema, nameMapping);
+                    //   // Now field IDs match Iceberg schema based on name mapping
                     //   this.projection = ParquetSchemaUtil.pruneColumns(typeWithIds, expectedSchema);
+                    // }
                     // ```
                     //
-                    // The name mapping provides a fallback: "this field ID corresponds to these possible names"
-                    let name_mapped_column = name_mapping
-                        .and_then(|mapping| {
+                    // Our approach achieves the same result but detects conflicts DURING projection:
+                    // - When name mapping is present, field ID matches alone aren't sufficient
+                    // - We verify the field NAME also matches to ensure it's the correct field
+                    // - If names don't match, we treat the field as "not present" and use name mapping
+                    let field_by_id = if let Some((source_field, source_index)) =
+                        field_id_to_source_schema_map.get(field_id)
+                    {
+                        let name_matches = source_field.name() == &iceberg_field.name;
+
+                        if name_mapping.is_some() && !name_matches {
+                            // Field ID conflict detected: Parquet has this field ID but for a different field.
+                            // The field we're looking for (this field_id + this name) is NOT PRESENT in the file.
+                            // Per spec: treat as "not present" and fall through to name mapping (rule #2).
+                            None
+                        } else {
+                            // Field ID matches and either:
+                            // - No name mapping present (trust the field ID)
+                            // - Names also match (correct field, use it)
+                            if source_field.data_type().equals_datatype(target_type) {
+                                Some(ColumnSource::PassThrough {
+                                    source_index: *source_index,
+                                })
+                            } else {
+                                Some(ColumnSource::Promote {
+                                    target_type: target_type.clone(),
+                                    source_index: *source_index,
+                                })
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(source) = field_by_id {
+                        source
+                    } else {
+                        // Field not found by ID, or field ID conflict detected.
+                        // Per spec: field is "not present", apply remaining rules.
+                        // Field NOT in Parquet by field ID - try spec rule #2 (name mapping)
+                        //
+                        // This handles scenarios like Hive table migrations where Parquet files may:
+                        // - Have no field IDs at all
+                        // - Have conflicting field IDs (e.g., add_files with partition columns)
+                        //
+                        // Per Java's implementation (ReadConf.java lines 83-85):
+                        // ```java
+                        // } else if (nameMapping != null) {
+                        //   typeWithIds = ParquetSchemaUtil.applyNameMapping(fileSchema, nameMapping);
+                        //   this.projection = ParquetSchemaUtil.pruneColumns(typeWithIds, expectedSchema);
+                        // ```
+                        //
+                        // The name mapping provides a fallback: "this field ID corresponds to these possible names"
+                        let name_mapped_column = name_mapping.and_then(|mapping| {
                             // Find the mapped field for this field ID
                             // The NameMapping structure allows looking up by field ID to get the names
                             mapping.fields().iter().find_map(|mapped_field| {
                                 if mapped_field.field_id() == Some(*field_id) {
                                     // Try each possible name for this field
                                     mapped_field.names().iter().find_map(|name| {
-                                        field_name_to_source_schema_map.get(name).map(|(field, idx)| {
-                                            (field.clone(), *idx)
-                                        })
+                                        field_name_to_source_schema_map
+                                            .get(name)
+                                            .map(|(field, idx)| (field.clone(), *idx))
                                     })
                                 } else {
                                     None
@@ -499,28 +602,30 @@ impl RecordBatchTransformer {
                             })
                         });
 
-                    if let Some((source_field, source_index)) = name_mapped_column {
-                        // Spec rule #2: Found column via name mapping - read it from file
-                        if source_field.data_type().equals_datatype(target_type) {
-                            ColumnSource::PassThrough { source_index }
-                        } else {
-                            ColumnSource::Promote {
-                                target_type: target_type.clone(),
-                                source_index,
-                            }
-                        }
-                    } else {
-                        // Spec rules #3 and #4: Use initial_default if present, otherwise null
-                        let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
-                            if let Literal::Primitive(prim) = lit {
-                                Some(prim.clone())
+                        if let Some((source_field, source_index)) = name_mapped_column {
+                            // Spec rule #2: Found column via name mapping - read it from file
+                            if source_field.data_type().equals_datatype(target_type) {
+                                ColumnSource::PassThrough { source_index }
                             } else {
-                                None
+                                ColumnSource::Promote {
+                                    target_type: target_type.clone(),
+                                    source_index,
+                                }
                             }
-                        });
-                        ColumnSource::Add {
-                            value: default_value,
-                            target_type: target_type.clone(),
+                        } else {
+                            // Spec rules #3 and #4: Use initial_default if present, otherwise null
+                            let default_value =
+                                iceberg_field.initial_default.as_ref().and_then(|lit| {
+                                    if let Literal::Primitive(prim) = lit {
+                                        Some(prim.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+                            ColumnSource::Add {
+                                value: default_value,
+                                target_type: target_type.clone(),
+                            }
                         }
                     }
                 };
@@ -1433,7 +1538,8 @@ mod test {
                         .with_initial_default(Literal::string("default_category"))
                         .into(),
                     // Rule #4: Field with no default - should be null
-                    NestedField::optional(5, "notes", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(5, "notes", Type::Primitive(PrimitiveType::String))
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1476,13 +1582,10 @@ mod test {
             Some(name_mapping),
         );
 
-        let parquet_batch = RecordBatch::try_new(
-            parquet_schema,
-            vec![
-                Arc::new(Int32Array::from(vec![100, 200])),
-                Arc::new(StringArray::from(vec!["value1", "value2"])),
-            ],
-        )
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(vec![100, 200])),
+            Arc::new(StringArray::from(vec!["value1", "value2"])),
+        ])
         .unwrap();
 
         let result = transformer.process_record_batch(parquet_batch).unwrap();
