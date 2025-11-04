@@ -377,7 +377,7 @@ impl Catalog for MemoryCatalog {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
@@ -396,7 +396,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    async fn new_memory_catalog() -> impl Catalog {
+    pub(crate) async fn new_memory_catalog() -> impl Catalog {
         let warehouse_location = temp_path();
         MemoryCatalogBuilder::default()
             .load(

@@ -31,6 +31,8 @@ use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
+use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
+use crate::spec::manifest_list::_serde::ManifestFileV3;
 use crate::{Error, ErrorKind};
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -69,6 +71,11 @@ impl ManifestList {
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV2>(&values)?.try_into()
             }
+            FormatVersion::V3 => {
+                let reader = Reader::new(bs)?;
+                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
+                from_value::<_serde::ManifestListV3>(&values)?.try_into()
+            }
         }
     }
 
@@ -90,6 +97,7 @@ pub struct ManifestListWriter {
     avro_writer: Writer<'static, Vec<u8>>,
     sequence_number: i64,
     snapshot_id: i64,
+    next_row_id: Option<u64>,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -103,6 +111,11 @@ impl std::fmt::Debug for ManifestListWriter {
 }
 
 impl ManifestListWriter {
+    /// Get the next row ID that will be assigned to the next data manifest added.
+    pub fn next_row_id(&self) -> Option<u64> {
+        self.next_row_id
+    }
+
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
         let mut metadata = HashMap::from_iter([
@@ -115,7 +128,14 @@ impl ManifestListWriter {
                 parent_snapshot_id.to_string(),
             );
         }
-        Self::new(FormatVersion::V1, output_file, metadata, 0, snapshot_id)
+        Self::new(
+            FormatVersion::V1,
+            output_file,
+            metadata,
+            0,
+            snapshot_id,
+            None,
+        )
     }
 
     /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
@@ -142,6 +162,42 @@ impl ManifestListWriter {
             metadata,
             sequence_number,
             snapshot_id,
+            None,
+        )
+    }
+
+    /// Construct a v3 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn v3(
+        output_file: OutputFile,
+        snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
+        sequence_number: i64,
+        first_row_id: Option<u64>, // Always None for delete manifests
+    ) -> Self {
+        let mut metadata = HashMap::from_iter([
+            ("snapshot-id".to_string(), snapshot_id.to_string()),
+            ("sequence-number".to_string(), sequence_number.to_string()),
+            ("format-version".to_string(), "3".to_string()),
+        ]);
+        metadata.insert(
+            "parent-snapshot-id".to_string(),
+            parent_snapshot_id
+                .map(|v| v.to_string())
+                .unwrap_or("null".to_string()),
+        );
+        metadata.insert(
+            "first-row-id".to_string(),
+            first_row_id
+                .map(|v| v.to_string())
+                .unwrap_or("null".to_string()),
+        );
+        Self::new(
+            FormatVersion::V3,
+            output_file,
+            metadata,
+            sequence_number,
+            snapshot_id,
+            first_row_id,
         )
     }
 
@@ -151,10 +207,12 @@ impl ManifestListWriter {
         metadata: HashMap<String, String>,
         sequence_number: i64,
         snapshot_id: i64,
+        first_row_id: Option<u64>,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
+            FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
         let mut avro_writer = Writer::new(avro_schema, Vec::new());
         for (key, value) in metadata {
@@ -168,46 +226,35 @@ impl ManifestListWriter {
             avro_writer,
             sequence_number,
             snapshot_id,
+            next_row_id: first_row_id,
         }
     }
 
     /// Append manifests to be written.
+    ///
+    /// If V3 Manifests are added and the `first_row_id` of any data manifest is unassigned,
+    /// it will be assigned based on the `next_row_id` of the writer, and the `next_row_id` of the writer will be updated accordingly.
+    /// If `first_row_id` is already assigned, it will be validated against the `next_row_id` of the writer.
     pub fn add_manifests(&mut self, manifests: impl Iterator<Item = ManifestFile>) -> Result<()> {
         match self.format_version {
             FormatVersion::V1 => {
                 for manifest in manifests {
-                    let manifes: ManifestFileV1 = manifest.try_into()?;
-                    self.avro_writer.append_ser(manifes)?;
+                    let manifests: ManifestFileV1 = manifest.try_into()?;
+                    self.avro_writer.append_ser(manifests)?;
                 }
             }
-            FormatVersion::V2 => {
+            FormatVersion::V2 | FormatVersion::V3 => {
                 for mut manifest in manifests {
-                    if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
-                        if manifest.added_snapshot_id != self.snapshot_id {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Found unassigned sequence number for a manifest from snapshot {}.",
-                                    manifest.added_snapshot_id
-                                ),
-                            ));
-                        }
-                        manifest.sequence_number = self.sequence_number;
+                    self.assign_sequence_numbers(&mut manifest)?;
+
+                    if self.format_version == FormatVersion::V2 {
+                        let manifest_entry: ManifestFileV2 = manifest.try_into()?;
+                        self.avro_writer.append_ser(manifest_entry)?;
+                    } else if self.format_version == FormatVersion::V3 {
+                        self.assign_first_row_id(&mut manifest)?;
+                        let manifest_entry: ManifestFileV3 = manifest.try_into()?;
+                        self.avro_writer.append_ser(manifest_entry)?;
                     }
-                    if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
-                        if manifest.added_snapshot_id != self.snapshot_id {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Found unassigned sequence number for a manifest from snapshot {}.",
-                                    manifest.added_snapshot_id
-                                ),
-                            ));
-                        }
-                        manifest.min_sequence_number = self.sequence_number;
-                    }
-                    let manifest_entry: ManifestFileV2 = manifest.try_into()?;
-                    self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
         }
@@ -222,6 +269,112 @@ impl ManifestListWriter {
         writer.close().await?;
         Ok(())
     }
+
+    /// Assign sequence numbers to manifest if they are unassigned
+    fn assign_sequence_numbers(&self, manifest: &mut ManifestFile) -> Result<()> {
+        if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+            if manifest.added_snapshot_id != self.snapshot_id {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Found unassigned sequence number for a manifest from snapshot {}.",
+                        manifest.added_snapshot_id
+                    ),
+                ));
+            }
+            manifest.sequence_number = self.sequence_number;
+        }
+
+        if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+            if manifest.added_snapshot_id != self.snapshot_id {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Found unassigned sequence number for a manifest from snapshot {}.",
+                        manifest.added_snapshot_id
+                    ),
+                ));
+            }
+            manifest.min_sequence_number = self.sequence_number;
+        }
+
+        Ok(())
+    }
+
+    /// Returns number of newly assigned first-row-ids, if any.
+    fn assign_first_row_id(&mut self, manifest: &mut ManifestFile) -> Result<()> {
+        match manifest.content {
+            ManifestContentType::Data => {
+                match (self.next_row_id, manifest.first_row_id) {
+                    (Some(_), Some(_)) => {
+                        // Case: Manifest with already assigned first row ID.
+                        // No need to increase next_row_id, as this manifest is already assigned.
+                    }
+                    (None, Some(manifest_first_row_id)) => {
+                        // Case: Assigned first row ID for data manifest, but the writer does not have a next-row-id assigned.
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!(
+                                "Found invalid first-row-id assignment for Manifest {}. Writer does not have a next-row-id assigned, but the manifest has first-row-id assigned to {}.",
+                                manifest.manifest_path, manifest_first_row_id,
+                            ),
+                        ));
+                    }
+                    (Some(writer_next_row_id), None) => {
+                        // Case: Unassigned first row ID for data manifest. This is either a new
+                        // manifest, or a manifest from a pre-v3 snapshot. We need to assign one.
+                        let (existing_rows_count, added_rows_count) =
+                            require_row_counts_in_manifest(manifest)?;
+                        manifest.first_row_id = Some(writer_next_row_id);
+
+                        self.next_row_id = writer_next_row_id
+                        .checked_add(existing_rows_count)
+                        .and_then(|sum| sum.checked_add(added_rows_count))
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Row ID overflow when computing next row ID for Manifest {}. Next Row ID: {writer_next_row_id}, Existing Rows Count: {existing_rows_count}, Added Rows Count: {added_rows_count}",
+                                    manifest.manifest_path
+                                ),
+                            )
+                        }).map(Some)?;
+                    }
+                    (None, None) => {
+                        // Case: Table without row lineage. No action needed.
+                    }
+                }
+            }
+            ManifestContentType::Deletes => {
+                // Deletes never have a first-row-id assigned.
+                manifest.first_row_id = None;
+            }
+        };
+
+        Ok(())
+    }
+}
+
+fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)> {
+    let existing_rows_count = manifest.existing_rows_count.ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Cannot include a Manifest without existing-rows-count to a table with row lineage enabled. Manifest path: {}",
+                manifest.manifest_path,
+            ),
+        )
+    })?;
+    let added_rows_count = manifest.added_rows_count.ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Cannot include a Manifest without added-rows-count to a table with row lineage enabled. Manifest path: {}",
+                manifest.manifest_path,
+            ),
+        )
+    })?;
+    Ok((existing_rows_count, added_rows_count))
 }
 
 /// This is a helper module that defines the schema field of the manifest list entry.
@@ -453,6 +606,15 @@ mod _const_schema {
             ))
         })
     };
+    static FIRST_ROW_ID: Lazy<NestedFieldRef> = {
+        Lazy::new(|| {
+            Arc::new(NestedField::optional(
+                520,
+                "first_row_id",
+                Type::Primitive(PrimitiveType::Long),
+            ))
+        })
+    };
 
     static V1_SCHEMA: Lazy<Schema> = {
         Lazy::new(|| {
@@ -497,11 +659,38 @@ mod _const_schema {
         })
     };
 
+    static V3_SCHEMA: Lazy<Schema> = {
+        Lazy::new(|| {
+            let fields = vec![
+                MANIFEST_PATH.clone(),
+                MANIFEST_LENGTH.clone(),
+                PARTITION_SPEC_ID.clone(),
+                CONTENT.clone(),
+                SEQUENCE_NUMBER.clone(),
+                MIN_SEQUENCE_NUMBER.clone(),
+                ADDED_SNAPSHOT_ID.clone(),
+                ADDED_FILES_COUNT_V2.clone(),
+                EXISTING_FILES_COUNT_V2.clone(),
+                DELETED_FILES_COUNT_V2.clone(),
+                ADDED_ROWS_COUNT_V2.clone(),
+                EXISTING_ROWS_COUNT_V2.clone(),
+                DELETED_ROWS_COUNT_V2.clone(),
+                PARTITIONS.clone(),
+                KEY_METADATA.clone(),
+                FIRST_ROW_ID.clone(),
+            ];
+            Schema::builder().with_fields(fields).build().unwrap()
+        })
+    };
+
     pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
         Lazy::new(|| schema_to_avro_schema("manifest_file", &V1_SCHEMA).unwrap());
 
     pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
         Lazy::new(|| schema_to_avro_schema("manifest_file", &V2_SCHEMA).unwrap());
+
+    pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V3: Lazy<AvroSchema> =
+        Lazy::new(|| schema_to_avro_schema("manifest_file", &V3_SCHEMA).unwrap());
 }
 
 /// Entry in a manifest list.
@@ -580,6 +769,10 @@ pub struct ManifestFile {
     ///
     /// Implementation-specific key metadata for encryption
     pub key_metadata: Option<Vec<u8>>,
+    /// field 520
+    ///
+    /// The starting _row_id to assign to rows added by ADDED data files
+    pub first_row_id: Option<u64>,
 }
 
 impl ManifestFile {
@@ -705,6 +898,12 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(transparent)]
+    pub(crate) struct ManifestListV3 {
+        entries: Vec<ManifestFileV3>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(transparent)]
     pub(crate) struct ManifestListV2 {
         entries: Vec<ManifestFileV2>,
     }
@@ -713,6 +912,33 @@ pub(super) mod _serde {
     #[serde(transparent)]
     pub(crate) struct ManifestListV1 {
         entries: Vec<ManifestFileV1>,
+    }
+
+    impl ManifestListV3 {
+        /// Converts the [ManifestListV3] into a [ManifestList].
+        pub fn try_into(self) -> Result<super::ManifestList> {
+            Ok(super::ManifestList {
+                entries: self
+                    .entries
+                    .into_iter()
+                    .map(|v| v.try_into())
+                    .collect::<Result<Vec<_>>>()?,
+            })
+        }
+    }
+
+    impl TryFrom<super::ManifestList> for ManifestListV3 {
+        type Error = Error;
+
+        fn try_from(value: super::ManifestList) -> std::result::Result<Self, Self::Error> {
+            Ok(Self {
+                entries: value
+                    .entries
+                    .into_iter()
+                    .map(|v| v.try_into())
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            })
+        }
     }
 
     impl ManifestListV2 {
@@ -813,6 +1039,58 @@ pub(super) mod _serde {
         pub key_metadata: Option<ByteBuf>,
     }
 
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    pub(super) struct ManifestFileV3 {
+        pub manifest_path: String,
+        pub manifest_length: i64,
+        pub partition_spec_id: i32,
+        #[serde(default = "v2_default_content_for_v1")]
+        pub content: i32,
+        #[serde(default = "v2_default_sequence_number_for_v1")]
+        pub sequence_number: i64,
+        #[serde(default = "v2_default_min_sequence_number_for_v1")]
+        pub min_sequence_number: i64,
+        pub added_snapshot_id: i64,
+        #[serde(alias = "added_data_files_count", alias = "added_files_count")]
+        pub added_files_count: i32,
+        #[serde(alias = "existing_data_files_count", alias = "existing_files_count")]
+        pub existing_files_count: i32,
+        #[serde(alias = "deleted_data_files_count", alias = "deleted_files_count")]
+        pub deleted_files_count: i32,
+        pub added_rows_count: i64,
+        pub existing_rows_count: i64,
+        pub deleted_rows_count: i64,
+        pub partitions: Option<Vec<FieldSummary>>,
+        pub key_metadata: Option<ByteBuf>,
+        pub first_row_id: Option<u64>,
+    }
+
+    impl ManifestFileV3 {
+        /// Converts the [ManifestFileV3] into a [ManifestFile].
+        pub fn try_into(self) -> Result<ManifestFile> {
+            let manifest_file = ManifestFile {
+                manifest_path: self.manifest_path,
+                manifest_length: self.manifest_length,
+                partition_spec_id: self.partition_spec_id,
+                content: self.content.try_into()?,
+                sequence_number: self.sequence_number,
+                min_sequence_number: self.min_sequence_number,
+                added_snapshot_id: self.added_snapshot_id,
+                added_files_count: Some(self.added_files_count.try_into()?),
+                existing_files_count: Some(self.existing_files_count.try_into()?),
+                deleted_files_count: Some(self.deleted_files_count.try_into()?),
+                added_rows_count: Some(self.added_rows_count.try_into()?),
+                existing_rows_count: Some(self.existing_rows_count.try_into()?),
+                deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
+                partitions: self.partitions,
+                key_metadata: self.key_metadata.map(|b| b.into_vec()),
+                first_row_id: self.first_row_id,
+            };
+
+            Ok(manifest_file)
+        }
+    }
+
     impl ManifestFileV2 {
         /// Converts the [ManifestFileV2] into a [ManifestFile].
         pub fn try_into(self) -> Result<ManifestFile> {
@@ -832,6 +1110,7 @@ pub(super) mod _serde {
                 deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
                 partitions: self.partitions,
                 key_metadata: self.key_metadata.map(|b| b.into_vec()),
+                first_row_id: None,
             })
         }
     }
@@ -881,6 +1160,7 @@ pub(super) mod _serde {
                 content: super::ManifestContentType::Data,
                 sequence_number: 0,
                 min_sequence_number: 0,
+                first_row_id: None,
             })
         }
     }
@@ -889,6 +1169,80 @@ pub(super) mod _serde {
         match key_metadata {
             Some(metadata) if !metadata.is_empty() => Some(ByteBuf::from(metadata)),
             _ => None,
+        }
+    }
+
+    impl TryFrom<ManifestFile> for ManifestFileV3 {
+        type Error = Error;
+
+        fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
+            let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
+            Ok(Self {
+                manifest_path: value.manifest_path,
+                manifest_length: value.manifest_length,
+                partition_spec_id: value.partition_spec_id,
+                content: value.content as i32,
+                sequence_number: value.sequence_number,
+                min_sequence_number: value.min_sequence_number,
+                added_snapshot_id: value.added_snapshot_id,
+                added_files_count: value
+                    .added_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "added_data_files_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                existing_files_count: value
+                    .existing_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "existing_data_files_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                deleted_files_count: value
+                    .deleted_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "deleted_data_files_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                added_rows_count: value
+                    .added_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "added_rows_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                existing_rows_count: value
+                    .existing_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "existing_rows_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                deleted_rows_count: value
+                    .deleted_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "deleted_rows_count in ManifestFileV3 is required",
+                        )
+                    })?
+                    .try_into()?,
+                partitions: value.partitions,
+                key_metadata,
+                first_row_id: value.first_row_id,
+            })
         }
     }
 
@@ -1012,7 +1366,7 @@ mod test {
 
     use super::_serde::ManifestListV2;
     use crate::io::FileIOBuilder;
-    use crate::spec::manifest_list::_serde::ManifestListV1;
+    use crate::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
         UNASSIGNED_SEQUENCE_NUMBER,
@@ -1038,6 +1392,7 @@ mod test {
                     deleted_rows_count: Some(0),
                     partitions: Some(vec![]),
                     key_metadata: None,
+                    first_row_id: None,
                 }
             ]
         };
@@ -1089,6 +1444,7 @@ mod test {
                         vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
+                    first_row_id: None,
                 },
                 ManifestFile {
                     manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
@@ -1108,6 +1464,7 @@ mod test {
                         vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
+                    first_row_id: None,
                 }
             ]
         };
@@ -1138,6 +1495,80 @@ mod test {
         assert_eq!(manifest_list, parsed_manifest_list);
     }
 
+    #[tokio::test]
+    async fn test_parse_manifest_list_v3() {
+        let manifest_list = ManifestList {
+            entries: vec![
+                ManifestFile {
+                    manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                    manifest_length: 6926,
+                    partition_spec_id: 1,
+                    content: ManifestContentType::Data,
+                    sequence_number: 1,
+                    min_sequence_number: 1,
+                    added_snapshot_id: 377075049360453639,
+                    added_files_count: Some(1),
+                    existing_files_count: Some(0),
+                    deleted_files_count: Some(0),
+                    added_rows_count: Some(3),
+                    existing_rows_count: Some(0),
+                    deleted_rows_count: Some(0),
+                    partitions: Some(
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                    ),
+                    key_metadata: None,
+                    first_row_id: Some(10),
+                },
+                ManifestFile {
+                    manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
+                    manifest_length: 6926,
+                    partition_spec_id: 2,
+                    content: ManifestContentType::Data,
+                    sequence_number: 1,
+                    min_sequence_number: 1,
+                    added_snapshot_id: 377075049360453639,
+                    added_files_count: Some(1),
+                    existing_files_count: Some(0),
+                    deleted_files_count: Some(0),
+                    added_rows_count: Some(3),
+                    existing_rows_count: Some(0),
+                    deleted_rows_count: Some(0),
+                    partitions: Some(
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                    ),
+                    key_metadata: None,
+                    first_row_id: Some(13),
+                }
+            ]
+        };
+
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = "simple_manifest_list_v3.avro";
+        let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
+
+        let mut writer = ManifestListWriter::v3(
+            file_io.new_output(full_path.clone()).unwrap(),
+            377075049360453639,
+            Some(377075049360453639),
+            1,
+            Some(10),
+        );
+
+        writer
+            .add_manifests(manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(full_path).expect("read_file must succeed");
+
+        let parsed_manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+
+        assert_eq!(manifest_list, parsed_manifest_list);
+    }
+
     #[test]
     fn test_serialize_manifest_list_v1() {
         let manifest_list:ManifestListV1 = ManifestList {
@@ -1157,6 +1588,7 @@ mod test {
                 deleted_rows_count: Some(0),
                 partitions: None,
                 key_metadata: None,
+                first_row_id: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
@@ -1187,12 +1619,44 @@ mod test {
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
                 key_metadata: None,
+                first_row_id: None,
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
         assert_eq!(
             result,
             r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_files_count":1,"existing_files_count":0,"deleted_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
+        );
+    }
+
+    #[test]
+    fn test_serialize_manifest_list_v3() {
+        let manifest_list: ManifestListV3 = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 377075049360453639,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
+                first_row_id: Some(10),
+            }]
+        }.try_into().unwrap();
+        let result = serde_json::to_string(&manifest_list).unwrap();
+        assert_eq!(
+            result,
+            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_files_count":1,"existing_files_count":0,"deleted_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null,"first_row_id":10}]"#
         );
     }
 
@@ -1217,6 +1681,7 @@ mod test {
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}],
                 ),
                 key_metadata: None,
+                first_row_id: None,
             }]
         };
 
@@ -1263,6 +1728,7 @@ mod test {
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
                 key_metadata: None,
+                first_row_id: None,
             }]
         };
 
@@ -1282,6 +1748,56 @@ mod test {
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
         expected_manifest_list.entries[0].min_sequence_number = seq_num;
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v3() {
+        let snapshot_id = 377075049360453639;
+        let seq_num = 1;
+        let mut expected_manifest_list = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
+                first_row_id: Some(10),
+            }]
+        };
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("manifest_list_v2.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer =
+            ManifestListWriter::v3(output_file, snapshot_id, Some(0), seq_num, Some(10));
+        writer
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+        expected_manifest_list.entries[0].sequence_number = seq_num;
+        expected_manifest_list.entries[0].min_sequence_number = seq_num;
+        expected_manifest_list.entries[0].first_row_id = Some(10);
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
@@ -1308,6 +1824,7 @@ mod test {
                     vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
                 ),
                 key_metadata: None,
+                first_row_id: None,
             }]
         };
 
@@ -1326,6 +1843,100 @@ mod test {
 
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v1_as_v3() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                manifest_length: 5806,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1646658105718557341,
+                added_files_count: Some(3),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
+                first_row_id: None,
+            }]
+        };
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("manifest_list_v1.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
+        writer
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+
+        let manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v2_as_v3() {
+        let snapshot_id = 377075049360453639;
+        let seq_num = 1;
+        let mut expected_manifest_list = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(
+                    vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1).to_bytes().unwrap()), upper_bound: Some(Datum::long(1).to_bytes().unwrap())}]
+                ),
+                key_metadata: None,
+                first_row_id: None,
+            }]
+        };
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("manifest_list_v2.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num);
+        writer
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+
+        let manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+        expected_manifest_list.entries[0].sequence_number = seq_num;
+        expected_manifest_list.entries[0].min_sequence_number = seq_num;
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
