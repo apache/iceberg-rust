@@ -228,10 +228,26 @@ impl ArrowReader {
             initial_stream_builder
         };
 
+        // Check if _file column is requested and filter it out for projection
+        let mut file_column_position = None;
+        let project_field_ids_without_virtual: Vec<i32> = task
+            .project_field_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &field_id)| {
+                if field_id == RESERVED_FIELD_ID_FILE {
+                    file_column_position = Some(idx);
+                    None
+                } else {
+                    Some(field_id)
+                }
+            })
+            .collect();
+
         // Fallback IDs don't match Parquet's embedded field IDs (since they don't exist),
         // so we must use position-based projection instead of field-ID matching
         let projection_mask = Self::get_arrow_projection_mask(
-            &task.project_field_ids,
+            &project_field_ids_without_virtual,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
@@ -245,7 +261,7 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformer::build(task.schema_ref(), &project_field_ids_without_virtual);
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -377,8 +393,7 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
-        // Get the _file column position from the task (if requested)
-        let file_column_position = task.file_column_position;
+        // Clone data_file_path for use in the closure
         let data_file_path = task.data_file_path.clone();
 
         // Build the batch stream and send all the RecordBatches that it generates
@@ -2066,7 +2081,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -2385,7 +2399,6 @@ message schema {
             schema: schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            file_column_position: None,
             deletes: vec![],
         };
 
@@ -2399,7 +2412,6 @@ message schema {
             schema: schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            file_column_position: None,
             deletes: vec![],
         };
 
@@ -2524,7 +2536,6 @@ message schema {
                 schema: new_schema.clone(),
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -2854,7 +2865,6 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
@@ -3070,7 +3080,6 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
@@ -3279,7 +3288,6 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            file_column_position: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
@@ -3385,7 +3393,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3480,7 +3487,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 3],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3564,7 +3570,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3662,7 +3667,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3789,7 +3793,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3883,7 +3886,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 5, 2],
                 predicate: None,
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),
@@ -3990,7 +3992,6 @@ message schema {
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
-                file_column_position: None,
                 deletes: vec![],
             })]
             .into_iter(),

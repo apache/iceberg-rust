@@ -31,7 +31,10 @@ use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
-use crate::arrow::{ArrowReaderBuilder, RESERVED_COL_NAME_FILE as RESERVED_COL_NAME_FILE_INTERNAL};
+use crate::arrow::{
+    ArrowReaderBuilder, RESERVED_COL_NAME_FILE as RESERVED_COL_NAME_FILE_INTERNAL,
+    RESERVED_FIELD_ID_FILE,
+};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -265,14 +268,11 @@ impl<'a> TableScanBuilder<'a> {
                 .collect()
         });
 
-        // Track the position of the _file column if requested
-        let mut file_column_position = None;
-
-        for (index, column_name) in column_names.iter().enumerate() {
+        for column_name in column_names.iter() {
             // Handle special reserved column "_file"
             if column_name == RESERVED_COL_NAME_FILE_INTERNAL {
-                file_column_position = Some(index);
-                continue; // Don't add to field_ids - it's a virtual column
+                field_ids.push(RESERVED_FIELD_ID_FILE);
+                continue;
             }
 
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
@@ -315,7 +315,6 @@ impl<'a> TableScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
-            file_column_position,
         };
 
         Ok(TableScan {
@@ -1814,7 +1813,6 @@ pub mod tests {
             schema: schema.clone(),
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
-            file_column_position: None,
             deletes: vec![],
         };
         test_fn(task);
@@ -1829,7 +1827,6 @@ pub mod tests {
             schema,
             record_count: None,
             data_file_format: DataFileFormat::Avro,
-            file_column_position: None,
             deletes: vec![],
         };
         test_fn(task);

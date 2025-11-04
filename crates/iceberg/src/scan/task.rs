@@ -52,11 +52,6 @@ pub struct FileScanTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate: Option<BoundPredicate>,
 
-    /// The position of the _file column in the output, if requested.
-    /// None if the _file column was not requested.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_column_position: Option<usize>,
-
     /// The list of delete files that may need to be applied to this data file
     pub deletes: Vec<FileScanTaskDeleteFile>,
 }

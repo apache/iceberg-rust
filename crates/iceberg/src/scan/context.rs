@@ -46,7 +46,6 @@ pub(crate) struct ManifestFileContext {
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
-    file_column_position: Option<usize>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -60,7 +59,6 @@ pub(crate) struct ManifestEntryContext {
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
-    pub file_column_position: Option<usize>,
 }
 
 impl ManifestFileContext {
@@ -76,7 +74,6 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
-            file_column_position,
             ..
         } = self;
 
@@ -92,7 +89,6 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
-                file_column_position,
             };
 
             sender
@@ -131,8 +127,6 @@ impl ManifestEntryContext {
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
 
-            file_column_position: self.file_column_position,
-
             deletes,
         })
     }
@@ -155,8 +149,6 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-
-    pub file_column_position: Option<usize>,
 }
 
 impl PlanContext {
@@ -268,7 +260,6 @@ impl PlanContext {
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
-            file_column_position: self.file_column_position,
         }
     }
 }
