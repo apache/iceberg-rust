@@ -509,6 +509,42 @@ static CONTENT_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
     })
 };
 
+fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
+    vec![
+        CONTENT.clone(),
+        FILE_PATH.clone(),
+        FILE_FORMAT.clone(),
+        Arc::new(NestedField::required(
+            102,
+            "partition",
+            Type::Struct(partition_type.clone()),
+        )),
+        RECORD_COUNT.clone(),
+        FILE_SIZE_IN_BYTES.clone(),
+        COLUMN_SIZES.clone(),
+        VALUE_COUNTS.clone(),
+        NULL_VALUE_COUNTS.clone(),
+        NAN_VALUE_COUNTS.clone(),
+        LOWER_BOUNDS.clone(),
+        UPPER_BOUNDS.clone(),
+        KEY_METADATA.clone(),
+        SPLIT_OFFSETS.clone(),
+        EQUALITY_IDS.clone(),
+        SORT_ORDER_ID.clone(),
+        FIRST_ROW_ID.clone(),
+        REFERENCE_DATA_FILE.clone(),
+        CONTENT_OFFSET.clone(),
+        CONTENT_SIZE_IN_BYTES.clone(),
+    ]
+}
+
+pub(super) fn data_file_schema_v3(partition_type: &StructType) -> Result<AvroSchema> {
+    let schema = Schema::builder()
+        .with_fields(data_file_fields_v3(partition_type))
+        .build()?;
+    schema_to_avro_schema("data_file", &schema)
+}
+
 fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
     vec![
         CONTENT.clone(),
@@ -533,6 +569,8 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         SORT_ORDER_ID.clone(),
         FIRST_ROW_ID.clone(),
         REFERENCE_DATA_FILE.clone(),
+        // Why are the following two fields here in the existing v2 schema?
+        // In the spec, they are not even listed as optional for v2.
         CONTENT_OFFSET.clone(),
         CONTENT_SIZE_IN_BYTES.clone(),
     ]
