@@ -2055,4 +2055,65 @@ pub mod tests {
         assert_eq!(schema.field(1).name(), "y");
         assert_eq!(schema.field(2).name(), RESERVED_COL_NAME_FILE);
     }
+
+    #[tokio::test]
+    async fn test_select_called_twice_uses_last_selection() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Call select twice - first with x and y, then with only z and _file
+        // The second call should override the first
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", "y", RESERVED_COL_NAME_FILE]) // This should be ignored
+            .select(["z", RESERVED_COL_NAME_FILE]) // This should be used
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have exactly 2 columns: z and _file (NOT x or y)
+        assert_eq!(
+            batches[0].num_columns(),
+            2,
+            "Should have exactly 2 columns from the last select"
+        );
+
+        let schema = batches[0].schema();
+
+        // Verify the columns are z and _file in that order
+        assert_eq!(schema.field(0).name(), "z", "First column should be z");
+        assert_eq!(
+            schema.field(1).name(),
+            RESERVED_COL_NAME_FILE,
+            "Second column should be _file"
+        );
+
+        // Verify x and y are NOT present
+        assert!(
+            batches[0].column_by_name("x").is_none(),
+            "Column x should not be present (it was only in the first select)"
+        );
+        assert!(
+            batches[0].column_by_name("y").is_none(),
+            "Column y should not be present (it was only in the first select)"
+        );
+
+        // Verify z column has data
+        let z_col = batches[0].column_by_name("z").unwrap();
+        let z_arr = z_col.as_primitive::<arrow_array::types::Int64Type>();
+        assert!(z_arr.len() > 0, "Column z should have data");
+
+        // Verify _file column exists and is properly formatted
+        let file_col = batches[0].column_by_name(RESERVED_COL_NAME_FILE).unwrap();
+        assert!(
+            matches!(
+                file_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_file column should use RunEndEncoded type"
+        );
+    }
 }
