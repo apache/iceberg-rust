@@ -72,20 +72,17 @@ impl BasicDeleteFileLoader {
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
-    /// Evolves the schema of the RecordBatches from an equality delete file
+    /// Evolves the schema of the RecordBatches from an equality delete file.
+    ///
+    /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
+    /// only evolves the specified `equality_ids` columns, not all table columns.
     pub(crate) async fn evolve_schema(
         record_batch_stream: ArrowRecordBatchStream,
         target_schema: Arc<Schema>,
+        equality_ids: &[i32],
     ) -> Result<ArrowRecordBatchStream> {
-        let eq_ids = target_schema
-            .as_ref()
-            .field_id_to_name_map()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(target_schema.clone(), &eq_ids);
+            RecordBatchTransformer::build(target_schema.clone(), equality_ids);
 
         let record_batch_stream = record_batch_stream.map(move |record_batch| {
             record_batch.and_then(|record_batch| {
@@ -106,7 +103,14 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
     ) -> Result<ArrowRecordBatchStream> {
         let raw_batch_stream = self.parquet_to_batch_stream(&task.file_path).await?;
 
-        Self::evolve_schema(raw_batch_stream, schema).await
+        // For equality deletes, only evolve the equality_ids columns.
+        // For positional deletes (equality_ids is None), use all field IDs.
+        let field_ids = match &task.equality_ids {
+            Some(ids) => ids.clone(),
+            None => schema.field_id_to_name_map().keys().cloned().collect(),
+        };
+
+        Self::evolve_schema(raw_batch_stream, schema, &field_ids).await
     }
 }
 
