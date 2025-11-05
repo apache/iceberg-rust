@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,9 @@ pub struct FileScanTask {
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
+    /// The content type of the file to scan.
+    pub data_file_content: DataContentType,
+
     /// The format of the file to scan.
     pub data_file_format: DataFileFormat,
 
@@ -53,7 +58,11 @@ pub struct FileScanTask {
     pub predicate: Option<BoundPredicate>,
 
     /// The list of delete files that may need to be applied to this data file
-    pub deletes: Vec<FileScanTaskDeleteFile>,
+    pub deletes: Vec<FileScanTask>,
+    /// sequence number
+    pub sequence_number: i64,
+    /// equality ids
+    pub equality_ids: Option<Vec<i32>>,
 }
 
 impl FileScanTask {
@@ -87,6 +96,8 @@ impl FileScanTask {
 pub(crate) struct DeleteFileContext {
     pub(crate) manifest_entry: ManifestEntryRef,
     pub(crate) partition_spec_id: i32,
+    pub(crate) snapshot_schema: SchemaRef,
+    pub(crate) field_ids: Arc<Vec<i32>>,
 }
 
 impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
@@ -96,6 +107,27 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
             equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
+        }
+    }
+}
+
+impl From<&DeleteFileContext> for FileScanTask {
+    fn from(ctx: &DeleteFileContext) -> Self {
+        FileScanTask {
+            start: 0,
+            length: ctx.manifest_entry.file_size_in_bytes(),
+            record_count: Some(ctx.manifest_entry.record_count()),
+
+            data_file_path: ctx.manifest_entry.file_path().to_string(),
+            data_file_content: ctx.manifest_entry.content_type(),
+            data_file_format: ctx.manifest_entry.file_format(),
+
+            schema: ctx.snapshot_schema.clone(),
+            project_field_ids: ctx.field_ids.to_vec(),
+            predicate: None,
+            deletes: vec![],
+            sequence_number: ctx.manifest_entry.sequence_number().unwrap_or(0),
+            equality_ids: ctx.manifest_entry.data_file().equality_ids(),
         }
     }
 }

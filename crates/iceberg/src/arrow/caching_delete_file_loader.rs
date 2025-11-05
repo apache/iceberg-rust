@@ -30,7 +30,7 @@ use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
-use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
+use crate::scan::{ArrowRecordBatchStream, FileScanTask};
 use crate::spec::{
     DataContentType, Datum, ListType, MapType, NestedField, NestedFieldRef, PartnerAccessor,
     PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type,
@@ -138,7 +138,7 @@ impl CachingDeleteFileLoader {
     /// ```
     pub(crate) fn load_deletes(
         &self,
-        delete_file_entries: &[FileScanTaskDeleteFile],
+        delete_file_entries: &[FileScanTask],
         schema: SchemaRef,
     ) -> Receiver<Result<DeleteFilter>> {
         let (tx, rx) = channel();
@@ -204,32 +204,32 @@ impl CachingDeleteFileLoader {
     }
 
     async fn load_file_for_task(
-        task: &FileScanTaskDeleteFile,
+        task: &FileScanTask,
         basic_delete_file_loader: BasicDeleteFileLoader,
         del_filter: DeleteFilter,
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
-        match task.file_type {
+        match task.data_file_content {
             DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
                 basic_delete_file_loader
-                    .parquet_to_batch_stream(&task.file_path)
+                    .parquet_to_batch_stream(task.data_file_path())
                     .await?,
             )),
 
             DataContentType::EqualityDeletes => {
-                let Some(notify) = del_filter.try_start_eq_del_load(&task.file_path) else {
+                let Some(notify) = del_filter.try_start_eq_del_load(task.data_file_path()) else {
                     return Ok(DeleteFileContext::ExistingEqDel);
                 };
 
                 let (sender, receiver) = channel();
-                del_filter.insert_equality_delete(&task.file_path, receiver);
+                del_filter.insert_equality_delete(task.data_file_path(), receiver);
 
                 // Per the Iceberg spec, evolve schema for equality deletes but only for the
                 // equality_ids columns, not all table columns.
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.file_path)
+                        .parquet_to_batch_stream(task.data_file_path())
                         .await?,
                     schema,
                     &equality_ids_vec,
@@ -552,6 +552,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::scan::FileScanTaskDeleteFile;
 
     #[tokio::test]
     async fn test_delete_file_loader_parse_equality_deletes() {
@@ -871,6 +872,36 @@ mod tests {
             equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
         };
 
+        let pos_del_scan_task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: pos_del.file_path,
+            data_file_content: DataContentType::PositionDeletes,
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![],
+            sequence_number: 0,
+            equality_ids: None,
+        };
+
+        let eq_del_scan_task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: eq_del.file_path.clone(),
+            data_file_content: DataContentType::EqualityDeletes,
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![],
+            sequence_number: 0,
+            equality_ids: eq_del.equality_ids.clone(),
+        };
+
         let file_scan_task = FileScanTask {
             start: 0,
             length: 0,
@@ -880,7 +911,10 @@ mod tests {
             schema: data_file_schema.clone(),
             project_field_ids: vec![2, 3],
             predicate: None,
-            deletes: vec![pos_del, eq_del],
+            deletes: vec![pos_del_scan_task, eq_del_scan_task],
+            sequence_number: 0,
+            data_file_content: DataContentType::Data,
+            equality_ids: None,
         };
 
         // Load the deletes - should handle both types without error

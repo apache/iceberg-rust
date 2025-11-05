@@ -24,7 +24,7 @@ use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
 use crate::runtime::spawn;
-use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
+use crate::scan::{DeleteFileContext, FileScanTask};
 use crate::spec::{DataContentType, DataFile, Struct};
 
 /// Index of delete files
@@ -86,7 +86,7 @@ impl DeleteFileIndex {
         &self,
         data_file: &DataFile,
         seq_num: Option<i64>,
-    ) -> Vec<FileScanTaskDeleteFile> {
+    ) -> Vec<FileScanTask> {
         let notifier = {
             let guard = self.state.read().unwrap();
             match *guard {
@@ -165,7 +165,7 @@ impl PopulatedDeleteFileIndex {
         &self,
         data_file: &DataFile,
         seq_num: Option<i64>,
-    ) -> Vec<FileScanTaskDeleteFile> {
+    ) -> Vec<FileScanTask> {
         let mut results = vec![];
 
         self.global_equality_deletes
@@ -219,7 +219,7 @@ mod tests {
     use super::*;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry, ManifestStatus,
-        Struct,
+        Schema, Struct,
     };
 
     #[test]
@@ -241,6 +241,8 @@ mod tests {
             .map(|entry| DeleteFileContext {
                 manifest_entry: entry.into(),
                 partition_spec_id: 0,
+                snapshot_schema: Arc::new(Schema::builder().with_schema_id(1).build().unwrap()), // hack
+                field_ids: Arc::new(vec![]), // hack
             })
             .collect();
 
@@ -263,7 +265,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&data_file, Some(4));
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
 
         assert_eq!(
@@ -276,7 +278,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&data_file, Some(5));
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_5,
@@ -288,7 +290,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&data_file, Some(6));
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_6,
@@ -304,7 +306,7 @@ mod tests {
         let actual_paths_to_apply_for_partitioned_file: Vec<String> =
             delete_files_to_apply_for_partitioned_file
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.data_file_path)
                 .collect();
         assert_eq!(
             actual_paths_to_apply_for_partitioned_file,
@@ -333,6 +335,8 @@ mod tests {
             .map(|entry| DeleteFileContext {
                 manifest_entry: entry.into(),
                 partition_spec_id: spec_id,
+                snapshot_schema: Arc::new(Schema::builder().with_schema_id(1).build().unwrap()), // hack
+                field_ids: Arc::new(vec![]), // hack
             })
             .collect();
 
@@ -356,7 +360,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(4));
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
 
         assert_eq!(
@@ -369,7 +373,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(5));
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_5,
@@ -381,7 +385,7 @@ mod tests {
             delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(6));
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.data_file_path)
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_6,
@@ -396,7 +400,7 @@ mod tests {
         let actual_paths_to_apply_for_different_partition: Vec<String> =
             delete_files_to_apply_for_different_partition
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.data_file_path)
                 .collect();
         assert!(actual_paths_to_apply_for_different_partition.is_empty());
 
@@ -407,7 +411,7 @@ mod tests {
         let actual_paths_to_apply_for_different_spec: Vec<String> =
             delete_files_to_apply_for_different_spec
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.data_file_path)
                 .collect();
         assert!(actual_paths_to_apply_for_different_spec.is_empty());
     }

@@ -120,6 +120,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::spec::DataContentType;
 
     #[tokio::test]
     async fn test_basic_delete_file_loader_read_delete_file() {
@@ -134,11 +135,15 @@ mod tests {
 
         let file_scan_tasks = setup(table_location);
 
+        let delete_task = FileScanTaskDeleteFile {
+            file_path: file_scan_tasks[0].deletes[0].data_file_path.clone(),
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+        };
+
         let result = delete_file_loader
-            .read_delete_file(
-                &file_scan_tasks[0].deletes[0],
-                file_scan_tasks[0].schema_ref(),
-            )
+            .read_delete_file(&delete_task, file_scan_tasks[0].schema_ref())
             .await
             .unwrap();
 

@@ -127,6 +127,7 @@ impl ManifestEntryContext {
             record_count: Some(self.manifest_entry.record_count()),
 
             data_file_path: self.manifest_entry.file_path().to_string(),
+            data_file_content: self.manifest_entry.data_file().content_type(),
             data_file_format: self.manifest_entry.file_format(),
 
             schema: self.snapshot_schema,
@@ -136,6 +137,8 @@ impl ManifestEntryContext {
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
 
             deletes,
+            sequence_number: self.manifest_entry.sequence_number().unwrap_or(0),
+            equality_ids: self.manifest_entry.data_file().equality_ids(),
         })
     }
 }
