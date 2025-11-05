@@ -41,7 +41,6 @@ const META_ROOT_PATH: &str = "metadata";
 
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
-    #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
@@ -190,7 +189,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+        partition_spec_id: i32,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -207,7 +210,14 @@ impl<'a> SnapshotProducer<'a> {
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
-                .default_partition_spec()
+                .partition_spec_by_id(partition_spec_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid partition spec id for new manifest writer",
+                    )
+                    .with_context("partition spec id", partition_spec_id.to_string())
+                })?
                 .as_ref()
                 .clone(),
         );
@@ -303,11 +313,70 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(manifest_content_type)?;
+
+        let mut writer = self.new_manifest_writer(
+            manifest_content_type,
+            self.table.metadata().default_partition_spec_id(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
         writer.write_manifest_file().await
+    }
+
+    async fn write_delete_manifest(
+        &mut self,
+        deleted_entries: Vec<ManifestEntry>,
+    ) -> Result<Vec<ManifestFile>> {
+        if deleted_entries.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Group deleted entries by spec_id
+        let mut partition_groups = HashMap::new();
+        for entry in deleted_entries {
+            partition_groups
+                .entry(entry.data_file().partition_spec_id)
+                .or_insert_with(Vec::new)
+                .push(entry);
+        }
+
+        // Write a delete manifest per spec_id group
+        let mut deleted_manifests = Vec::new();
+        for (spec_id, entries) in partition_groups {
+            let mut data_file_writer: Option<ManifestWriter> = None;
+            let mut delete_file_writer: Option<ManifestWriter> = None;
+            for entry in entries {
+                match entry.content_type() {
+                    DataContentType::Data => {
+                        if data_file_writer.is_none() {
+                            data_file_writer =
+                                Some(self.new_manifest_writer(ManifestContentType::Data, spec_id)?);
+                        }
+                        data_file_writer.as_mut().unwrap().add_delete_entry(entry)?;
+                    }
+                    DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
+                        if delete_file_writer.is_none() {
+                            delete_file_writer = Some(
+                                self.new_manifest_writer(ManifestContentType::Deletes, spec_id)?,
+                            );
+                        }
+                        delete_file_writer
+                            .as_mut()
+                            .unwrap()
+                            .add_delete_entry(entry)?;
+                    }
+                }
+            }
+            if let Some(writer) = data_file_writer {
+                deleted_manifests.push(writer.write_manifest_file().await?);
+            }
+            if let Some(writer) = delete_file_writer {
+                deleted_manifests.push(writer.write_manifest_file().await?);
+            }
+        }
+
+        Ok(deleted_manifests)
     }
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
@@ -342,6 +411,11 @@ impl<'a> SnapshotProducer<'a> {
             let added_manifest = self.write_added_manifest(added_delete_files).await?;
             manifest_files.push(added_manifest);
         }
+
+        let delete_manifests = self
+            .write_delete_manifest(snapshot_produce_operation.delete_entries(self).await?)
+            .await?;
+        manifest_files.extend(delete_manifests);
 
         manifest_process
             .process_manifests(self, manifest_files)
@@ -643,7 +717,7 @@ impl MergeManifestManager {
                             Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>,
                         >)
                 } else {
-                    let writer = snapshot_produce.new_manifest_writer(self.content)?;
+                    let writer = snapshot_produce.new_manifest_writer(self.content, snapshot_produce.table.metadata().default_partition_spec_id())?;
                     let snapshot_id = snapshot_produce.snapshot_id;
                     let file_io = snapshot_produce.table.file_io().clone();
                     Ok((Box::pin(async move {

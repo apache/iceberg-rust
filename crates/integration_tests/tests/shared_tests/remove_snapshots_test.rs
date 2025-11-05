@@ -30,6 +30,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
@@ -81,12 +82,44 @@ async fn test_expire_snapshots_by_count() {
         file_name_generator,
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+    let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+    let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(col1) as ArrayRef,
+        Arc::new(col2) as ArrayRef,
+        Arc::new(col3) as ArrayRef,
+    ])
+    .unwrap();
+    data_file_writer.write(batch.clone()).await.unwrap();
+    let data_file = data_file_writer.close().await.unwrap();
+
+    // check parquet file schema
+    let content = table
+        .file_io()
+        .new_input(data_file[0].file_path())
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let parquet_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
+        &content,
+        ArrowReaderOptions::default(),
+    )
+    .unwrap();
+    let field_ids: Vec<i32> = parquet_reader
+        .parquet_schema()
+        .columns()
+        .iter()
+        .map(|col| col.self_type().get_basic_info().id())
+        .collect();
+    assert_eq!(field_ids, vec![1, 2, 3]);
 
     // commit result
     for i in 0..10 {
         // Create a new data file writer for each iteration
         let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
-
         // Create different data for each iteration
         let col1 = StringArray::from(vec![
             Some(format!("foo_{}", i)),
