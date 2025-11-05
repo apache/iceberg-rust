@@ -54,7 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
-pub mod remove_snapshots;
+mod remove_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -65,14 +65,14 @@ mod upgrade_format_version;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use append::{MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES};
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
+use remove_snapshots::RemoveSnapshotAction;
 
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
-use crate::transaction::action::BoxedTransactionAction;
-use crate::transaction::append::FastAppendAction;
-use crate::transaction::remove_snapshots::RemoveSnapshotAction;
+use crate::transaction::append::{FastAppendAction, MergeAppendAction};
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -141,6 +141,11 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a merge append action.
+    pub fn merge_append(&self) -> MergeAppendAction {
+        MergeAppendAction::new()
     }
 
     /// Creates replace sort order action.

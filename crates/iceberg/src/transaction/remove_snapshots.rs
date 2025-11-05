@@ -29,16 +29,10 @@ use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
-/// Property key for max snapshot age in milliseconds.
-pub const MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
 /// Default value for max snapshot age in milliseconds.
 pub const MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000; // 5 days
-/// Property key for min snapshots to keep.
-pub const MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
 /// Default value for min snapshots to keep.
 pub const MIN_SNAPSHOTS_TO_KEEP_DEFAULT: i32 = 1;
-/// Property key for max reference age in milliseconds.
-pub const MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
 /// Default value for max reference age in milliseconds.
 pub const MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
 
