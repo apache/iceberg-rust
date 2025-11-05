@@ -25,10 +25,20 @@ use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    DefaultManifestProcess, MergeManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
+
+/// Target size of manifest file when merging manifests.
+pub const MANIFEST_TARGET_SIZE_BYTES: &str = "commit.manifest.target-size-bytes";
+const MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u32 = 8 * 1024 * 1024; // 8 MB
+/// Minimum number of manifests to merge.
+pub const MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
+const MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
+/// Whether allow to merge manifests.
+pub const MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+const MANIFEST_MERGE_ENABLED_DEFAULT: bool = false;
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
@@ -186,6 +196,125 @@ impl SnapshotProduceOperation for FastAppendOperation {
             .filter(|entry| entry.has_added_files() || entry.has_existing_files())
             .cloned()
             .collect())
+    }
+}
+
+/// MergeAppendAction is a transaction action similar to fast append except that it will merge manifests
+/// based on the target size.
+pub struct MergeAppendAction {
+    // snapshot_produce_action: SnapshotProducer<'_>,
+    target_size_bytes: u32,
+    min_count_to_merge: u32,
+    merge_enabled: bool,
+
+    check_duplicate: bool,
+    // below are properties used to create SnapshotProducer when commit
+    commit_uuid: Option<Uuid>,
+    key_metadata: Option<Vec<u8>>,
+    snapshot_properties: HashMap<String, String>,
+    added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
+    snapshot_id: Option<i64>,
+}
+
+impl MergeAppendAction {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new() -> Self {
+        Self {
+            target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
+            min_count_to_merge: MANIFEST_MIN_MERGE_COUNT_DEFAULT,
+            merge_enabled: MANIFEST_MERGE_ENABLED_DEFAULT,
+            check_duplicate: true,
+            commit_uuid: None,
+            key_metadata: None,
+            snapshot_properties: HashMap::default(),
+            added_data_files: vec![],
+            added_delete_files: vec![],
+            snapshot_id: None,
+        }
+    }
+
+    pub fn set_target_size_bytes(mut self, v: u32) -> Self {
+        self.target_size_bytes = v;
+        self
+    }
+
+    pub fn set_min_count_to_merge(mut self, v: u32) -> Self {
+        self.min_count_to_merge = v;
+        self
+    }
+
+    pub fn set_merge_enabled(mut self, v: bool) -> Self {
+        self.merge_enabled = v;
+        self
+    }
+
+    pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
+        let target_size_bytes: u32 = snapshot_properties
+            .get(MANIFEST_TARGET_SIZE_BYTES)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
+        let min_count_to_merge: u32 = snapshot_properties
+            .get(MANIFEST_MIN_MERGE_COUNT)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_MIN_MERGE_COUNT_DEFAULT);
+        let merge_enabled = snapshot_properties
+            .get(MANIFEST_MERGE_ENABLED)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_MERGE_ENABLED_DEFAULT);
+
+        self.snapshot_properties = snapshot_properties;
+        self.target_size_bytes = target_size_bytes;
+        self.min_count_to_merge = min_count_to_merge;
+        self.merge_enabled = merge_enabled;
+
+        self
+    }
+
+    /// Add data files to the snapshot.
+    pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
+        self.added_data_files.extend(data_files);
+        self
+    }
+}
+
+#[async_trait]
+impl TransactionAction for MergeAppendAction {
+    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        let snapshot_producer = SnapshotProducer::new(
+            table,
+            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            self.key_metadata.clone(),
+            self.snapshot_id,
+            self.snapshot_properties.clone(),
+            self.added_data_files.clone(),
+            self.added_delete_files.clone(),
+        );
+
+        // validate added files
+        snapshot_producer.validate_added_data_files(&self.added_data_files)?;
+        snapshot_producer.validate_added_data_files(&self.added_delete_files)?;
+
+        // Checks duplicate files
+        if self.check_duplicate {
+            snapshot_producer
+                .validate_duplicate_files(&self.added_data_files)
+                .await?;
+
+            snapshot_producer
+                .validate_duplicate_files(&self.added_delete_files)
+                .await?;
+        }
+
+        if self.merge_enabled {
+            let process =
+                MergeManifestProcess::new(self.target_size_bytes, self.min_count_to_merge);
+            snapshot_producer.commit(FastAppendOperation, process).await
+        } else {
+            snapshot_producer
+                .commit(FastAppendOperation, DefaultManifestProcess)
+                .await
+        }
     }
 }
 

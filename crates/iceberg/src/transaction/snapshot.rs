@@ -15,21 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
+use std::pin::Pin;
 
+use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::io::FileIO;
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
-    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter,
+    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
+use crate::utils::bin::ListPacker;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
@@ -49,22 +54,24 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 
 pub(crate) struct DefaultManifestProcess;
 
+#[async_trait]
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile> {
-        manifests
+    ) -> Result<Vec<ManifestFile>> {
+        Ok(manifests)
     }
 }
 
+#[async_trait]
 pub(crate) trait ManifestProcess: Send + Sync {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile>;
+    ) -> Result<Vec<ManifestFile>>;
 }
 
 pub(crate) struct SnapshotProducer<'a> {
@@ -336,8 +343,9 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_manifest);
         }
 
-        let manifest_files = manifest_process.process_manifests(self, manifest_files);
-        Ok(manifest_files)
+        manifest_process
+            .process_manifests(self, manifest_files)
+            .await
     }
 
     // Returns a `Summary` of the current snapshot
@@ -497,5 +505,193 @@ impl<'a> SnapshotProducer<'a> {
         ];
 
         Ok(ActionCommit::new(updates, requirements))
+    }
+}
+
+pub(crate) struct MergeManifestProcess {
+    target_size_bytes: u32,
+    min_count_to_merge: u32,
+}
+
+impl MergeManifestProcess {
+    pub fn new(target_size_bytes: u32, min_count_to_merge: u32) -> Self {
+        Self {
+            target_size_bytes,
+            min_count_to_merge,
+        }
+    }
+}
+
+#[async_trait]
+impl ManifestProcess for MergeManifestProcess {
+    async fn process_manifests(
+        &self,
+        snapshot_produce: &mut SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        let (unmerge_data_manifest, unmerge_delete_manifest): (Vec<_>, Vec<_>) = manifests
+            .into_iter()
+            .partition(|manifest| matches!(manifest.content, ManifestContentType::Data));
+        let mut data_manifest = {
+            let manifest_merge_manager = MergeManifestManager::new(
+                self.target_size_bytes,
+                self.min_count_to_merge,
+                ManifestContentType::Data,
+            );
+            manifest_merge_manager
+                .merge_manifest(snapshot_produce, unmerge_data_manifest)
+                .await?
+        };
+        data_manifest.extend(unmerge_delete_manifest);
+        Ok(data_manifest)
+    }
+}
+
+struct MergeManifestManager {
+    target_size_bytes: u32,
+    min_count_to_merge: u32,
+    content: ManifestContentType,
+}
+
+impl MergeManifestManager {
+    pub fn new(
+        target_size_bytes: u32,
+        min_count_to_merge: u32,
+        content: ManifestContentType,
+    ) -> Self {
+        Self {
+            target_size_bytes,
+            min_count_to_merge,
+            content,
+        }
+    }
+
+    fn group_by_spec(&self, manifests: Vec<ManifestFile>) -> BTreeMap<i32, Vec<ManifestFile>> {
+        let mut grouped_manifests = BTreeMap::new();
+        for manifest in manifests {
+            grouped_manifests
+                .entry(manifest.partition_spec_id)
+                .or_insert_with(Vec::new)
+                .push(manifest);
+        }
+        grouped_manifests
+    }
+
+    async fn merge_bin(
+        &self,
+        snapshot_id: i64,
+        file_io: FileIO,
+        manifest_bin: Vec<ManifestFile>,
+        mut writer: ManifestWriter,
+    ) -> Result<ManifestFile> {
+        for manifest_file in manifest_bin {
+            let manifest_file = manifest_file.load_manifest(&file_io).await?;
+            for manifest_entry in manifest_file.entries() {
+                if manifest_entry.status() == ManifestStatus::Deleted
+                    && manifest_entry
+                        .snapshot_id()
+                        .is_some_and(|id| id == snapshot_id)
+                {
+                    //only files deleted by this snapshot should be added to the new manifest
+                    writer.add_delete_entry(manifest_entry.as_ref().clone())?;
+                } else if manifest_entry.status() == ManifestStatus::Added
+                    && manifest_entry
+                        .snapshot_id()
+                        .is_some_and(|id| id == snapshot_id)
+                {
+                    //added entries from this snapshot are still added, otherwise they should be existing
+                    writer.add_entry(manifest_entry.as_ref().clone())?;
+                } else if manifest_entry.status() != ManifestStatus::Deleted {
+                    // add all non-deleted files from the old manifest as existing files
+                    writer.add_existing_entry(manifest_entry.as_ref().clone())?;
+                }
+            }
+        }
+
+        writer.write_manifest_file().await
+    }
+
+    async fn merge_group(
+        &self,
+        snapshot_produce: &mut SnapshotProducer<'_>,
+        first_manifest: &ManifestFile,
+        group_manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        let packer: ListPacker<ManifestFile> = ListPacker::new(self.target_size_bytes);
+        let manifest_bins =
+            packer.pack(group_manifests, |manifest| manifest.manifest_length as u32);
+
+        let manifest_merge_futures = manifest_bins
+            .into_iter()
+            .map(|manifest_bin| {
+                if manifest_bin.len() == 1 {
+                    Ok(Box::pin(async { Ok(manifest_bin) })
+                        as Pin<
+                            Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>,
+                        >)
+                }
+                //  if the bin has the first manifest (the new data files or an appended manifest file) then only
+                //  merge it if the number of manifests is above the minimum count. this is applied only to bins
+                //  with an in-memory manifest so that large manifests don't prevent merging older groups.
+                else if manifest_bin
+                    .iter()
+                    .any(|manifest| manifest == first_manifest)
+                    && manifest_bin.len() < self.min_count_to_merge as usize
+                {
+                    Ok(Box::pin(async { Ok(manifest_bin) })
+                        as Pin<
+                            Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>,
+                        >)
+                } else {
+                    let writer = snapshot_produce.new_manifest_writer(self.content)?;
+                    let snapshot_id = snapshot_produce.snapshot_id;
+                    let file_io = snapshot_produce.table.file_io().clone();
+                    Ok((Box::pin(async move {
+                        Ok(vec![
+                            self.merge_bin(
+                                snapshot_id,
+                                file_io,
+                                manifest_bin,
+                                writer,
+                            )
+                            .await?,
+                        ])
+                    }))
+                        as Pin<Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>>)
+                }
+            })
+            .collect::<Result<Vec<Pin<Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>>>>>()?;
+
+        let merged_bins: Vec<Vec<ManifestFile>> =
+            futures::future::join_all(manifest_merge_futures.into_iter())
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+
+        Ok(merged_bins.into_iter().flatten().collect())
+    }
+
+    pub(crate) async fn merge_manifest(
+        &self,
+        snapshot_produce: &mut SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        if manifests.is_empty() {
+            return Ok(manifests);
+        }
+
+        let first_manifest = manifests[0].clone();
+
+        let group_manifests = self.group_by_spec(manifests);
+
+        let mut merge_manifests = vec![];
+        for (_spec_id, manifests) in group_manifests.into_iter().rev() {
+            merge_manifests.extend(
+                self.merge_group(snapshot_produce, &first_manifest, manifests)
+                    .await?,
+            );
+        }
+
+        Ok(merge_manifests)
     }
 }
