@@ -97,7 +97,7 @@ impl ManifestEntryV1 {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 /// Data file
 pub struct DataFileSerde {
     #[serde(default)]
