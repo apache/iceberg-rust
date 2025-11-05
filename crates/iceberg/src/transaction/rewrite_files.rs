@@ -169,30 +169,20 @@ impl TransactionAction for RewriteFilesAction {
     }
 }
 
-fn copy_with_deleted_status(entry: &ManifestEntryRef) -> Result<ManifestEntry> {
-    // todo should we fail on missing properties or should we ignore them when they don't exist?
-    let builder = ManifestEntry::builder()
+fn copy_with_deleted_status(entry: &ManifestEntry) -> Result<ManifestEntry> {
+    let mut builder = ManifestEntry::builder()
         .status(ManifestStatus::Deleted)
-        .snapshot_id(entry.snapshot_id().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Missing snapshot_id for entry with file path: {}",
-                    entry.file_path()
-                ),
-            )
-        })?)
-        .sequence_number(entry.sequence_number().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Missing sequence_number for entry with file path: {}",
-                    entry.file_path()
-                ),
-            )
-        })?)
-        // todo copy file seq no as well
         .data_file(entry.data_file().clone());
+
+    if let Some(snapshot_id) = entry.snapshot_id() {
+        builder = builder.snapshot_id(snapshot_id);
+    }
+
+    if let Some(sequence_number) = entry.sequence_number() {
+        builder = builder.sequence_number(sequence_number);
+    }
+
+    // todo copy file seq no as well
 
     Ok(builder.build())
 }
@@ -271,7 +261,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                                 .iter()
                                 .any(|f| f.file_path == entry.data_file().file_path)
                             {
-                                delete_entries.push(copy_with_deleted_status(entry)?)
+                                delete_entries.push(copy_with_deleted_status(entry.as_ref())?)
                             }
                         }
                         DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
@@ -280,7 +270,7 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                                 .iter()
                                 .any(|f| f.file_path == entry.data_file().file_path)
                             {
-                                delete_entries.push(copy_with_deleted_status(entry)?)
+                                delete_entries.push(copy_with_deleted_status(entry.as_ref())?)
                             }
                         }
                     }
