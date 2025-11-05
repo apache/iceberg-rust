@@ -87,7 +87,7 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
@@ -120,7 +120,12 @@ pub(crate) struct SnapshotProducer<'a> {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
-    added_delete_files: Vec<DataFile>,
+    pub added_delete_files: Vec<DataFile>,
+
+    // for filtering out files that are removed by action
+    pub removed_data_file_paths: HashSet<String>,
+    pub removed_delete_file_paths: HashSet<String>,
+
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -128,6 +133,7 @@ pub(crate) struct SnapshotProducer<'a> {
 }
 
 impl<'a> SnapshotProducer<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
@@ -136,7 +142,19 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
         added_delete_files: Vec<DataFile>,
+        removed_data_file_paths: Vec<DataFile>,
+        removed_delete_file_paths: Vec<DataFile>,
     ) -> Self {
+        let removed_data_file_paths = removed_data_file_paths
+            .into_iter()
+            .map(|df| df.file_path)
+            .collect();
+
+        let removed_delete_file_paths = removed_delete_file_paths
+            .into_iter()
+            .map(|df| df.file_path)
+            .collect();
+
         Self {
             table,
             snapshot_id: snapshot_id.unwrap_or_else(|| Self::generate_unique_snapshot_id(table)),
@@ -145,6 +163,8 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_properties,
             added_data_files,
             added_delete_files,
+            removed_data_file_paths,
+            removed_delete_file_paths,
             manifest_counter: (0..),
         }
     }
@@ -226,7 +246,7 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(
+    pub(crate) fn new_manifest_writer(
         &mut self,
         content: ManifestContentType,
         partition_spec_id: i32,
