@@ -21,7 +21,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use _serde::SnapshotV2;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -82,33 +81,52 @@ impl Default for Operation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypedBuilder)]
-#[serde(from = "SnapshotV2", into = "SnapshotV2")]
+#[derive(Debug, PartialEq, Eq, Clone)]
+/// Row range of a snapshot, contains first_row_id and added_rows_count.
+pub struct SnapshotRowRange {
+    /// The first _row_id assigned to the first row in the first data file in the first manifest.
+    pub first_row_id: u64,
+    /// The upper bound of the number of rows with assigned row IDs
+    pub added_rows: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(prefix = "with_")))]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
     /// A unique long ID
-    snapshot_id: i64,
+    pub(crate) snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
     #[builder(default = None)]
-    parent_snapshot_id: Option<i64>,
+    pub(crate) parent_snapshot_id: Option<i64>,
     /// A monotonically increasing long that tracks the order of
     /// changes to a table.
-    sequence_number: i64,
+    pub(crate) sequence_number: i64,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection
-    timestamp_ms: i64,
+    pub(crate) timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
     /// Currently we only support manifest list file, and manifest files are not supported.
     #[builder(setter(into))]
-    manifest_list: String,
+    pub(crate) manifest_list: String,
     /// A string map that summarizes the snapshot changes, including operation.
-    summary: Summary,
+    pub(crate) summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
     #[builder(setter(strip_option(fallback = schema_id_opt)), default = None)]
-    schema_id: Option<SchemaId>,
+    pub(crate) schema_id: Option<SchemaId>,
+    /// Encryption Key ID
+    #[builder(default)]
+    pub(crate) encryption_key_id: Option<String>,
+    /// Row range of this snapshot, required when the table version supports row lineage.
+    /// Specify as a tuple of (first_row_id, added_rows_count)
+    #[builder(default, setter(!strip_option, transform = |first_row_id: u64, added_rows: u64| Some(SnapshotRowRange { first_row_id, added_rows })))]
+    // This is specified as a struct instead of two separate fields to ensure that both fields are either set or not set.
+    // The java implementations uses two separate fields, then sets `added_row_counts` to Null if `first_row_id` is set to Null.
+    // It throws an error if `added_row_counts` is set but `first_row_id` is not set, or if either of the two is negative.
+    // We handle all cases infallible using the rust type system.
+    pub(crate) row_range: Option<SnapshotRowRange>,
 }
 
 impl Snapshot {
@@ -205,6 +223,37 @@ impl Snapshot {
             snapshot_id: self.snapshot_id,
         }
     }
+
+    /// The row-id of the first newly added row in this snapshot. All rows added in this snapshot will
+    /// have a row-id assigned to them greater than this value. All rows with a row-id less than this
+    /// value were created in a snapshot that was added to the table (but not necessarily committed to
+    /// this branch) in the past.
+    ///
+    /// This field is optional but is required when the table version supports row lineage.
+    pub fn first_row_id(&self) -> Option<u64> {
+        self.row_range.as_ref().map(|r| r.first_row_id)
+    }
+
+    /// The total number of newly added rows in this snapshot. It should be the summation of {@link
+    /// ManifestFile#ADDED_ROWS_COUNT} for every manifest added in this snapshot.
+    ///
+    /// This field is optional but is required when the table version supports row lineage.
+    pub fn added_rows_count(&self) -> Option<u64> {
+        self.row_range.as_ref().map(|r| r.added_rows)
+    }
+
+    /// Returns the row range of this snapshot, if available.
+    /// This is a tuple containing (first_row_id, added_rows_count).
+    pub fn row_range(&self) -> Option<(u64, u64)> {
+        self.row_range
+            .as_ref()
+            .map(|r| (r.first_row_id, r.added_rows))
+    }
+
+    /// Get encryption key id, if available.
+    pub fn encryption_key_id(&self) -> Option<&str> {
+        self.encryption_key_id.as_deref()
+    }
 }
 
 pub(super) mod _serde {
@@ -219,6 +268,26 @@ pub(super) mod _serde {
     use super::{Operation, Snapshot, Summary};
     use crate::Error;
     use crate::spec::SchemaId;
+    use crate::spec::snapshot::SnapshotRowRange;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 snapshot for serialization/deserialization
+    pub(crate) struct SnapshotV3 {
+        pub snapshot_id: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub parent_snapshot_id: Option<i64>,
+        pub sequence_number: i64,
+        pub timestamp_ms: i64,
+        pub manifest_list: String,
+        pub summary: Summary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema_id: Option<SchemaId>,
+        pub first_row_id: u64,
+        pub added_rows: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub key_id: Option<String>,
+    }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -253,6 +322,51 @@ pub(super) mod _serde {
         pub schema_id: Option<SchemaId>,
     }
 
+    impl From<SnapshotV3> for Snapshot {
+        fn from(s: SnapshotV3) -> Self {
+            Snapshot {
+                snapshot_id: s.snapshot_id,
+                parent_snapshot_id: s.parent_snapshot_id,
+                sequence_number: s.sequence_number,
+                timestamp_ms: s.timestamp_ms,
+                manifest_list: s.manifest_list,
+                summary: s.summary,
+                schema_id: s.schema_id,
+                encryption_key_id: s.key_id,
+                row_range: Some(SnapshotRowRange {
+                    first_row_id: s.first_row_id,
+                    added_rows: s.added_rows,
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<Snapshot> for SnapshotV3 {
+        type Error = Error;
+
+        fn try_from(s: Snapshot) -> Result<Self, Self::Error> {
+            let row_range = s.row_range.ok_or_else(|| {
+                Error::new(
+                    crate::ErrorKind::DataInvalid,
+                    "v3 Snapshots must have first-row-id and rows-added fields set.".to_string(),
+                )
+            })?;
+
+            Ok(SnapshotV3 {
+                snapshot_id: s.snapshot_id,
+                parent_snapshot_id: s.parent_snapshot_id,
+                sequence_number: s.sequence_number,
+                timestamp_ms: s.timestamp_ms,
+                manifest_list: s.manifest_list,
+                summary: s.summary,
+                schema_id: s.schema_id,
+                first_row_id: row_range.first_row_id,
+                added_rows: row_range.added_rows,
+                key_id: s.encryption_key_id,
+            })
+        }
+    }
+
     impl From<SnapshotV2> for Snapshot {
         fn from(v2: SnapshotV2) -> Self {
             Snapshot {
@@ -263,6 +377,8 @@ pub(super) mod _serde {
                 manifest_list: v2.manifest_list,
                 summary: v2.summary,
                 schema_id: v2.schema_id,
+                encryption_key_id: None,
+                row_range: None,
             }
         }
     }
@@ -300,6 +416,8 @@ pub(super) mod _serde {
                     additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
+                encryption_key_id: None,
+                row_range: None,
             })
         }
     }
