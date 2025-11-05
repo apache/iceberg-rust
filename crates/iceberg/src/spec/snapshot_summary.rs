@@ -850,6 +850,7 @@ mod tests {
             deleted_rows_count: Some(50),
             partitions: Some(Vec::new()),
             key_metadata: None,
+            first_row_id: None,
         };
 
         collector
@@ -974,6 +975,7 @@ mod tests {
             deleted_rows_count: Some(0),
             partitions: Some(Vec::new()),
             key_metadata: None,
+            first_row_id: None,
         });
 
         summary_four.add_file(

@@ -243,7 +243,7 @@ mod tests {
     use crate::spec::TableMetadata;
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Error, ErrorKind, TableIdent};
+    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -302,8 +302,41 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        let table_ident =
+            TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
+                .unwrap();
+
+        catalog
+            .create_namespace(table_ident.namespace(), HashMap::new())
+            .await
+            .unwrap();
+
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let base_metadata = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let table_creation = TableCreation::builder()
+            .schema((**base_metadata.current_schema()).clone())
+            .partition_spec((**base_metadata.default_partition_spec()).clone())
+            .sort_order((**base_metadata.default_sort_order()).clone())
+            .name(table_ident.name().to_string())
+            .format_version(crate::spec::FormatVersion::V3)
+            .build();
+
+        catalog
+            .create_table(table_ident.namespace(), table_creation)
+            .await
+            .unwrap()
+    }
+
     /// Helper function to create a test table with retry properties
-    fn setup_test_table(num_retries: &str) -> Table {
+    pub(super) fn setup_test_table(num_retries: &str) -> Table {
         let table = make_v2_table();
 
         // Set retry properties
@@ -467,5 +500,90 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+}
+
+#[cfg(test)]
+mod test_row_lineage {
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Struct,
+    };
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+
+    #[tokio::test]
+    async fn test_fast_append_with_row_lineage() {
+        // Helper function to create a data file with specified number of rows
+        fn file_with_rows(record_count: u64) -> DataFile {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(format!("test/{}.parquet", record_count))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(record_count)
+                .partition(Struct::from_iter([Some(Literal::long(0))]))
+                .partition_spec_id(0)
+                .build()
+                .unwrap()
+        }
+        let catalog = new_memory_catalog().await;
+
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Check initial state - next_row_id should be 0
+        assert_eq!(table.metadata().next_row_id(), 0);
+
+        // First fast append with 30 rows
+        let tx = Transaction::new(&table);
+        let data_file_30 = file_with_rows(30);
+        let action = tx.fast_append().add_data_files(vec![data_file_30]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Check snapshot and table state after first append
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.first_row_id(), Some(0));
+        assert_eq!(table.metadata().next_row_id(), 30);
+
+        // Check written manifest for first_row_id
+        let manifest_list = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        assert_eq!(manifest_list.entries().len(), 1);
+        let manifest_file = &manifest_list.entries()[0];
+        assert_eq!(manifest_file.first_row_id, Some(0));
+
+        // Second fast append with 17 and 11 rows
+        let tx = Transaction::new(&table);
+        let data_file_17 = file_with_rows(17);
+        let data_file_11 = file_with_rows(11);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![data_file_17, data_file_11]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Check snapshot and table state after second append
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.first_row_id(), Some(30));
+        assert_eq!(table.metadata().next_row_id(), 30 + 17 + 11);
+
+        // Check written manifest for first_row_id
+        let manifest_list = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 2);
+        let manifest_file = &manifest_list.entries()[1];
+        assert_eq!(manifest_file.first_row_id, Some(30));
     }
 }
