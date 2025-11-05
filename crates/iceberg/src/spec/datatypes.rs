@@ -423,7 +423,15 @@ impl<'de> Deserialize<'de> for StructType {
                 let mut fields = None;
                 while let Some(key) = map.next_key()? {
                     match key {
-                        Field::Type => (),
+                        Field::Type => {
+                            let type_val: String = map.next_value()?;
+                            if type_val != "struct" {
+                                return Err(serde::de::Error::custom(format!(
+                                    "expected type 'struct', got '{}'",
+                                    type_val
+                                )));
+                            }
+                        }
                         Field::Fields => {
                             if fields.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fields"));
@@ -1207,5 +1215,50 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+    }
+
+    #[test]
+    fn struct_type_with_type_field() {
+        // Test that StructType properly deserializes JSON with "type":"struct" field
+        // This was previously broken because the deserializer wasn't consuming the type field value
+        let json = r#"
+        {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let struct_type: StructType = serde_json::from_str(json)
+            .expect("Should successfully deserialize StructType with type field");
+
+        assert_eq!(struct_type.fields().len(), 1);
+        assert_eq!(struct_type.fields()[0].name, "field1");
+    }
+
+    #[test]
+    fn struct_type_rejects_wrong_type() {
+        // Test that StructType validation rejects incorrect type field values
+        let json = r#"
+        {
+            "type": "list",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let result = serde_json::from_str::<StructType>(json);
+        assert!(
+            result.is_err(),
+            "Should reject StructType with wrong type field"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected type 'struct'")
+        );
     }
 }
