@@ -224,16 +224,22 @@ impl CachingDeleteFileLoader {
                 let (sender, receiver) = channel();
                 del_filter.insert_equality_delete(&task.file_path, receiver);
 
+                // Per the Iceberg spec, evolve schema for equality deletes but only for the
+                // equality_ids columns, not all table columns.
+                let equality_ids_vec = task.equality_ids.clone().unwrap();
+                let evolved_stream = BasicDeleteFileLoader::evolve_schema(
+                    basic_delete_file_loader
+                        .parquet_to_batch_stream(&task.file_path)
+                        .await?,
+                    schema,
+                    &equality_ids_vec,
+                )
+                .await?;
+
                 Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: BasicDeleteFileLoader::evolve_schema(
-                        basic_delete_file_loader
-                            .parquet_to_batch_stream(&task.file_path)
-                            .await?,
-                        schema,
-                    )
-                    .await?,
+                    batch_stream: evolved_stream,
                     sender,
-                    equality_ids: HashSet::from_iter(task.equality_ids.clone().unwrap()),
+                    equality_ids: HashSet::from_iter(equality_ids_vec),
                 })
             }
 
@@ -536,6 +542,7 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
@@ -568,7 +575,7 @@ mod tests {
         )
         .await
         .expect("error parsing batch stream");
-        println!("{}", parsed_eq_delete);
+        println!("{parsed_eq_delete}");
 
         let expected = "((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) AND ((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5))".to_string();
 
@@ -685,5 +692,213 @@ mod tests {
 
         let result = delete_filter.get_delete_vector(&file_scan_tasks[1]);
         assert!(result.is_none()); // no pos dels for file 3
+    }
+
+    /// Verifies that evolve_schema on partial-schema equality deletes works correctly
+    /// when only equality_ids columns are evolved, not all table columns.
+    ///
+    /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
+    /// equality delete files can contain only a subset of columns.
+    #[tokio::test]
+    async fn test_partial_schema_equality_deletes_evolve_succeeds() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+
+        // Create table schema with REQUIRED fields
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    crate::spec::NestedField::required(
+                        1,
+                        "id",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Int),
+                    )
+                    .into(),
+                    crate::spec::NestedField::required(
+                        2,
+                        "data",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Write equality delete file with PARTIAL schema (only 'data' column)
+        let delete_file_path = {
+            let data_vals = vec!["a", "d", "g"];
+            let data_col = Arc::new(StringArray::from(data_vals)) as ArrayRef;
+
+            let delete_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+                "data",
+                DataType::Utf8,
+                false,
+                "2", // field ID
+            )]));
+
+            let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![data_col]).unwrap();
+
+            let path = format!("{}/partial-eq-deletes.parquet", &table_location);
+            let file = File::create(&path).unwrap();
+            let props = WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(file, delete_batch.schema(), Some(props)).unwrap();
+            writer.write(&delete_batch).expect("Writing batch");
+            writer.close().unwrap();
+            path
+        };
+
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+
+        let batch_stream = basic_delete_file_loader
+            .parquet_to_batch_stream(&delete_file_path)
+            .await
+            .unwrap();
+
+        // Only evolve the equality_ids columns (field 2), not all table columns
+        let equality_ids = vec![2];
+        let evolved_stream =
+            BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema, &equality_ids)
+                .await
+                .unwrap();
+
+        let result = evolved_stream.try_collect::<Vec<_>>().await;
+
+        assert!(
+            result.is_ok(),
+            "Expected success when evolving only equality_ids columns, got error: {:?}",
+            result.err()
+        );
+
+        let batches = result.unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1); // Only 'data' column
+
+        // Verify the actual values are preserved after schema evolution
+        let data_col = batch.column(0).as_string::<i32>();
+        assert_eq!(data_col.value(0), "a");
+        assert_eq!(data_col.value(1), "d");
+        assert_eq!(data_col.value(2), "g");
+    }
+
+    /// Test loading a FileScanTask with BOTH positional and equality deletes.
+    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
+    #[tokio::test]
+    async fn test_load_deletes_with_mixed_types() {
+        use crate::scan::FileScanTask;
+        use crate::spec::{DataFileFormat, Schema};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path();
+        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Create the data file schema
+        let data_file_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    crate::spec::NestedField::optional(
+                        2,
+                        "y",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                    crate::spec::NestedField::optional(
+                        3,
+                        "z",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Write positional delete file
+        let positional_delete_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+        let file_path_values =
+            vec![format!("{}/data-1.parquet", table_location.to_str().unwrap()); 4];
+        let file_path_col = Arc::new(StringArray::from_iter_values(&file_path_values));
+        let pos_col = Arc::new(Int64Array::from_iter_values(vec![0i64, 1, 2, 3]));
+
+        let positional_deletes_to_write =
+            RecordBatch::try_new(positional_delete_schema.clone(), vec![
+                file_path_col,
+                pos_col,
+            ])
+            .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let pos_del_path = format!("{}/pos-del-mixed.parquet", table_location.to_str().unwrap());
+        let file = File::create(&pos_del_path).unwrap();
+        let mut writer = ArrowWriter::try_new(
+            file,
+            positional_deletes_to_write.schema(),
+            Some(props.clone()),
+        )
+        .unwrap();
+        writer.write(&positional_deletes_to_write).unwrap();
+        writer.close().unwrap();
+
+        // Write equality delete file
+        let eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
+
+        // Create FileScanTask with BOTH positional and equality deletes
+        let pos_del = FileScanTaskDeleteFile {
+            file_path: pos_del_path,
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+        };
+
+        let eq_del = FileScanTaskDeleteFile {
+            file_path: eq_delete_path.clone(),
+            file_type: DataContentType::EqualityDeletes,
+            partition_spec_id: 0,
+            equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
+        };
+
+        let file_scan_task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: format!("{}/data-1.parquet", table_location.to_str().unwrap()),
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![2, 3],
+            predicate: None,
+            deletes: vec![pos_del, eq_del],
+        };
+
+        // Load the deletes - should handle both types without error
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_filter = delete_file_loader
+            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify both delete types can be processed together
+        let result = delete_filter
+            .build_equality_delete_predicate(&file_scan_task)
+            .await;
+        assert!(
+            result.is_ok(),
+            "Failed to build equality delete predicate: {:?}",
+            result.err()
+        );
     }
 }

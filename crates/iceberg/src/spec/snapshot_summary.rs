@@ -824,9 +824,9 @@ mod tests {
         assert!(props.contains_key(&partition_key));
 
         let partition_summary = props.get(&partition_key).unwrap();
-        assert!(partition_summary.contains(&format!("{}=200", ADDED_FILE_SIZE)));
-        assert!(partition_summary.contains(&format!("{}=1", ADDED_DATA_FILES)));
-        assert!(partition_summary.contains(&format!("{}=20", ADDED_RECORDS)));
+        assert!(partition_summary.contains(&format!("{ADDED_FILE_SIZE}=200")));
+        assert!(partition_summary.contains(&format!("{ADDED_DATA_FILES}=1")));
+        assert!(partition_summary.contains(&format!("{ADDED_RECORDS}=20")));
     }
 
     #[test]
@@ -850,6 +850,7 @@ mod tests {
             deleted_rows_count: Some(50),
             partitions: Some(Vec::new()),
             key_metadata: None,
+            first_row_id: None,
         };
 
         collector
@@ -974,6 +975,7 @@ mod tests {
             deleted_rows_count: Some(0),
             partitions: Some(Vec::new()),
             key_metadata: None,
+            first_row_id: None,
         });
 
         summary_four.add_file(

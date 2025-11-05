@@ -274,10 +274,7 @@ impl MinMaxColAggregator {
         let Type::Primitive(ty) = ty.clone() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!(
-                    "Composed type {} is not supported for min max aggregation.",
-                    ty
-                ),
+                format!("Composed type {ty} is not supported for min max aggregation."),
             ));
         };
 
@@ -285,7 +282,7 @@ impl MinMaxColAggregator {
             let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("Statistics {} is not match with field type {}.", value, ty),
+                    format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
@@ -296,7 +293,7 @@ impl MinMaxColAggregator {
             let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("Statistics {} is not match with field type {}.", value, ty),
+                    format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
@@ -333,7 +330,7 @@ impl ParquetWriter {
             let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {}", err),
+                    format!("Error reading Parquet metadata: {err}"),
                 )
             })?;
             let mut builder = ParquetWriter::parquet_to_data_file_builder(

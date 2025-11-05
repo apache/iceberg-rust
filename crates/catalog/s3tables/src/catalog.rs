@@ -637,7 +637,7 @@ impl Catalog for S3TablesCatalog {
                     "Operation failed for hitting aws sdk error",
                 ),
             }
-            .with_source(anyhow::Error::msg(format!("aws sdk error: {:?}", error)))
+            .with_source(anyhow::Error::msg(format!("aws sdk error: {error:?}")))
         })?;
 
         Ok(staged_table)
@@ -649,7 +649,7 @@ pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_s3tables::error::SdkError<T>)
 where T: std::fmt::Debug {
     Error::new(
         ErrorKind::Unexpected,
-        format!("Operation failed for hitting aws sdk error: {:?}", error),
+        format!("Operation failed for hitting aws sdk error: {error:?}"),
     )
 }
 
@@ -682,7 +682,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -694,7 +694,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         let tables = catalog
@@ -709,7 +709,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         let table = catalog
@@ -719,7 +719,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        println!("{:?}", table);
+        println!("{table:?}");
     }
 
     #[tokio::test]
@@ -727,7 +727,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         let namespace = NamespaceIdent::new("test_s3tables_create_delete_namespace".to_string());
@@ -745,7 +745,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         let creation = {
@@ -788,7 +788,7 @@ mod tests {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {}", e),
+            Err(e) => panic!("Error loading catalog: {e}"),
         };
 
         // Create a test namespace and table

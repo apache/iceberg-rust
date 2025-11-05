@@ -44,7 +44,7 @@ pub trait TransformFunction: Send + Sync + Debug {
         self.transform_literal(input)?.ok_or_else(|| {
             Error::new(
                 ErrorKind::Unexpected,
-                format!("Returns 'None' for literal {}", input),
+                format!("Returns 'None' for literal {input}"),
             )
         })
     }
@@ -171,10 +171,7 @@ mod test {
                 assert_eq!(
                     satisfies_order_of,
                     &trans.satisfies_order_of(other_trans),
-                    "Failed to check satisfies order {}, {}, {}",
-                    trans,
-                    other_trans,
-                    satisfies_order_of
+                    "Failed to check satisfies order {trans}, {other_trans}, {satisfies_order_of}"
                 );
             }
 
@@ -182,8 +179,7 @@ mod test {
                 let actual = trans.result_type(input_type).ok();
                 assert_eq!(
                     result_type, &actual,
-                    "type mismatch at index {}, input: {}, expected: {:?}, actual: {:?}",
-                    i, input_type, result_type, actual
+                    "type mismatch at index {i}, input: {input_type}, expected: {result_type:?}, actual: {actual:?}"
                 );
             }
         }

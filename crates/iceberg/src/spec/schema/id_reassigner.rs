@@ -122,7 +122,7 @@ impl ReassignFieldIds {
                 self.old_to_new_id.get(&id).copied().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Identifier Field ID {} not found", id),
+                        format!("Identifier Field ID {id} not found"),
                     )
                 })
             })
@@ -142,7 +142,7 @@ impl ReassignFieldIds {
                     .ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,
-                            format!("Field with id {} for alias {} not found", id, name),
+                            format!("Field with id {id} for alias {name} not found"),
                         )
                     })
                     .map(|new_id| (name, new_id))
