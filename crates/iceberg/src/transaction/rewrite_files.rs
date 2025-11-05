@@ -25,8 +25,8 @@ use super::snapshot::{DefaultManifestProcess, SnapshotProduceOperation, Snapshot
 use super::{ActionCommit, TransactionAction};
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{
-    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestEntryRef, ManifestFile,
-    ManifestStatus, Operation,
+    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
+    Operation,
 };
 use crate::table::Table;
 use crate::transaction::validate::SnapshotValidator;
@@ -170,17 +170,11 @@ impl TransactionAction for RewriteFilesAction {
 }
 
 fn copy_with_deleted_status(entry: &ManifestEntry) -> Result<ManifestEntry> {
-    let mut builder = ManifestEntry::builder()
+    let builder = ManifestEntry::builder()
         .status(ManifestStatus::Deleted)
+        .snapshot_id_opt(entry.snapshot_id())
+        .sequence_number_opt(entry.sequence_number())
         .data_file(entry.data_file().clone());
-
-    if let Some(snapshot_id) = entry.snapshot_id() {
-        builder = builder.snapshot_id(snapshot_id);
-    }
-
-    if let Some(sequence_number) = entry.sequence_number() {
-        builder = builder.sequence_number(sequence_number);
-    }
 
     // todo copy file seq no as well
 
