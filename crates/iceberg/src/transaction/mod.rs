@@ -55,6 +55,7 @@ mod action;
 pub use action::*;
 mod append;
 mod remove_snapshots;
+mod rewrite_files;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -65,9 +66,9 @@ mod upgrade_format_version;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use append::{MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES};
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 use remove_snapshots::RemoveSnapshotAction;
+use rewrite_files::RewriteFilesAction;
 
 use crate::error::Result;
 use crate::spec::TableProperties;
@@ -79,6 +80,19 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+
+/// Target size of manifest file when merging manifests.
+pub const MANIFEST_TARGET_SIZE_BYTES: &str = "commit.manifest.target-size-bytes";
+/// This is the default value for `MANIFEST_TARGET_SIZE_BYTES`.
+pub const MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u32 = 8 * 1024 * 1024; // 8 MB
+/// Minimum number of manifests to merge.
+pub const MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
+/// This is the default value for `MANIFEST_MIN_MERGE_COUNT`.
+pub const MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
+/// Whether allow to merge manifests.
+pub const MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+/// This is the default value for `MANIFEST_MERGE_ENABLED`.
+pub const MANIFEST_MERGE_ENABLED_DEFAULT: bool = false;
 
 /// Table transaction.
 #[derive(Clone)]
@@ -166,6 +180,11 @@ impl Transaction {
     /// Update the statistics of table
     pub fn update_statistics(&self) -> UpdateStatisticsAction {
         UpdateStatisticsAction::new()
+    }
+
+    /// Creates rewrite files action.
+    pub fn rewrite_files(self) -> RewriteFilesAction {
+        RewriteFilesAction::new()
     }
 
     /// Commit transaction.

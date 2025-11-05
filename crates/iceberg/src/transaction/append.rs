@@ -21,6 +21,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use super::{
+    MANIFEST_MERGE_ENABLED, MANIFEST_MERGE_ENABLED_DEFAULT, MANIFEST_MIN_MERGE_COUNT,
+    MANIFEST_MIN_MERGE_COUNT_DEFAULT, MANIFEST_TARGET_SIZE_BYTES,
+    MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
+};
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
@@ -29,16 +34,6 @@ use crate::transaction::snapshot::{
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
-
-/// Target size of manifest file when merging manifests.
-pub const MANIFEST_TARGET_SIZE_BYTES: &str = "commit.manifest.target-size-bytes";
-const MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u32 = 8 * 1024 * 1024; // 8 MB
-/// Minimum number of manifests to merge.
-pub const MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
-const MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
-/// Whether allow to merge manifests.
-pub const MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
-const MANIFEST_MERGE_ENABLED_DEFAULT: bool = false;
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
@@ -138,6 +133,8 @@ impl TransactionAction for FastAppendAction {
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
             self.added_delete_files.clone(),
+            vec![],
+            vec![],
         );
 
         // validate added files
@@ -177,7 +174,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
@@ -218,7 +215,6 @@ pub struct MergeAppendAction {
 }
 
 impl MergeAppendAction {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new() -> Self {
         Self {
             target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
@@ -289,6 +285,8 @@ impl TransactionAction for MergeAppendAction {
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
             self.added_delete_files.clone(),
+            vec![],
+            vec![],
         );
 
         // validate added files

@@ -31,6 +31,7 @@ mod merge_append_test;
 mod read_evolved_schema;
 mod read_positional_deletes;
 mod remove_snapshots_test;
+mod rewrite_files_test;
 mod scan_all_type;
 
 pub async fn random_ns() -> Namespace {
