@@ -24,7 +24,7 @@ use tokio::sync::oneshot::Receiver;
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Bind, BoundPredicate, Predicate};
-use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+use crate::scan::FileScanTask;
 use crate::spec::DataContentType;
 use crate::{Error, ErrorKind, Result};
 
@@ -188,14 +188,14 @@ impl DeleteFilter {
             }
 
             let Some(predicate) = self
-                .get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+                .get_equality_delete_predicate_for_delete_file_path(delete.data_file_path())
                 .await
             else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
                         "Missing predicate for equality delete file '{}'",
-                        delete.file_path
+                        delete.data_file_path()
                     ),
                 ));
             };
@@ -258,8 +258,8 @@ impl DeleteFilter {
     }
 }
 
-pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
-    matches!(f.file_type, DataContentType::EqualityDeletes)
+pub(crate) fn is_equality_delete(f: &FileScanTask) -> bool {
+    matches!(f.data_file_content, DataContentType::EqualityDeletes)
 }
 
 #[cfg(test)]
@@ -376,43 +376,31 @@ pub(crate) mod tests {
             writer.close().unwrap();
         }
 
-        let pos_del_1 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()),
+        // Helper to build a positional delete task with minimal fields
+        let make_pos_del_task = |n: u8| FileScanTask {
             file_size_in_bytes: std::fs::metadata(format!(
-                "{}/pos-del-1.parquet",
-                table_location.to_str().unwrap()
+                "{}/pos-del-{}.parquet",
+                table_location.to_str().unwrap(),
+                n
             ))
             .unwrap()
             .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: format!("{}/pos-del-{}.parquet", table_location.to_str().unwrap(), n),
+            data_file_content: DataContentType::PositionDeletes,
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![],
+            sequence_number: 0,
             equality_ids: None,
-        };
-
-        let pos_del_2 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()),
-            file_size_in_bytes: std::fs::metadata(format!(
-                "{}/pos-del-2.parquet",
-                table_location.to_str().unwrap()
-            ))
-            .unwrap()
-            .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-        };
-
-        let pos_del_3 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()),
-            file_size_in_bytes: std::fs::metadata(format!(
-                "{}/pos-del-3.parquet",
-                table_location.to_str().unwrap()
-            ))
-            .unwrap()
-            .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         let file_scan_tasks = vec![
@@ -422,11 +410,14 @@ pub(crate) mod tests {
                 length: 0,
                 record_count: None,
                 data_file_path: format!("{}/1.parquet", table_location.to_str().unwrap()),
+                data_file_content: DataContentType::Data,
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
-                deletes: vec![pos_del_1, pos_del_2.clone()],
+                deletes: vec![make_pos_del_task(1), make_pos_del_task(2)],
+                sequence_number: 0,
+                equality_ids: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -438,11 +429,14 @@ pub(crate) mod tests {
                 length: 0,
                 record_count: None,
                 data_file_path: format!("{}/2.parquet", table_location.to_str().unwrap()),
+                data_file_content: DataContentType::Data,
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
-                deletes: vec![pos_del_3],
+                deletes: vec![make_pos_del_task(3)],
+                sequence_number: 0,
+                equality_ids: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -489,17 +483,32 @@ pub(crate) mod tests {
             length: 0,
             record_count: None,
             data_file_path: "data.parquet".to_string(),
+            data_file_content: DataContentType::Data,
             data_file_format: crate::spec::DataFileFormat::Parquet,
             schema: schema.clone(),
             project_field_ids: vec![],
             predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_path: "eq-del.parquet".to_string(),
+            deletes: vec![FileScanTask {
                 file_size_in_bytes: 1, // never read; this test fails before opening the file
-                file_type: DataContentType::EqualityDeletes,
-                partition_spec_id: 0,
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: "eq-del.parquet".to_string(),
+                data_file_content: DataContentType::EqualityDeletes,
+                data_file_format: crate::spec::DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![],
+                predicate: None,
+                deletes: vec![],
+                sequence_number: 0,
                 equality_ids: None,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: true,
             }],
+            sequence_number: 0,
+            equality_ids: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,

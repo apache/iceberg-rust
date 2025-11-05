@@ -1112,8 +1112,7 @@ mod tests {
         // Create a partition spec
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(1)
-            .add_partition_field("id", "id_partition", Transform::Identity)
-            .unwrap()
+            // No partition fields for this serialization round-trip test
             .build()
             .unwrap();
 

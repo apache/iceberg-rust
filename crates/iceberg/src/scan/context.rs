@@ -132,6 +132,7 @@ impl ManifestEntryContext {
             record_count: Some(self.manifest_entry.record_count()),
 
             data_file_path: self.manifest_entry.file_path().to_string(),
+            data_file_content: self.manifest_entry.data_file().content_type(),
             data_file_format: self.manifest_entry.file_format(),
 
             schema: self.snapshot_schema,
@@ -149,6 +150,8 @@ impl ManifestEntryContext {
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
             case_sensitive: self.case_sensitive,
+            sequence_number: self.manifest_entry.sequence_number().unwrap_or(0),
+            equality_ids: self.manifest_entry.data_file().equality_ids(),
         })
     }
 }

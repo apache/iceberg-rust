@@ -56,7 +56,7 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
+use crate::spec::{DataContentType, Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -476,16 +476,19 @@ impl ArrowReader {
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        let record_batch_stream =
-            record_batch_stream_builder
-                .build()?
-                .map(move |batch| match batch {
+        let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
+            if matches!(task.data_file_content, DataContentType::PositionDeletes) {
+                Ok(batch?)
+            } else {
+                match batch {
                     Ok(batch) => {
                         // Process the record batch (type promotion, column reordering, virtual fields, etc.)
                         record_batch_transformer.process_record_batch(batch)
                     }
                     Err(err) => Err(err.into()),
-                });
+                }
+            }
+        });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -1833,7 +1836,7 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+    use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
         DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
     };
@@ -1848,6 +1851,21 @@ mod tests {
                     NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
                     NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
                     NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn position_del_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![])
+                .with_fields(vec![
+                    NestedField::required(1, "file_path", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::required(2, "pos", Type::Primitive(PrimitiveType::Long)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2135,6 +2153,7 @@ message schema {
                 length: 0,
                 record_count: None,
                 data_file_path: format!("{table_location}/1.parquet"),
+                data_file_content: DataContentType::Data,
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1],
@@ -2144,6 +2163,8 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2467,6 +2488,9 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            data_file_content: DataContentType::Data,
+            sequence_number: 0,
+            equality_ids: None,
         };
 
         // Task 2: read the second and third row groups
@@ -2485,6 +2509,9 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            data_file_content: DataContentType::Data,
+            sequence_number: 0,
+            equality_ids: None,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2616,6 +2643,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2779,17 +2809,32 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
+            deletes: vec![FileScanTask {
                 file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: delete_file_path.clone(),
+                data_file_format: DataFileFormat::Parquet,
+                schema: table_schema.clone(),
+                project_field_ids: vec![],
+                predicate: None,
+                deletes: vec![],
+                data_file_content: DataContentType::PositionDeletes,
+                sequence_number: 0,
                 equality_ids: None,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             }],
             partition: None,
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            data_file_content: DataContentType::Data,
+            sequence_number: 0,
+            equality_ids: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2999,17 +3044,32 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
+            deletes: vec![FileScanTask {
                 file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: delete_file_path.clone(),
+                data_file_format: DataFileFormat::Parquet,
+                schema: position_del_schema(),
+                project_field_ids: vec![],
+                predicate: None,
+                deletes: vec![],
+                data_file_content: DataContentType::PositionDeletes,
+                sequence_number: 0,
                 equality_ids: None,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             }],
             partition: None,
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            data_file_content: DataContentType::Data,
+            sequence_number: 0,
+            equality_ids: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3212,17 +3272,32 @@ message schema {
             schema: table_schema.clone(),
             project_field_ids: vec![1],
             predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
+            deletes: vec![FileScanTask {
                 file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: delete_file_path.clone(),
+                data_file_format: DataFileFormat::Parquet,
+                schema: position_del_schema(),
+                project_field_ids: vec![],
+                predicate: None,
+                deletes: vec![],
+                data_file_content: DataContentType::PositionDeletes,
+                sequence_number: 0,
                 equality_ids: None,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             }],
             partition: None,
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            data_file_content: DataContentType::Data,
+            sequence_number: 0,
+            equality_ids: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3330,6 +3405,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3431,6 +3509,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3521,6 +3602,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3625,6 +3709,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3758,6 +3845,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3858,6 +3948,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3971,6 +4064,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -4065,6 +4161,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             }),
             Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_1.parquet"))
@@ -4083,6 +4182,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             }),
             Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_2.parquet"))
@@ -4101,6 +4203,9 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             }),
         ];
 
@@ -4283,6 +4388,9 @@ message schema {
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
                 case_sensitive: false,
+                data_file_content: DataContentType::Data,
+                sequence_number: 0,
+                equality_ids: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
