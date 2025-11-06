@@ -44,12 +44,12 @@ use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
+use crate::task_writer::TaskWriter;
 use crate::to_datafusion_error;
 
 /// An execution plan node that writes data to an Iceberg table.
@@ -205,18 +205,6 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        if !self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .is_unpartitioned()
-        {
-            // TODO add support for partitioned tables
-            return Err(DataFusionError::NotImplemented(
-                "IcebergWriteExec does not support partitioned tables yet".to_string(),
-            ));
-        }
-
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -277,31 +265,40 @@ impl ExecutionPlan for IcebergWriteExec {
         );
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
+        // Create TaskWriter
+        // TODO: Make fanout_enabled configurable via table properties
+        let fanout_enabled = true;
+        let schema = self.table.metadata().current_schema().clone();
+        let partition_spec = self.table.metadata().default_partition_spec().clone();
+        let task_writer = TaskWriter::new(
+            data_file_writer_builder,
+            fanout_enabled,
+            schema.clone(),
+            partition_spec,
+        );
+
         // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
-            Arc::new(
-                schema_to_arrow_schema(self.table.metadata().current_schema())
-                    .map_err(to_datafusion_error)?,
-            ),
+            Arc::new(schema_to_arrow_schema(&schema).map_err(to_datafusion_error)?),
             partition,
             Arc::clone(&context),
         )?;
 
         // Create write stream
         let stream = futures::stream::once(async move {
-            let mut writer = data_file_writer_builder
-                // todo specify partition key when partitioning writer is supported
-                .build(None)
-                .await
-                .map_err(to_datafusion_error)?;
+            let mut task_writer = task_writer;
             let mut input_stream = data;
 
             while let Some(batch) = input_stream.next().await {
-                writer.write(batch?).await.map_err(to_datafusion_error)?;
+                let batch = batch?;
+                task_writer
+                    .write(batch)
+                    .await
+                    .map_err(to_datafusion_error)?;
             }
 
-            let data_files = writer.close().await.map_err(to_datafusion_error)?;
+            let data_files = task_writer.close().await.map_err(to_datafusion_error)?;
 
             // Convert builders to data files and then to JSON strings
             let data_files_strs: Vec<String> = data_files
