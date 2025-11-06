@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     execute_input_stream,
 };
 use futures::StreamExt;
-use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
+use iceberg::arrow::FieldMatchMode;
 use iceberg::spec::{DataFileFormat, TableProperties, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -280,7 +280,7 @@ impl ExecutionPlan for IcebergWriteExec {
         // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
-            Arc::new(schema_to_arrow_schema(&schema).map_err(to_datafusion_error)?),
+            self.input.schema(), // input schema may have projected column `_partition`
             partition,
             Arc::clone(&context),
         )?;
