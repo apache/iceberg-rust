@@ -407,11 +407,11 @@ impl RecordBatchTransformer {
                 // 3. Use initial_default
                 // 4. Return null
                 //
-                // WHY check partition constants before Parquet field IDs (Java: BaseParquetReaders.java:299):
+                // Why check partition constants before Parquet field IDs (Java: BaseParquetReaders.java:299):
                 // In add_files scenarios, partition columns may exist in BOTH Parquet AND partition metadata.
                 // Partition metadata is authoritative - it defines which partition this file belongs to.
 
-                // WHY verify names when checking field IDs:
+                // Why verify names when checking field IDs:
                 // add_files can create field ID conflicts (Parquet field_id=1->"name", Iceberg field_id=1->"id").
                 // Name mismatches with name_mapping present indicate conflicts, treat field as "not present".
                 // Without name_mapping, name mismatches are just column renames, so trust the field ID.
@@ -1502,7 +1502,7 @@ mod test {
 
     /// Verifies field ID conflict detection for add_files imports.
     ///
-    /// WHY: add_files can import Parquet with conflicting field IDs (field_id=1->"name" in Parquet
+    /// Why: add_files can import Parquet with conflicting field IDs (field_id=1->"name" in Parquet
     /// vs field_id=1->"id" in Iceberg). Name-checking detects conflicts, treats fields as "not present",
     /// allowing spec fallback to partition constants and name mapping.
     ///
