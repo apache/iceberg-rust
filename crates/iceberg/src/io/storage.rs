@@ -16,8 +16,10 @@
 // under the License.
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::time::Duration;
 
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
@@ -110,11 +112,12 @@ impl Storage {
         }
     }
 
-    /// Creates operator from path.
+    /// Creates operator from path with custom configuration.
     ///
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    /// * props: Configuration properties for retry and timeout settings.
     ///
     /// # Returns
     ///
@@ -122,9 +125,10 @@ impl Storage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    pub(crate) fn create_operator<'a>(
+    pub(crate) fn create_operator_with_config<'a>(
         &self,
         path: &'a impl AsRef<str>,
+        props: &HashMap<String, String>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
@@ -212,9 +216,41 @@ impl Storage {
             )),
         }?;
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // Apply retry layer with configurable settings
+        let retry_max_attempts = props
+            .get("io.retry.max-attempts")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(3);
+        let retry_min_delay_ms = props
+            .get("io.retry.min-delay-ms")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1000);
+        let retry_max_delay_ms = props
+            .get("io.retry.max-delay-ms")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60000);
+        let retry_factor = props
+            .get("io.retry.factor")
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(2.0);
+        
+        let mut operator = operator.layer(
+            RetryLayer::new()
+                .with_max_times(retry_max_attempts)
+                .with_min_delay(Duration::from_millis(retry_min_delay_ms))
+                .with_max_delay(Duration::from_millis(retry_max_delay_ms))
+                .with_factor(retry_factor)
+        );
+        
+        // Apply timeout layer if configured
+        if let Some(timeout_ms) = props
+            .get("io.timeout-ms")
+            .and_then(|v| v.parse::<u64>().ok()) {
+            operator = operator.layer(
+                TimeoutLayer::new()
+                    .with_timeout(Duration::from_millis(timeout_ms))
+            );
+        }
 
         Ok((operator, relative_path))
     }
