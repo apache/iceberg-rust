@@ -183,8 +183,7 @@ impl TableProvider for IcebergTableProvider {
             ));
         };
 
-        let metadata = self.table.metadata();
-        let partition_spec = metadata.default_partition_spec();
+        let partition_spec = self.table.metadata().default_partition_spec();
 
         // Step 1: Project partition values for partitioned tables
         let plan_with_partition = if !partition_spec.is_unpartitioned() {
