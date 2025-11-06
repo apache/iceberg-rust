@@ -2712,13 +2712,7 @@ mod _serde {
                         }
                     }
                     Type::Primitive(PrimitiveType::Decimal { precision, .. }) => {
-                        let required_bytes =
-                            Type::decimal_required_bytes(*precision).map_err(|e| {
-                                invalid_err_with_reason(
-                                    "bytes",
-                                    &format!("Invalid decimal precision: {}", e),
-                                )
-                            })? as usize;
+                        let required_bytes = Type::decimal_required_bytes(*precision)? as usize;
 
                         if v.len() == required_bytes {
                             // Pad the bytes to 16 bytes (i128 size) with sign extension
