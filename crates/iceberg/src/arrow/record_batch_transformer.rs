@@ -191,8 +191,8 @@ impl RecordBatchTransformer {
     ///    bucket-partitioned columns.
     ///
     /// 2. **Add_files field ID conflicts**: When importing Hive tables, partition columns can have field IDs
-    ///    conflicting with Parquet data columns (e.g., Parquet has field_id=1→"name", but Iceberg expects
-    ///    field_id=1→"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
+    ///    conflicting with Parquet data columns (e.g., Parquet has field_id=1->"name", but Iceberg expects
+    ///    field_id=1->"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
     ///
     /// This matches Java's ParquetSchemaUtil.applyNameMapping approach but detects conflicts during projection.
     ///
@@ -400,146 +400,91 @@ impl RecordBatchTransformer {
                     "Field not found in snapshot schema",
                 ))?;
 
-                // Determine how to source this column per Iceberg spec "Column Projection" rules.
+                // Iceberg spec's "Column Projection" rules (https://iceberg.apache.org/spec/#column-projection).
+                // For fields "not present" in data files:
+                // 1. Use partition metadata (identity transforms only)
+                // 2. Use name mapping
+                // 3. Use initial_default
+                // 4. Return null
                 //
-                // Per the spec (https://iceberg.apache.org/spec/#column-projection):
-                // "Values for field ids which are not present in a data file must be resolved
-                // according the following rules:"
-                //
-                // 1. "Return the value from partition metadata if an Identity Transform exists
-                //     for the field and the partition value is present in the partition struct
-                //     on data_file object in the manifest."
-                // 2. "Use schema.name-mapping.default metadata to map field id to columns
-                //     without field id as described below and use the column if it is present."
-                // 3. "Return the default value if it has a defined initial-default"
-                // 4. "Return null in all other cases"
+                // WHY check partition constants before Parquet field IDs (Java: BaseParquetReaders.java:299):
+                // In add_files scenarios, partition columns may exist in BOTH Parquet AND partition metadata.
+                // Partition metadata is authoritative - it defines which partition this file belongs to.
 
+                // WHY verify names when checking field IDs:
+                // add_files can create field ID conflicts (Parquet field_id=1->"name", Iceberg field_id=1->"id").
+                // Name mismatches with name_mapping present indicate conflicts, treat field as "not present".
+                // Without name_mapping, name mismatches are just column renames, so trust the field ID.
+                // (Java: ParquetSchemaUtil.applyNameMapping, TestAddFilesProcedure.addDataPartitioned)
+                let field_by_id = field_id_to_source_schema_map.get(field_id).and_then(
+                    |(source_field, source_index)| {
+                        if name_mapping.is_some() {
+                            let name_matches = source_field.name() == &iceberg_field.name;
+                            if !name_matches {
+                                return None; // Field ID conflict, treat as "not present"
+                            }
+                        }
+
+                        if source_field.data_type().equals_datatype(target_type) {
+                            Some(ColumnSource::PassThrough {
+                                source_index: *source_index,
+                            })
+                        } else {
+                            Some(ColumnSource::Promote {
+                                target_type: target_type.clone(),
+                                source_index: *source_index,
+                            })
+                        }
+                    },
+                );
+
+                // Apply spec's fallback steps for "not present" fields.
                 let column_source = if let Some(constant_value) = constants_map.get(field_id) {
-                    // Spec rule #1: Identity-partitioned column - use constant from partition metadata
+                    // Rule #1: Identity partition constant
                     ColumnSource::Add {
                         value: Some(constant_value.clone()),
                         target_type: target_type.clone(),
                     }
+                } else if let Some(source) = field_by_id {
+                    source
                 } else {
-                    // Check if field ID exists in Parquet, but verify it's the CORRECT field.
-                    //
-                    // Per the Iceberg spec (https://iceberg.apache.org/spec/#column-projection):
-                    // "Values for field ids which are NOT PRESENT in a data file must be resolved
-                    // according the following rules..."
-                    //
-                    // The key insight: In add_files scenarios (Hive table migrations), Parquet files
-                    // may have field IDs that conflict with the Iceberg schema's field IDs:
-                    //
-                    // Example:
-                    // - Parquet file written with: field_id=1→"name", field_id=2→"dept"
-                    // - Imported via add_files with: field_id=1→"id" (partition), field_id=2→"name", field_id=3→"dept"
-                    //
-                    // When we look for Iceberg field_id=1 ("id"), we find a field_id=1 in the Parquet file,
-                    // but it's the WRONG field (it's "name", not "id"). The correct field (id=1, name="id")
-                    // is NOT PRESENT in the Parquet file - it only exists as partition metadata.
-                    //
-                    // Per the spec: when a field is "not present", we should apply rules 2-4 (name mapping,
-                    // initial-default, or null).
-                    //
-                    // Java's approach (ParquetSchemaUtil.applyNameMapping, ReadConf.java lines 83-85):
-                    // Java REWRITES the Parquet schema's field IDs based on names BEFORE projection:
-                    // ```java
-                    // if (nameMapping != null) {
-                    //   typeWithIds = ParquetSchemaUtil.applyNameMapping(fileSchema, nameMapping);
-                    //   // Now field IDs match Iceberg schema based on name mapping
-                    //   this.projection = ParquetSchemaUtil.pruneColumns(typeWithIds, expectedSchema);
-                    // }
-                    // ```
-                    //
-                    // Our approach achieves the same result but detects conflicts DURING projection:
-                    // - When name mapping is present, field ID matches alone aren't sufficient
-                    // - We verify the field NAME also matches to ensure it's the correct field
-                    // - If names don't match, we treat the field as "not present" and use name mapping
-                    let field_by_id = field_id_to_source_schema_map.get(field_id).and_then(
-                        |(source_field, source_index)| {
-                            let name_matches = source_field.name() == &iceberg_field.name;
-
-                            if name_mapping.is_some() && !name_matches {
-                                // Field ID conflict detected: Parquet has this field ID but for a different field.
-                                // The field we're looking for (this field_id + this name) is NOT PRESENT in the file.
-                                // Per spec: treat as "not present" and fall through to name mapping (rule #2).
-                                None
-                            } else if source_field.data_type().equals_datatype(target_type) {
-                                // Field ID matches and either:
-                                // - No name mapping present (trust the field ID)
-                                // - Names also match (correct field, use it)
-                                Some(ColumnSource::PassThrough {
-                                    source_index: *source_index,
+                    // Rule #2: Name mapping (Java: ReadConf.java:83-85)
+                    let name_mapped_column = name_mapping.and_then(|mapping| {
+                        mapping.fields().iter().find_map(|mapped_field| {
+                            if mapped_field.field_id() == Some(*field_id) {
+                                mapped_field.names().iter().find_map(|name| {
+                                    field_name_to_source_schema_map
+                                        .get(name)
+                                        .map(|(field, idx)| (field.clone(), *idx))
                                 })
                             } else {
-                                Some(ColumnSource::Promote {
-                                    target_type: target_type.clone(),
-                                    source_index: *source_index,
-                                })
+                                None
                             }
-                        },
-                    );
+                        })
+                    });
 
-                    if let Some(source) = field_by_id {
-                        source
+                    if let Some((source_field, source_index)) = name_mapped_column {
+                        if source_field.data_type().equals_datatype(target_type) {
+                            ColumnSource::PassThrough { source_index }
+                        } else {
+                            ColumnSource::Promote {
+                                target_type: target_type.clone(),
+                                source_index,
+                            }
+                        }
                     } else {
-                        // Field not found by ID, or field ID conflict detected.
-                        // Per spec: field is "not present", apply remaining rules.
-                        // Field NOT in Parquet by field ID - try spec rule #2 (name mapping)
-                        //
-                        // This handles scenarios like Hive table migrations where Parquet files may:
-                        // - Have no field IDs at all
-                        // - Have conflicting field IDs (e.g., add_files with partition columns)
-                        //
-                        // Per Java's implementation (ReadConf.java lines 83-85):
-                        // ```java
-                        // } else if (nameMapping != null) {
-                        //   typeWithIds = ParquetSchemaUtil.applyNameMapping(fileSchema, nameMapping);
-                        //   this.projection = ParquetSchemaUtil.pruneColumns(typeWithIds, expectedSchema);
-                        // ```
-                        //
-                        // The name mapping provides a fallback: "this field ID corresponds to these possible names"
-                        let name_mapped_column = name_mapping.and_then(|mapping| {
-                            // Find the mapped field for this field ID
-                            // The NameMapping structure allows looking up by field ID to get the names
-                            mapping.fields().iter().find_map(|mapped_field| {
-                                if mapped_field.field_id() == Some(*field_id) {
-                                    // Try each possible name for this field
-                                    mapped_field.names().iter().find_map(|name| {
-                                        field_name_to_source_schema_map
-                                            .get(name)
-                                            .map(|(field, idx)| (field.clone(), *idx))
-                                    })
+                        // Rules #3 and #4: initial_default or null
+                        let default_value =
+                            iceberg_field.initial_default.as_ref().and_then(|lit| {
+                                if let Literal::Primitive(prim) = lit {
+                                    Some(prim.clone())
                                 } else {
                                     None
                                 }
-                            })
-                        });
-
-                        if let Some((source_field, source_index)) = name_mapped_column {
-                            // Spec rule #2: Found column via name mapping - read it from file
-                            if source_field.data_type().equals_datatype(target_type) {
-                                ColumnSource::PassThrough { source_index }
-                            } else {
-                                ColumnSource::Promote {
-                                    target_type: target_type.clone(),
-                                    source_index,
-                                }
-                            }
-                        } else {
-                            // Spec rules #3 and #4: Use initial_default if present, otherwise null
-                            let default_value =
-                                iceberg_field.initial_default.as_ref().and_then(|lit| {
-                                    if let Literal::Primitive(prim) = lit {
-                                        Some(prim.clone())
-                                    } else {
-                                        None
-                                    }
-                                });
-                            ColumnSource::Add {
-                                value: default_value,
-                                target_type: target_type.clone(),
-                            }
+                            });
+                        ColumnSource::Add {
+                            value: default_value,
+                            target_type: target_type.clone(),
                         }
                     }
                 };
@@ -1057,139 +1002,6 @@ mod test {
         assert_eq!(subdept_column.value(0), "communications");
     }
 
-    /// Test for TRUE field ID conflicts where Parquet field IDs don't match Iceberg semantics.
-    ///
-    /// This is the critical test that exercises the field ID conflict detection code (lines 545-549).
-    ///
-    /// # Scenario
-    ///
-    /// Parquet file was written with its own field ID assignment:
-    /// - field_id=1 → "name" (String)
-    /// - field_id=2 → "salary" (Int)
-    ///
-    /// Then imported to Iceberg via add_files with NEW field IDs:
-    /// - field_id=1 → "id" (Int, partition column with initial_default=1)
-    /// - field_id=2 → "name" (String)
-    /// - field_id=3 → "dept" (String, partition column with initial_default="hr")
-    /// - field_id=4 → "salary" (Int)
-    ///
-    /// # The Conflict
-    ///
-    /// When looking for Iceberg field_id=2 ("name"):
-    /// - Parquet HAS a field_id=2, but it's "salary", not "name"
-    /// - This is a field ID conflict - same ID, different field
-    ///
-    /// # Expected Behavior Per Spec
-    ///
-    /// Per the spec, field_id=2 "name" is NOT PRESENT in the Parquet file (even though
-    /// a different field_id=2 exists). The implementation must:
-    /// 1. Detect the conflict (field ID matches, but names don't match)
-    /// 2. Treat Iceberg field_id=2 as "not present"
-    /// 3. Fall through to name mapping (spec rule #2) to find "name" by column name
-    ///
-    /// # Implementation
-    ///
-    /// This tests the code at lines 545-549:
-    /// ```rust
-    /// if name_mapping.is_some() && !name_matches {
-    ///     // Field ID conflict detected
-    ///     None
-    /// }
-    /// ```
-    ///
-    /// # References
-    /// - Iceberg spec: https://iceberg.apache.org/spec/#column-projection
-    #[test]
-    fn add_files_with_true_field_id_conflict() {
-        use crate::spec::{MappedField, NameMapping};
-
-        // Iceberg schema after add_files import
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
-                        .with_initial_default(Literal::int(1))
-                        .into(),
-                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String))
-                        .with_initial_default(Literal::string("hr"))
-                        .into(),
-                    NestedField::optional(4, "salary", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // Parquet file schema with CONFLICTING field IDs:
-        // - field_id=1 is "name" in Parquet, but "id" in Iceberg (conflict!)
-        // - field_id=2 is "salary" in Parquet, but "name" in Iceberg (conflict!)
-        let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("name", DataType::Utf8, true, "1"),
-            simple_field("salary", DataType::Int32, false, "2"),
-        ]));
-
-        // Name mapping is CRITICAL - without it, we'd incorrectly use the conflicting field IDs
-        let name_mapping = Arc::new(NameMapping::new(vec![
-            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
-            MappedField::new(Some(4), vec!["salary".to_string()], vec![]),
-        ]));
-
-        let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, salary
-
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            None,
-            None,
-            Some(name_mapping),
-        );
-
-        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
-            Arc::new(StringArray::from(vec!["Alice"])),
-            Arc::new(Int32Array::from(vec![50000])),
-        ])
-        .unwrap();
-
-        let result = transformer.process_record_batch(parquet_batch).unwrap();
-
-        // Verify the transformed RecordBatch correctly resolved field ID conflicts:
-        assert_eq!(result.num_columns(), 4);
-        assert_eq!(result.num_rows(), 1);
-
-        // Column 0: id=1 (from initial_default, NOT from Parquet field_id=1 which is "name")
-        let id_column = result
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(id_column.value(0), 1);
-
-        // Column 1: name="Alice" (from Parquet via name mapping, NOT from field_id=2 which is "salary")
-        let name_column = result
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(name_column.value(0), "Alice");
-
-        // Column 2: dept="hr" (from initial_default, not in Parquet file)
-        let dept_column = result
-            .column(2)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(dept_column.value(0), "hr");
-
-        // Column 3: salary=50000 (from Parquet via name mapping, NOT from field_id=2 directly)
-        let salary_column = result
-            .column(3)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(salary_column.value(0), 50000);
-    }
-
     /// Test for bucket partitioning where source columns must be read from data files.
     ///
     /// This test verifies correct implementation of the Iceberg spec's "Column Projection" rules:
@@ -1558,10 +1370,10 @@ mod test {
     /// according the following rules:"
     ///
     /// This test creates a scenario where each rule is exercised:
-    /// - Rule #1: dept (identity-partitioned) → constant from partition metadata
-    /// - Rule #2: data (via name mapping) → read from Parquet file by name
-    /// - Rule #3: category (initial_default) → use default value
-    /// - Rule #4: notes (no default) → return null
+    /// - Rule #1: dept (identity-partitioned) -> constant from partition metadata
+    /// - Rule #2: data (via name mapping) -> read from Parquet file by name
+    /// - Rule #3: category (initial_default) -> use default value
+    /// - Rule #4: notes (no default) -> return null
     ///
     /// # References
     /// - Iceberg spec: format/spec.md "Column Projection" section
@@ -1686,5 +1498,124 @@ mod test {
             .unwrap();
         assert!(notes_column.is_null(0));
         assert!(notes_column.is_null(1));
+    }
+
+    /// Verifies field ID conflict detection for add_files imports.
+    ///
+    /// WHY: add_files can import Parquet with conflicting field IDs (field_id=1->"name" in Parquet
+    /// vs field_id=1->"id" in Iceberg). Name-checking detects conflicts, treats fields as "not present",
+    /// allowing spec fallback to partition constants and name mapping.
+    ///
+    /// Reproduces: TestAddFilesProcedure.addDataPartitioned
+    #[test]
+    fn add_files_with_field_id_conflicts_like_java_test() {
+        use crate::spec::{MappedField, NameMapping, Struct, Transform};
+
+        // Iceberg schema (field IDs 1-4)
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(1))]);
+
+        // Parquet schema with CONFLICTING field IDs (1-3 instead of 1-4)
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("name", DataType::Utf8, false, "1"),
+            simple_field("dept", DataType::Utf8, false, "2"),
+            simple_field("subdept", DataType::Utf8, false, "3"),
+        ]));
+
+        // WHY name mapping: Resolves conflicts by mapping Iceberg field IDs to Parquet column names
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
+            MappedField::new(Some(3), vec!["dept".to_string()], vec![]),
+            MappedField::new(Some(4), vec!["subdept".to_string()], vec![]),
+        ]));
+
+        let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
+
+        let mut transformer = RecordBatchTransformer::build_with_partition_data(
+            snapshot_schema,
+            &projected_field_ids,
+            Some(partition_spec),
+            Some(partition_data),
+            Some(name_mapping),
+        );
+
+        // Parquet data (one row)
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(StringArray::from(vec!["John Doe"])), // name column
+            Arc::new(StringArray::from(vec!["Engineering"])), // dept column
+            Arc::new(StringArray::from(vec!["Backend"])),  // subdept column
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 4);
+        assert_eq!(result.num_rows(), 1);
+
+        // Verify: id from partition constant (conflict with Parquet field_id=1)
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+
+        // Verify: name via name mapping (conflict with Parquet field_id=2)
+        assert_eq!(
+            result
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "John Doe"
+        );
+
+        // Verify: dept via name mapping (conflict with Parquet field_id=3)
+        assert_eq!(
+            result
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "Engineering"
+        );
+
+        // Verify: subdept via name mapping (not in Parquet by field ID)
+        assert_eq!(
+            result
+                .column(3)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "Backend"
+        );
     }
 }
