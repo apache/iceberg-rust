@@ -194,11 +194,12 @@ impl TableProvider for IcebergTableProvider {
         };
 
         // Step 2: Repartition for parallel processing
-        let target_partitions = NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
-            DataFusionError::Configuration(
-                "target_partitions must be greater than 0".to_string(),
-            )
-        })?;
+        let target_partitions =
+            NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
+                DataFusionError::Configuration(
+                    "target_partitions must be greater than 0".to_string(),
+                )
+            })?;
 
         let repartitioned_plan = repartition(
             plan_with_partition,
