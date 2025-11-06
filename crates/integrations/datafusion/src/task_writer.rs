@@ -68,10 +68,6 @@ pub(crate) struct TaskWriter<B: IcebergWriterBuilder> {
     writer: SupportedWriter<B>,
     /// Partition splitter for partitioned tables (initialized in constructor)
     partition_splitter: Option<RecordBatchPartitionSplitter>,
-    /// Iceberg schema reference
-    schema: SchemaRef,
-    /// Partition specification reference
-    partition_spec: PartitionSpecRef,
 }
 
 /// Internal enum to hold the different writer types.
@@ -152,14 +148,13 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
         Self {
             writer,
             partition_splitter,
-            schema,
-            partition_spec,
         }
     }
 
     /// Write a RecordBatch to the TaskWriter.
     ///
-    /// For partitioned tables, the partition splitter is already initialized in the constructor.
+    /// For partitioned tables, uses the partition splitter to split
+    /// the batch by partition key and route each partition to the underlying writer.
     /// For unpartitioned tables, data is written directly without splitting.
     ///
     /// # Parameters
@@ -203,13 +198,13 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// Helper method to split and write partitioned data.
     ///
     /// This method handles the common logic for both FanoutWriter and ClusteredWriter:
-    /// - Splits the batch by partition key using the provided splitter
-    /// - Writes each partition to the underlying writer
+    /// - Splits the batch by partition key using the partition splitter
+    /// - Writes each partition to the underlying writer with its corresponding partition key
     ///
     /// # Parameters
     ///
     /// * `writer` - The underlying PartitioningWriter (FanoutWriter or ClusteredWriter)
-    /// * `partition_splitter` - The partition splitter (must be initialized)
+    /// * `partition_splitter` - The partition splitter
     /// * `batch` - The RecordBatch to write
     ///
     /// # Returns
