@@ -72,7 +72,13 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V1)
             .content(ManifestContentType::Data)
             .build();
-        ManifestWriter::new(self.output, self.snapshot_id, self.key_metadata, metadata)
+        ManifestWriter::new(
+            self.output,
+            self.snapshot_id,
+            self.key_metadata,
+            metadata,
+            None,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -84,7 +90,13 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Data)
             .build();
-        ManifestWriter::new(self.output, self.snapshot_id, self.key_metadata, metadata)
+        ManifestWriter::new(
+            self.output,
+            self.snapshot_id,
+            self.key_metadata,
+            metadata,
+            None,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, deletes content.
@@ -96,7 +108,51 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(self.output, self.snapshot_id, self.key_metadata, metadata)
+        ManifestWriter::new(
+            self.output,
+            self.snapshot_id,
+            self.key_metadata,
+            metadata,
+            None,
+        )
+    }
+
+    /// Build a [`ManifestWriter`] for format version 2, data content.
+    pub fn build_v3_data(self) -> ManifestWriter {
+        let metadata = ManifestMetadata::builder()
+            .schema_id(self.schema.schema_id())
+            .schema(self.schema)
+            .partition_spec(self.partition_spec)
+            .format_version(FormatVersion::V3)
+            .content(ManifestContentType::Data)
+            .build();
+        ManifestWriter::new(
+            self.output,
+            self.snapshot_id,
+            self.key_metadata,
+            metadata,
+            // First row id is assigned by the [`ManifestListWriter`] when the manifest
+            // is added to the list.
+            None,
+        )
+    }
+
+    /// Build a [`ManifestWriter`] for format version 3, deletes content.
+    pub fn build_v3_deletes(self) -> ManifestWriter {
+        let metadata = ManifestMetadata::builder()
+            .schema_id(self.schema.schema_id())
+            .schema(self.schema)
+            .partition_spec(self.partition_spec)
+            .format_version(FormatVersion::V3)
+            .content(ManifestContentType::Deletes)
+            .build();
+        ManifestWriter::new(
+            self.output,
+            self.snapshot_id,
+            self.key_metadata,
+            metadata,
+            None,
+        )
     }
 }
 
@@ -112,6 +168,7 @@ pub struct ManifestWriter {
     existing_rows: u64,
     deleted_files: u32,
     deleted_rows: u64,
+    first_row_id: Option<u64>,
 
     min_seq_num: Option<i64>,
 
@@ -129,6 +186,7 @@ impl ManifestWriter {
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
+        first_row_id: Option<u64>,
     ) -> Self {
         Self {
             output,
@@ -139,6 +197,7 @@ impl ManifestWriter {
             existing_rows: 0,
             deleted_files: 0,
             deleted_rows: 0,
+            first_row_id,
             min_seq_num: None,
             key_metadata,
             manifest_entries: Vec::new(),
@@ -348,7 +407,8 @@ impl ManifestWriter {
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
-            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
+            // Manifest schema did not change between V2 and V3
+            FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
         let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
         avro_writer.add_user_metadata(
@@ -388,8 +448,11 @@ impl ManifestWriter {
             let value = match self.metadata.format_version {
                 FormatVersion::V1 => to_value(ManifestEntryV1::try_from(entry, &partition_type)?)?
                     .resolve(&avro_schema)?,
-                FormatVersion::V2 => to_value(ManifestEntryV2::try_from(entry, &partition_type)?)?
-                    .resolve(&avro_schema)?,
+                // Manifest entry format did not change between V2 and V3
+                FormatVersion::V2 | FormatVersion::V3 => {
+                    to_value(ManifestEntryV2::try_from(entry, &partition_type)?)?
+                        .resolve(&avro_schema)?
+                }
             };
 
             avro_writer.append(value)?;
@@ -417,6 +480,7 @@ impl ManifestWriter {
             deleted_rows_count: Some(self.deleted_rows),
             partitions: Some(partition_summary),
             key_metadata: self.key_metadata,
+            first_row_id: self.first_row_id,
         })
     }
 }
