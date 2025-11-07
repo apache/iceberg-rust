@@ -19,6 +19,7 @@
 # and only MSRV is required.
 #
 # The channel is exactly same day for our MSRV.
+# Updated to 1.88 MSRV for testing with datafusion main
 [toolchain]
-channel = "nightly-2025-03-28"
+channel = "nightly-2025-06-23"
 components = ["rustfmt", "clippy"]
