@@ -161,10 +161,10 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
-        if let Some(contains_nan) = field.contains_nan {
-            if !contains_nan {
-                return ROWS_CANNOT_MATCH;
-            }
+        if let Some(contains_nan) = field.contains_nan
+            && !contains_nan
+        {
+            return ROWS_CANNOT_MATCH;
         }
 
         if ManifestFilterVisitor::are_all_null(field, &reference.field().field_type) {
@@ -389,16 +389,16 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 return ROWS_MIGHT_MATCH;
             }
 
-            if prefix.as_bytes().eq(&lower_bound[..prefix_len]) {
-                if let Some(upper_bound) = &field.upper_bound {
-                    // if upper is shorter than the prefix then upper can't start with the prefix
-                    if prefix_len > upper_bound.len() {
-                        return ROWS_MIGHT_MATCH;
-                    }
+            if prefix.as_bytes().eq(&lower_bound[..prefix_len])
+                && let Some(upper_bound) = &field.upper_bound
+            {
+                // if upper is shorter than the prefix then upper can't start with the prefix
+                if prefix_len > upper_bound.len() {
+                    return ROWS_MIGHT_MATCH;
+                }
 
-                    if prefix.as_bytes().eq(&upper_bound[..prefix_len]) {
-                        return ROWS_CANNOT_MATCH;
-                    }
+                if prefix.as_bytes().eq(&upper_bound[..prefix_len]) {
+                    return ROWS_CANNOT_MATCH;
                 }
             }
         }

@@ -427,8 +427,7 @@ impl<'de> Deserialize<'de> for StructType {
                             let type_val: String = map.next_value()?;
                             if type_val != "struct" {
                                 return Err(serde::de::Error::custom(format!(
-                                    "expected type 'struct', got '{}'",
-                                    type_val
+                                    "expected type 'struct', got '{type_val}'"
                                 )));
                             }
                         }

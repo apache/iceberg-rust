@@ -545,16 +545,16 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                     return Ok(false);
                 }
 
-                if let Some(min) = min {
-                    if min.gt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(min) = min
+                    && min.gt(datum)
+                {
+                    return Ok(false);
                 }
 
-                if let Some(max) = max {
-                    if max.lt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(max) = max
+                    && max.lt(datum)
+                {
+                    return Ok(false);
                 }
 
                 Ok(true)
@@ -793,6 +793,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 // 3. Use parquet's internal test module approach (requires being in same crate)
 
 #[cfg(all(test, feature = "page_index_tests_disabled"))]
+#[allow(unexpected_cfgs)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
