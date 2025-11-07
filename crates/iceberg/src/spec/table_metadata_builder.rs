@@ -28,6 +28,7 @@ use super::{
     UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
 const FIRST_FIELD_ID: u32 = 1;
@@ -120,6 +121,7 @@ impl TableMetadataBuilder {
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
                 encryption_keys: HashMap::new(),
+                next_row_id: INITIAL_ROW_ID,
             },
             last_updated_ms: None,
             changes: vec![],
@@ -170,6 +172,7 @@ impl TableMetadataBuilder {
             partition_spec,
             sort_order,
             properties,
+            format_version,
         } = table_creation;
 
         let location = location.ok_or_else(|| {
@@ -188,7 +191,7 @@ impl TableMetadataBuilder {
             partition_spec,
             sort_order.unwrap_or(SortOrder::unsorted_order()),
             location,
-            FormatVersion::V2,
+            format_version,
             properties,
         )
     }
@@ -224,6 +227,11 @@ impl TableMetadataBuilder {
                     // No changes needed for V1
                 }
                 FormatVersion::V2 => {
+                    self.metadata.format_version = format_version;
+                    self.changes
+                        .push(TableUpdate::UpgradeFormatVersion { format_version });
+                }
+                FormatVersion::V3 => {
                     self.metadata.format_version = format_version;
                     self.changes
                         .push(TableUpdate::UpgradeFormatVersion { format_version });
@@ -329,6 +337,9 @@ impl TableMetadataBuilder {
     /// # Errors
     /// - Snapshot id already exists.
     /// - For format version > 1: the sequence number of the snapshot is lower than the highest sequence number specified so far.
+    /// - For format version >= 3: the first-row-id of the snapshot is lower than the next-row-id of the table.
+    /// - For format version >= 3: added-rows is null or first-row-id is null.
+    /// - For format version >= 3: next-row-id would overflow when adding added-rows.
     pub fn add_snapshot(mut self, snapshot: Snapshot) -> Result<Self> {
         if self
             .metadata
@@ -383,6 +394,43 @@ impl TableMetadataBuilder {
                     max_last_updated
                 ),
             ));
+        }
+
+        let mut added_rows = None;
+        if self.metadata.format_version >= MIN_FORMAT_VERSION_ROW_LINEAGE {
+            if let Some((first_row_id, added_rows_count)) = snapshot.row_range() {
+                if first_row_id < self.metadata.next_row_id {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
+                            self.metadata.next_row_id
+                        ),
+                    ));
+                }
+
+                added_rows = Some(added_rows_count);
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
+                    ),
+                ));
+            }
+        }
+
+        if let Some(added_rows) = added_rows {
+            self.metadata.next_row_id = self
+                .metadata
+                .next_row_id
+                .checked_add(added_rows)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Cannot add snapshot: next-row-id overflowed when adding added-rows",
+                    )
+                })?;
         }
 
         // Mutation happens in next line - must be infallible from here
@@ -1012,6 +1060,31 @@ impl TableMetadataBuilder {
     fn add_default_sort_order(self, sort_order: SortOrder) -> Result<Self> {
         self.add_sort_order(sort_order)?
             .set_default_sort_order(Self::LAST_ADDED as i64)
+    }
+
+    /// Add an encryption key to the table metadata.
+    pub fn add_encryption_key(mut self, key: EncryptedKey) -> Self {
+        let key_id = key.key_id().to_string();
+        if self.metadata.encryption_keys.contains_key(&key_id) {
+            // already exists
+            return self;
+        }
+
+        self.metadata.encryption_keys.insert(key_id, key.clone());
+        self.changes.push(TableUpdate::AddEncryptionKey {
+            encryption_key: key,
+        });
+        self
+    }
+
+    /// Remove an encryption key from the table metadata.
+    pub fn remove_encryption_key(mut self, key_id: &str) -> Self {
+        if self.metadata.encryption_keys.remove(key_id).is_some() {
+            self.changes.push(TableUpdate::RemoveEncryptionKey {
+                key_id: key_id.to_string(),
+            });
+        }
+        self
     }
 
     /// Build the table metadata.
@@ -2987,5 +3060,383 @@ mod tests {
         let result = builder.add_partition_spec(non_conflicting_partition_spec);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_row_lineage_addition() {
+        let new_rows = 30;
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+        let add_rows = Snapshot::builder()
+            .with_snapshot_id(0)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), new_rows)
+            .build();
+
+        let first_addition = base
+            .into_builder(None)
+            .add_snapshot(add_rows.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(first_addition.next_row_id(), new_rows);
+
+        let add_more_rows = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(first_addition.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(Some(0))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(first_addition.next_row_id(), new_rows)
+            .build();
+
+        let second_addition = first_addition
+            .into_builder(None)
+            .add_snapshot(add_more_rows)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(second_addition.next_row_id(), new_rows * 2);
+    }
+
+    #[test]
+    fn test_row_lineage_invalid_snapshot() {
+        let new_rows = 30;
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+
+        // add rows to check TableMetadata validation; Snapshot rejects negative next-row-id
+        let add_rows = Snapshot::builder()
+            .with_snapshot_id(0)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), new_rows)
+            .build();
+
+        let added = base
+            .into_builder(None)
+            .add_snapshot(add_rows)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let invalid_new_rows = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(added.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(Some(0))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            // first_row_id is behind table next_row_id
+            .with_row_range(added.next_row_id() - 1, 10)
+            .build();
+
+        let err = added
+            .into_builder(None)
+            .add_snapshot(invalid_new_rows)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Cannot add a snapshot, first-row-id is behind table next-row-id: 29 < 30"
+            )
+        );
+    }
+
+    #[test]
+    fn test_row_lineage_append_branch() {
+        // Appends to a branch should still change last-row-id even if not on main, these changes
+        // should also affect commits to main
+
+        let branch = "some_branch";
+
+        // Start with V3 metadata to support row lineage
+        let base = builder_without_changes(FormatVersion::V3)
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Initial next_row_id should be 0
+        assert_eq!(base.next_row_id(), 0);
+
+        // Write to Branch - append 30 rows
+        let branch_snapshot_1 = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(base.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("foo")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(base.next_row_id(), 30)
+            .build();
+
+        let table_after_branch_1 = base
+            .into_builder(None)
+            .set_branch_snapshot(branch_snapshot_1.clone(), branch)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Current snapshot should be null (no main branch snapshot yet)
+        assert!(table_after_branch_1.current_snapshot().is_none());
+
+        // Branch snapshot should have first_row_id = 0
+        let branch_ref = table_after_branch_1.refs.get(branch).unwrap();
+        let branch_snap_1 = table_after_branch_1
+            .snapshots
+            .get(&branch_ref.snapshot_id)
+            .unwrap();
+        assert_eq!(branch_snap_1.first_row_id(), Some(0));
+
+        // Next row id should be 30
+        assert_eq!(table_after_branch_1.next_row_id(), 30);
+
+        // Write to Main - append 28 rows
+        let main_snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(table_after_branch_1.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("bar")
+            .with_parent_snapshot_id(None)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(table_after_branch_1.next_row_id(), 28)
+            .build();
+
+        let table_after_main = table_after_branch_1
+            .into_builder(None)
+            .add_snapshot(main_snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: main_snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Main snapshot should have first_row_id = 30
+        let current_snapshot = table_after_main.current_snapshot().unwrap();
+        assert_eq!(current_snapshot.first_row_id(), Some(30));
+
+        // Next row id should be 58 (30 + 28)
+        assert_eq!(table_after_main.next_row_id(), 58);
+
+        // Write again to branch - append 21 rows
+        let branch_snapshot_2 = Snapshot::builder()
+            .with_snapshot_id(3)
+            .with_timestamp_ms(table_after_main.last_updated_ms + 1)
+            .with_sequence_number(2)
+            .with_schema_id(0)
+            .with_manifest_list("baz")
+            .with_parent_snapshot_id(Some(branch_snapshot_1.snapshot_id()))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_row_range(table_after_main.next_row_id(), 21)
+            .build();
+
+        let table_after_branch_2 = table_after_main
+            .into_builder(None)
+            .set_branch_snapshot(branch_snapshot_2.clone(), branch)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Branch snapshot should have first_row_id = 58 (30 + 28)
+        let branch_ref_2 = table_after_branch_2.refs.get(branch).unwrap();
+        let branch_snap_2 = table_after_branch_2
+            .snapshots
+            .get(&branch_ref_2.snapshot_id)
+            .unwrap();
+        assert_eq!(branch_snap_2.first_row_id(), Some(58));
+
+        // Next row id should be 79 (30 + 28 + 21)
+        assert_eq!(table_after_branch_2.next_row_id(), 79);
+    }
+
+    #[test]
+    fn test_encryption_keys() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        // Create test encryption keys
+        let encryption_key_1 = EncryptedKey::builder()
+            .key_id("key-1")
+            .encrypted_key_metadata(vec![1, 2, 3, 4])
+            .encrypted_by_id("encryption-service-1")
+            .properties(HashMap::from_iter(vec![(
+                "algorithm".to_string(),
+                "AES-256".to_string(),
+            )]))
+            .build();
+
+        let encryption_key_2 = EncryptedKey::builder()
+            .key_id("key-2")
+            .encrypted_key_metadata(vec![5, 6, 7, 8])
+            .encrypted_by_id("encryption-service-2")
+            .properties(HashMap::new())
+            .build();
+
+        // Add first encryption key
+        let build_result = builder
+            .add_encryption_key(encryption_key_1.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-1"),
+            Some(&encryption_key_1)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
+            encryption_key: encryption_key_1.clone()
+        });
+
+        // Add second encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
+            .add_encryption_key(encryption_key_2.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 2);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-1"),
+            Some(&encryption_key_1)
+        );
+        assert_eq!(
+            build_result.metadata.encryption_key("key-2"),
+            Some(&encryption_key_2)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
+            encryption_key: encryption_key_2.clone()
+        });
+
+        // Try to add duplicate key - should not create a change
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .add_encryption_key(encryption_key_1.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 0);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 2);
+
+        // Remove first encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata3.json".to_string(),
+            ))
+            .remove_encryption_key("key-1")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+        assert_eq!(build_result.metadata.encryption_key("key-1"), None);
+        assert_eq!(
+            build_result.metadata.encryption_key("key-2"),
+            Some(&encryption_key_2)
+        );
+        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
+            key_id: "key-1".to_string()
+        });
+
+        // Try to remove non-existent key - should not create a change
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata4.json".to_string(),
+            ))
+            .remove_encryption_key("non-existent-key")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 0);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 1);
+
+        // Test encryption_keys_iter()
+        let keys = build_result
+            .metadata
+            .encryption_keys_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], &encryption_key_2);
+
+        // Remove last encryption key
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata5.json".to_string(),
+            ))
+            .remove_encryption_key("key-2")
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.encryption_keys.len(), 0);
+        assert_eq!(build_result.metadata.encryption_key("key-2"), None);
+        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
+            key_id: "key-2".to_string()
+        });
+
+        // Verify empty encryption_keys_iter()
+        let keys = build_result.metadata.encryption_keys_iter();
+        assert_eq!(keys.len(), 0);
     }
 }

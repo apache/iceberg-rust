@@ -307,9 +307,7 @@ impl StaticTable {
         table_ident: TableIdent,
         file_io: FileIO,
     ) -> Result<Self> {
-        let metadata_file = file_io.new_input(metadata_location)?;
-        let metadata_file_content = metadata_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_file_content)?;
+        let metadata = TableMetadata::read_from(&file_io, metadata_location).await?;
 
         let table = Table::builder()
             .metadata(metadata)
