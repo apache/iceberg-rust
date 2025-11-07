@@ -232,8 +232,7 @@ impl ArrowReader {
         let project_field_ids_without_virtual: Vec<i32> = task
             .project_field_ids
             .iter()
-            .enumerate()
-            .filter_map(|(idx, &field_id)| {
+            .filter_map(|&field_id| {
                 if field_id == RESERVED_FIELD_ID_FILE {
                     None
                 } else {
