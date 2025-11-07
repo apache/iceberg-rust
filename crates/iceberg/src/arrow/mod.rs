@@ -27,8 +27,6 @@ pub(crate) mod caching_delete_file_loader;
 pub mod delete_file_loader;
 pub(crate) mod delete_filter;
 
-pub(crate) mod metadata_column_transformer;
-pub(crate) use metadata_column_transformer::{RESERVED_COL_NAME_FILE, RESERVED_FIELD_ID_FILE};
 mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;

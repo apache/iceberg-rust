@@ -48,7 +48,6 @@ use parquet::file::metadata::{
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
-use crate::arrow::metadata_column_transformer::MetadataTransformer;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
@@ -62,6 +61,12 @@ use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
+
+/// Reserved field ID for the file path (_file) column per Iceberg spec
+pub(crate) const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
+
+/// Column name for the file path metadata column per Iceberg spec
+pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -223,18 +228,21 @@ impl ArrowReader {
             initial_stream_builder
         };
 
-        // Build the metadata transformer from the projected field IDs
-        // This identifies reserved fields (like _file) and creates transformations for them
-        let metadata_transformer_builder =
-            MetadataTransformer::builder(task.project_field_ids.clone())
-                .with_file_path(task.data_file_path.clone());
-
-        // Get the field IDs without virtual fields for Parquet projection
-        let project_field_ids_without_virtual =
-            metadata_transformer_builder.project_field_ids_without_virtual();
-
-        // Build the metadata transformer (which will handle adding _file columns)
-        let metadata_transformer = metadata_transformer_builder.build();
+        // Check if _file column is requested and filter it out for projection
+        let mut file_column_positions = Vec::new();
+        let project_field_ids_without_virtual: Vec<i32> = task
+            .project_field_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &field_id)| {
+                if field_id == RESERVED_FIELD_ID_FILE {
+                    file_column_positions.push(idx);
+                    None
+                } else {
+                    Some(field_id)
+                }
+            })
+            .collect();
 
         // Fallback IDs don't match Parquet's embedded field IDs (since they don't exist),
         // so we must use position-based projection instead of field-ID matching
@@ -395,12 +403,23 @@ impl ArrowReader {
                 .build()?
                 .map(move |batch| match batch {
                     Ok(batch) => {
-                        // First apply record batch transformations (type promotion, column reordering, etc.)
-                        let processed_batch =
+                        let mut processed_batch =
                             record_batch_transformer.process_record_batch(batch)?;
 
-                        // Then apply metadata transformations (add _file column, etc.)
-                        metadata_transformer.apply(processed_batch)
+                        // Add the _file column at each requested position
+                        // We insert them back at their original positions since we're reconstructing
+                        // the original column order
+                        for &position in &file_column_positions {
+                            processed_batch = Self::add_file_path_column_ree_at_position(
+                                processed_batch,
+                                &data_file_path,
+                                RESERVED_COL_NAME_FILE,
+                                RESERVED_FIELD_ID_FILE,
+                                position,
+                            )?;
+                        }
+
+                        Ok(processed_batch)
                     }
                     Err(err) => Err(err.into()),
                 });
