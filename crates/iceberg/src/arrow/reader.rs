@@ -229,14 +229,12 @@ impl ArrowReader {
         };
 
         // Check if _file column is requested and filter it out for projection
-        let mut file_column_positions = Vec::new();
         let project_field_ids_without_virtual: Vec<i32> = task
             .project_field_ids
             .iter()
             .enumerate()
             .filter_map(|(idx, &field_id)| {
                 if field_id == RESERVED_FIELD_ID_FILE {
-                    file_column_positions.push(idx);
                     None
                 } else {
                     Some(field_id)
@@ -409,14 +407,16 @@ impl ArrowReader {
                         // Add the _file column at each requested position
                         // We insert them back at their original positions since we're reconstructing
                         // the original column order
-                        for &position in &file_column_positions {
-                            processed_batch = Self::add_file_path_column_ree_at_position(
-                                processed_batch,
-                                &data_file_path,
-                                RESERVED_COL_NAME_FILE,
-                                RESERVED_FIELD_ID_FILE,
-                                position,
-                            )?;
+                        for (position, field_id) in task.project_field_ids.iter().enumerate() {
+                            if *field_id == RESERVED_FIELD_ID_FILE {
+                                processed_batch = Self::add_file_path_column_ree_at_position(
+                                    processed_batch,
+                                    &data_file_path,
+                                    RESERVED_COL_NAME_FILE,
+                                    RESERVED_FIELD_ID_FILE,
+                                    position,
+                                )?;
+                            }
                         }
 
                         Ok(processed_batch)
