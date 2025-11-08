@@ -792,9 +792,10 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 // 2. Contribute test utilities to arrow-rs parquet crate
 // 3. Use parquet's internal test module approach (requires being in same crate)
 
-#[cfg(all(test, feature = "page_index_tests_disabled"))]
 #[allow(unexpected_cfgs)]
+#[cfg(all(test, feature = "page_index_tests_disabled"))]
 mod tests {
+    #![allow(unexpected_cfgs)]
     use std::collections::HashMap;
     use std::sync::Arc;
 

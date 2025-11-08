@@ -508,8 +508,7 @@ mod tests {
 
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column, got: {:?}",
-                    column_names
+                    "Should use _partition column, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning with Identity transform"),
@@ -733,8 +732,7 @@ mod tests {
                     .collect();
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column for mixed transforms with Identity, got: {:?}",
-                    column_names
+                    "Should use _partition column for mixed transforms with Identity, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning for table with identity transforms"),
