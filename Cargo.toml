@@ -38,6 +38,9 @@ repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
 rust-version = "1.88"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = { version = "0.20", features = ["zstandard"] }
