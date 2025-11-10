@@ -155,13 +155,7 @@ impl TransactionAction for FastAppendAction {
 
         // Checks duplicate files
         if self.check_duplicate {
-            snapshot_producer
-                .validate_duplicate_files(&self.added_data_files)
-                .await?;
-
-            snapshot_producer
-                .validate_duplicate_files(&self.added_delete_files)
-                .await?;
+            snapshot_producer.validate_data_file_changes().await?;
         }
 
         snapshot_producer
@@ -318,13 +312,7 @@ impl TransactionAction for MergeAppendAction {
 
         // Checks duplicate files
         if self.check_duplicate {
-            snapshot_producer
-                .validate_duplicate_files(&self.added_data_files)
-                .await?;
-
-            snapshot_producer
-                .validate_duplicate_files(&self.added_delete_files)
-                .await?;
+            snapshot_producer.validate_data_file_changes().await?;
         }
 
         if self.merge_enabled {
