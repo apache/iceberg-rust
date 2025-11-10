@@ -27,8 +27,7 @@ use crate::io::object_cache::ObjectCache;
 use crate::scan::ExpressionEvaluatorCache;
 use crate::scan::context::{ManifestEntryContext, ManifestEntryFilterFn, ManifestFileContext};
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, Operation, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 
 #[derive(Debug)]
@@ -65,28 +64,8 @@ impl IncrementalPlanContext {
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        // Validate that all snapshots are Append or Delete operations and collect their IDs
-        let snapshot_ids: HashSet<i64> = {
-            let mut ids = HashSet::new();
-            for snapshot in self.snapshots.iter() {
-                let operation = &snapshot.summary().operation;
-                if !matches!(
-                    operation,
-                    Operation::Append | Operation::Overwrite | Operation::Delete
-                ) {
-                    return Err(crate::Error::new(
-                        crate::ErrorKind::FeatureUnsupported,
-                        format!(
-                            "Incremental scan only supports Append, Overwrite and Delete operations, but snapshot {} has operation {:?}",
-                            snapshot.snapshot_id(),
-                            operation
-                        ),
-                    ));
-                }
-                ids.insert(snapshot.snapshot_id());
-            }
-            ids
-        };
+        // Collect all snapshot IDs (all operation types are supported)
+        let snapshot_ids: HashSet<i64> = self.snapshots.iter().map(|s| s.snapshot_id()).collect();
 
         let (manifest_files, filter_fn) = {
             let mut manifest_files = HashSet::<ManifestFile>::new();
