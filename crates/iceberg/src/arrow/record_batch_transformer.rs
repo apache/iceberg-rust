@@ -59,7 +59,7 @@ fn constants_map(
         // Only identity transforms should use constant values from partition metadata
         if matches!(field.transform, Transform::Identity) {
             // Get the partition value for this field
-            if let Some(Some(Literal::Primitive(value))) = partition_data.iter().nth(pos) {
+            if let Some(Literal::Primitive(value)) = &partition_data[pos] {
                 constants.insert(field.source_id, value.clone());
             }
         }
@@ -143,16 +143,108 @@ enum SchemaComparison {
     Different,
 }
 
+/// Builder for RecordBatchTransformer to improve ergonomics when constructing with optional parameters.
+///
+/// See [`RecordBatchTransformer`] for details on partition spec, partition data, and name mapping.
+#[derive(Debug)]
+pub(crate) struct RecordBatchTransformerBuilder {
+    snapshot_schema: Arc<IcebergSchema>,
+    projected_iceberg_field_ids: Vec<i32>,
+    partition_spec: Option<Arc<PartitionSpec>>,
+    partition_data: Option<Struct>,
+    name_mapping: Option<Arc<NameMapping>>,
+}
+
+impl RecordBatchTransformerBuilder {
+    pub(crate) fn new(
+        snapshot_schema: Arc<IcebergSchema>,
+        projected_iceberg_field_ids: &[i32],
+    ) -> Self {
+        Self {
+            snapshot_schema,
+            projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
+            partition_spec: None,
+            partition_data: None,
+            name_mapping: None,
+        }
+    }
+
+    /// Set partition spec and data together for identifying identity-transformed partition columns.
+    ///
+    /// Both partition_spec and partition_data must be provided together since the spec defines
+    /// which fields are identity-partitioned, and the data provides their constant values.
+    /// One without the other cannot produce a valid constants map.
+    pub(crate) fn with_partition(
+        mut self,
+        partition_spec: Option<Arc<PartitionSpec>>,
+        partition_data: Option<Struct>,
+    ) -> Self {
+        self.partition_spec = partition_spec;
+        self.partition_data = partition_data;
+        self
+    }
+
+    pub(crate) fn with_name_mapping(mut self, name_mapping: Option<Arc<NameMapping>>) -> Self {
+        self.name_mapping = name_mapping;
+        self
+    }
+
+    pub(crate) fn build(self) -> RecordBatchTransformer {
+        RecordBatchTransformer {
+            snapshot_schema: self.snapshot_schema,
+            projected_iceberg_field_ids: self.projected_iceberg_field_ids,
+            partition_spec: self.partition_spec,
+            partition_data: self.partition_data,
+            name_mapping: self.name_mapping,
+            batch_transform: None,
+        }
+    }
+}
+
+/// Transforms RecordBatches from Parquet files to match the Iceberg table schema.
+///
+/// Handles schema evolution, column reordering, type promotion, and implements the Iceberg spec's
+/// "Column Projection" rules for resolving field IDs "not present" in data files:
+/// 1. Return the value from partition metadata if an Identity Transform exists
+/// 2. Use schema.name-mapping.default metadata to map field id to columns without field id
+/// 3. Return the default value if it has a defined initial-default
+/// 4. Return null in all other cases
+///
+/// # Partition Spec and Data
+///
+/// **Bucket partitioning**: Distinguish identity transforms (use partition metadata constants)
+/// from non-identity transforms like bucket (read from data file) to enable runtime filtering on
+/// bucket-partitioned columns. For example, `bucket(4, id)` stores only the bucket number in
+/// partition metadata, so actual `id` values must be read from the data file.
+///
+/// **Add_files field ID conflicts**: When importing Hive tables, partition columns can have field IDs
+/// conflicting with Parquet data columns (e.g., Parquet has field_id=1->"name", but Iceberg expects
+/// field_id=1->"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
+///
+/// This matches Java's ParquetSchemaUtil.applyNameMapping approach but detects conflicts during projection.
+///
+/// # References
+/// - Spec: https://iceberg.apache.org/spec/#column-projection
+/// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+/// - Java: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
 
-    // Optional partition spec and data for proper constant identification
+    /// Partition spec for identifying identity-transformed partition columns (spec rule #1).
+    /// Only fields with identity transforms use partition data constants; non-identity transforms
+    /// (bucket, truncate, etc.) must read source columns from data files.
     partition_spec: Option<Arc<PartitionSpec>>,
+
+    /// Partition data providing constant values for identity-transformed partition columns (spec rule #1).
+    /// For example, in a file at path `dept=engineering/file.parquet`, this would contain
+    /// the value "engineering" for the dept field.
     partition_data: Option<Struct>,
 
-    // Optional name mapping for resolving field IDs from column names
+    /// Name mapping for resolving field IDs from column names when field IDs are missing or
+    /// conflicting (spec rule #2). Used primarily for Hive tables imported via add_files where
+    /// Parquet field IDs may conflict with Iceberg schema field IDs.
     name_mapping: Option<Arc<NameMapping>>,
 
     // BatchTransform gets lazily constructed based on the schema of
@@ -167,56 +259,7 @@ impl RecordBatchTransformer {
         snapshot_schema: Arc<IcebergSchema>,
         projected_iceberg_field_ids: &[i32],
     ) -> Self {
-        Self::build_with_partition_data(
-            snapshot_schema,
-            projected_iceberg_field_ids,
-            None,
-            None,
-            None,
-        )
-    }
-
-    /// Build a RecordBatchTransformer with partition spec and data for proper constant identification.
-    ///
-    /// Implements the Iceberg spec's "Column Projection" rules for resolving field IDs "not present" in data files:
-    /// 1. Return the value from partition metadata if an Identity Transform exists
-    /// 2. Use schema.name-mapping.default metadata to map field id to columns without field id
-    /// 3. Return the default value if it has a defined initial-default
-    /// 4. Return null in all other cases
-    ///
-    /// # Why this method exists
-    ///
-    /// 1. **Bucket partitioning**: Distinguish identity transforms (use partition metadata constants)
-    ///    from non-identity transforms like bucket (read from data file) to enable runtime filtering on
-    ///    bucket-partitioned columns.
-    ///
-    /// 2. **Add_files field ID conflicts**: When importing Hive tables, partition columns can have field IDs
-    ///    conflicting with Parquet data columns (e.g., Parquet has field_id=1->"name", but Iceberg expects
-    ///    field_id=1->"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
-    ///
-    /// This matches Java's ParquetSchemaUtil.applyNameMapping approach but detects conflicts during projection.
-    ///
-    /// # References
-    /// - Spec: https://iceberg.apache.org/spec/#column-projection
-    /// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
-    /// - Java: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
-    pub(crate) fn build_with_partition_data(
-        snapshot_schema: Arc<IcebergSchema>,
-        projected_iceberg_field_ids: &[i32],
-        partition_spec: Option<Arc<PartitionSpec>>,
-        partition_data: Option<Struct>,
-        name_mapping: Option<Arc<NameMapping>>,
-    ) -> Self {
-        let projected_iceberg_field_ids = projected_iceberg_field_ids.to_vec();
-
-        Self {
-            snapshot_schema,
-            projected_iceberg_field_ids,
-            partition_spec,
-            partition_data,
-            name_mapping,
-            batch_transform: None,
-        }
+        RecordBatchTransformerBuilder::new(snapshot_schema, projected_iceberg_field_ids).build()
     }
 
     pub(crate) fn process_record_batch(
@@ -657,7 +700,9 @@ mod test {
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-    use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+    use crate::arrow::record_batch_transformer::{
+        RecordBatchTransformer, RecordBatchTransformerBuilder,
+    };
     use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
 
     #[test]
@@ -948,13 +993,10 @@ mod test {
 
         let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            None,
-            None,
-            Some(name_mapping),
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_name_mapping(Some(name_mapping))
+                .build();
 
         // Create a Parquet RecordBatch with data for: name="John Doe", subdept="communications"
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
@@ -1079,13 +1121,10 @@ mod test {
 
         let projected_field_ids = [1, 2]; // id, name
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            Some(partition_spec),
-            Some(partition_data),
-            None,
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(Some(partition_spec), Some(partition_data))
+                .build();
 
         // Create a Parquet RecordBatch with actual data
         // The id column MUST be read from here, not treated as a constant
@@ -1202,13 +1241,10 @@ mod test {
 
         let projected_field_ids = [1, 2, 3]; // id, dept, name
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            Some(partition_spec),
-            Some(partition_data),
-            None,
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(Some(partition_spec), Some(partition_data))
+                .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
             Arc::new(Int32Array::from(vec![100, 200])),
@@ -1320,13 +1356,10 @@ mod test {
 
         let projected_field_ids = [1, 2]; // row_id (field_id=1), name (field_id=2)
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            Some(partition_spec),
-            Some(partition_data),
-            None,
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(Some(partition_spec), Some(partition_data))
+                .build();
 
         // Create a Parquet RecordBatch with actual data
         // Despite column rename, data should be read via field_id=1
@@ -1433,13 +1466,11 @@ mod test {
 
         let projected_field_ids = [1, 2, 3, 4, 5]; // id, dept, data, category, notes
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            Some(partition_spec),
-            Some(partition_data),
-            Some(name_mapping),
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_name_mapping(Some(name_mapping))
+                .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
             Arc::new(Int32Array::from(vec![100, 200])),
@@ -1553,13 +1584,11 @@ mod test {
 
         let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
 
-        let mut transformer = RecordBatchTransformer::build_with_partition_data(
-            snapshot_schema,
-            &projected_field_ids,
-            Some(partition_spec),
-            Some(partition_data),
-            Some(name_mapping),
-        );
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_name_mapping(Some(name_mapping))
+                .build();
 
         // Parquet data (one row)
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![

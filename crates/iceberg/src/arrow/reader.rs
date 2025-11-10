@@ -45,7 +45,7 @@ use parquet::file::metadata::{
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -235,13 +235,11 @@ impl ArrowReader {
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering.
-        let mut record_batch_transformer = RecordBatchTransformer::build_with_partition_data(
-            task.schema_ref(),
-            task.project_field_ids(),
-            task.partition_spec.clone(),
-            task.partition.clone(),
-            task.name_mapping.clone(),
-        );
+        let mut record_batch_transformer =
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
+                .with_partition(task.partition_spec.clone(), task.partition.clone())
+                .with_name_mapping(task.name_mapping.clone())
+                .build();
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
