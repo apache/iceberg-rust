@@ -2682,12 +2682,71 @@ mod _serde {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
                     _ => Err(invalid_err("string")),
                 },
-                // # TODO:https://github.com/apache/iceberg-rust/issues/86
-                // rust avro don't support deserialize any bytes representation now.
-                RawLiteralEnum::Bytes(_) => Err(invalid_err_with_reason(
-                    "bytes",
-                    "todo: rust avro doesn't support deserialize any bytes representation now",
-                )),
+                RawLiteralEnum::Bytes(v) => match ty {
+                    Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
+                    Type::Primitive(PrimitiveType::Fixed(expected_len)) => {
+                        if v.len() == *expected_len as usize {
+                            Ok(Some(Literal::fixed(v.to_vec())))
+                        } else {
+                            Err(invalid_err_with_reason(
+                                "bytes",
+                                &format!(
+                                    "Fixed type must be exactly {} bytes, got {}",
+                                    expected_len,
+                                    v.len()
+                                ),
+                            ))
+                        }
+                    }
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        if v.len() == 16 {
+                            let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
+                                invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
+                            })?;
+                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        } else {
+                            Err(invalid_err_with_reason(
+                                "bytes",
+                                "UUID must be exactly 16 bytes",
+                            ))
+                        }
+                    }
+                    Type::Primitive(PrimitiveType::Decimal { precision, .. }) => {
+                        let required_bytes = Type::decimal_required_bytes(*precision)? as usize;
+
+                        if v.len() == required_bytes {
+                            // Pad the bytes to 16 bytes (i128 size) with sign extension
+                            let mut padded_bytes = [0u8; 16];
+                            let start_idx = 16 - v.len();
+
+                            // Copy the input bytes to the end of the array
+                            padded_bytes[start_idx..].copy_from_slice(&v);
+
+                            // Sign extend if the number is negative (MSB is 1)
+                            if !v.is_empty() && (v[0] & 0x80) != 0 {
+                                // Fill the padding with 0xFF for negative numbers
+                                for byte in &mut padded_bytes[..start_idx] {
+                                    *byte = 0xFF;
+                                }
+                            }
+
+                            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(
+                                i128::from_be_bytes(padded_bytes),
+                            ))))
+                        } else {
+                            Err(invalid_err_with_reason(
+                                "bytes",
+                                &format!(
+                                    "Decimal with precision {} must be exactly {} bytes, got {}",
+                                    precision,
+                                    required_bytes,
+                                    v.len()
+                                ),
+                            ))
+                        }
+                    }
+                    _ => Err(invalid_err("bytes")),
+                },
                 RawLiteralEnum::List(v) => match ty {
                     Type::List(ty) => Ok(Some(Literal::List(
                         v.list
@@ -3307,6 +3366,238 @@ mod tests {
                 "expect error DataInvalid",
             );
         }
+    }
+
+    fn check_raw_literal_bytes_serde_via_avro(
+        input_bytes: Vec<u8>,
+        expected_literal: Literal,
+        expected_type: &Type,
+    ) {
+        use apache_avro::types::Value;
+
+        // Create an Avro bytes value and deserialize it through the RawLiteral path
+        let avro_value = Value::Bytes(input_bytes);
+        let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+        let result = raw_literal.try_into(expected_type).unwrap();
+        assert_eq!(result, Some(expected_literal));
+    }
+
+    fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &Type) {
+        use apache_avro::types::Value;
+
+        let avro_value = Value::Bytes(input_bytes);
+        let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+        let result = raw_literal.try_into(expected_type);
+        assert!(result.is_err(), "Expected error but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_binary() {
+        let bytes = vec![1u8, 2u8, 3u8, 4u8, 5u8];
+        check_raw_literal_bytes_serde_via_avro(
+            bytes.clone(),
+            Literal::binary(bytes),
+            &Type::Primitive(PrimitiveType::Binary),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_binary_empty() {
+        let bytes = vec![];
+        check_raw_literal_bytes_serde_via_avro(
+            bytes.clone(),
+            Literal::binary(bytes),
+            &Type::Primitive(PrimitiveType::Binary),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_fixed_correct_length() {
+        let bytes = vec![1u8, 2u8, 3u8, 4u8];
+        check_raw_literal_bytes_serde_via_avro(
+            bytes.clone(),
+            Literal::fixed(bytes),
+            &Type::Primitive(PrimitiveType::Fixed(4)),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_fixed_wrong_length() {
+        let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but expecting 4
+        check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Fixed(4)));
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_fixed_empty_correct_length() {
+        let bytes = vec![];
+        check_raw_literal_bytes_serde_via_avro(
+            bytes.clone(),
+            Literal::fixed(bytes),
+            &Type::Primitive(PrimitiveType::Fixed(0)),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_uuid_correct_length() {
+        let uuid_bytes = vec![
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef,
+        ];
+        let expected_uuid = u128::from_be_bytes([
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef,
+        ]);
+        check_raw_literal_bytes_serde_via_avro(
+            uuid_bytes,
+            Literal::Primitive(PrimitiveLiteral::UInt128(expected_uuid)),
+            &Type::Primitive(PrimitiveType::Uuid),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_uuid_wrong_length() {
+        let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but UUID needs 16
+        check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Uuid));
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_4_scale_2() {
+        // Precision 4 requires 2 bytes
+        let decimal_bytes = vec![0x04, 0xd2]; // 1234 in 2 bytes
+        let expected_decimal = 1234i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 4,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_4_negative() {
+        // Precision 4 requires 2 bytes, negative number
+        let decimal_bytes = vec![0xfb, 0x2e]; // -1234 in 2 bytes
+        let expected_decimal = -1234i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 4,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_9_scale_2() {
+        // Precision 9 requires 4 bytes
+        let decimal_bytes = vec![0x00, 0x12, 0xd6, 0x87]; // 1234567 in 4 bytes
+        let expected_decimal = 1234567i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_18_scale_2() {
+        // Precision 18 requires 8 bytes
+        let decimal_bytes = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xd2]; // 1234 in 8 bytes
+        let expected_decimal = 1234i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 18,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_38_scale_2() {
+        // Precision 38 requires 16 bytes (maximum precision)
+        let decimal_bytes = vec![
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x04, 0xd2, // 1234 in 16 bytes
+        ];
+        let expected_decimal = 1234i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 38,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_1_scale_0() {
+        // Precision 1 requires 1 byte
+        let decimal_bytes = vec![0x07]; // 7 in 1 byte
+        let expected_decimal = 7i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 1,
+                scale: 0,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_precision_1_negative() {
+        // Precision 1 requires 1 byte, negative number
+        let decimal_bytes = vec![0xf9]; // -7 in 1 byte (two's complement)
+        let expected_decimal = -7i128;
+        check_raw_literal_bytes_serde_via_avro(
+            decimal_bytes,
+            Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 1,
+                scale: 0,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_wrong_length() {
+        // 3 bytes provided, but precision 4 requires 2 bytes
+        let bytes = vec![1u8, 2u8, 3u8];
+        check_raw_literal_bytes_error_via_avro(
+            bytes,
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 4,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_decimal_wrong_length_too_few() {
+        // 1 byte provided, but precision 9 requires 4 bytes
+        let bytes = vec![0x42];
+        check_raw_literal_bytes_error_via_avro(
+            bytes,
+            &Type::Primitive(PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_raw_literal_bytes_unsupported_type() {
+        let bytes = vec![1u8, 2u8, 3u8, 4u8];
+        check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Int));
     }
 
     #[test]
