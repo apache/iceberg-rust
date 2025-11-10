@@ -42,7 +42,6 @@ pub struct RewriteFilesAction {
     min_count_to_merge: u32,
     merge_enabled: bool,
 
-    check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
@@ -55,6 +54,7 @@ pub struct RewriteFilesAction {
     new_data_file_sequence_number: Option<i64>,
     target_branch: Option<String>,
     enable_delete_filter_manager: bool,
+    check_file_existence: bool,
 }
 
 pub struct RewriteFilesOperation;
@@ -65,7 +65,6 @@ impl RewriteFilesAction {
             target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
             min_count_to_merge: MANIFEST_MIN_MERGE_COUNT_DEFAULT,
             merge_enabled: MANIFEST_MERGE_ENABLED_DEFAULT,
-            check_duplicate: true,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::new(),
@@ -77,6 +76,7 @@ impl RewriteFilesAction {
             new_data_file_sequence_number: None,
             target_branch: None,
             enable_delete_filter_manager: false,
+            check_file_existence: false,
         }
     }
 
@@ -165,7 +165,11 @@ impl RewriteFilesAction {
     // This avoids commit conflicts with updates that add newer equality deletes at a higher sequence number.
     pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Self {
         self.new_data_file_sequence_number = Some(seq);
+        self
+    }
 
+    pub fn set_check_file_existence(mut self, check: bool) -> Self {
+        self.check_file_existence = check;
         self
     }
 }
@@ -335,15 +339,8 @@ impl TransactionAction for RewriteFilesAction {
             snapshot_producer.enable_delete_filter_manager();
         }
 
-        // Checks duplicate files
-        if self.check_duplicate {
-            snapshot_producer
-                .validate_duplicate_files(&self.added_data_files)
-                .await?;
-
-            snapshot_producer
-                .validate_duplicate_files(&self.added_delete_files)
-                .await?;
+        if self.check_file_existence {
+            snapshot_producer.validate_data_file_changes().await?;
         }
 
         if self.merge_enabled {

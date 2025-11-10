@@ -164,46 +164,46 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    pub(crate) async fn validate_duplicate_files(
-        &self,
-        added_data_files: &[DataFile],
-    ) -> Result<()> {
-        let new_files: HashSet<&str> = added_data_files
-            .iter()
-            .map(|df| df.file_path.as_str())
-            .collect();
+    // pub(crate) async fn validate_duplicate_files(
+    //     &self,
+    //     added_data_files: &[DataFile],
+    // ) -> Result<()> {
+    //     let new_files: HashSet<&str> = added_data_files
+    //         .iter()
+    //         .map(|df| df.file_path.as_str())
+    //         .collect();
 
-        let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = self.table.metadata().snapshot_for_ref(&self.target_branch)
-        {
-            let manifest_list = current_snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
-                .await?;
-            for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry
-                    .load_manifest(self.table.file_io())
-                    .await?;
-                for entry in manifest.entries() {
-                    let file_path = entry.file_path();
-                    if new_files.contains(file_path) && entry.is_alive() {
-                        referenced_files.push(file_path.to_string());
-                    }
-                }
-            }
-        }
+    //     let mut referenced_files = Vec::new();
+    //     if let Some(current_snapshot) = self.table.metadata().snapshot_for_ref(&self.target_branch)
+    //     {
+    //         let manifest_list = current_snapshot
+    //             .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
+    //             .await?;
+    //         for manifest_list_entry in manifest_list.entries() {
+    //             let manifest = manifest_list_entry
+    //                 .load_manifest(self.table.file_io())
+    //                 .await?;
+    //             for entry in manifest.entries() {
+    //                 let file_path = entry.file_path();
+    //                 if new_files.contains(file_path) && entry.is_alive() {
+    //                     referenced_files.push(file_path.to_string());
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        if !referenced_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add files that are already referenced by table, files: {}",
-                    referenced_files.join(", ")
-                ),
-            ));
-        }
+    //     if !referenced_files.is_empty() {
+    //         return Err(Error::new(
+    //             ErrorKind::DataInvalid,
+    //             format!(
+    //                 "Cannot add files that are already referenced by table, files: {}",
+    //                 referenced_files.join(", ")
+    //             ),
+    //         ));
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
         let generate_random_id = || -> i64 {
@@ -750,6 +750,115 @@ impl<'a> SnapshotProducer<'a> {
 
             self.delete_filter_manager = Some(manager);
         }
+    }
+
+    /// Validate data file operations in a single pass through manifests.
+    /// This checks both:
+    /// 1. Added files don't already exist in the table (duplicate prevention)
+    /// 2. Deleted files actually exist in the table (existence validation)
+    pub(crate) async fn validate_data_file_changes(&self) -> Result<()> {
+        // Early return if nothing to validate
+        if self.added_data_files.is_empty()
+            && self.added_delete_files.is_empty()
+            && self.removed_data_file_paths.is_empty()
+        {
+            return Ok(());
+        }
+
+        // Use a mutable set - remove files as we find them
+        let mut files_to_delete: HashSet<&str> = self
+            .removed_data_file_paths
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+
+        let table = &self.table;
+        let branch_snapshot_ref = table.metadata().snapshot_for_ref(self.target_branch());
+
+        // If trying to delete files but no snapshot exists, that's an error
+        if !files_to_delete.is_empty() && branch_snapshot_ref.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot delete files from a table with no current snapshot, files: {}",
+                    files_to_delete
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+
+        let files_to_add: HashSet<&str> = self
+            .added_data_files
+            .iter()
+            .chain(self.added_delete_files.iter())
+            .map(|df| df.file_path.as_str())
+            .collect();
+
+        let mut duplicate_files = Vec::new();
+
+        // Single pass through all manifests
+        if let Some(current_snapshot) = branch_snapshot_ref {
+            let manifest_list = current_snapshot
+                .load_manifest_list(table.file_io(), table.metadata_ref().as_ref())
+                .await?;
+
+            for manifest_list_entry in manifest_list.entries() {
+                let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
+                for entry in manifest.entries() {
+                    if !entry.is_alive() {
+                        continue;
+                    }
+
+                    let file_path = entry.file_path();
+
+                    // Check for duplicate adds
+                    if files_to_add.contains(file_path) {
+                        duplicate_files.push(file_path.to_string());
+                    }
+
+                    // Remove from files_to_delete as we find them
+                    // Remaining files in the set don't exist in the snapshot
+                    if !files_to_delete.is_empty() {
+                        files_to_delete.remove(file_path);
+                    }
+
+                    // Early exit optimization: if both checks are done, stop scanning
+                    if duplicate_files.len() == files_to_add.len() && files_to_delete.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Validate no duplicate files are being added
+        if !duplicate_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add files that are already referenced by table, files: {}",
+                    duplicate_files.join(", ")
+                ),
+            ));
+        }
+
+        // Any remaining files in files_to_delete don't exist in the snapshot
+        if !files_to_delete.is_empty() {
+            let non_existent_files: Vec<String> =
+                files_to_delete.iter().map(|s| s.to_string()).collect();
+
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot delete files that are not in the current snapshot, files: {}",
+                    non_existent_files.join(", ")
+                ),
+            ));
+        }
+
+        Ok(())
     }
 }
 
