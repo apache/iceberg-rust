@@ -3388,7 +3388,7 @@ mod tests {
         let avro_value = Value::Bytes(input_bytes);
         let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
         let result = raw_literal.try_into(expected_type);
-        assert!(result.is_err(), "Expected error but got: {:?}", result);
+        assert!(result.is_err(), "Expected error but got: {result:?}");
     }
 
     #[test]
