@@ -27,6 +27,7 @@ mod tests {
     use serde_json::Value as JsonValue;
     use uuid::Uuid;
 
+    use crate::ErrorKind;
     use crate::avro::schema_to_avro_schema;
     use crate::spec::Schema;
     use crate::spec::Type::Primitive;
@@ -34,7 +35,6 @@ mod tests {
     use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
     use crate::spec::values::serde::_serde;
     use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
-    use crate::{Error, ErrorKind};
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
