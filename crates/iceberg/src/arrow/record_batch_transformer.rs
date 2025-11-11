@@ -1335,7 +1335,7 @@ mod test {
     /// - Iceberg spec: format/spec.md "Column Projection" section
     #[test]
     fn test_all_four_spec_rules() {
-        use crate::spec::{MappedField, NameMapping, Transform};
+        use crate::spec::Transform;
 
         // Iceberg schema with columns designed to exercise each spec rule
         let snapshot_schema = Arc::new(
@@ -1346,7 +1346,7 @@ mod test {
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
                     // Rule #1: Identity-partitioned field - should use partition metadata
                     NestedField::required(2, "dept", Type::Primitive(PrimitiveType::String)).into(),
-                    // Rule #2: Field resolved by name mapping (no field ID in Parquet)
+                    // Rule #2: Field resolved by name mapping (ArrowReader already applied)
                     NestedField::required(3, "data", Type::Primitive(PrimitiveType::String)).into(),
                     // Rule #3: Field with initial_default
                     NestedField::optional(4, "category", Type::Primitive(PrimitiveType::String))
@@ -1373,19 +1373,13 @@ mod test {
         // Partition data: dept="engineering"
         let partition_data = Struct::from_iter(vec![Some(Literal::string("engineering"))]);
 
-        // Parquet schema: has id (with field_id=1) and data (without field ID)
+        // Parquet schema: simulates post-ArrowReader state where name mapping already applied
+        // Has id (field_id=1) and data (field_id=3, assigned by ArrowReader via name mapping)
         // Missing: dept (in partition), category (has default), notes (no default)
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
             simple_field("id", DataType::Int32, false, "1"),
-            Field::new("data", DataType::Utf8, false), // No field ID - needs name mapping
+            simple_field("data", DataType::Utf8, false, "3"),
         ]));
-
-        // Name mapping: maps field ID 3 to "data" column
-        let name_mapping = Arc::new(NameMapping::new(vec![MappedField::new(
-            Some(3),
-            vec!["data".to_string()],
-            vec![],
-        )]));
 
         let projected_field_ids = [1, 2, 3, 4, 5]; // id, dept, data, category, notes
 
@@ -1451,121 +1445,5 @@ mod test {
             .unwrap();
         assert!(notes_column.is_null(0));
         assert!(notes_column.is_null(1));
-    }
-
-    /// Verifies field ID conflict detection for add_files imports.
-    ///
-    /// Why: add_files can import Parquet with conflicting field IDs (field_id=1->"name" in Parquet
-    /// vs field_id=1->"id" in Iceberg). Name-checking detects conflicts, treats fields as "not present",
-    /// allowing spec fallback to partition constants and name mapping.
-    ///
-    /// Reproduces: TestAddFilesProcedure.addDataPartitioned
-    #[test]
-    fn add_files_with_field_id_conflicts_like_java_test() {
-        use crate::spec::{MappedField, NameMapping, Struct, Transform};
-
-        // Iceberg schema (field IDs 1-4)
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(4, "subdept", Type::Primitive(PrimitiveType::String))
-                        .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let partition_spec = Arc::new(
-            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
-                .with_spec_id(0)
-                .add_partition_field("id", "id", Transform::Identity)
-                .unwrap()
-                .build()
-                .unwrap(),
-        );
-
-        let partition_data = Struct::from_iter(vec![Some(Literal::int(1))]);
-
-        // Parquet schema with CONFLICTING field IDs (1-3 instead of 1-4)
-        let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("name", DataType::Utf8, false, "1"),
-            simple_field("dept", DataType::Utf8, false, "2"),
-            simple_field("subdept", DataType::Utf8, false, "3"),
-        ]));
-
-        // WHY name mapping: Resolves conflicts by mapping Iceberg field IDs to Parquet column names
-        let name_mapping = Arc::new(NameMapping::new(vec![
-            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
-            MappedField::new(Some(3), vec!["dept".to_string()], vec![]),
-            MappedField::new(Some(4), vec!["subdept".to_string()], vec![]),
-        ]));
-
-        let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
-
-        let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition(Some(partition_spec), Some(partition_data))
-                .build();
-
-        // Parquet data (one row)
-        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
-            Arc::new(StringArray::from(vec!["John Doe"])), // name column
-            Arc::new(StringArray::from(vec!["Engineering"])), // dept column
-            Arc::new(StringArray::from(vec!["Backend"])),  // subdept column
-        ])
-        .unwrap();
-
-        let result = transformer.process_record_batch(parquet_batch).unwrap();
-
-        assert_eq!(result.num_columns(), 4);
-        assert_eq!(result.num_rows(), 1);
-
-        // Verify: id from partition constant (conflict with Parquet field_id=1)
-        assert_eq!(
-            result
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            1
-        );
-
-        // Verify: name via name mapping (conflict with Parquet field_id=2)
-        assert_eq!(
-            result
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap()
-                .value(0),
-            "John Doe"
-        );
-
-        // Verify: dept via name mapping (conflict with Parquet field_id=3)
-        assert_eq!(
-            result
-                .column(2)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap()
-                .value(0),
-            "Engineering"
-        );
-
-        // Verify: subdept via name mapping (not in Parquet by field ID)
-        assert_eq!(
-            result
-                .column(3)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap()
-                .value(0),
-            "Backend"
-        );
     }
 }
