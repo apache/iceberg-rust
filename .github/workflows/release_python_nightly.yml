@@ -86,7 +86,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: 3.9
+          python-version: 3.12
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -133,3 +133,4 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
           packages-dir: bindings/python/dist
+          verbose: true
