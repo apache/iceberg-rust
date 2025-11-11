@@ -25,6 +25,8 @@ use async_trait::async_trait;
 use azdls::AzureStorageScheme;
 use bytes::Bytes;
 use opendal::layers::RetryLayer;
+#[cfg(feature = "storage-azblob")]
+use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
@@ -93,6 +95,9 @@ pub enum OpenDalStorageFactory {
     /// GCS storage factory.
     #[cfg(feature = "storage-gcs")]
     Gcs,
+    /// Azure Blob Storage factory.
+    #[cfg(feature = "storage-azblob")]
+    Azblob,
     /// OSS storage factory.
     #[cfg(feature = "storage-oss")]
     Oss,
@@ -127,6 +132,10 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
                 config: gcs_config_parse(config.props().clone())?.into(),
             })),
+            #[cfg(feature = "storage-azblob")]
+            OpenDalStorageFactory::Azblob => Ok(Arc::new(OpenDalStorage::Azblob {
+                config: crate::io::azblob_config_parse(config.props().clone())?.into(),
+            })),
             #[cfg(feature = "storage-oss")]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
@@ -143,6 +152,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "storage-fs"),
                 not(feature = "storage-s3"),
                 not(feature = "storage-gcs"),
+                not(feature = "storage-azblob"),
                 not(feature = "storage-oss"),
                 not(feature = "storage-azdls"),
             ))]
@@ -186,6 +196,12 @@ pub enum OpenDalStorage {
     Gcs {
         /// GCS configuration.
         config: Arc<GcsConfig>,
+    },
+    /// AZBLOB storage variant.
+    #[cfg(feature = "storage-azblob")]
+    Azblob {
+        /// AZBLOB configuration.
+        config: Arc<AzblobConfig>,
     },
     /// OSS storage variant.
     #[cfg(feature = "storage-oss")]
@@ -234,6 +250,10 @@ impl OpenDalStorage {
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => Ok(Self::Gcs {
                 config: gcs_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-azblob")]
+            Scheme::Azblob => Ok(Self::Azblob {
+                config: crate::io::azblob_config_parse(props)?.into(),
             }),
             #[cfg(feature = "storage-oss")]
             Scheme::Oss => Ok(Self::Oss {
@@ -324,6 +344,19 @@ impl OpenDalStorage {
                     ));
                 }
             }
+            #[cfg(feature = "storage-azblob")]
+            OpenDalStorage::Azblob { config } => {
+                let operator = crate::io::azblob_config_build(config, path)?;
+                let prefix = format!("azblob://{}/", operator.info().name());
+                if path.starts_with(&prefix) {
+                    (operator, &path[prefix.len()..])
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid azblob url: {path}, should start with {prefix}"),
+                    ));
+                }
+            }
             #[cfg(feature = "storage-oss")]
             OpenDalStorage::Oss { config } => {
                 let op = oss_config_build(config, path)?;
@@ -346,6 +379,7 @@ impl OpenDalStorage {
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
+                not(feature = "storage-azblob"),
                 not(feature = "storage-oss"),
                 not(feature = "storage-azdls"),
             ))]
