@@ -164,11 +164,14 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Test
-        run: cargo test --no-fail-fast --all-targets --all-features --workspace
+        run: cargo nextest run --no-fail-fast --all-targets --all-features --workspace
 
       - name: Smol Test
-        run: cargo test --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
+        run: cargo nextest run --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
