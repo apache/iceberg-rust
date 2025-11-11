@@ -28,6 +28,7 @@ use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
@@ -35,6 +36,7 @@ pub struct FastAppendAction {
     // below are properties used to create SnapshotProducer when commit
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
+    snapshot_id: Option<i64>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
 }
@@ -45,6 +47,7 @@ impl FastAppendAction {
             check_duplicate: true,
             commit_uuid: None,
             key_metadata: None,
+            snapshot_id: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
         }
@@ -79,15 +82,38 @@ impl FastAppendAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Generate snapshot id ahead which is used by exactly once delivery.
+    pub fn generate_snapshot_id(table: &Table) -> i64 {
+        SnapshotProducer::generate_unique_snapshot_id(table)
+    }
 }
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        if let Some(snapshot_id) = self.snapshot_id {
+            if table
+                .metadata()
+                .snapshots()
+                .any(|s| s.snapshot_id() == snapshot_id)
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot id {} already exists", snapshot_id),
+                ));
+            }
+        }
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
+            self.snapshot_id,
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
         );
