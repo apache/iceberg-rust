@@ -133,3 +133,4 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
           packages-dir: bindings/python/dist
+          verbose: true
