@@ -55,7 +55,7 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -181,7 +181,8 @@ impl ArrowReader {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
-        let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
+        let delete_filter_rx =
+            delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
         // Migrated tables lack field IDs, requiring us to inspect the schema to choose
         // between field-ID-based or position-based projection
@@ -193,7 +194,9 @@ impl ArrowReader {
         )
         .await?;
 
-        // Parquet files from Hive/Spark migrations lack field IDs in their metadata
+        // Check if Parquet file has embedded field IDs
+        // Corresponds to Java's ParquetSchemaUtil.hasIds()
+        // Reference: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java:118
         let missing_field_ids = initial_stream_builder
             .schema()
             .fields()
@@ -201,11 +204,38 @@ impl ArrowReader {
             .next()
             .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
 
-        // Adding position-based fallback IDs at schema level (not per-batch) enables projection
-        // on files that lack embedded field IDs. We recreate the builder to apply the modified schema.
+        // Three-branch schema resolution strategy matching Java's ReadConf constructor
+        //
+        // Per Iceberg spec Column Projection rules:
+        // "Columns in Iceberg data files are selected by field id. The table schema's column
+        //  names and order may change after a data file is written, and projection must be done
+        //  using field ids."
+        // https://iceberg.apache.org/spec/#column-projection
+        //
+        // When Parquet files lack field IDs (e.g., Hive/Spark migrations via add_files),
+        // we must assign field IDs BEFORE reading data to enable correct projection.
+        //
+        // Java's ReadConf determines field ID strategy:
+        // - Branch 1: hasIds(fileSchema) → trust embedded field IDs, use pruneColumns()
+        // - Branch 2: nameMapping present → applyNameMapping(), then pruneColumns()
+        // - Branch 3: fallback → addFallbackIds(), then pruneColumnsFallback()
         let mut record_batch_stream_builder = if missing_field_ids {
-            let arrow_schema =
-                add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema());
+            // Parquet file lacks field IDs - must assign them before reading
+            let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
+                // Branch 2: Apply name mapping to assign correct Iceberg field IDs
+                // Per spec rule #2: "Use schema.name-mapping.default metadata to map field id
+                // to columns without field id"
+                // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
+                apply_name_mapping_to_arrow_schema(
+                    Arc::clone(initial_stream_builder.schema()),
+                    name_mapping,
+                )?
+            } else {
+                // Branch 3: No name mapping - use position-based fallback IDs
+                // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
+                add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema())
+            };
+
             let options = ArrowReaderOptions::new().with_schema(arrow_schema);
 
             Self::create_parquet_record_batch_stream_builder(
@@ -216,11 +246,14 @@ impl ArrowReader {
             )
             .await?
         } else {
+            // Branch 1: File has embedded field IDs - trust them
             initial_stream_builder
         };
 
-        // Fallback IDs don't match Parquet's embedded field IDs (since they don't exist),
-        // so we must use position-based projection instead of field-ID matching
+        // Create projection mask based on field IDs
+        // - If file has embedded IDs: field-ID-based projection (missing_field_ids=false)
+        // - If name mapping applied: field-ID-based projection (missing_field_ids=true but IDs now match)
+        // - If fallback IDs: position-based projection (missing_field_ids=true)
         let projection_mask = Self::get_arrow_projection_mask(
             &task.project_field_ids,
             &task.schema,
@@ -238,7 +271,6 @@ impl ArrowReader {
         let mut record_batch_transformer =
             RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
                 .with_partition(task.partition_spec.clone(), task.partition.clone())
-                .with_name_mapping(task.name_mapping.clone())
                 .build();
 
         if let Some(batch_size) = batch_size {
@@ -920,6 +952,77 @@ fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32
     }
 
     column_map
+}
+
+/// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
+///
+/// Assigns Iceberg field IDs based on column names using the name mapping,
+/// enabling correct projection on migrated files (e.g., from Hive/Spark via add_files).
+///
+/// Per Iceberg spec Column Projection rule #2:
+/// "Use schema.name-mapping.default metadata to map field id to columns without field id"
+/// https://iceberg.apache.org/spec/#column-projection
+///
+/// Corresponds to Java's ParquetSchemaUtil.applyNameMapping() and ApplyNameMapping visitor.
+/// The key difference is Java operates on Parquet MessageType, while we operate on Arrow Schema.
+///
+/// # Arguments
+/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs)
+/// * `name_mapping` - Name mapping from table metadata (TableProperties.DEFAULT_NAME_MAPPING)
+///
+/// # Returns
+/// Arrow schema with field IDs assigned based on name mapping
+fn apply_name_mapping_to_arrow_schema(
+    arrow_schema: ArrowSchemaRef,
+    name_mapping: &NameMapping,
+) -> Result<Arc<ArrowSchema>> {
+    debug_assert!(
+        arrow_schema
+            .fields()
+            .iter()
+            .next()
+            .is_none_or(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none()),
+        "Schema already has field IDs - name mapping should not be applied"
+    );
+
+    use arrow_schema::Field;
+
+    let fields_with_mapped_ids: Vec<_> = arrow_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            // Look up this column name in name mapping to get the Iceberg field ID.
+            // Corresponds to Java's ApplyNameMapping visitor which calls
+            // nameMapping.find(currentPath()) and returns field.withId() if found.
+            //
+            // If the field isn't in the mapping, leave it WITHOUT assigning an ID
+            // (matching Java's behavior of returning the field unchanged).
+            // Later, during projection, fields without IDs are filtered out.
+            let mapped_field_opt = name_mapping
+                .fields()
+                .iter()
+                .find(|f| f.names().contains(&field.name().to_string()));
+
+            let mut metadata = field.metadata().clone();
+
+            if let Some(mapped_field) = mapped_field_opt {
+                if let Some(field_id) = mapped_field.field_id() {
+                    // Field found in mapping with a field_id → assign it
+                    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
+                }
+                // If field_id is None, leave the field without an ID (will be filtered by projection)
+            }
+            // If field not found in mapping, leave it without an ID (will be filtered by projection)
+
+            Field::new(field.name(), field.data_type().clone(), field.is_nullable())
+                .with_metadata(metadata)
+        })
+        .collect();
+
+    Ok(Arc::new(ArrowSchema::new_with_metadata(
+        fields_with_mapped_ids,
+        arrow_schema.metadata().clone(),
+    )))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.

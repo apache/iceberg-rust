@@ -30,8 +30,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{
-    Literal, NameMapping, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct,
-    Transform,
+    Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -145,14 +144,13 @@ enum SchemaComparison {
 
 /// Builder for RecordBatchTransformer to improve ergonomics when constructing with optional parameters.
 ///
-/// See [`RecordBatchTransformer`] for details on partition spec, partition data, and name mapping.
+/// See [`RecordBatchTransformer`] for details on partition spec and partition data.
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
     partition_spec: Option<Arc<PartitionSpec>>,
     partition_data: Option<Struct>,
-    name_mapping: Option<Arc<NameMapping>>,
 }
 
 impl RecordBatchTransformerBuilder {
@@ -165,7 +163,6 @@ impl RecordBatchTransformerBuilder {
             projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
             partition_spec: None,
             partition_data: None,
-            name_mapping: None,
         }
     }
 
@@ -184,18 +181,12 @@ impl RecordBatchTransformerBuilder {
         self
     }
 
-    pub(crate) fn with_name_mapping(mut self, name_mapping: Option<Arc<NameMapping>>) -> Self {
-        self.name_mapping = name_mapping;
-        self
-    }
-
     pub(crate) fn build(self) -> RecordBatchTransformer {
         RecordBatchTransformer {
             snapshot_schema: self.snapshot_schema,
             projected_iceberg_field_ids: self.projected_iceberg_field_ids,
             partition_spec: self.partition_spec,
             partition_data: self.partition_data,
-            name_mapping: self.name_mapping,
             batch_transform: None,
         }
     }
@@ -206,9 +197,19 @@ impl RecordBatchTransformerBuilder {
 /// Handles schema evolution, column reordering, type promotion, and implements the Iceberg spec's
 /// "Column Projection" rules for resolving field IDs "not present" in data files:
 /// 1. Return the value from partition metadata if an Identity Transform exists
-/// 2. Use schema.name-mapping.default metadata to map field id to columns without field id
+/// 2. Use schema.name-mapping.default metadata to map field id to columns without field id (applied in ArrowReader)
 /// 3. Return the default value if it has a defined initial-default
 /// 4. Return null in all other cases
+///
+/// # Field ID Resolution
+///
+/// Field ID resolution happens in ArrowReader before data is read (matching Java's ReadConf):
+/// - If file has embedded field IDs: trust them (ParquetSchemaUtil.hasIds() = true)
+/// - If file lacks IDs and name_mapping exists: apply name mapping (ParquetSchemaUtil.applyNameMapping())
+/// - If file lacks IDs and no name_mapping: use position-based fallback (ParquetSchemaUtil.addFallbackIds())
+///
+/// By the time RecordBatchTransformer processes data, all field IDs are trustworthy.
+/// This transformer only handles remaining projection rules (#1, #3, #4) for fields still "not present".
 ///
 /// # Partition Spec and Data
 ///
@@ -217,16 +218,10 @@ impl RecordBatchTransformerBuilder {
 /// bucket-partitioned columns. For example, `bucket(4, id)` stores only the bucket number in
 /// partition metadata, so actual `id` values must be read from the data file.
 ///
-/// **Add_files field ID conflicts**: When importing Hive tables, partition columns can have field IDs
-/// conflicting with Parquet data columns (e.g., Parquet has field_id=1->"name", but Iceberg expects
-/// field_id=1->"id"). Per spec, such fields are "not present" and should use name mapping (rule #2).
-///
-/// This matches Java's ParquetSchemaUtil.applyNameMapping approach but detects conflicts during projection.
-///
 /// # References
 /// - Spec: https://iceberg.apache.org/spec/#column-projection
-/// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
-/// - Java: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java
+/// - Java: parquet/src/main/java/org/apache/iceberg/parquet/ReadConf.java (field ID resolution)
+/// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java (partition constants)
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
@@ -241,11 +236,6 @@ pub(crate) struct RecordBatchTransformer {
     /// For example, in a file at path `dept=engineering/file.parquet`, this would contain
     /// the value "engineering" for the dept field.
     partition_data: Option<Struct>,
-
-    /// Name mapping for resolving field IDs from column names when field IDs are missing or
-    /// conflicting (spec rule #2). Used primarily for Hive tables imported via add_files where
-    /// Parquet field IDs may conflict with Iceberg schema field IDs.
-    name_mapping: Option<Arc<NameMapping>>,
 
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
@@ -276,7 +266,7 @@ impl RecordBatchTransformer {
                     .with_match_field_names(false)
                     .with_row_count(Some(record_batch.num_rows()));
                 RecordBatch::try_new_with_options(
-                    target_schema.clone(),
+                    Arc::clone(target_schema),
                     self.transform_columns(record_batch.columns(), operations)?,
                     &options,
                 )?
@@ -286,7 +276,7 @@ impl RecordBatchTransformer {
                     .with_match_field_names(false)
                     .with_row_count(Some(record_batch.num_rows()));
                 RecordBatch::try_new_with_options(
-                    target_schema.clone(),
+                    Arc::clone(target_schema),
                     record_batch.columns().to_vec(),
                     &options,
                 )?
@@ -298,7 +288,6 @@ impl RecordBatchTransformer {
                     &self.projected_iceberg_field_ids,
                     self.partition_spec.as_ref().map(|s| s.as_ref()),
                     self.partition_data.as_ref(),
-                    self.name_mapping.as_ref().map(|n| n.as_ref()),
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -319,7 +308,6 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids: &[i32],
         partition_spec: Option<&PartitionSpec>,
         partition_data: Option<&Struct>,
-        name_mapping: Option<&NameMapping>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -357,7 +345,6 @@ impl RecordBatchTransformer {
                     field_id_to_mapped_schema_map,
                     constants_map,
                     partition_spec,
-                    name_mapping,
                 )?,
                 target_schema,
             }),
@@ -416,15 +403,9 @@ impl RecordBatchTransformer {
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
         constants_map: HashMap<i32, PrimitiveLiteral>,
         _partition_spec: Option<&PartitionSpec>,
-        name_mapping: Option<&NameMapping>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
-
-        // Build name-based map for spec rule #2 (name mapping)
-        // This allows us to find Parquet columns by name when field IDs are missing/conflicting
-        let field_name_to_source_schema_map =
-            Self::build_field_name_to_arrow_schema_map(source_schema);
 
         projected_iceberg_field_ids
             .iter()
@@ -454,29 +435,24 @@ impl RecordBatchTransformer {
                 // In add_files scenarios, partition columns may exist in BOTH Parquet AND partition metadata.
                 // Partition metadata is authoritative - it defines which partition this file belongs to.
 
-                // Why verify names when checking field IDs:
-                // add_files can create field ID conflicts (Parquet field_id=1->"name", Iceberg field_id=1->"id").
-                // Name mismatches with name_mapping present indicate conflicts, treat field as "not present".
-                // Without name_mapping, name mismatches are just column renames, so trust the field ID.
-                // (Java: ParquetSchemaUtil.applyNameMapping, TestAddFilesProcedure.addDataPartitioned)
-                let field_by_id = field_id_to_source_schema_map.get(field_id).and_then(
+                // Field ID resolution now happens in ArrowReader via:
+                // 1. Embedded field IDs (ParquetSchemaUtil.hasIds() = true) - trust them
+                // 2. Name mapping (ParquetSchemaUtil.applyNameMapping()) - applied upfront
+                // 3. Position-based fallback (ParquetSchemaUtil.addFallbackIds()) - applied upfront
+                //
+                // At this point, all field IDs in the source schema are trustworthy.
+                // No conflict detection needed - schema resolution happened in reader.rs.
+                let field_by_id = field_id_to_source_schema_map.get(field_id).map(
                     |(source_field, source_index)| {
-                        if name_mapping.is_some() {
-                            let name_matches = source_field.name() == &iceberg_field.name;
-                            if !name_matches {
-                                return None; // Field ID conflict, treat as "not present"
-                            }
-                        }
-
                         if source_field.data_type().equals_datatype(target_type) {
-                            Some(ColumnSource::PassThrough {
+                            ColumnSource::PassThrough {
                                 source_index: *source_index,
-                            })
+                            }
                         } else {
-                            Some(ColumnSource::Promote {
+                            ColumnSource::Promote {
                                 target_type: target_type.clone(),
                                 source_index: *source_index,
-                            })
+                            }
                         }
                     },
                 );
@@ -491,44 +467,20 @@ impl RecordBatchTransformer {
                 } else if let Some(source) = field_by_id {
                     source
                 } else {
-                    // Rule #2: Name mapping (Java: ReadConf.java:83-85)
-                    let name_mapped_column = name_mapping.and_then(|mapping| {
-                        mapping.fields().iter().find_map(|mapped_field| {
-                            if mapped_field.field_id() == Some(*field_id) {
-                                mapped_field.names().iter().find_map(|name| {
-                                    field_name_to_source_schema_map
-                                        .get(name)
-                                        .map(|(field, idx)| (field.clone(), *idx))
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    });
-
-                    if let Some((source_field, source_index)) = name_mapped_column {
-                        if source_field.data_type().equals_datatype(target_type) {
-                            ColumnSource::PassThrough { source_index }
+                    // Rules #2, #3 and #4:
+                    // Rule #2 (name mapping) was already applied in reader.rs if needed.
+                    // If field_id is still not found, the column doesn't exist in the Parquet file.
+                    // Fall through to rule #3 (initial_default) or rule #4 (null).
+                    let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
+                        if let Literal::Primitive(prim) = lit {
+                            Some(prim.clone())
                         } else {
-                            ColumnSource::Promote {
-                                target_type: target_type.clone(),
-                                source_index,
-                            }
+                            None
                         }
-                    } else {
-                        // Rules #3 and #4: initial_default or null
-                        let default_value =
-                            iceberg_field.initial_default.as_ref().and_then(|lit| {
-                                if let Literal::Primitive(prim) = lit {
-                                    Some(prim.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                        ColumnSource::Add {
-                            value: default_value,
-                            target_type: target_type.clone(),
-                        }
+                    });
+                    ColumnSource::Add {
+                        value: default_value,
+                        target_type: target_type.clone(),
                     }
                 };
 
@@ -558,32 +510,6 @@ impl RecordBatchTransformer {
         }
 
         Ok(field_id_to_source_schema)
-    }
-
-    /// Build a map from field name to (FieldRef, index) for name-based column resolution.
-    ///
-    /// This is used for Iceberg spec rule #2: "Use schema.name-mapping.default metadata
-    /// to map field id to columns without field id as described below and use the column
-    /// if it is present."
-    ///
-    /// Unlike `build_field_id_to_arrow_schema_map`, this method handles Parquet files
-    /// that may not have field IDs in their metadata. It builds a simple name-based index
-    /// to enable column resolution by name when field IDs are missing or conflicting.
-    ///
-    /// # References
-    /// - Iceberg spec: format/spec.md "Column Projection" section, rule #2
-    /// - Java impl: ParquetSchemaUtil.applyNameMapping() + ReadConf constructor
-    fn build_field_name_to_arrow_schema_map(
-        source_schema: &SchemaRef,
-    ) -> HashMap<String, (FieldRef, usize)> {
-        let mut field_name_to_source_schema = HashMap::new();
-        for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
-            field_name_to_source_schema.insert(
-                source_field.name().to_string(),
-                (source_field.clone(), source_field_idx),
-            );
-        }
-        field_name_to_source_schema
     }
 
     fn transform_columns(
@@ -937,21 +863,23 @@ mod test {
     ///
     /// This reproduces the scenario from Iceberg spec where:
     /// - Hive-style partitioned Parquet files are imported via add_files procedure
-    /// - Parquet files DO NOT have field IDs (typical for Hive tables)
+    /// - Parquet files originally DO NOT have field IDs (typical for Hive tables)
+    /// - ArrowReader applies name mapping to assign correct Iceberg field IDs
     /// - Iceberg schema assigns field IDs: id (1), name (2), dept (3), subdept (4)
     /// - Partition columns (id, dept) have initial_default values
     ///
     /// Per the Iceberg spec (https://iceberg.apache.org/spec/#column-projection),
     /// this scenario requires `schema.name-mapping.default` from table metadata
     /// to correctly map Parquet columns by name to Iceberg field IDs.
+    /// This mapping is now applied in ArrowReader before data is processed.
     ///
-    /// Expected behavior with name mapping:
+    /// Expected behavior:
     /// 1. id=1 (from initial_default) - spec rule #3
-    /// 2. name="John Doe" (from Parquet via name mapping) - spec rule #2
+    /// 2. name="John Doe" (from Parquet with field_id=2 assigned by reader) - found by field ID
     /// 3. dept="hr" (from initial_default) - spec rule #3
-    /// 4. subdept="communications" (from Parquet via name mapping) - spec rule #2
+    /// 4. subdept="communications" (from Parquet with field_id=4 assigned by reader) - found by field ID
     #[test]
-    fn add_files_partition_columns_without_field_ids() {
+    fn add_files_with_name_mapping_applied_in_reader() {
         // Iceberg schema after add_files: id (partition), name, dept (partition), subdept
         let snapshot_schema = Arc::new(
             Schema::builder()
@@ -971,32 +899,27 @@ mod test {
                 .unwrap(),
         );
 
-        // Parquet file schema: name, subdept (NO field IDs - typical for Hive tables)
-        // Note: Partition columns (id, dept) are NOT in the Parquet file - they're in directory paths
-        let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("name", DataType::Utf8, true),
-            Field::new("subdept", DataType::Utf8, true),
-        ]));
-
-        // Create name mapping to resolve field ID conflicts
-        // Per Iceberg spec: "Use schema.name-mapping.default metadata to map field id
-        // to columns without field id"
+        // Simulate ArrowReader having applied name mapping:
+        // Original Parquet: name, subdept (NO field IDs)
+        // After reader.rs applies name mapping: name (field_id=2), subdept (field_id=4)
         //
-        // The name mapping tells us:
-        // - Iceberg field ID 2 ("name") can be found in Parquet column "name" (even though Parquet has field_id=1)
-        // - Iceberg field ID 4 ("subdept") can be found in Parquet column "subdept" (even though Parquet has field_id=2)
-        use crate::spec::{MappedField, NameMapping};
-        let name_mapping = Arc::new(NameMapping::new(vec![
-            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
-            MappedField::new(Some(4), vec!["subdept".to_string()], vec![]),
+        // Note: Partition columns (id, dept) are NOT in the Parquet file - they're in directory paths
+        use std::collections::HashMap;
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("subdept", DataType::Utf8, true).with_metadata(HashMap::from([(
+                "PARQUET:field_id".to_string(),
+                "4".to_string(),
+            )])),
         ]));
 
         let projected_field_ids = [1, 2, 3, 4]; // id, name, dept, subdept
 
         let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_name_mapping(Some(name_mapping))
-                .build();
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids).build();
 
         // Create a Parquet RecordBatch with data for: name="John Doe", subdept="communications"
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
@@ -1009,9 +932,9 @@ mod test {
 
         // Verify the transformed RecordBatch has:
         // - id=1 (from initial_default, not from Parquet)
-        // - name="John Doe" (from Parquet, matched by name despite field ID conflict)
+        // - name="John Doe" (from Parquet with correct field_id=2)
         // - dept="hr" (from initial_default, not from Parquet)
-        // - subdept="communications" (from Parquet, matched by name)
+        // - subdept="communications" (from Parquet with correct field_id=4)
         assert_eq!(result.num_columns(), 4);
         assert_eq!(result.num_rows(), 1);
 
@@ -1469,7 +1392,6 @@ mod test {
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
                 .with_partition(Some(partition_spec), Some(partition_data))
-                .with_name_mapping(Some(name_mapping))
                 .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
@@ -1587,7 +1509,6 @@ mod test {
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
                 .with_partition(Some(partition_spec), Some(partition_data))
-                .with_name_mapping(Some(name_mapping))
                 .build();
 
         // Parquet data (one row)
