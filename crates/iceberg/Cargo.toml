@@ -30,7 +30,7 @@ repository = { workspace = true }
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
-storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs", "storage-azblob"]
 
 storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
@@ -38,6 +38,7 @@ storage-gcs = ["opendal/services-gcs"]
 storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
 storage-s3 = ["opendal/services-s3", "reqsign"]
+storage-azblob = ["opendal/services-azblob"]
 
 smol = ["dep:smol"]
 tokio = ["tokio/rt-multi-thread"]

@@ -98,6 +98,11 @@ pub use storage_oss::*;
 #[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
 
+#[cfg(feature = "storage-azblob")]
+mod storage_azblob;
+#[cfg(feature = "storage-azblob")]
+pub use storage_azblob::*;
+
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }

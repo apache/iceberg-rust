@@ -44,6 +44,7 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
 /// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
 /// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+/// | AZBLOB             | `storage-azblob`  | `azblob`                         | `azblob://<container>/path/to/file` |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,

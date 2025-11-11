@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use opendal::layers::RetryLayer;
+#[cfg(feature = "storage-azblob")]
+use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
 #[cfg(feature = "storage-gcs")]
@@ -53,6 +55,8 @@ pub(crate) enum Storage {
     },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
+    #[cfg(feature = "storage-azblob")]
+    Azblob { config: Arc<AzblobConfig> },
     #[cfg(feature = "storage-oss")]
     Oss { config: Arc<OssConfig> },
     /// Expects paths of the form
@@ -89,6 +93,10 @@ impl Storage {
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => Ok(Self::Gcs {
                 config: super::gcs_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-azblob")]
+            Scheme::Azblob => Ok(Self::Azblob {
+                config: super::azblob_config_parse(props)?.into(),
             }),
             #[cfg(feature = "storage-oss")]
             Scheme::Oss => Ok(Self::Oss {
@@ -179,6 +187,19 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-azblob")]
+            Storage::Azblob { config } => {
+                let operator = super::azblob_config_build(config, path)?;
+                let prefix = format!("azblob://{}/", operator.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((operator, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid azblob url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(feature = "storage-oss")]
             Storage::Oss { config } => {
                 let op = super::oss_config_build(config, path)?;
@@ -203,6 +224,7 @@ impl Storage {
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
                 not(feature = "storage-gcs"),
+                not(feature = "storage-azblob"),
                 not(feature = "storage-oss"),
                 not(feature = "storage-azdls"),
             ))]
