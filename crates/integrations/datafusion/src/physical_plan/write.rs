@@ -270,12 +270,13 @@ impl ExecutionPlan for IcebergWriteExec {
         let fanout_enabled = true;
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
-        let task_writer = TaskWriter::new(
+        let task_writer = TaskWriter::try_new(
             data_file_writer_builder,
             fanout_enabled,
             schema.clone(),
             partition_spec,
-        );
+        )
+        .map_err(to_datafusion_error)?;
 
         // Get input data
         let data = execute_input_stream(

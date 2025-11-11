@@ -118,12 +118,12 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     ///     partition_spec,
     /// );
     /// ```
-    pub fn new(
+    pub fn try_new(
         writer_builder: B,
         fanout_enabled: bool,
         schema: SchemaRef,
         partition_spec: PartitionSpecRef,
-    ) -> Self {
+    ) -> Result<Self> {
         let writer = if partition_spec.is_unpartitioned() {
             SupportedWriter::Unpartitioned(UnpartitionedWriter::new(writer_builder))
         } else if fanout_enabled {
@@ -135,20 +135,19 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
         // Initialize partition splitter in constructor for partitioned tables
         let partition_splitter = if !partition_spec.is_unpartitioned() {
             Some(
-                RecordBatchPartitionSplitter::new_with_precomputed_values(
+                RecordBatchPartitionSplitter::try_new_with_precomputed_values(
                     schema.clone(),
                     partition_spec.clone(),
-                )
-                .expect("Failed to create partition splitter"),
+                )?,
             )
         } else {
             None
         };
 
-        Self {
+        Ok(Self {
             writer,
             partition_splitter,
-        }
+        })
     }
 
     /// Write a RecordBatch to the TaskWriter.
@@ -377,7 +376,7 @@ mod tests {
         let partition_spec = Arc::new(PartitionSpec::builder(schema.clone()).build()?);
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, false, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, false, schema, partition_spec)?;
 
         // Write data
         let batch = RecordBatch::try_new(arrow_schema, vec![
@@ -443,7 +442,7 @@ mod tests {
         );
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, true, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, true, schema, partition_spec)?;
 
         // Create partition column
         let partition_field = Field::new("region", DataType::Utf8, false).with_metadata(
@@ -486,7 +485,7 @@ mod tests {
         );
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, false, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, false, schema, partition_spec)?;
 
         // Create partition column
         let partition_field = Field::new("region", DataType::Utf8, false).with_metadata(
