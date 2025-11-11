@@ -145,6 +145,7 @@ jobs:
           - { name: "default", args: "--all-targets --all-features --workspace" }
           - { name: "smol", args: "--all-targets --no-default-features --features smol --features storage-all --workspace" }
           - { name: "doc", args: "--doc --all-features --workspace" }
+    name: Unit Tests (${{ matrix.test-suite.name }})
     steps:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
