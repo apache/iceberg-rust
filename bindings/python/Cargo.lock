@@ -2313,7 +2313,6 @@ dependencies = [
  "chrono",
  "derive_builder",
  "expect-test",
- "flate2",
  "fnv",
  "futures",
  "itertools 0.13.0",
