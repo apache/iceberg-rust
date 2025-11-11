@@ -386,12 +386,14 @@ impl TableScan {
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
         // scan's filter
-        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
-            manifest_entry_data_ctx_tx,
-            delete_file_idx.clone(),
-            manifest_entry_delete_ctx_tx,
-        ).await?;
+        let manifest_file_contexts = plan_context
+            .build_manifest_file_contexts(
+                manifest_list,
+                manifest_entry_data_ctx_tx,
+                delete_file_idx.clone(),
+                manifest_entry_delete_ctx_tx,
+            )
+            .await?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
 
@@ -421,7 +423,7 @@ impl TableScan {
                         spawn(async move {
                             Self::process_delete_manifest_entry(manifest_entry_context, tx).await
                         })
-                            .await
+                        .await
                     },
                 )
                 .await;
@@ -444,7 +446,7 @@ impl TableScan {
                         spawn(async move {
                             Self::process_data_manifest_entry(manifest_entry_context, tx).await
                         })
-                            .await
+                        .await
                     },
                 )
                 .await;

@@ -16,6 +16,8 @@
 // under the License.
 
 mod _serde;
+/// Data file
+pub use _serde::DataFileSerde as SerializedDataFile;
 
 mod data_file;
 pub use data_file::*;
