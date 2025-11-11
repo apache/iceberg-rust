@@ -85,12 +85,13 @@ impl<'a> SnapshotProducer<'a> {
         table: &'a Table,
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
+        snapshot_id: Option<i64>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
+            snapshot_id: snapshot_id.unwrap_or_else(|| Self::generate_unique_snapshot_id(table)),
             commit_uuid,
             key_metadata,
             snapshot_properties,
@@ -163,7 +164,7 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    fn generate_unique_snapshot_id(table: &Table) -> i64 {
+    pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
         let generate_random_id = || -> i64 {
             let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
             let snapshot_id = (lhs ^ rhs) as i64;
