@@ -37,3 +37,9 @@ pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
 datafusion-ffi = { version = "50" }
 tokio = { version = "1.46.1", default-features = false }
+
+[profile.release]
+codegen-units = 1
+debug = false
+lto = "fat"
+strip = true
