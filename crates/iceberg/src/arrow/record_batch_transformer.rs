@@ -20,15 +20,17 @@ use std::sync::Arc;
 
 use arrow_array::{
     Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array,
-    Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
+    Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, RunArray,
+    StringArray,
 };
 use arrow_cast::cast;
 use arrow_schema::{
-    DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
+    DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema_to_arrow_schema;
+use crate::metadata_columns::get_reserved_field_name;
 use crate::spec::{Literal, PrimitiveLiteral, Schema as IcebergSchema};
 use crate::{Error, ErrorKind, Result};
 
@@ -111,6 +113,8 @@ enum SchemaComparison {
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
+    // Map from field ID to constant value for virtual/metadata fields
+    constants_map: HashMap<i32, PrimitiveLiteral>,
 
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
@@ -129,8 +133,20 @@ impl RecordBatchTransformer {
         Self {
             snapshot_schema,
             projected_iceberg_field_ids,
+            constants_map: HashMap::new(),
             batch_transform: None,
         }
+    }
+
+    /// Add a constant value for a specific field ID.
+    /// This is used for virtual/metadata fields like _file that have constant values per batch.
+    ///
+    /// # Arguments
+    /// * `field_id` - The field ID to associate with the constant
+    /// * `value` - The constant value for this field
+    pub(crate) fn with_constant(mut self, field_id: i32, value: PrimitiveLiteral) -> Self {
+        self.constants_map.insert(field_id, value);
+        self
     }
 
     pub(crate) fn process_record_batch(
@@ -167,6 +183,7 @@ impl RecordBatchTransformer {
                     record_batch.schema_ref(),
                     self.snapshot_schema.as_ref(),
                     &self.projected_iceberg_field_ids,
+                    &self.constants_map,
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -185,6 +202,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
+        constants_map: &HashMap<i32, PrimitiveLiteral>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -195,11 +213,24 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                Ok(field_id_to_mapped_schema_map
-                    .get(field_id)
-                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                    .0
-                    .clone())
+                // Check if this is a constant/virtual field
+                if let Some(constant_value) = constants_map.get(field_id) {
+                    // Create a field for the virtual column based on the constant type
+                    let arrow_type = Self::primitive_literal_to_arrow_type(constant_value)?;
+                    let field_name = get_reserved_field_name(*field_id)?;
+                    Ok(Arc::new(
+                        Field::new(field_name, arrow_type, false).with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            field_id.to_string(),
+                        )])),
+                    ))
+                } else {
+                    Ok(field_id_to_mapped_schema_map
+                        .get(field_id)
+                        .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
+                        .0
+                        .clone())
+                }
             })
             .collect();
 
@@ -214,6 +245,7 @@ impl RecordBatchTransformer {
                     snapshot_schema,
                     projected_iceberg_field_ids,
                     field_id_to_mapped_schema_map,
+                    constants_map,
                 )?,
                 target_schema,
             }),
@@ -270,11 +302,21 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
+        constants_map: &HashMap<i32, PrimitiveLiteral>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
 
         projected_iceberg_field_ids.iter().map(|field_id|{
+            // Check if this is a constant/virtual field first
+            if let Some(constant_value) = constants_map.get(field_id) {
+                // This is a virtual field - add it with the constant value
+                return Ok(ColumnSource::Add {
+                    value: Some(constant_value.clone()),
+                    target_type: Self::primitive_literal_to_arrow_type(constant_value)?,
+                });
+            }
+
             let (target_field, _) = field_id_to_mapped_schema_map.get(field_id).ok_or(
                 Error::new(ErrorKind::Unexpected, "could not find field in schema")
             )?;
@@ -429,6 +471,27 @@ impl RecordBatchTransformer {
                 let vals: Vec<Option<f64>> = vec![None; num_rows];
                 Arc::new(Float64Array::from(vals))
             }
+            (DataType::RunEndEncoded(_, _), Some(PrimitiveLiteral::String(value))) => {
+                // Create Run-End Encoded array for constant string values (e.g., file paths)
+                // This is more memory-efficient than repeating the same value for every row
+                let run_ends = if num_rows == 0 {
+                    Int32Array::from(Vec::<i32>::new())
+                } else {
+                    Int32Array::from(vec![num_rows as i32])
+                };
+                let values = if num_rows == 0 {
+                    StringArray::from(Vec::<&str>::new())
+                } else {
+                    StringArray::from(vec![value.as_str()])
+                };
+                Arc::new(RunArray::try_new(&run_ends, &values).map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to create RunArray for constant string",
+                    )
+                    .with_source(e)
+                })?)
+            }
             (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
                 Arc::new(StringArray::from(vec![value.clone(); num_rows]))
             }
@@ -448,6 +511,33 @@ impl RecordBatchTransformer {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("unexpected target column type {dt}"),
+                ));
+            }
+        })
+    }
+
+    /// Converts a PrimitiveLiteral to its corresponding Arrow DataType.
+    /// This is used for virtual fields to determine the Arrow type based on the constant value.
+    fn primitive_literal_to_arrow_type(literal: &PrimitiveLiteral) -> Result<DataType> {
+        Ok(match literal {
+            PrimitiveLiteral::Boolean(_) => DataType::Boolean,
+            PrimitiveLiteral::Int(_) => DataType::Int32,
+            PrimitiveLiteral::Long(_) => DataType::Int64,
+            PrimitiveLiteral::Float(_) => DataType::Float32,
+            PrimitiveLiteral::Double(_) => DataType::Float64,
+            PrimitiveLiteral::String(_) => {
+                // Use Run-End Encoding for constant strings (memory efficient)
+                let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+                let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+                DataType::RunEndEncoded(run_ends_field, values_field)
+            }
+            PrimitiveLiteral::Binary(_) => DataType::Binary,
+            PrimitiveLiteral::Int128(_) => DataType::Decimal128(38, 0),
+            PrimitiveLiteral::UInt128(_) => DataType::Decimal128(38, 0),
+            PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot create arrow type for AboveMax/BelowMin literal",
                 ));
             }
         })

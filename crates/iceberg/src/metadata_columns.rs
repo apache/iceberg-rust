@@ -1,0 +1,60 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Metadata columns (virtual/reserved fields) for Iceberg tables.
+//!
+//! This module defines metadata columns that can be requested in projections
+//! but are not stored in data files. Instead, they are computed on-the-fly
+//! during reading. Examples include the _file column (file path) and future
+//! columns like partition values or row numbers.
+
+use crate::{Error, ErrorKind, Result};
+
+/// Reserved field ID for the file path (_file) column per Iceberg spec
+pub const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
+
+/// Reserved column name for the file path metadata column
+pub const RESERVED_COL_NAME_FILE: &str = "_file";
+
+/// Returns the field name for a reserved field ID.
+///
+/// # Arguments
+/// * `field_id` - The reserved field ID
+///
+/// # Returns
+/// The name of the reserved field, or an error if the field ID is not recognized
+pub fn get_reserved_field_name(field_id: i32) -> Result<&'static str> {
+    match field_id {
+        RESERVED_FIELD_ID_FILE => Ok(RESERVED_COL_NAME_FILE),
+        _ => Err(Error::new(
+            ErrorKind::Unexpected,
+            format!("Unknown reserved field ID: {field_id}"),
+        )),
+    }
+}
+
+/// Checks if a field ID is a reserved (virtual/metadata) field.
+///
+/// # Arguments
+/// * `field_id` - The field ID to check
+///
+/// # Returns
+/// `true` if the field ID is reserved, `false` otherwise
+pub fn is_reserved_field(field_id: i32) -> bool {
+    field_id == RESERVED_FIELD_ID_FILE
+    // Additional reserved fields can be checked here in the future
+}
