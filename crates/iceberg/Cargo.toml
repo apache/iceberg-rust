@@ -28,6 +28,9 @@ keywords = ["iceberg"]
 license = { workspace = true }
 repository = { workspace = true }
 
+[lints]
+workspace = true
+
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
@@ -87,7 +90,6 @@ serde_repr = { workspace = true }
 serde_with = { workspace = true }
 smol = { workspace = true, optional = true }
 strum = { workspace = true, features = ["derive"] }
-thrift = { workspace = true }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }

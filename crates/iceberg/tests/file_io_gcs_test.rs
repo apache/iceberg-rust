@@ -68,7 +68,7 @@ mod tests {
 
         FileIOBuilder::new("gcs")
             .with_props(vec![
-                (GCS_SERVICE_PATH, format!("http://{}", addr)),
+                (GCS_SERVICE_PATH, format!("http://{addr}")),
                 (GCS_NO_AUTH, "true".to_string()),
             ])
             .build()
@@ -81,13 +81,13 @@ mod tests {
         bucket_data.insert("name", name);
 
         let client = reqwest::Client::new();
-        let endpoint = format!("http://{}/storage/v1/b", server_addr);
+        let endpoint = format!("http://{server_addr}/storage/v1/b");
         client.post(endpoint).json(&bucket_data).send().await?;
         Ok(())
     }
 
     fn get_gs_path() -> String {
-        format!("gs://{}", FAKE_GCS_BUCKET)
+        format!("gs://{FAKE_GCS_BUCKET}")
     }
 
     #[tokio::test]

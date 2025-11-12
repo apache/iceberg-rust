@@ -160,9 +160,8 @@ fn determine_partitioning_strategy(
 
         // Case 2: Partitioned table missing _partition column (normally this should not happen)
         (true, Err(_)) => Err(DataFusionError::Plan(format!(
-            "Partitioned table input missing {} column. \
-             Ensure projection happens before repartitioning.",
-            PROJECTED_PARTITION_VALUE_COLUMN
+            "Partitioned table input missing {PROJECTED_PARTITION_VALUE_COLUMN} column. \
+             Ensure projection happens before repartitioning."
         ))),
 
         // Case 3: Unpartitioned table, always use RoundRobinBatch
@@ -509,8 +508,7 @@ mod tests {
 
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column, got: {:?}",
-                    column_names
+                    "Should use _partition column, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning with Identity transform"),
@@ -734,8 +732,7 @@ mod tests {
                     .collect();
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column for mixed transforms with Identity, got: {:?}",
-                    column_names
+                    "Should use _partition column for mixed transforms with Identity, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning for table with identity transforms"),
