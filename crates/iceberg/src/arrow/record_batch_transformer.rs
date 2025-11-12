@@ -113,8 +113,9 @@ enum SchemaComparison {
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    // Map from field ID to constant value for virtual/metadata fields
-    constants_map: HashMap<i32, PrimitiveLiteral>,
+    // Pre-computed constant field information: field_id -> (arrow_type, value)
+    // Avoids duplicate lookups and type conversions during batch processing
+    constant_fields: HashMap<i32, (DataType, PrimitiveLiteral)>,
 
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
@@ -133,7 +134,7 @@ impl RecordBatchTransformer {
         Self {
             snapshot_schema,
             projected_iceberg_field_ids,
-            constants_map: HashMap::new(),
+            constant_fields: HashMap::new(),
             batch_transform: None,
         }
     }
@@ -144,9 +145,10 @@ impl RecordBatchTransformer {
     /// # Arguments
     /// * `field_id` - The field ID to associate with the constant
     /// * `value` - The constant value for this field
-    pub(crate) fn with_constant(mut self, field_id: i32, value: PrimitiveLiteral) -> Self {
-        self.constants_map.insert(field_id, value);
-        self
+    pub(crate) fn with_constant(mut self, field_id: i32, value: PrimitiveLiteral) -> Result<Self> {
+        let arrow_type = Self::primitive_literal_to_arrow_type(&value)?;
+        self.constant_fields.insert(field_id, (arrow_type, value));
+        Ok(self)
     }
 
     pub(crate) fn process_record_batch(
@@ -183,7 +185,7 @@ impl RecordBatchTransformer {
                     record_batch.schema_ref(),
                     self.snapshot_schema.as_ref(),
                     &self.projected_iceberg_field_ids,
-                    &self.constants_map,
+                    &self.constant_fields,
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -202,7 +204,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
-        constants_map: &HashMap<i32, PrimitiveLiteral>,
+        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -213,16 +215,17 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant/virtual field
-                if let Some(constant_value) = constants_map.get(field_id) {
-                    // Create a field for the virtual column based on the constant type
-                    let arrow_type = Self::primitive_literal_to_arrow_type(constant_value)?;
+                // Check if this is a constant/virtual field (pre-computed)
+                if let Some((arrow_type, _)) = constant_fields.get(field_id) {
+                    // Create a field for the virtual column
                     let field_name = get_metadata_column_name(*field_id)?;
                     Ok(Arc::new(
-                        Field::new(field_name, arrow_type, false).with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            field_id.to_string(),
-                        )])),
+                        Field::new(field_name, arrow_type.clone(), false).with_metadata(
+                            HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                field_id.to_string(),
+                            )]),
+                        ),
                     ))
                 } else {
                     Ok(field_id_to_mapped_schema_map
@@ -245,7 +248,7 @@ impl RecordBatchTransformer {
                     snapshot_schema,
                     projected_iceberg_field_ids,
                     field_id_to_mapped_schema_map,
-                    constants_map,
+                    constant_fields,
                 )?,
                 target_schema,
             }),
@@ -302,18 +305,18 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
-        constants_map: &HashMap<i32, PrimitiveLiteral>,
+        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
 
         projected_iceberg_field_ids.iter().map(|field_id|{
-            // Check if this is a constant/virtual field first
-            if let Some(constant_value) = constants_map.get(field_id) {
+            // Check if this is a constant/virtual field (pre-computed)
+            if let Some((arrow_type, value)) = constant_fields.get(field_id) {
                 // This is a virtual field - add it with the constant value
                 return Ok(ColumnSource::Add {
-                    value: Some(constant_value.clone()),
-                    target_type: Self::primitive_literal_to_arrow_type(constant_value)?,
+                    value: Some(value.clone()),
+                    target_type: arrow_type.clone(),
                 });
             }
 

@@ -84,6 +84,5 @@ pub fn is_metadata_field(field_id: i32) -> bool {
 /// # Returns
 /// `true` if the column name is a metadata column, `false` otherwise
 pub fn is_metadata_column_name(column_name: &str) -> bool {
-    column_name == RESERVED_COL_NAME_FILE
-    // Additional metadata column names can be checked here in the future
+    get_metadata_field_id(column_name).is_ok()
 }

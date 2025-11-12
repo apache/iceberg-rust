@@ -248,7 +248,7 @@ impl ArrowReader {
                 .with_constant(
                     RESERVED_FIELD_ID_FILE,
                     PrimitiveLiteral::String(task.data_file_path.clone()),
-                );
+                )?;
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
