@@ -532,7 +532,7 @@ impl RecordBatchTransformer {
                 // Use Run-End Encoding for constant strings (memory efficient)
                 let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
                 // Note that this is nullable, as Arrow expects this when building the
-                // final Arrow schema.
+                // final Arrow schema with `RunArray::try_new`.
                 let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
                 DataType::RunEndEncoded(run_ends_field, values_field)
             }
