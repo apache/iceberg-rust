@@ -70,7 +70,7 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
 /// * `field_id` - The field ID to check
 ///
 /// # Returns
-/// `true` if the field ID is a metadata field, `false` otherwise
+/// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
 pub fn is_metadata_field(field_id: i32) -> bool {
     field_id == RESERVED_FIELD_ID_FILE
     // Additional metadata fields can be checked here in the future
