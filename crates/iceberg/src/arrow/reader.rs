@@ -54,7 +54,7 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_reserved_field};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -225,7 +225,7 @@ impl ArrowReader {
         let project_field_ids_without_reserved: Vec<i32> = task
             .project_field_ids
             .iter()
-            .filter(|&&id| !is_reserved_field(id))
+            .filter(|&&id| !is_metadata_field(id))
             .copied()
             .collect();
         // so we must use position-based projection instead of field-ID matching

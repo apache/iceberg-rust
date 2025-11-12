@@ -36,7 +36,7 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_FIELD_ID_FILE};
+use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
@@ -222,7 +222,7 @@ impl<'a> TableScanBuilder<'a> {
         if let Some(column_names) = self.column_names.as_ref() {
             for column_name in column_names {
                 // Skip reserved columns that don't exist in the schema
-                if column_name == RESERVED_COL_NAME_FILE {
+                if is_metadata_column_name(column_name) {
                     continue;
                 }
                 if schema.field_by_name(column_name).is_none() {
@@ -245,9 +245,9 @@ impl<'a> TableScanBuilder<'a> {
         });
 
         for column_name in column_names.iter() {
-            // Handle special reserved column "_file"
-            if column_name == RESERVED_COL_NAME_FILE {
-                field_ids.push(RESERVED_FIELD_ID_FILE);
+            // Handle metadata columns (like "_file")
+            if is_metadata_column_name(column_name) {
+                field_ids.push(get_metadata_field_id(column_name)?);
                 continue;
             }
 
@@ -588,7 +588,8 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
-    use crate::scan::{FileScanTask, RESERVED_COL_NAME_FILE};
+    use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+    use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,

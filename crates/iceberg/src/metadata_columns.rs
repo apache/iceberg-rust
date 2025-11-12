@@ -30,31 +30,60 @@ pub const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
-/// Returns the field name for a reserved field ID.
+/// Returns the column name for a metadata field ID.
 ///
 /// # Arguments
-/// * `field_id` - The reserved field ID
+/// * `field_id` - The metadata field ID
 ///
 /// # Returns
-/// The name of the reserved field, or an error if the field ID is not recognized
-pub fn get_reserved_field_name(field_id: i32) -> Result<&'static str> {
+/// The name of the metadata column, or an error if the field ID is not recognized
+pub fn get_metadata_column_name(field_id: i32) -> Result<&'static str> {
     match field_id {
         RESERVED_FIELD_ID_FILE => Ok(RESERVED_COL_NAME_FILE),
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Unknown reserved field ID: {field_id}"),
+            format!("Unknown metadata field ID: {field_id}"),
         )),
     }
 }
 
-/// Checks if a field ID is a reserved (virtual/metadata) field.
+/// Returns the field ID for a metadata column name.
+///
+/// # Arguments
+/// * `column_name` - The metadata column name
+///
+/// # Returns
+/// The field ID of the metadata column, or an error if the column name is not recognized
+pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
+    match column_name {
+        RESERVED_COL_NAME_FILE => Ok(RESERVED_FIELD_ID_FILE),
+        _ => Err(Error::new(
+            ErrorKind::Unexpected,
+            format!("Unknown metadata column name: {column_name}"),
+        )),
+    }
+}
+
+/// Checks if a field ID is a metadata field.
 ///
 /// # Arguments
 /// * `field_id` - The field ID to check
 ///
 /// # Returns
-/// `true` if the field ID is reserved, `false` otherwise
-pub fn is_reserved_field(field_id: i32) -> bool {
+/// `true` if the field ID is a metadata field, `false` otherwise
+pub fn is_metadata_field(field_id: i32) -> bool {
     field_id == RESERVED_FIELD_ID_FILE
-    // Additional reserved fields can be checked here in the future
+    // Additional metadata fields can be checked here in the future
+}
+
+/// Checks if a column name is a metadata column.
+///
+/// # Arguments
+/// * `column_name` - The column name to check
+///
+/// # Returns
+/// `true` if the column name is a metadata column, `false` otherwise
+pub fn is_metadata_column_name(column_name: &str) -> bool {
+    column_name == RESERVED_COL_NAME_FILE
+    // Additional metadata column names can be checked here in the future
 }

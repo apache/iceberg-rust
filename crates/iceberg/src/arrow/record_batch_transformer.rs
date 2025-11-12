@@ -30,7 +30,7 @@ use arrow_schema::{
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema_to_arrow_schema;
-use crate::metadata_columns::get_reserved_field_name;
+use crate::metadata_columns::get_metadata_column_name;
 use crate::spec::{Literal, PrimitiveLiteral, Schema as IcebergSchema};
 use crate::{Error, ErrorKind, Result};
 
@@ -217,7 +217,7 @@ impl RecordBatchTransformer {
                 if let Some(constant_value) = constants_map.get(field_id) {
                     // Create a field for the virtual column based on the constant type
                     let arrow_type = Self::primitive_literal_to_arrow_type(constant_value)?;
-                    let field_name = get_reserved_field_name(*field_id)?;
+                    let field_name = get_metadata_column_name(*field_id)?;
                     Ok(Arc::new(
                         Field::new(field_name, arrow_type, false).with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
