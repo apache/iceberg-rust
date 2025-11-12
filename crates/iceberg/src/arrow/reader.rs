@@ -268,10 +268,17 @@ impl ArrowReader {
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering.
-        let mut record_batch_transformer =
-            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
-                .with_partition(task.partition_spec.clone(), task.partition.clone())
-                .build();
+        let mut record_batch_transformer_builder =
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        if let (Some(partition_spec), Some(partition_data)) =
+            (task.partition_spec.clone(), task.partition.clone())
+        {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_partition(partition_spec, partition_data);
+        }
+
+        let mut record_batch_transformer = record_batch_transformer_builder.build();
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);

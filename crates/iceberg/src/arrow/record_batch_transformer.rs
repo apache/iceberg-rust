@@ -173,11 +173,11 @@ impl RecordBatchTransformerBuilder {
     /// One without the other cannot produce a valid constants map.
     pub(crate) fn with_partition(
         mut self,
-        partition_spec: Option<Arc<PartitionSpec>>,
-        partition_data: Option<Struct>,
+        partition_spec: Arc<PartitionSpec>,
+        partition_data: Struct,
     ) -> Self {
-        self.partition_spec = partition_spec;
-        self.partition_data = partition_data;
+        self.partition_spec = Some(partition_spec);
+        self.partition_data = Some(partition_data);
         self
     }
 
@@ -243,15 +243,6 @@ pub(crate) struct RecordBatchTransformer {
 }
 
 impl RecordBatchTransformer {
-    /// Build a RecordBatchTransformer for a given
-    /// Iceberg snapshot schema and list of projected field ids.
-    pub(crate) fn build(
-        snapshot_schema: Arc<IcebergSchema>,
-        projected_iceberg_field_ids: &[i32],
-    ) -> Self {
-        RecordBatchTransformerBuilder::new(snapshot_schema, projected_iceberg_field_ids).build()
-    }
-
     pub(crate) fn process_record_batch(
         &mut self,
         record_batch: RecordBatch,
@@ -654,7 +645,9 @@ mod test {
         let snapshot_schema = Arc::new(iceberg_table_schema());
         let projected_iceberg_field_ids = [13, 14];
 
-        let mut inst = RecordBatchTransformer::build(snapshot_schema, &projected_iceberg_field_ids);
+        let mut inst =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
 
         let result = inst
             .process_record_batch(source_record_batch_no_migration_required())
@@ -670,7 +663,9 @@ mod test {
         let snapshot_schema = Arc::new(iceberg_table_schema());
         let projected_iceberg_field_ids = [10, 11, 12, 14, 15]; // a, b, c, e, f
 
-        let mut inst = RecordBatchTransformer::build(snapshot_schema, &projected_iceberg_field_ids);
+        let mut inst =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
 
         let result = inst.process_record_batch(source_record_batch()).unwrap();
 
@@ -699,7 +694,8 @@ mod test {
         let projected_iceberg_field_ids = [1, 2, 3];
 
         let mut transformer =
-            RecordBatchTransformer::build(snapshot_schema, &projected_iceberg_field_ids);
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
 
         let file_schema = Arc::new(ArrowSchema::new(vec![
             simple_field("id", DataType::Int32, false, "1"),
@@ -1046,7 +1042,7 @@ mod test {
 
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_partition(partition_spec, partition_data)
                 .build();
 
         // Create a Parquet RecordBatch with actual data
@@ -1166,7 +1162,7 @@ mod test {
 
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_partition(partition_spec, partition_data)
                 .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
@@ -1281,7 +1277,7 @@ mod test {
 
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_partition(partition_spec, partition_data)
                 .build();
 
         // Create a Parquet RecordBatch with actual data
@@ -1385,7 +1381,7 @@ mod test {
 
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition(Some(partition_spec), Some(partition_data))
+                .with_partition(partition_spec, partition_data)
                 .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
