@@ -42,7 +42,7 @@ pub fn get_metadata_column_name(field_id: i32) -> Result<&'static str> {
         RESERVED_FIELD_ID_FILE => Ok(RESERVED_COL_NAME_FILE),
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Unknown metadata field ID: {field_id}"),
+            format!("Unknown/unsupported metadata field ID: {field_id}"),
         )),
     }
 }
@@ -59,7 +59,7 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
         RESERVED_COL_NAME_FILE => Ok(RESERVED_FIELD_ID_FILE),
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Unknown metadata column name: {column_name}"),
+            format!("Unknown/unsupported metadata column name: {column_name}"),
         )),
     }
 }
