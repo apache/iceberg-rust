@@ -60,6 +60,10 @@ const INT_MIN: i32 = -2147483648;
 const LONG_MAX: i64 = 9223372036854775807;
 const LONG_MIN: i64 = -9223372036854775808;
 
+const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+const NANOS_PER_MICRO: i64 = 1000;
+const NANOS_PER_DAY: i64 = NANOS_PER_MICRO * MICROS_PER_DAY;
+
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
@@ -1189,17 +1193,11 @@ impl Datum {
         match target_type {
             Type::Primitive(target_primitive_type) => {
                 match (&self.literal, &self.r#type, target_primitive_type) {
-                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
-                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
-                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
-                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
-                        Ok(Datum::i64_to_i32(*val))
+                    (PrimitiveLiteral::Int(val), source_type, target_type) => {
+                        convert_int(*val, source_type, target_type)
                     }
-                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
-                        Ok(Datum::timestamp_micros(*val))
-                    }
-                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamptz) => {
-                        Ok(Datum::timestamptz_micros(*val))
+                    (PrimitiveLiteral::Long(val), source_type, target_type) => {
+                        convert_long(*val, source_type, target_type)
                     }
                     // Let's wait with nano's until this clears up: https://github.com/apache/iceberg/pull/11775
                     (PrimitiveLiteral::Int128(val), _, PrimitiveType::Long) => {
@@ -1273,6 +1271,105 @@ impl Datum {
             _ => self.to_string(),
         }
     }
+}
+
+/// Converts an int literal between two [PrimitiveType]s.
+fn convert_int(
+    val: i32,
+    source_type: &PrimitiveType,
+    target_type: &PrimitiveType,
+) -> Result<Datum> {
+    let datum = match (source_type, target_type) {
+        (_, PrimitiveType::Int) => Datum::int(val),
+        (_, PrimitiveType::Date) => Datum::date(val),
+        (_, PrimitiveType::Long) => Datum::long(val),
+        (PrimitiveType::Date, PrimitiveType::Timestamp) => Datum::timestamp_micros(
+            (val as i64)
+                .checked_mul(MICROS_PER_DAY)
+                .ok_or_else(overflow)?,
+        ),
+        (PrimitiveType::Date, PrimitiveType::Timestamptz) => Datum::timestamptz_micros(
+            (val as i64)
+                .checked_mul(MICROS_PER_DAY)
+                .ok_or_else(overflow)?,
+        ),
+        (PrimitiveType::Date, PrimitiveType::TimestampNs) => Datum::timestamp_nanos(
+            (val as i64)
+                .checked_mul(NANOS_PER_DAY)
+                .ok_or_else(overflow)?,
+        ),
+        (PrimitiveType::Date, PrimitiveType::TimestamptzNs) => Datum::timestamptz_nanos(
+            (val as i64)
+                .checked_mul(NANOS_PER_DAY)
+                .ok_or_else(overflow)?,
+        ),
+        _ => {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't convert datum from {source_type} type to {target_type} type.",),
+            ));
+        }
+    };
+
+    Ok(datum)
+}
+
+/// Converts a long literal between two [PrimitiveType]s.
+fn convert_long(
+    val: i64,
+    source_type: &PrimitiveType,
+    target_type: &PrimitiveType,
+) -> Result<Datum> {
+    let datum = match (source_type, target_type) {
+        (_, PrimitiveType::Int) => Datum::i64_to_i32(val),
+        (_, PrimitiveType::Long) => Datum::long(val),
+        (
+            PrimitiveType::Long | PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+            PrimitiveType::Timestamp,
+        ) => Datum::timestamp_micros(val),
+        (
+            PrimitiveType::Long | PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+            PrimitiveType::Timestamptz,
+        ) => Datum::timestamptz_micros(val),
+        (
+            PrimitiveType::Long | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+            PrimitiveType::TimestampNs,
+        ) => Datum::timestamp_nanos(val),
+        (
+            PrimitiveType::Long | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+            PrimitiveType::TimestamptzNs,
+        ) => Datum::timestamptz_nanos(val),
+        (PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs, PrimitiveType::Timestamp) => {
+            Datum::timestamp_micros(val / NANOS_PER_MICRO)
+        }
+        (PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs, PrimitiveType::Timestamptz) => {
+            Datum::timestamptz_micros(val / NANOS_PER_MICRO)
+        }
+        (PrimitiveType::Timestamp | PrimitiveType::Timestamptz, PrimitiveType::TimestampNs) => {
+            Datum::timestamp_nanos(val.checked_mul(NANOS_PER_MICRO).ok_or_else(overflow)?)
+        }
+        (PrimitiveType::Timestamp | PrimitiveType::Timestamptz, PrimitiveType::TimestamptzNs) => {
+            Datum::timestamptz_nanos(val.checked_mul(NANOS_PER_MICRO).ok_or_else(overflow)?)
+        }
+        (PrimitiveType::Timestamp | PrimitiveType::Timestamptz, PrimitiveType::Date) => {
+            Datum::date((val / MICROS_PER_DAY) as i32)
+        }
+        (PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs, PrimitiveType::Date) => {
+            Datum::date((val / (NANOS_PER_DAY)) as i32)
+        }
+        _ => {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't convert datum from {source_type} type to {target_type} type."),
+            ));
+        }
+    };
+
+    Ok(datum)
+}
+
+fn overflow() -> Error {
+    Error::new(ErrorKind::DataInvalid, "integer overflow")
 }
 
 /// Map is a collection of key-value pairs with a key type and a value type.
@@ -4013,169 +4110,213 @@ mod tests {
         test_fn(datum);
     }
 
-    #[test]
-    fn test_datum_date_convert_to_int() {
-        let datum_date = Datum::date(12345);
+    macro_rules! datum_convert_tests {
+        ($($name:ident: ($source:expr => $target_type:ident, $expected:expr),)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = $source;
+                let target_type = PrimitiveType::$target_type;
+                let expected = $expected;
 
-        let result = datum_date.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-        let expected = Datum::int(12345);
-
-        assert_eq!(result, expected);
+                let result = source.to(&Primitive(target_type)).unwrap();
+                assert_eq!(result, expected);
+            }
+        )*
+        }
     }
 
-    #[test]
-    fn test_datum_int_convert_to_date() {
-        let datum_int = Datum::int(12345);
-
-        let result = datum_int.to(&Primitive(PrimitiveType::Date)).unwrap();
-
-        let expected = Datum::date(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_long_convert_to_int() {
-        let datum = Datum::long(12345);
-
-        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-        let expected = Datum::int(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_long_convert_to_int_above_max() {
-        let datum = Datum::long(INT_MAX as i64 + 1);
-
-        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-        let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_long_convert_to_int_below_min() {
-        let datum = Datum::long(INT_MIN as i64 - 1);
-
-        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-        let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_long_convert_to_timestamp() {
-        let datum = Datum::long(12345);
-
-        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
-
-        let expected = Datum::timestamp_micros(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_long_convert_to_timestamptz() {
-        let datum = Datum::long(12345);
-
-        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
-
-        let expected = Datum::timestamptz_micros(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_decimal_convert_to_long() {
-        let datum = Datum::decimal(12345).unwrap();
-
-        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-        let expected = Datum::long(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_decimal_convert_to_long_above_max() {
-        let datum = Datum::decimal(LONG_MAX as i128 + 1).unwrap();
-
-        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-        let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_decimal_convert_to_long_below_min() {
-        let datum = Datum::decimal(LONG_MIN as i128 - 1).unwrap();
-
-        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-        let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_string_convert_to_boolean() {
-        let datum = Datum::string("true");
-
-        let result = datum.to(&Primitive(PrimitiveType::Boolean)).unwrap();
-
-        let expected = Datum::bool(true);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_string_convert_to_int() {
-        let datum = Datum::string("12345");
-
-        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-        let expected = Datum::int(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_string_convert_to_long() {
-        let datum = Datum::string("12345");
-
-        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-        let expected = Datum::long(12345);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_string_convert_to_timestamp() {
-        let datum = Datum::string("1925-05-20T19:25:00.000");
-
-        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
-
-        let expected = Datum::timestamp_micros(-1407990900000000);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_datum_string_convert_to_timestamptz() {
-        let datum = Datum::string("1925-05-20T19:25:00.000 UTC");
-
-        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
-
-        let expected = Datum::timestamptz_micros(-1407990900000000);
-
-        assert_eq!(result, expected);
+    datum_convert_tests! {
+        // Date conversions
+        convert_date_to_int: (
+            Datum::date(12345) => Int,
+            Datum::int(12345)
+        ),
+        convert_int_to_date: (
+            Datum::int(12345) => Date,
+            Datum::date(12345)
+        ),
+        convert_date_to_timestamp: (
+            Datum::date(1) => Timestamp,
+            Datum::timestamp_from_datetime(
+                DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                    .unwrap()
+                    .naive_utc()
+            )
+        ),
+        convert_date_to_timestamptz: (
+            Datum::date(1) => Timestamptz,
+            Datum::timestamptz_from_str("1970-01-02T00:00:00Z").unwrap()
+        ),
+        convert_date_to_timestamp_nanos: (
+            Datum::date(1) => TimestampNs,
+            Datum::timestamp_from_datetime(
+                DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                    .unwrap()
+                    .naive_utc()
+            )
+            .to(&Primitive(PrimitiveType::TimestampNs))
+            .unwrap()
+        ),
+        convert_date_to_timestamptz_nanos: (
+            Datum::date(1) => TimestamptzNs,
+            Datum::timestamptz_from_datetime(
+                DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z").unwrap()
+            )
+            .to(&Primitive(PrimitiveType::TimestamptzNs))
+            .unwrap()
+        ),
+        convert_date_negative_to_timestamp: (
+            Datum::date(-1) => Timestamp,
+            Datum::timestamp_from_datetime(
+                DateTime::parse_from_rfc3339("1969-12-31T00:00:00Z")
+                    .unwrap()
+                    .naive_utc()
+            )
+        ),
+        convert_date_to_timestamp_year_9999: (
+            Datum::date(2932896) => Timestamp,
+            Datum::timestamp_from_datetime(
+                DateTime::parse_from_rfc3339("9999-12-31T00:00:00Z")
+                    .unwrap()
+                    .naive_utc()
+            )
+        ),
+        // Long conversions
+        convert_long_to_int: (
+            Datum::long(12345) => Int,
+            Datum::int(12345)
+        ),
+        convert_long_to_int_above_max: (
+            Datum::long(INT_MAX as i64 + 1) => Int,
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax)
+        ),
+        convert_long_to_int_below_min: (
+            Datum::long(INT_MIN as i64 - 1) => Int,
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin)
+        ),
+        convert_long_to_timestamp: (
+            Datum::long(12345) => Timestamp,
+            Datum::timestamp_micros(12345)
+        ),
+        convert_long_to_timestamptz: (
+            Datum::long(12345) => Timestamptz,
+            Datum::timestamptz_micros(12345)
+        ),
+        convert_long_to_timestamp_nanos: (
+            Datum::long(12345) => TimestampNs,
+            Datum::timestamp_nanos(12345)
+        ),
+        convert_long_to_timestamptz_nanos: (
+            Datum::long(12345) => TimestamptzNs,
+            Datum::timestamptz_nanos(12345)
+        ),
+        // Decimal conversions
+        convert_decimal_to_long: (
+            Datum::decimal(12345).unwrap() => Long,
+            Datum::long(12345)
+        ),
+        convert_decimal_to_long_above_max: (
+            Datum::decimal(LONG_MAX as i128 + 1).unwrap() => Long,
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax)
+        ),
+        convert_decimal_to_long_below_min: (
+            Datum::decimal(LONG_MIN as i128 - 1).unwrap() => Long,
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin)
+        ),
+        // String conversions
+        convert_string_to_boolean: (
+            Datum::string("true") => Boolean,
+            Datum::bool(true)
+        ),
+        convert_string_to_int: (
+            Datum::string("12345") => Int,
+            Datum::int(12345)
+        ),
+        convert_string_to_long: (
+            Datum::string("12345") => Long,
+            Datum::long(12345)
+        ),
+        convert_string_to_timestamp: (
+            Datum::string("1925-05-20T19:25:00.000") => Timestamp,
+            Datum::timestamp_micros(-1407990900000000)
+        ),
+        convert_string_to_timestamptz: (
+            Datum::string("1925-05-20T19:25:00.000 UTC") => Timestamptz,
+            Datum::timestamptz_micros(-1407990900000000)
+        ),
+        // Timestamp conversions (micros to nanos)
+        convert_timestamp_micros_to_timestamp_nanos: (
+            Datum::timestamp_micros(12345) => TimestampNs,
+            Datum::timestamp_nanos(12345000)
+        ),
+        convert_timestamp_micros_to_timestamptz_nanos: (
+            Datum::timestamp_micros(12345) => TimestamptzNs,
+            Datum::timestamptz_nanos(12345000)
+        ),
+        convert_timestamptz_micros_to_timestamp_nanos: (
+            Datum::timestamptz_micros(12345) => TimestampNs,
+            Datum::timestamp_nanos(12345000)
+        ),
+        convert_timestamptz_micros_to_timestamptz_nanos: (
+            Datum::timestamptz_micros(12345) => TimestamptzNs,
+            Datum::timestamptz_nanos(12345000)
+        ),
+        // Timestamp conversions (nanos to micros)
+        convert_timestamp_nanos_to_timestamp_micros: (
+            Datum::timestamp_nanos(12345000) => Timestamp,
+            Datum::timestamp_micros(12345)
+        ),
+        test_datum_timestamp_micros_to_nanos: (
+            Datum::timestamp_nanos(12345678) => Timestamp,
+            Datum::timestamp_micros(12345)
+        ),
+        convert_timestamp_nanos_to_timestamptz_micros: (
+            Datum::timestamp_nanos(12345000) => Timestamptz,
+            Datum::timestamptz_micros(12345)
+        ),
+        convert_timestamptz_nanos_to_timestamp_micros: (
+            Datum::timestamptz_nanos(12345000) => Timestamp,
+            Datum::timestamp_micros(12345)
+        ),
+        convert_timestamptz_nanos_to_timestamptz_micros: (
+            Datum::timestamptz_nanos(12345000) => Timestamptz,
+            Datum::timestamptz_micros(12345)
+        ),
+        // Timestamp conversions (nanos to nanos)
+        convert_timestamp_nanos_to_timestamp_nanos: (
+            Datum::timestamp_nanos(12345) => TimestampNs,
+            Datum::timestamp_nanos(12345)
+        ),
+        convert_timestamp_nanos_to_timestamptz_nanos: (
+            Datum::timestamp_nanos(12345) => TimestamptzNs,
+            Datum::timestamptz_nanos(12345)
+        ),
+        convert_timestamptz_nanos_to_timestamp_nanos: (
+            Datum::timestamptz_nanos(12345) => TimestampNs,
+            Datum::timestamp_nanos(12345)
+        ),
+        convert_timestamptz_nanos_to_timestamptz_nanos: (
+            Datum::timestamptz_nanos(12345) => TimestamptzNs,
+            Datum::timestamptz_nanos(12345)
+        ),
+        // Timestamp to date conversions
+        convert_timestamp_to_date: (
+            Datum::timestamp_micros(24 * 60 * 60 * 1_000_000) => Date,
+            Datum::date(1)
+        ),
+        convert_timestamptz_to_date: (
+            Datum::timestamptz_micros(24 * 60 * 60 * 1_000_000) => Date,
+            Datum::date(1)
+        ),
+        convert_timestamp_nanos_to_date: (
+            Datum::timestamp_nanos(24 * 60 * 60 * 1_000_000_000) => Date,
+            Datum::date(1)
+        ),
+        convert_timestamptz_nanos_to_date: (
+            Datum::timestamptz_nanos(24 * 60 * 60 * 1_000_000_000) => Date,
+            Datum::date(1)
+        ),
     }
 
     #[test]
