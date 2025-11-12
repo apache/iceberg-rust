@@ -28,6 +28,7 @@ use super::{
 };
 use crate::error::Result;
 use crate::io::OutputFile;
+use crate::spec::avro_util::codec_from_str;
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
@@ -43,6 +44,8 @@ pub struct ManifestWriterBuilder {
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
+    compression_codec: String,
+    compression_level: u8,
 }
 
 impl ManifestWriterBuilder {
@@ -54,13 +57,24 @@ impl ManifestWriterBuilder {
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
+        use crate::spec::TableProperties;
+
         Self {
             output,
             snapshot_id,
             key_metadata,
             schema,
             partition_spec,
+            compression_codec: TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            compression_level: TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
         }
+    }
+
+    /// Set compression codec and level for the manifest file.
+    pub fn with_compression(mut self, codec: String, level: u8) -> Self {
+        self.compression_codec = codec;
+        self.compression_level = level;
+        self
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -78,6 +92,8 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression_codec,
+            self.compression_level,
         )
     }
 
@@ -96,6 +112,8 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression_codec,
+            self.compression_level,
         )
     }
 
@@ -114,6 +132,8 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression_codec,
+            self.compression_level,
         )
     }
 
@@ -134,6 +154,8 @@ impl ManifestWriterBuilder {
             // First row id is assigned by the [`ManifestListWriter`] when the manifest
             // is added to the list.
             None,
+            self.compression_codec,
+            self.compression_level,
         )
     }
 
@@ -152,6 +174,8 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression_codec,
+            self.compression_level,
         )
     }
 }
@@ -177,6 +201,9 @@ pub struct ManifestWriter {
     manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
+
+    compression_codec: String,
+    compression_level: u8,
 }
 
 impl ManifestWriter {
@@ -187,6 +214,8 @@ impl ManifestWriter {
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
+        compression_codec: String,
+        compression_level: u8,
     ) -> Self {
         Self {
             output,
@@ -202,6 +231,8 @@ impl ManifestWriter {
             key_metadata,
             manifest_entries: Vec::new(),
             metadata,
+            compression_codec,
+            compression_level,
         }
     }
 
@@ -410,7 +441,11 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
+
+        // Determine compression codec using helper function
+        let codec = codec_from_str(Some(self.compression_codec.as_str()), self.compression_level);
+
+        let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), codec);
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema).map_err(|err| {

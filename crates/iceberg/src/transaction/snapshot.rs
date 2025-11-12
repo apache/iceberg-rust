@@ -195,6 +195,19 @@ impl<'a> SnapshotProducer<'a> {
             DataFileFormat::Avro
         );
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
+
+        // Get compression settings from table properties
+        let table_props =
+            TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to parse table properties for compression settings",
+                )
+                .with_source(e)
+            })?;
+        let codec = table_props.avro_compression_codec.clone();
+        let level = table_props.avro_compression_level;
+
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
@@ -205,7 +218,9 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-        );
+        )
+        .with_compression(codec, level);
+
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
             FormatVersion::V2 => match content {
@@ -386,6 +401,19 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
+
+        // Get compression settings from table properties
+        let table_props =
+            TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to parse table properties for compression settings",
+                )
+                .with_source(e)
+            })?;
+        let codec = table_props.avro_compression_codec.clone();
+        let level = table_props.avro_compression_level;
+
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
@@ -411,7 +439,8 @@ impl<'a> SnapshotProducer<'a> {
                 next_seq_num,
                 Some(first_row_id),
             ),
-        };
+        }
+        .with_compression(codec, level);
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files
         // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
