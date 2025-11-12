@@ -17,6 +17,7 @@
 
 //! Spec for Iceberg.
 
+mod avro_util;
 mod datatypes;
 mod encrypted_key;
 mod manifest;

@@ -114,6 +114,10 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub avro_compression_codec: String,
+    /// Compression level for Avro files
+    pub avro_compression_level: u8,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
@@ -232,6 +236,17 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
+    /// Default Avro compression codec - gzip
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str = "gzip";
+
+    /// Compression level for Avro files
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
+    /// Default Avro compression level (9 = BestCompression)
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: u8 = 9;
+
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
@@ -325,6 +340,16 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
+            avro_compression_codec: parse_property(
+                props,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            )?,
+            avro_compression_level: parse_property(
+                props,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+            )?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
@@ -417,6 +442,14 @@ mod tests {
             CompressionCodec::None
         );
         assert_eq!(
+            table_properties.avro_compression_codec,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string()
+        );
+        assert_eq!(
+            table_properties.avro_compression_level,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT
+        );
+        assert_eq!(
             table_properties.gc_enabled,
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
         );
@@ -458,15 +491,27 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression() {
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
+                "zstd".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+                "3".to_string(),
+            ),
+        ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
             CompressionCodec::gzip_default()
         );
+        assert_eq!(table_properties.avro_compression_codec, "zstd");
+        assert_eq!(table_properties.avro_compression_level, 3);
     }
 
     #[test]

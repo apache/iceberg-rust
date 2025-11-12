@@ -27,6 +27,8 @@ use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::error::Result;
 use crate::io::FileWrite;
+use crate::spec::TableProperties;
+use crate::spec::avro_util::codec_from_str;
 use crate::{Error, ErrorKind};
 
 /// A manifest list writer.
@@ -37,6 +39,8 @@ pub struct ManifestListWriter {
     sequence_number: i64,
     snapshot_id: i64,
     next_row_id: Option<u64>,
+    compression_codec: String,
+    compression_level: u8,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -52,6 +56,21 @@ impl ManifestListWriter {
     /// Get the next row ID that will be assigned to the next data manifest added.
     pub fn next_row_id(&self) -> Option<u64> {
         self.next_row_id
+    }
+
+    /// Set compression codec and level for the manifest list file.
+    pub fn with_compression(mut self, codec: String, level: u8) -> Self {
+        self.compression_codec = codec.clone();
+        self.compression_level = level;
+
+        let avro_schema = match self.format_version {
+            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
+            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
+            FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
+        };
+        let compression = codec_from_str(Some(codec.as_str()), level);
+        self.avro_writer = Writer::with_codec(avro_schema, Vec::new(), compression);
+        self
     }
 
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`FileWrite`].
@@ -70,7 +89,16 @@ impl ManifestListWriter {
                 parent_snapshot_id.to_string(),
             );
         }
-        Self::new(FormatVersion::V1, writer, metadata, 0, snapshot_id, None)
+        Self::new(
+            FormatVersion::V1,
+            writer,
+            metadata,
+            0,
+            snapshot_id,
+            None,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+        )
     }
 
     /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`FileWrite`].
@@ -98,6 +126,8 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             None,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
         )
     }
 
@@ -133,6 +163,8 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             first_row_id,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
         )
     }
 
@@ -143,13 +175,16 @@ impl ManifestListWriter {
         sequence_number: i64,
         snapshot_id: i64,
         first_row_id: Option<u64>,
+        compression_codec: String,
+        compression_level: u8,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut avro_writer = Writer::new(avro_schema, Vec::new());
+        let codec = codec_from_str(Some(compression_codec.as_str()), compression_level);
+        let mut avro_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
@@ -162,6 +197,8 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             next_row_id: first_row_id,
+            compression_codec,
+            compression_level,
         }
     }
 
