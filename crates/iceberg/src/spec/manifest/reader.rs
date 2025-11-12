@@ -132,6 +132,7 @@ mod tests {
 
     use super::*;
     use crate::ErrorKind;
+    use crate::compression::CompressionCodec;
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
@@ -154,7 +155,9 @@ mod tests {
             Some(1),
             schema.clone(),
             partition_spec,
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         writer.add_entry(test_entry()).unwrap();
         // Writing the manifest yields the manifest list entry describing it.
@@ -195,6 +198,7 @@ mod tests {
             Some(1),
             schema.clone(),
             partition_spec,
+            CompressionCodec::None,
         )
         .unwrap()
         .build_v3_data();

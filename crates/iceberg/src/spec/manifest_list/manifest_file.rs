@@ -197,6 +197,7 @@ mod test {
 
     use super::{ManifestContentType, ManifestFile};
     use crate::ErrorKind;
+    use crate::compression::CompressionCodec;
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
@@ -239,8 +240,15 @@ mod test {
             .unwrap();
 
         let output_file = io.new_output(path).unwrap();
-        let mut writer = ManifestWriterBuilder::new(output_file, Some(1), schema, partition_spec)
-            .build_v3_data();
+        let mut writer = ManifestWriterBuilder::new(
+            output_file,
+            Some(1),
+            schema,
+            partition_spec,
+            CompressionCodec::None,
+        )
+        .unwrap()
+        .build_v3_data();
 
         writer
             .add_entry(data_entry(ManifestStatus::Added, 100, None))
@@ -270,6 +278,7 @@ mod test {
             Some(1),
             schema,
             partition_spec,
+            CompressionCodec::None,
         )
         .expect("Expected a valid writer")
         .build_v3_data();

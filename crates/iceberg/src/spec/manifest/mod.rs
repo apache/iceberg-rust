@@ -163,6 +163,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
@@ -269,7 +270,9 @@ mod tests {
             Some(1),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();
@@ -574,7 +577,9 @@ mod tests {
             Some(2),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();
@@ -670,7 +675,9 @@ mod tests {
             Some(3),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v1();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();
@@ -778,7 +785,9 @@ mod tests {
             Some(2),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v1();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();
@@ -885,7 +894,9 @@ mod tests {
             Some(2),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();
@@ -1163,7 +1174,9 @@ mod tests {
             Some(1),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         for entry in &entries {
             writer.add_entry(entry.clone()).unwrap();

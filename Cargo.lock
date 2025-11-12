@@ -2729,6 +2729,7 @@ dependencies = [
  "iceberg_test_utils",
  "itertools 0.13.0",
  "minijinja",
+ "miniz_oxide",
  "mockall",
  "moka",
  "murmur3",
