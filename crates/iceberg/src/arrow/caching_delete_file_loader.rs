@@ -543,7 +543,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{
+        ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+    };
     use arrow_schema::{DataType, Field, Fields};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -552,6 +554,8 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::spec::{DataContentType, DataFileFormat, Schema};
 
     #[tokio::test]
     async fn test_delete_file_loader_parse_equality_deletes() {
@@ -638,6 +642,87 @@ mod tests {
         .unwrap();
 
         let path = format!("{}/equality-deletes-1.parquet", &table_location);
+
+        let file = File::create(&path).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file,
+            equality_deletes_to_write.schema(),
+            Some(props.clone()),
+        )
+        .unwrap();
+
+        writer
+            .write(&equality_deletes_to_write)
+            .expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        path
+    }
+
+    fn setup_data_file_with_binary(table_location: &str) -> (String, Arc<Schema>) {
+        let id_vals = vec![1, 2, 3];
+        let id_col = Arc::new(Int32Array::from(id_vals)) as ArrayRef;
+
+        let binary_vals = vec![
+            Some(&b"data_to_delete_1"[..]),
+            Some(&b"other_data"[..]),
+            Some(&b"data_to_delete_2"[..]),
+        ];
+        let binary_col = Arc::new(BinaryArray::from(binary_vals)) as ArrayRef;
+
+        let data_schema = Arc::new(arrow_schema::Schema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("binary_col", DataType::Binary, true, "2"),
+        ]));
+
+        let data_batch =
+            RecordBatch::try_new(data_schema.clone(), vec![id_col, binary_col]).unwrap();
+
+        let path = format!("{}/data-binary.parquet", &table_location);
+
+        let file = File::create(&path).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file, data_batch.schema(), Some(props.clone())).unwrap();
+
+        writer.write(&data_batch).expect("Writing batch");
+        writer.close().unwrap();
+
+        let iceberg_schema = arrow_schema_to_schema(&data_schema).unwrap();
+
+        (path, Arc::new(iceberg_schema))
+    }
+
+    fn setup_write_equality_delete_file_with_binary(table_location: &str) -> String {
+        // Binary column with two delete rows
+        let binary_vals = vec![
+            Some(&b"data_to_delete_1"[..]),
+            Some(&b"data_to_delete_2"[..]),
+        ];
+        let binary_col = Arc::new(BinaryArray::from(binary_vals)) as ArrayRef;
+
+        let equality_delete_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "binary_col",
+            DataType::Binary,
+            true,
+            "2",
+        )]));
+
+        let equality_deletes_to_write =
+            RecordBatch::try_new(equality_delete_schema.clone(), vec![binary_col]).unwrap();
+
+        let path = format!("{}/equality-deletes-binary.parquet", &table_location);
 
         let file = File::create(&path).unwrap();
 
@@ -898,6 +983,52 @@ mod tests {
         assert!(
             result.is_ok(),
             "Failed to build equality delete predicate: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_with_binary_type() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        let (data_file_path, data_file_schema) = setup_data_file_with_binary(table_location);
+        let eq_delete_file_path = setup_write_equality_delete_file_with_binary(table_location);
+
+        let eq_del = FileScanTaskDeleteFile {
+            file_path: eq_delete_file_path,
+            file_type: DataContentType::EqualityDeletes,
+            partition_spec_id: 0,
+            equality_ids: Some(vec![2]), // Binary column field ID
+        };
+
+        let file_scan_task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path,
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![1, 2], // id and binary_col
+            predicate: None,
+            deletes: vec![eq_del],
+        };
+
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_filter = delete_file_loader
+            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let result = delete_filter
+            .build_equality_delete_predicate(&file_scan_task)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected success with Binary type support, but got error: {:?}",
             result.err()
         );
     }
