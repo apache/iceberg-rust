@@ -40,10 +40,19 @@ pub const RESERVED_COL_NAME_FILE: &str = "_file";
 pub fn get_metadata_column_name(field_id: i32) -> Result<&'static str> {
     match field_id {
         RESERVED_FIELD_ID_FILE => Ok(RESERVED_COL_NAME_FILE),
-        _ => Err(Error::new(
-            ErrorKind::Unexpected,
-            format!("Unknown/unsupported metadata field ID: {field_id}"),
-        )),
+        _ => {
+            if field_id > 2147483447 {
+                Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Unsupported metadata field ID: {field_id}"),
+                ))
+            } else {
+                Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Field ID {field_id} is not a metadata field"),
+                ))
+            }
+        }
     }
 }
 
