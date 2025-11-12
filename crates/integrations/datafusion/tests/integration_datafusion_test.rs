@@ -27,9 +27,13 @@ use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
+use iceberg::spec::{
+    NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionSpec,
+};
 use iceberg::test_utils::check_record_batches;
-use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{
+    Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent,
+};
 use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
@@ -806,6 +810,150 @@ async fn test_insert_into_nested() -> Result<()> {
             ]"#]],
         &[],
         Some("id"),
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into_partitioned() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_partitioned_write".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    // Create a schema with a partition column
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(3, "value", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+
+    // Create partition spec with identity transform on category
+    let partition_spec = UnboundPartitionSpec::builder()
+        .with_spec_id(0)
+        .add_partition_field(2, "category", Transform::Identity)?
+        .build();
+
+    // Create the partitioned table
+    let creation = TableCreation::builder()
+        .name("partitioned_table".to_string())
+        .location(temp_path())
+        .schema(schema)
+        .partition_spec(partition_spec)
+        .properties(HashMap::new())
+        .build();
+
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Insert data with multiple partition values in a single batch
+    let df = ctx
+        .sql(
+            r#"
+            INSERT INTO catalog.test_partitioned_write.partitioned_table 
+            VALUES 
+                (1, 'electronics', 'laptop'),
+                (2, 'electronics', 'phone'),
+                (3, 'books', 'novel'),
+                (4, 'books', 'textbook'),
+                (5, 'clothing', 'shirt')
+            "#,
+        )
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    let rows_inserted = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), 5);
+
+    // Refresh catalog to get updated table
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+    ctx.register_catalog("catalog", catalog);
+
+    // Query the table to verify data
+    let df = ctx
+        .sql("SELECT * FROM catalog.test_partitioned_write.partitioned_table ORDER BY id")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    // Verify the data - note that _partition column should NOT be present
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            Field { name: "category", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+            Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }"#]],
+        expect![[r#"
+            id: PrimitiveArray<Int32>
+            [
+              1,
+              2,
+              3,
+              4,
+              5,
+            ],
+            category: StringArray
+            [
+              "electronics",
+              "electronics",
+              "books",
+              "books",
+              "clothing",
+            ],
+            value: StringArray
+            [
+              "laptop",
+              "phone",
+              "novel",
+              "textbook",
+              "shirt",
+            ]"#]],
+        &[],
+        Some("id"),
+    );
+
+    // Verify that data files exist under correct partition paths
+    let table_ident = TableIdent::new(namespace.clone(), "partitioned_table".to_string());
+    let table = client.load_table(&table_ident).await?;
+    let table_location = table.metadata().location();
+    let file_io = table.file_io();
+
+    // List files under each expected partition path
+    let electronics_path = format!("{}/data/category=electronics", table_location);
+    let books_path = format!("{}/data/category=books", table_location);
+    let clothing_path = format!("{}/data/category=clothing", table_location);
+
+    // Verify partition directories exist and contain data files
+    assert!(
+        file_io.exists(&electronics_path).await?,
+        "Expected partition directory: {}",
+        electronics_path
+    );
+    assert!(
+        file_io.exists(&books_path).await?,
+        "Expected partition directory: {}",
+        books_path
+    );
+    assert!(
+        file_io.exists(&clothing_path).await?,
+        "Expected partition directory: {}",
+        clothing_path
     );
 
     Ok(())
