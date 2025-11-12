@@ -617,17 +617,14 @@ mod test {
                     NestedField::optional(
                         3,
                         "struct_col",
-                        Type::Struct(
-                            crate::spec::StructType::new(vec![
-                                NestedField::optional(
-                                    100,
-                                    "inner_field",
-                                    Type::Primitive(PrimitiveType::String),
-                                )
-                                .into(),
-                            ])
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(
+                                100,
+                                "inner_field",
+                                Type::Primitive(PrimitiveType::String),
+                            )
                             .into(),
-                        ),
+                        ])),
                     )
                     .into(),
                 ])
