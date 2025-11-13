@@ -15,16 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+//! This module contains Iceberg value types
 
-mod error;
-pub use error::*;
+pub(crate) mod datum;
+mod literal;
+mod map;
+mod primitive;
+pub(crate) mod serde;
+mod struct_value;
+mod temporal;
 
-pub mod physical_plan;
-mod schema;
-pub mod table;
-pub use table::table_provider_factory::IcebergTableProviderFactory;
-pub use table::*;
+#[cfg(test)]
+mod tests;
 
-pub(crate) mod task_writer;
+// Re-export all public types
+pub use datum::Datum;
+pub use literal::Literal;
+pub use map::Map;
+pub use primitive::PrimitiveLiteral;
+pub(crate) use serde::_serde::RawLiteral;
+pub use struct_value::Struct;

@@ -38,9 +38,6 @@ pub const PROJECTED_PARTITION_VALUE_COLUMN: &str = "_partition";
 /// The splitter supports two modes for obtaining partition values:
 /// - **Computed mode** (`calculator` is `Some`): Computes partition values from source columns using transforms
 /// - **Pre-computed mode** (`calculator` is `None`): Expects a `_partition` column in the input batch
-// # TODO
-// Remove this after partition writer supported.
-#[allow(dead_code)]
 pub struct RecordBatchPartitionSplitter {
     schema: SchemaRef,
     partition_spec: PartitionSpecRef,
@@ -48,9 +45,6 @@ pub struct RecordBatchPartitionSplitter {
     partition_type: StructType,
 }
 
-// # TODO
-// Remove this after partition writer supported.
-#[allow(dead_code)]
 impl RecordBatchPartitionSplitter {
     /// Create a new RecordBatchPartitionSplitter.
     ///
@@ -65,7 +59,7 @@ impl RecordBatchPartitionSplitter {
     /// # Returns
     ///
     /// Returns a new `RecordBatchPartitionSplitter` instance or an error if initialization fails.
-    pub fn new(
+    pub fn try_new(
         iceberg_schema: SchemaRef,
         partition_spec: PartitionSpecRef,
         calculator: Option<PartitionValueCalculator>,
@@ -93,12 +87,12 @@ impl RecordBatchPartitionSplitter {
     /// # Returns
     ///
     /// Returns a new `RecordBatchPartitionSplitter` instance or an error if initialization fails.
-    pub fn new_with_computed_values(
+    pub fn try_new_with_computed_values(
         iceberg_schema: SchemaRef,
         partition_spec: PartitionSpecRef,
     ) -> Result<Self> {
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &iceberg_schema)?;
-        Self::new(iceberg_schema, partition_spec, Some(calculator))
+        Self::try_new(iceberg_schema, partition_spec, Some(calculator))
     }
 
     /// Create a new RecordBatchPartitionSplitter expecting pre-computed partition values.
@@ -114,11 +108,11 @@ impl RecordBatchPartitionSplitter {
     /// # Returns
     ///
     /// Returns a new `RecordBatchPartitionSplitter` instance or an error if initialization fails.
-    pub fn new_with_precomputed_values(
+    pub fn try_new_with_precomputed_values(
         iceberg_schema: SchemaRef,
         partition_spec: PartitionSpecRef,
     ) -> Result<Self> {
-        Self::new(iceberg_schema, partition_spec, None)
+        Self::try_new(iceberg_schema, partition_spec, None)
     }
 
     /// Split the record batch into multiple record batches based on the partition spec.
@@ -267,9 +261,11 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let partition_splitter =
-            RecordBatchPartitionSplitter::new_with_computed_values(schema.clone(), partition_spec)
-                .expect("Failed to create splitter");
+        let partition_splitter = RecordBatchPartitionSplitter::try_new_with_computed_values(
+            schema.clone(),
+            partition_spec,
+        )
+        .expect("Failed to create splitter");
 
         let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
         let id_array = Int32Array::from(vec![1, 2, 1, 3, 2, 3, 1]);
@@ -398,7 +394,7 @@ mod tests {
         ]));
 
         // Create splitter expecting pre-computed partition column
-        let partition_splitter = RecordBatchPartitionSplitter::new_with_precomputed_values(
+        let partition_splitter = RecordBatchPartitionSplitter::try_new_with_precomputed_values(
             schema.clone(),
             partition_spec,
         )
