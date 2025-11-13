@@ -543,7 +543,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{
+        ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+    };
     use arrow_schema::{DataType, Field, Fields};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -552,6 +554,8 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::scan::FileScanTaskDeleteFile;
+    use crate::spec::{DataContentType, Schema};
 
     #[tokio::test]
     async fn test_delete_file_loader_parse_equality_deletes() {
@@ -567,7 +571,7 @@ mod tests {
             .await
             .expect("could not get batch stream");
 
-        let eq_ids = HashSet::from_iter(vec![2, 3, 4, 6]);
+        let eq_ids = HashSet::from_iter(vec![2, 3, 4, 6, 8]);
 
         let parsed_eq_delete = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
             record_batch_stream,
@@ -577,7 +581,7 @@ mod tests {
         .expect("error parsing batch stream");
         println!("{parsed_eq_delete}");
 
-        let expected = "((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) AND ((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5))".to_string();
+        let expected = "(((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) OR (b != 62696E6172795F64617461)) AND (((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5)) OR (b IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
     }
@@ -611,6 +615,9 @@ mod tests {
             ),
         ]));
 
+        let col_b_vals = vec![Some(&b"binary_data"[..]), None];
+        let col_b = Arc::new(BinaryArray::from(col_b_vals)) as ArrayRef;
+
         let equality_delete_schema = {
             let struct_field = DataType::Struct(Fields::from(vec![
                 simple_field("sa", DataType::Int32, false, "6"),
@@ -628,12 +635,13 @@ mod tests {
                     (PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string()),
                 ])),
                 simple_field("s", struct_field, false, "5"),
+                simple_field("b", DataType::Binary, true, "8"),
             ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
 
         let equality_deletes_to_write = RecordBatch::try_new(equality_delete_schema.clone(), vec![
-            col_y, col_z, col_a, col_s,
+            col_y, col_z, col_a, col_s, col_b,
         ])
         .unwrap();
 

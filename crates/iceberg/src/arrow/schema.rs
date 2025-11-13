@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
-    BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array, FixedSizeBinaryArray,
-    Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
+    BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
@@ -677,6 +677,9 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Arc::new(StringArray::new_scalar(value.as_str())))
+        }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(value)) => {
+            Ok(Arc::new(BinaryArray::new_scalar(value.as_slice())))
         }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
             Ok(Arc::new(Date32Array::new_scalar(*value)))
@@ -1813,6 +1816,14 @@ mod tests {
             let array = array.as_any().downcast_ref::<StringArray>().unwrap();
             assert!(is_scalar);
             assert_eq!(array.value(0), "abc");
+        }
+        {
+            let datum = Datum::binary(vec![1, 2, 3, 4]);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), &[1, 2, 3, 4]);
         }
         {
             let datum = Datum::date(42);
