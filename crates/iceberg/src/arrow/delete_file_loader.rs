@@ -20,7 +20,7 @@ use std::sync::Arc;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::arrow::ArrowReader;
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{Schema, SchemaRef};
@@ -82,7 +82,7 @@ impl BasicDeleteFileLoader {
         equality_ids: &[i32],
     ) -> Result<ArrowRecordBatchStream> {
         let mut record_batch_transformer =
-            RecordBatchTransformer::build(target_schema.clone(), equality_ids);
+            RecordBatchTransformerBuilder::new(target_schema.clone(), equality_ids).build();
 
         let record_batch_stream = record_batch_stream.map(move |record_batch| {
             record_batch.and_then(|record_batch| {
