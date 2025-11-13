@@ -27,6 +27,7 @@ use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
+use crate::transaction::validate::SnapshotValidator;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
@@ -90,6 +91,9 @@ impl TransactionAction for FastAppendAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            vec![],
+            vec![],
+            vec![],
         );
 
         // validate added files
@@ -110,6 +114,8 @@ impl TransactionAction for FastAppendAction {
 
 struct FastAppendOperation;
 
+impl SnapshotValidator for FastAppendOperation {}
+
 impl SnapshotProduceOperation for FastAppendOperation {
     fn operation(&self) -> Operation {
         Operation::Append
@@ -124,7 +130,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
