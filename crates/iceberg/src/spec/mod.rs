@@ -38,6 +38,7 @@ mod view_metadata;
 mod view_metadata_builder;
 mod view_version;
 
+pub use avro_util::CompressionSettings;
 pub use datatypes::*;
 pub use encrypted_key::*;
 pub use manifest::*;

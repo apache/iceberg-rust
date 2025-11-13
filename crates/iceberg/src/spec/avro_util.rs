@@ -20,6 +20,37 @@
 use apache_avro::Codec;
 use log::warn;
 
+/// Settings for compression codec and level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompressionSettings {
+    /// The compression codec name (e.g., "gzip", "zstd", "deflate", "none")
+    pub codec: String,
+    /// The compression level
+    pub level: u8,
+}
+
+impl CompressionSettings {
+    /// Create a new CompressionSettings with the specified codec and level.
+    pub fn new(codec: String, level: u8) -> Self {
+        Self { codec, level }
+    }
+
+    /// Convert to apache_avro::Codec using the codec_from_str helper function.
+    pub(crate) fn to_codec(&self) -> Codec {
+        codec_from_str(Some(&self.codec), self.level)
+    }
+}
+
+impl Default for CompressionSettings {
+    fn default() -> Self {
+        use crate::spec::TableProperties;
+        Self {
+            codec: TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            level: TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+        }
+    }
+}
+
 /// Convert codec name and level to apache_avro::Codec.
 /// Returns Codec::Null for unknown or unsupported codecs.
 ///

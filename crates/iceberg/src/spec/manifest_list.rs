@@ -31,7 +31,7 @@ use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
-use crate::spec::avro_util::codec_from_str;
+use crate::spec::avro_util::CompressionSettings;
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
 use crate::spec::manifest_list::_serde::ManifestFileV3;
 use crate::{Error, ErrorKind};
@@ -99,8 +99,7 @@ pub struct ManifestListWriter {
     sequence_number: i64,
     snapshot_id: i64,
     next_row_id: Option<u64>,
-    compression_codec: String,
-    compression_level: u8,
+    compression: CompressionSettings,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -121,8 +120,6 @@ impl ManifestListWriter {
 
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
-        use crate::spec::TableProperties;
-
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
             ("format-version".to_string(), "1".to_string()),
@@ -140,8 +137,7 @@ impl ManifestListWriter {
             0,
             snapshot_id,
             None,
-            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+            CompressionSettings::default(),
         )
     }
 
@@ -152,8 +148,6 @@ impl ManifestListWriter {
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
     ) -> Self {
-        use crate::spec::TableProperties;
-
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
             ("sequence-number".to_string(), sequence_number.to_string()),
@@ -172,8 +166,7 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             None,
-            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+            CompressionSettings::default(),
         )
     }
 
@@ -185,8 +178,6 @@ impl ManifestListWriter {
         sequence_number: i64,
         first_row_id: Option<u64>, // Always None for delete manifests
     ) -> Self {
-        use crate::spec::TableProperties;
-
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
             ("sequence-number".to_string(), sequence_number.to_string()),
@@ -211,15 +202,13 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             first_row_id,
-            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+            CompressionSettings::default(),
         )
     }
 
-    /// Set compression codec and level for the manifest list file.
-    pub fn with_compression(mut self, codec: String, level: u8) -> Self {
-        self.compression_codec = codec.clone();
-        self.compression_level = level;
+    /// Set compression settings for the manifest list file.
+    pub fn with_compression(mut self, compression: CompressionSettings) -> Self {
+        self.compression = compression.clone();
 
         // Recreate the avro_writer with the new codec
         let avro_schema = match self.format_version {
@@ -228,10 +217,10 @@ impl ManifestListWriter {
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
 
-        // Use helper function to get codec
-        let compression = codec_from_str(Some(codec.as_str()), level);
+        // Use CompressionSettings to get codec
+        let codec = compression.to_codec();
 
-        let new_writer = Writer::with_codec(avro_schema, Vec::new(), compression);
+        let new_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
 
         // Copy over existing metadata from the old writer
         // Unfortunately, we can't extract metadata from the old writer,
@@ -247,8 +236,7 @@ impl ManifestListWriter {
         sequence_number: i64,
         snapshot_id: i64,
         first_row_id: Option<u64>,
-        compression_codec: String,
-        compression_level: u8,
+        compression: CompressionSettings,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -256,8 +244,8 @@ impl ManifestListWriter {
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
 
-        // Use helper function to determine compression codec
-        let codec = codec_from_str(Some(compression_codec.as_str()), compression_level);
+        // Use CompressionSettings to determine compression codec
+        let codec = compression.to_codec();
 
         let mut avro_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
         for (key, value) in metadata {
@@ -272,8 +260,7 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             next_row_id: first_row_id,
-            compression_codec,
-            compression_level,
+            compression,
         }
     }
 

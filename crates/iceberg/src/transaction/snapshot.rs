@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    CompressionSettings, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
+    StructType, Summary, TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -205,8 +205,10 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let codec = table_props.avro_compression_codec.clone();
-        let level = table_props.avro_compression_level;
+        let compression = CompressionSettings::new(
+            table_props.avro_compression_codec.clone(),
+            table_props.avro_compression_level,
+        );
 
         let builder = ManifestWriterBuilder::new(
             output_file,
@@ -219,7 +221,7 @@ impl<'a> SnapshotProducer<'a> {
                 .as_ref()
                 .clone(),
         )
-        .with_compression(codec, level);
+        .with_compression(compression);
 
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
@@ -411,8 +413,10 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let codec = table_props.avro_compression_codec.clone();
-        let level = table_props.avro_compression_level;
+        let compression = CompressionSettings::new(
+            table_props.avro_compression_codec.clone(),
+            table_props.avro_compression_level,
+        );
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
@@ -440,7 +444,7 @@ impl<'a> SnapshotProducer<'a> {
                 Some(first_row_id),
             ),
         }
-        .with_compression(codec, level);
+        .with_compression(compression);
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files
         // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
