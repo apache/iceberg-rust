@@ -99,8 +99,8 @@ impl<'a> SnapshotProducer<'a> {
         }
     }
 
-    pub(crate) fn validate_added_data_files(&self, added_data_files: &[DataFile]) -> Result<()> {
-        for data_file in added_data_files {
+    pub(crate) fn validate_added_data_files(&self) -> Result<()> {
+        for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -123,11 +123,9 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    pub(crate) async fn validate_duplicate_files(
-        &self,
-        added_data_files: &[DataFile],
-    ) -> Result<()> {
-        let new_files: HashSet<&str> = added_data_files
+    pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
+        let new_files: HashSet<&str> = self
+            .added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
             .collect();
