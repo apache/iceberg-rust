@@ -125,8 +125,10 @@ mod tests {
 
     #[test]
     fn test_codec_from_str_deflate_levels() {
-        use apache_avro::{Writer, Schema, types::Record};
         use std::collections::HashMap;
+
+        use apache_avro::types::Record;
+        use apache_avro::{Schema, Writer};
 
         // Create a simple schema for testing
         let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
@@ -151,13 +153,20 @@ mod tests {
         // Level 0 (NoCompression) should be largest
         // Level 10 (UberCompression) should be smallest or equal to level 9
         assert!(sizes[&0] >= sizes[&1], "Level 0 should be >= level 1");
-        assert!(sizes[&1] >= sizes[&9] || sizes[&1] == sizes[&9], "Level 1 should be >= level 9");
-        assert!(sizes[&9] >= sizes[&10] || sizes[&9] == sizes[&10], "Level 9 should be >= level 10");
+        assert!(
+            sizes[&1] >= sizes[&9] || sizes[&1] == sizes[&9],
+            "Level 1 should be >= level 9"
+        );
+        assert!(
+            sizes[&9] >= sizes[&10] || sizes[&9] == sizes[&10],
+            "Level 9 should be >= level 10"
+        );
     }
 
     #[test]
     fn test_codec_from_str_zstd_levels() {
-        use apache_avro::{Writer, Schema, types::Record};
+        use apache_avro::types::Record;
+        use apache_avro::{Schema, Writer};
 
         // Create a simple schema for testing
         let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
@@ -196,12 +205,17 @@ mod tests {
         let encoded_22 = writer_22.into_inner().unwrap();
 
         // Both should produce the same size since 100 is clamped to 22
-        assert_eq!(encoded_100.len(), encoded_22.len(), "Level 100 should be clamped to 22");
+        assert_eq!(
+            encoded_100.len(),
+            encoded_22.len(),
+            "Level 100 should be clamped to 22"
+        );
     }
 
     #[test]
     fn test_compression_level_differences() {
-        use apache_avro::{Writer, Schema, types::Record};
+        use apache_avro::types::Record;
+        use apache_avro::{Schema, Writer};
 
         // Create a schema and data that will compress well
         let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
@@ -225,6 +239,11 @@ mod tests {
         let size_9 = writer_9.into_inner().unwrap().len();
 
         // Level 0 should produce larger output than level 9 for compressible data
-        assert!(size_0 > size_9, "NoCompression (level 0) should produce larger output than BestCompression (level 9): {} vs {}", size_0, size_9);
+        assert!(
+            size_0 > size_9,
+            "NoCompression (level 0) should produce larger output than BestCompression (level 9): {} vs {}",
+            size_0,
+            size_9
+        );
     }
 }

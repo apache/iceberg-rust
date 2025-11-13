@@ -443,7 +443,10 @@ impl ManifestWriter {
         };
 
         // Determine compression codec using helper function
-        let codec = codec_from_str(Some(self.compression_codec.as_str()), self.compression_level);
+        let codec = codec_from_str(
+            Some(self.compression_codec.as_str()),
+            self.compression_level,
+        );
 
         let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), codec);
         avro_writer.add_user_metadata(
