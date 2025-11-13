@@ -1818,6 +1818,14 @@ mod tests {
             assert_eq!(array.value(0), "abc");
         }
         {
+            let datum = Datum::binary(vec![1, 2, 3, 4]);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), &[1, 2, 3, 4]);
+        }
+        {
             let datum = Datum::date(42);
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
