@@ -21,7 +21,10 @@ on:
   push:
     branches:
       - main
+      - dev_rebase_main_20251111
   pull_request:
+    branches:
+      - dev_rebase_main_20251111
     paths:
       - '**'                              # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
