@@ -215,7 +215,7 @@ mod tests {
             writer.append(record).unwrap();
 
             let encoded = writer.into_inner().unwrap();
-            assert!(encoded.len() > 0, "Compression should produce output");
+            assert!(!encoded.is_empty(), "Compression should produce output");
         }
 
         // Test clamping - higher than 22 should be clamped to 22
