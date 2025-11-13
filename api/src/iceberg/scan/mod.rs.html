@@ -1777,21 +1777,27 @@
 <a href=#1777 id=1777 data-nosnippet>1777</a>            record_count: <span class="prelude-val">Some</span>(<span class="number">100</span>),
 <a href=#1778 id=1778 data-nosnippet>1778</a>            data_file_format: DataFileFormat::Parquet,
 <a href=#1779 id=1779 data-nosnippet>1779</a>            deletes: <span class="macro">vec!</span>[],
-<a href=#1780 id=1780 data-nosnippet>1780</a>        };
-<a href=#1781 id=1781 data-nosnippet>1781</a>        test_fn(task);
-<a href=#1782 id=1782 data-nosnippet>1782</a>
-<a href=#1783 id=1783 data-nosnippet>1783</a>        <span class="comment">// with predicate
-<a href=#1784 id=1784 data-nosnippet>1784</a>        </span><span class="kw">let </span>task = FileScanTask {
-<a href=#1785 id=1785 data-nosnippet>1785</a>            data_file_path: <span class="string">"data_file_path"</span>.to_string(),
-<a href=#1786 id=1786 data-nosnippet>1786</a>            start: <span class="number">0</span>,
-<a href=#1787 id=1787 data-nosnippet>1787</a>            length: <span class="number">100</span>,
-<a href=#1788 id=1788 data-nosnippet>1788</a>            project_field_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>],
-<a href=#1789 id=1789 data-nosnippet>1789</a>            predicate: <span class="prelude-val">Some</span>(BoundPredicate::AlwaysTrue),
-<a href=#1790 id=1790 data-nosnippet>1790</a>            schema,
-<a href=#1791 id=1791 data-nosnippet>1791</a>            record_count: <span class="prelude-val">None</span>,
-<a href=#1792 id=1792 data-nosnippet>1792</a>            data_file_format: DataFileFormat::Avro,
-<a href=#1793 id=1793 data-nosnippet>1793</a>            deletes: <span class="macro">vec!</span>[],
-<a href=#1794 id=1794 data-nosnippet>1794</a>        };
-<a href=#1795 id=1795 data-nosnippet>1795</a>        test_fn(task);
-<a href=#1796 id=1796 data-nosnippet>1796</a>    }
-<a href=#1797 id=1797 data-nosnippet>1797</a>}</code></pre></div></section></main></body></html>
+<a href=#1780 id=1780 data-nosnippet>1780</a>            partition: <span class="prelude-val">None</span>,
+<a href=#1781 id=1781 data-nosnippet>1781</a>            partition_spec: <span class="prelude-val">None</span>,
+<a href=#1782 id=1782 data-nosnippet>1782</a>            name_mapping: <span class="prelude-val">None</span>,
+<a href=#1783 id=1783 data-nosnippet>1783</a>        };
+<a href=#1784 id=1784 data-nosnippet>1784</a>        test_fn(task);
+<a href=#1785 id=1785 data-nosnippet>1785</a>
+<a href=#1786 id=1786 data-nosnippet>1786</a>        <span class="comment">// with predicate
+<a href=#1787 id=1787 data-nosnippet>1787</a>        </span><span class="kw">let </span>task = FileScanTask {
+<a href=#1788 id=1788 data-nosnippet>1788</a>            data_file_path: <span class="string">"data_file_path"</span>.to_string(),
+<a href=#1789 id=1789 data-nosnippet>1789</a>            start: <span class="number">0</span>,
+<a href=#1790 id=1790 data-nosnippet>1790</a>            length: <span class="number">100</span>,
+<a href=#1791 id=1791 data-nosnippet>1791</a>            project_field_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>],
+<a href=#1792 id=1792 data-nosnippet>1792</a>            predicate: <span class="prelude-val">Some</span>(BoundPredicate::AlwaysTrue),
+<a href=#1793 id=1793 data-nosnippet>1793</a>            schema,
+<a href=#1794 id=1794 data-nosnippet>1794</a>            record_count: <span class="prelude-val">None</span>,
+<a href=#1795 id=1795 data-nosnippet>1795</a>            data_file_format: DataFileFormat::Avro,
+<a href=#1796 id=1796 data-nosnippet>1796</a>            deletes: <span class="macro">vec!</span>[],
+<a href=#1797 id=1797 data-nosnippet>1797</a>            partition: <span class="prelude-val">None</span>,
+<a href=#1798 id=1798 data-nosnippet>1798</a>            partition_spec: <span class="prelude-val">None</span>,
+<a href=#1799 id=1799 data-nosnippet>1799</a>            name_mapping: <span class="prelude-val">None</span>,
+<a href=#1800 id=1800 data-nosnippet>1800</a>        };
+<a href=#1801 id=1801 data-nosnippet>1801</a>        test_fn(task);
+<a href=#1802 id=1802 data-nosnippet>1802</a>    }
+<a href=#1803 id=1803 data-nosnippet>1803</a>}</code></pre></div></section></main></body></html>

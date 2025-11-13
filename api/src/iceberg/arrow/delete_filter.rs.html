@@ -341,37 +341,43 @@
 <a href=#341 id=341 data-nosnippet>341</a>                project_field_ids: <span class="macro">vec!</span>[],
 <a href=#342 id=342 data-nosnippet>342</a>                predicate: <span class="prelude-val">None</span>,
 <a href=#343 id=343 data-nosnippet>343</a>                deletes: <span class="macro">vec!</span>[pos_del_1, pos_del_2.clone()],
-<a href=#344 id=344 data-nosnippet>344</a>            },
-<a href=#345 id=345 data-nosnippet>345</a>            FileScanTask {
-<a href=#346 id=346 data-nosnippet>346</a>                start: <span class="number">0</span>,
-<a href=#347 id=347 data-nosnippet>347</a>                length: <span class="number">0</span>,
-<a href=#348 id=348 data-nosnippet>348</a>                record_count: <span class="prelude-val">None</span>,
-<a href=#349 id=349 data-nosnippet>349</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#350 id=350 data-nosnippet>350</a>                data_file_format: DataFileFormat::Parquet,
-<a href=#351 id=351 data-nosnippet>351</a>                schema: data_file_schema.clone(),
-<a href=#352 id=352 data-nosnippet>352</a>                project_field_ids: <span class="macro">vec!</span>[],
-<a href=#353 id=353 data-nosnippet>353</a>                predicate: <span class="prelude-val">None</span>,
-<a href=#354 id=354 data-nosnippet>354</a>                deletes: <span class="macro">vec!</span>[pos_del_3],
-<a href=#355 id=355 data-nosnippet>355</a>            },
-<a href=#356 id=356 data-nosnippet>356</a>        ];
-<a href=#357 id=357 data-nosnippet>357</a>
-<a href=#358 id=358 data-nosnippet>358</a>        file_scan_tasks
-<a href=#359 id=359 data-nosnippet>359</a>    }
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_pos_del_schema() -&gt; ArrowSchemaRef {
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>fields = <span class="macro">vec!</span>[
-<a href=#363 id=363 data-nosnippet>363</a>            arrow_schema::Field::new(<span class="string">"file_path"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">false</span>)
-<a href=#364 id=364 data-nosnippet>364</a>                .with_metadata(HashMap::from([(
-<a href=#365 id=365 data-nosnippet>365</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#366 id=366 data-nosnippet>366</a>                    FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-<a href=#367 id=367 data-nosnippet>367</a>                )])),
-<a href=#368 id=368 data-nosnippet>368</a>            arrow_schema::Field::new(<span class="string">"pos"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(
-<a href=#369 id=369 data-nosnippet>369</a>                HashMap::from([(
-<a href=#370 id=370 data-nosnippet>370</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#371 id=371 data-nosnippet>371</a>                    FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-<a href=#372 id=372 data-nosnippet>372</a>                )]),
-<a href=#373 id=373 data-nosnippet>373</a>            ),
-<a href=#374 id=374 data-nosnippet>374</a>        ];
-<a href=#375 id=375 data-nosnippet>375</a>        Arc::new(arrow_schema::Schema::new(fields))
-<a href=#376 id=376 data-nosnippet>376</a>    }
-<a href=#377 id=377 data-nosnippet>377</a>}</code></pre></div></section></main></body></html>
+<a href=#344 id=344 data-nosnippet>344</a>                partition: <span class="prelude-val">None</span>,
+<a href=#345 id=345 data-nosnippet>345</a>                partition_spec: <span class="prelude-val">None</span>,
+<a href=#346 id=346 data-nosnippet>346</a>                name_mapping: <span class="prelude-val">None</span>,
+<a href=#347 id=347 data-nosnippet>347</a>            },
+<a href=#348 id=348 data-nosnippet>348</a>            FileScanTask {
+<a href=#349 id=349 data-nosnippet>349</a>                start: <span class="number">0</span>,
+<a href=#350 id=350 data-nosnippet>350</a>                length: <span class="number">0</span>,
+<a href=#351 id=351 data-nosnippet>351</a>                record_count: <span class="prelude-val">None</span>,
+<a href=#352 id=352 data-nosnippet>352</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#353 id=353 data-nosnippet>353</a>                data_file_format: DataFileFormat::Parquet,
+<a href=#354 id=354 data-nosnippet>354</a>                schema: data_file_schema.clone(),
+<a href=#355 id=355 data-nosnippet>355</a>                project_field_ids: <span class="macro">vec!</span>[],
+<a href=#356 id=356 data-nosnippet>356</a>                predicate: <span class="prelude-val">None</span>,
+<a href=#357 id=357 data-nosnippet>357</a>                deletes: <span class="macro">vec!</span>[pos_del_3],
+<a href=#358 id=358 data-nosnippet>358</a>                partition: <span class="prelude-val">None</span>,
+<a href=#359 id=359 data-nosnippet>359</a>                partition_spec: <span class="prelude-val">None</span>,
+<a href=#360 id=360 data-nosnippet>360</a>                name_mapping: <span class="prelude-val">None</span>,
+<a href=#361 id=361 data-nosnippet>361</a>            },
+<a href=#362 id=362 data-nosnippet>362</a>        ];
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a>        file_scan_tasks
+<a href=#365 id=365 data-nosnippet>365</a>    }
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_pos_del_schema() -&gt; ArrowSchemaRef {
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span>fields = <span class="macro">vec!</span>[
+<a href=#369 id=369 data-nosnippet>369</a>            arrow_schema::Field::new(<span class="string">"file_path"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">false</span>)
+<a href=#370 id=370 data-nosnippet>370</a>                .with_metadata(HashMap::from([(
+<a href=#371 id=371 data-nosnippet>371</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#372 id=372 data-nosnippet>372</a>                    FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
+<a href=#373 id=373 data-nosnippet>373</a>                )])),
+<a href=#374 id=374 data-nosnippet>374</a>            arrow_schema::Field::new(<span class="string">"pos"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(
+<a href=#375 id=375 data-nosnippet>375</a>                HashMap::from([(
+<a href=#376 id=376 data-nosnippet>376</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#377 id=377 data-nosnippet>377</a>                    FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
+<a href=#378 id=378 data-nosnippet>378</a>                )]),
+<a href=#379 id=379 data-nosnippet>379</a>            ),
+<a href=#380 id=380 data-nosnippet>380</a>        ];
+<a href=#381 id=381 data-nosnippet>381</a>        Arc::new(arrow_schema::Schema::new(fields))
+<a href=#382 id=382 data-nosnippet>382</a>    }
+<a href=#383 id=383 data-nosnippet>383</a>}</code></pre></div></section></main></body></html>
