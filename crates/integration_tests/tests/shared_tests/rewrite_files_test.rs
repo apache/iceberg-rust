@@ -42,11 +42,8 @@ use crate::shared_tests::{random_ns, test_schema};
 // Helper function to create a data file writer builder
 fn create_data_file_writer_builder(
     table: &Table,
-) -> DataFileWriterBuilder<
-    ParquetWriterBuilder,
-    DefaultLocationGenerator,
-    DefaultFileNameGenerator,
-> {
+) -> DataFileWriterBuilder<ParquetWriterBuilder, DefaultLocationGenerator, DefaultFileNameGenerator>
+{
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
         "test".to_string(),
@@ -445,10 +442,7 @@ async fn test_partition_spec_id_in_manifest() {
     // commit result
     let mut data_files_vec = Vec::default();
 
-    async fn build_data_file_f(
-        schema: Arc<arrow_schema::Schema>,
-        table: &Table,
-    ) -> DataFile {
+    async fn build_data_file_f(schema: Arc<arrow_schema::Schema>, table: &Table) -> DataFile {
         let data_file_writer_builder = create_data_file_writer_builder(table);
         let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
         let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
@@ -465,11 +459,7 @@ async fn test_partition_spec_id_in_manifest() {
     }
 
     for _ in 0..10 {
-        let data_file = build_data_file_f(
-            schema.clone(),
-            &table,
-        )
-        .await;
+        let data_file = build_data_file_f(schema.clone(), &table).await;
         data_files_vec.push(data_file.clone());
         let tx = Transaction::new(&table);
         let append_action = tx.fast_append().add_data_files(vec![data_file]);

@@ -168,13 +168,13 @@ impl FileIO {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
-        
+
         // ADLS requires append mode for writes
         #[cfg(feature = "storage-azdls")]
         let append_file = matches!(self.inner.as_ref(), Storage::Azdls { .. });
         #[cfg(not(feature = "storage-azdls"))]
         let append_file = false;
-        
+
         Ok(OutputFile {
             op,
             path,
