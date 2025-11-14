@@ -144,6 +144,7 @@ impl FileIO {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
+
         Ok(InputFile {
             op,
             path,
@@ -160,10 +161,18 @@ impl FileIO {
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
+
+        // ADLS requires append mode for writes
+        #[cfg(feature = "storage-azdls")]
+        let append_file = matches!(self.inner.as_ref(), Storage::Azdls { .. });
+        #[cfg(not(feature = "storage-azdls"))]
+        let append_file = false;
+
         Ok(OutputFile {
             op,
             path,
             relative_path_pos,
+            append_file,
         })
     }
 }
@@ -409,6 +418,8 @@ pub struct OutputFile {
     path: String,
     // Relative path of file to uri, starts at [`relative_path_pos`]
     relative_path_pos: usize,
+    // Whether to use append mode for writes (required for some storage backends like AZDLS)
+    append_file: bool,
 }
 
 impl OutputFile {
@@ -456,9 +467,13 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        Ok(Box::new(
-            self.op.writer(&self.path[self.relative_path_pos..]).await?,
-        ))
+        let writer = self
+            .op
+            .writer_with(&self.path[self.relative_path_pos..])
+            .append(self.append_file)
+            .await?;
+
+        Ok(Box::new(writer))
     }
 }
 
