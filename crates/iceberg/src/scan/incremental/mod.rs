@@ -53,8 +53,10 @@ pub struct IncrementalTableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to `None`, which means all columns.
     column_names: Option<Vec<String>>,
-    from_snapshot_id: i64,
-    to_snapshot_id: i64,
+    // None means scan from the first snapshot (inclusive)
+    from_snapshot_id: Option<i64>,
+    // None means scan to the current/last snapshot
+    to_snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
@@ -62,7 +64,11 @@ pub struct IncrementalTableScanBuilder<'a> {
 }
 
 impl<'a> IncrementalTableScanBuilder<'a> {
-    pub(crate) fn new(table: &'a Table, from_snapshot_id: i64, to_snapshot_id: i64) -> Self {
+    pub(crate) fn new(
+        table: &'a Table,
+        from_snapshot_id: Option<i64>,
+        to_snapshot_id: Option<i64>,
+    ) -> Self {
         let num_cpus = available_parallelism().get();
         Self {
             table,
@@ -107,13 +113,13 @@ impl<'a> IncrementalTableScanBuilder<'a> {
 
     /// Set the `from_snapshot_id` for the incremental scan.
     pub fn from_snapshot_id(mut self, from_snapshot_id: i64) -> Self {
-        self.from_snapshot_id = from_snapshot_id;
+        self.from_snapshot_id = Some(from_snapshot_id);
         self
     }
 
     /// Set the `to_snapshot_id` for the incremental scan.
     pub fn to_snapshot_id(mut self, to_snapshot_id: i64) -> Self {
-        self.to_snapshot_id = to_snapshot_id;
+        self.to_snapshot_id = Some(to_snapshot_id);
         self
     }
 
@@ -137,36 +143,69 @@ impl<'a> IncrementalTableScanBuilder<'a> {
 
     /// Build the incremental table scan.
     pub fn build(self) -> Result<IncrementalTableScan> {
-        let snapshot_from: Arc<Snapshot> = self
-            .table
-            .metadata()
-            .snapshot_by_id(self.from_snapshot_id)
+        let metadata = self.table.metadata();
+
+        // Resolve to_snapshot_id: if None, use the current (latest) snapshot
+        let to_snapshot_id = if let Some(id) = self.to_snapshot_id {
+            id
+        } else {
+            metadata
+                .current_snapshot()
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "No current snapshot found"))?
+                .snapshot_id()
+        };
+
+        let snapshot_to: Arc<Snapshot> = metadata
+            .snapshot_by_id(to_snapshot_id)
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Snapshot with id {} not found", self.from_snapshot_id),
+                    format!("Snapshot with id {} not found", to_snapshot_id),
                 )
             })?
             .clone();
 
-        let snapshot_to: Arc<Snapshot> = self
-            .table
-            .metadata()
-            .snapshot_by_id(self.to_snapshot_id)
-            .ok_or_else(|| {
+        // Determine oldest_snapshot_id for ancestors_between
+        // If from was None, include root snapshot by passing None to ancestors_between
+        // If from was Some(id), exclude that snapshot by passing Some(id)
+        let oldest_snapshot_id = if let Some(from_id) = self.from_snapshot_id {
+            // Validate the from snapshot exists
+            let _ = metadata.snapshot_by_id(from_id).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Snapshot with id {} not found", self.to_snapshot_id),
+                    format!("Snapshot with id {} not found", from_id),
                 )
-            })?
-            .clone();
+            })?;
+            Some(from_id)
+        } else {
+            None
+        };
 
         let snapshots = ancestors_between(
             &self.table.metadata_ref(),
             snapshot_to.snapshot_id(),
-            Some(snapshot_from.snapshot_id()),
+            oldest_snapshot_id,
         )
         .collect_vec();
+
+        // Get the from_snapshot for the plan context
+        // This is either the user-specified snapshot or the root snapshot
+        let from_snapshot_id = oldest_snapshot_id.unwrap_or_else(|| {
+            snapshots
+                .last()
+                .map(|s| s.snapshot_id())
+                .expect("snapshots should not be empty")
+        });
+
+        let snapshot_from: Arc<Snapshot> = metadata
+            .snapshot_by_id(from_snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot with id {} not found", from_snapshot_id),
+                )
+            })?
+            .clone();
 
         if !snapshots.is_empty() {
             assert_eq!(
