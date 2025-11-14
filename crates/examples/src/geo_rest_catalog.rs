@@ -22,7 +22,7 @@ use parquet::file::properties::WriterProperties;
 
 static REST_URI: &str = "http://localhost:8181";
 static NAMESPACE: &str = "ns1";
-static TABLE_NAME: &str = "cities_table";
+static TABLE_NAME: &str = "cities_table2";
 
 #[derive(Debug, Clone)]
 struct GeoFeature {
@@ -140,14 +140,31 @@ async fn main() {
             HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
         )
         .await
+        .map_err(|e| {
+            eprintln!("Failed to connect to REST catalog: {:?}", e);
+            eprintln!("Error: {}", e);
+            e
+        })
         .unwrap();
     println!("Connected to REST Catalog at {}", REST_URI);
 
     let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
-    if catalog.table_exists(&table_ident).await.unwrap() {
+
+    println!("Checking if table exists...");
+    let table_exists = catalog.table_exists(&table_ident).await.map_err(|e| {
+        eprintln!("Failed to check if table exists: {:?}", e);
+        eprintln!("Error: {}", e);
+        e
+    }).unwrap();
+
+    if table_exists {
         println!("Table {TABLE_NAME} already exists, dropping now.");
-        catalog.drop_table(&table_ident).await.unwrap();
+        catalog.drop_table(&table_ident).await.map_err(|e| {
+            eprintln!("Failed to drop table: {:?}", e);
+            eprintln!("Error: {}", e);
+            e
+        }).unwrap();
     }
 
     let iceberg_schema = Schema::builder()
@@ -219,9 +236,19 @@ async fn main() {
         .schema(iceberg_schema.clone())
         .properties(HashMap::from([("geo".to_string(), "geotestx".to_string())]))
         .build();
+
     let _created_table = catalog
         .create_table(&table_ident.namespace, table_creation)
         .await
+        .map_err(|e| {
+            eprintln!("\n=== FAILED TO CREATE TABLE ===");
+            eprintln!("Error type: {:?}", e);
+            eprintln!("Error message: {}", e);
+            eprintln!("Namespace: {:?}", table_ident.namespace);
+            eprintln!("Table name: {}", table_ident.name);
+            eprintln!("==============================\n");
+            e
+        })
         .unwrap();
     println!("Table {TABLE_NAME} created.");
     assert!(
@@ -296,7 +323,8 @@ async fn main() {
             .iter()
             .map(|f| f.properties.get("population").unwrap().as_str()),
     ));
-    let record_batch = RecordBatch::try_new(schema.clone(), vec![
+    //TODO: make write with credentials    
+    /*let record_batch = RecordBatch::try_new(schema.clone(), vec![
         ids,
         names,
         geometries_wkb,
@@ -310,8 +338,10 @@ async fn main() {
         populations,
     ])
     .unwrap();
+     
     data_file_writer.write(record_batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
+*/
 
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();
     println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
