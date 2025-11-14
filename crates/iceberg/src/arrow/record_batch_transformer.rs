@@ -763,8 +763,8 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array,
-        RecordBatch, StringArray,
+        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+        StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
