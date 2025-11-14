@@ -125,6 +125,47 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Include the _file metadata column in the scan.
+    ///
+    /// This is a convenience method that adds the _file column to the current selection.
+    /// If no columns are currently selected (select_all), this will select all columns plus _file.
+    /// If specific columns are selected, this adds _file to that selection.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use iceberg::table::Table;
+    /// # async fn example(table: Table) -> iceberg::Result<()> {
+    /// // Select id, name, and _file
+    /// let scan = table
+    ///     .scan()
+    ///     .select(["id", "name"])
+    ///     .with_file_path_column()
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_file_path_column(mut self) -> Self {
+        use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+
+        let mut columns = self.column_names.unwrap_or_else(|| {
+            // No explicit selection - get all column names from schema
+            self.table
+                .metadata()
+                .current_schema()
+                .as_struct()
+                .fields()
+                .iter()
+                .map(|f| f.name.clone())
+                .collect()
+        });
+
+        // Add _file column
+        columns.push(RESERVED_COL_NAME_FILE.to_string());
+
+        self.column_names = Some(columns);
+        self
+    }
+
     /// Set the snapshot to scan. When not set, it uses current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
