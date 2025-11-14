@@ -22,37 +22,71 @@
 //! during reading. Examples include the _file column (file path) and future
 //! columns like partition values or row numbers.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow_schema::{DataType, Field};
+use once_cell::sync::Lazy;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
 use crate::{Error, ErrorKind, Result};
 
 /// Reserved field ID for the file path (_file) column per Iceberg spec
-pub const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
+pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
-/// Returns the column name for a metadata field ID.
+/// Lazy-initialized Arrow Field definition for the _file metadata column.
+/// Uses Run-End Encoding for memory efficiency.
+static FILE_PATH_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
+    let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+    let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+    Arc::new(
+        Field::new(
+            RESERVED_COL_NAME_FILE,
+            DataType::RunEndEncoded(run_ends_field, values_field),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            RESERVED_FIELD_ID_FILE.to_string(),
+        )])),
+    )
+});
+
+/// Returns the Arrow Field definition for the _file metadata column.
+///
+/// # Returns
+/// A reference to the _file field definition (RunEndEncoded type)
+pub fn file_path_field() -> &'static Arc<Field> {
+    &FILE_PATH_FIELD
+}
+
+/// Returns the Arrow Field definition for a metadata field ID.
 ///
 /// # Arguments
 /// * `field_id` - The metadata field ID
 ///
 /// # Returns
-/// The name of the metadata column, or an error if the field ID is not recognized
-pub fn get_metadata_column_name(field_id: i32) -> Result<&'static str> {
+/// The Arrow Field definition for the metadata column, or an error if not a metadata field
+pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
     match field_id {
-        RESERVED_FIELD_ID_FILE => Ok(RESERVED_COL_NAME_FILE),
-        _ => {
-            if field_id > 2147483447 {
-                Err(Error::new(
-                    ErrorKind::Unexpected,
-                    format!("Unsupported metadata field ID: {field_id}"),
-                ))
-            } else {
-                Err(Error::new(
-                    ErrorKind::Unexpected,
-                    format!("Field ID {field_id} is not a metadata field"),
-                ))
-            }
+        RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_path_field())),
+        _ if is_metadata_field(field_id) => {
+            // Future metadata fields can be added here
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Metadata field ID {} recognized but field definition not implemented",
+                    field_id
+                ),
+            ))
         }
+        _ => Err(Error::new(
+            ErrorKind::Unexpected,
+            format!("Field ID {} is not a metadata field", field_id),
+        )),
     }
 }
 
