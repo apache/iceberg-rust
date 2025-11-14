@@ -763,7 +763,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array,
         RecordBatch, StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
