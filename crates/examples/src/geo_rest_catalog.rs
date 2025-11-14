@@ -1,21 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::types::Int32Type;
 use arrow_array::{
-    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, RecordBatch, StringArray,
+    ArrayRef, Float64Array, Int32Array, LargeBinaryArray, StringArray,
 };
 use futures::TryStreamExt;
-use geo_types::{Coord, Geometry, LineString, Point, Polygon, geometry};
+use geo_types::{Geometry, Point};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 use parquet::file::properties::WriterProperties;
@@ -152,19 +150,27 @@ async fn main() {
     let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
 
     println!("Checking if table exists...");
-    let table_exists = catalog.table_exists(&table_ident).await.map_err(|e| {
-        eprintln!("Failed to check if table exists: {:?}", e);
-        eprintln!("Error: {}", e);
-        e
-    }).unwrap();
+    let table_exists = catalog
+        .table_exists(&table_ident)
+        .await
+        .map_err(|e| {
+            eprintln!("Failed to check if table exists: {:?}", e);
+            eprintln!("Error: {}", e);
+            e
+        })
+        .unwrap();
 
     if table_exists {
         println!("Table {TABLE_NAME} already exists, dropping now.");
-        catalog.drop_table(&table_ident).await.map_err(|e| {
-            eprintln!("Failed to drop table: {:?}", e);
-            eprintln!("Error: {}", e);
-            e
-        }).unwrap();
+        catalog
+            .drop_table(&table_ident)
+            .await
+            .map_err(|e| {
+                eprintln!("Failed to drop table: {:?}", e);
+                eprintln!("Error: {}", e);
+                e
+            })
+            .unwrap();
     }
 
     let iceberg_schema = Schema::builder()
@@ -284,7 +290,7 @@ async fn main() {
         file_name_generator.clone(),
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
-    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
+    let data_file_writer = data_file_writer_builder.build(None).await.unwrap();
 
     let features = mock_sample_features();
     let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(features.iter().map(|f| f.id)));
@@ -323,25 +329,25 @@ async fn main() {
             .iter()
             .map(|f| f.properties.get("population").unwrap().as_str()),
     ));
-    //TODO: make write with credentials    
+    //TODO: make write with credentials
     /*let record_batch = RecordBatch::try_new(schema.clone(), vec![
-        ids,
-        names,
-        geometries_wkb,
-        geometry_types,
-        srids,
-        bbox_min_xs,
-        bbox_min_ys,
-        bbox_max_xs,
-        bbox_max_ys,
-        countries,
-        populations,
-    ])
-    .unwrap();
-     
-    data_file_writer.write(record_batch.clone()).await.unwrap();
-    let data_file = data_file_writer.close().await.unwrap();
-*/
+            ids,
+            names,
+            geometries_wkb,
+            geometry_types,
+            srids,
+            bbox_min_xs,
+            bbox_min_ys,
+            bbox_max_xs,
+            bbox_max_ys,
+            countries,
+            populations,
+        ])
+        .unwrap();
+
+        data_file_writer.write(record_batch.clone()).await.unwrap();
+        let data_file = data_file_writer.close().await.unwrap();
+    */
 
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();
     println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
