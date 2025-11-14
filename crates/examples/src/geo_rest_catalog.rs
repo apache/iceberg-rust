@@ -1,19 +1,34 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{
-    ArrayRef, Float64Array, Int32Array, LargeBinaryArray, StringArray,
-};
+use arrow_array::{ArrayRef, Float64Array, Int32Array, LargeBinaryArray, StringArray};
 use futures::TryStreamExt;
 use geo_types::{Geometry, Point};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::writer::IcebergWriterBuilder;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 use parquet::file::properties::WriterProperties;
@@ -21,6 +36,13 @@ use parquet::file::properties::WriterProperties;
 static REST_URI: &str = "http://localhost:8181";
 static NAMESPACE: &str = "ns1";
 static TABLE_NAME: &str = "cities_table2";
+
+//This is an example of creating and loading an table using a schema with
+// geo types via the Iceberg REST Catalog.
+//
+/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+/// the iceberg-rest catalog with `docker compose` in the official
+/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 
 #[derive(Debug, Clone)]
 struct GeoFeature {
