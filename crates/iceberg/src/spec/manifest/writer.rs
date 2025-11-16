@@ -65,6 +65,7 @@ impl ManifestWriterBuilder {
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
+        compression: CompressionSettings,
     ) -> Self {
         let location = output.location().to_owned();
         Self {
@@ -74,7 +75,7 @@ impl ManifestWriterBuilder {
             key_metadata,
             schema,
             partition_spec,
-            compression: CompressionSettings::default(),
+            compression,
         }
     }
 
@@ -98,12 +99,6 @@ impl ManifestWriterBuilder {
             partition_spec,
             compression: CompressionSettings::default(),
         }
-    }
-
-    /// Set compression settings for the manifest file.
-    pub fn with_compression(mut self, compression: CompressionSettings) -> Self {
-        self.compression = compression;
-        self
     }
 
     /// Build a [`ManifestWriter`] for format version 1.

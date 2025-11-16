@@ -277,8 +277,8 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-        )
-        .with_compression(compression);
+            compression,
+        );
 
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),

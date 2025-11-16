@@ -116,8 +116,8 @@ pub struct TableProperties {
     pub metadata_compression_codec: CompressionCodec,
     /// Compression codec for Avro files (manifests, manifest lists)
     pub avro_compression_codec: String,
-    /// Compression level for Avro files
-    pub avro_compression_level: u8,
+    /// Compression level for Avro files (None uses codec-specific defaults: gzip=9, zstd=1)
+    pub avro_compression_level: Option<u8>,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
@@ -244,8 +244,8 @@ impl TableProperties {
 
     /// Compression level for Avro files
     pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
-    /// Default Avro compression level (9 = BestCompression)
-    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: u8 = 9;
+    /// Default Avro compression level (None, uses codec-specific defaults: gzip=9, zstd=1)
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: Option<u8> = None;
 
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
@@ -345,11 +345,20 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
             )?,
-            avro_compression_level: parse_property(
-                props,
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
-            )?,
+            avro_compression_level: props
+                .get(TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL)
+                .map(|v| {
+                    v.parse::<u8>().map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Invalid value for {}: {e}",
+                                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL
+                            ),
+                        )
+                    })
+                })
+                .transpose()?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
@@ -511,7 +520,7 @@ mod tests {
             CompressionCodec::gzip_default()
         );
         assert_eq!(table_properties.avro_compression_codec, "zstd");
-        assert_eq!(table_properties.avro_compression_level, 3);
+        assert_eq!(table_properties.avro_compression_level, Some(3));
     }
 
     #[test]
@@ -902,5 +911,33 @@ mod tests {
         let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
         let tp = TableProperties::try_from(&props).unwrap();
         assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_table_properties_optional_compression_level() {
+        // Test that compression level is None when not specified
+        let props = HashMap::new();
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, None);
+
+        // Test that compression level is Some(value) when specified
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "5".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, Some(5));
+
+        // Test that invalid compression level returns error
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "invalid".to_string(),
+        )]);
+        let result = TableProperties::try_from(&props);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid value for write.avro.compression-level"));
     }
 }
