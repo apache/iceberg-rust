@@ -500,7 +500,7 @@ impl TableMetadata {
 
                 (compressed_data, new_location)
             }
-            "none" | "" => (json_data, metadata_location.as_ref().to_string()),
+            "uncompressed" | "" => (json_data, metadata_location.as_ref().to_string()),
             other => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,

@@ -34,6 +34,25 @@ where
     })
 }
 
+// Helper function to parse an optional property from a HashMap
+// If the property is not found, returns None
+fn parse_optional_property<T: std::str::FromStr>(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<T>, anyhow::Error>
+where
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    properties
+        .get(key)
+        .map(|value| {
+            value
+                .parse::<T>()
+                .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+        })
+        .transpose()
+}
+
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -53,8 +72,8 @@ pub struct TableProperties {
     pub metadata_compression_codec: String,
     /// Compression codec for Avro files (manifests, manifest lists)
     pub avro_compression_codec: String,
-    /// Compression level for Avro files
-    pub avro_compression_level: u8,
+    /// Compression level for Avro files (None uses codec-specific defaults: gzip=9, zstd=1)
+    pub avro_compression_level: Option<u8>,
 }
 
 impl TableProperties {
@@ -146,8 +165,8 @@ impl TableProperties {
 
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
-    /// Default metadata compression codec - none
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+    /// Default metadata compression codec - uncompressed
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "uncompressed";
 
     /// Compression codec for Avro files (manifests, manifest lists)
     pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
@@ -156,8 +175,8 @@ impl TableProperties {
 
     /// Compression level for Avro files
     pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
-    /// Default Avro compression level (9 = BestCompression)
-    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: u8 = 9;
+    /// Default Avro compression level (None, uses codec-specific defaults: gzip=9, zstd=1)
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: Option<u8> = None;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -206,10 +225,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
             )?,
-            avro_compression_level: parse_property(
+            avro_compression_level: parse_optional_property(
                 props,
                 TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
             )?,
         })
     }
@@ -277,7 +295,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(table_properties.metadata_compression_codec, "gzip");
         assert_eq!(table_properties.avro_compression_codec, "zstd");
-        assert_eq!(table_properties.avro_compression_level, 3);
+        assert_eq!(table_properties.avro_compression_level, Some(3));
     }
 
     #[test]
@@ -351,5 +369,55 @@ mod tests {
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
+    }
+
+    #[test]
+    fn test_parse_optional_property() {
+        // Test when key is not present - should return None
+        let props = HashMap::new();
+        let result: Option<u8> = parse_optional_property(&props, "missing-key").unwrap();
+        assert_eq!(result, None);
+
+        // Test when key is present with valid value - should return Some(value)
+        let props = HashMap::from([("test-key".to_string(), "42".to_string())]);
+        let result: Option<u8> = parse_optional_property(&props, "test-key").unwrap();
+        assert_eq!(result, Some(42));
+
+        // Test when key is present with invalid value - should return error
+        let props = HashMap::from([("test-key".to_string(), "invalid".to_string())]);
+        let result = parse_optional_property::<u8>(&props, "test-key");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid value for test-key"));
+    }
+
+    #[test]
+    fn test_table_properties_optional_compression_level() {
+        // Test that compression level is None when not specified
+        let props = HashMap::new();
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, None);
+
+        // Test that compression level is Some(value) when specified
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "5".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, Some(5));
+
+        // Test that invalid compression level returns error
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "invalid".to_string(),
+        )]);
+        let result = TableProperties::try_from(&props);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid value for write.avro.compression-level"));
     }
 }

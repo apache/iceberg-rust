@@ -119,7 +119,7 @@ impl ManifestListWriter {
     }
 
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
+    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>, compression_settings : CompressionSettings) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
             ("format-version".to_string(), "1".to_string()),
@@ -137,7 +137,7 @@ impl ManifestListWriter {
             0,
             snapshot_id,
             None,
-            CompressionSettings::default(),
+            compression_settings,
         )
     }
 
@@ -147,6 +147,7 @@ impl ManifestListWriter {
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
+        compression_settings : CompressionSettings
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -166,7 +167,7 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             None,
-            CompressionSettings::default(),
+            compression_settings,
         )
     }
 
@@ -177,6 +178,7 @@ impl ManifestListWriter {
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
         first_row_id: Option<u64>, // Always None for delete manifests
+        compression_settings : CompressionSettings
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -202,31 +204,8 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             first_row_id,
-            CompressionSettings::default(),
+            compression_settings,
         )
-    }
-
-    /// Set compression settings for the manifest list file.
-    pub fn with_compression(mut self, compression: CompressionSettings) -> Self {
-        self.compression = compression.clone();
-
-        // Recreate the avro_writer with the new codec
-        let avro_schema = match self.format_version {
-            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
-            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
-            FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
-        };
-
-        // Use CompressionSettings to get codec
-        let codec = compression.to_codec();
-
-        let new_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
-
-        // Copy over existing metadata from the old writer
-        // Unfortunately, we can't extract metadata from the old writer,
-        // so we'll need to handle this differently
-        self.avro_writer = new_writer;
-        self
     }
 
     fn new(

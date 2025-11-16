@@ -23,15 +23,15 @@ use log::warn;
 /// Settings for compression codec and level.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressionSettings {
-    /// The compression codec name (e.g., "gzip", "zstd", "deflate", "none")
+    /// The compression codec name (e.g., "gzip", "zstd", "deflate", "uncompressed")
     pub codec: String,
-    /// The compression level
-    pub level: u8,
+    /// The compression level (None uses codec-specific defaults: gzip=9, zstd=1)
+    pub level: Option<u8>,
 }
 
 impl CompressionSettings {
     /// Create a new CompressionSettings with the specified codec and level.
-    pub fn new(codec: String, level: u8) -> Self {
+    pub fn new(codec: String, level: Option<u8>) -> Self {
         Self { codec, level }
     }
 
@@ -46,7 +46,7 @@ impl Default for CompressionSettings {
         use crate::spec::TableProperties;
         Self {
             codec: TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-            level: TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT,
+            level: None,
         }
     }
 }
@@ -56,8 +56,8 @@ impl Default for CompressionSettings {
 ///
 /// # Arguments
 ///
-/// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "deflate", "none")
-/// * `level` - The compression level. For deflate/gzip:
+/// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "deflate", "uncompressed")
+/// * `level` - The compression level (None uses codec defaults: gzip=9, zstd=1). For deflate/gzip:
 ///   - 0: NoCompression
 ///   - 1: BestSpeed
 ///   - 9: BestCompression
@@ -66,9 +66,9 @@ impl Default for CompressionSettings {
 ///
 /// # Supported Codecs
 ///
-/// - `gzip` or `deflate`: Uses Deflate compression with specified level
-/// - `zstd`: Uses Zstandard compression (level clamped to valid zstd range)
-/// - `none` or `None`: No compression
+/// - `gzip` or `deflate`: Uses Deflate compression with specified level (default: 9)
+/// - `zstd`: Uses Zstandard compression (default: 1, level clamped to valid zstd range 0-22)
+/// - `uncompressed` or `None`: No compression
 /// - Any other value: Defaults to no compression (Codec::Null)
 ///
 /// # Compression Levels
@@ -79,16 +79,17 @@ impl Default for CompressionSettings {
 /// - Level 9: Best compression (slower, better compression)
 /// - Level 10: Uber compression (slowest, best compression)
 /// - Other: Default level (balanced speed/compression)
-pub(crate) fn codec_from_str(codec: Option<&str>, level: u8) -> Codec {
+pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
     use apache_avro::{DeflateSettings, ZstandardSettings};
 
     match codec {
         Some("gzip") | Some("deflate") => {
             // Map compression level to miniz_oxide::deflate::CompressionLevel
             // Reference: https://docs.rs/miniz_oxide/latest/miniz_oxide/deflate/enum.CompressionLevel.html
+            // Default level for gzip/deflate is 9 (BestCompression) to match Java
             use miniz_oxide::deflate::CompressionLevel;
 
-            let compression_level = match level {
+            let compression_level = match level.unwrap_or(9) {
                 0 => CompressionLevel::NoCompression,
                 1 => CompressionLevel::BestSpeed,
                 9 => CompressionLevel::BestCompression,
@@ -100,10 +101,11 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: u8) -> Codec {
         }
         Some("zstd") => {
             // Zstandard supports levels 0-22, clamp to valid range
-            let zstd_level = level.min(22);
+            // Default level for zstd is 1 to match Java
+            let zstd_level = level.unwrap_or(1).min(22);
             Codec::Zstandard(ZstandardSettings::new(zstd_level))
         }
-        Some("none") | None => Codec::Null,
+        Some("uncompressed") | None => Codec::Null,
         Some(unknown) => {
             warn!(
                 "Unrecognized compression codec '{}', using no compression (Codec::Null)",
@@ -117,41 +119,63 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: u8) -> Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apache_avro::{DeflateSettings, ZstandardSettings};
+    use miniz_oxide::deflate::CompressionLevel;
 
     #[test]
     fn test_codec_from_str_gzip() {
-        let codec = codec_from_str(Some("gzip"), 5);
-        assert!(matches!(codec, Codec::Deflate(_)));
+        let codec = codec_from_str(Some("gzip"), Some(5));
+        assert_eq!(
+            codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::DefaultLevel))
+        );
     }
 
     #[test]
     fn test_codec_from_str_deflate() {
-        let codec = codec_from_str(Some("deflate"), 9);
-        assert!(matches!(codec, Codec::Deflate(_)));
+        let codec = codec_from_str(Some("deflate"), Some(9));
+        assert_eq!(
+            codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
     }
 
     #[test]
     fn test_codec_from_str_zstd() {
-        let codec = codec_from_str(Some("zstd"), 3);
-        assert!(matches!(codec, Codec::Zstandard(_)));
+        let codec = codec_from_str(Some("zstd"), Some(3));
+        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(3)));
     }
 
     #[test]
-    fn test_codec_from_str_none() {
-        let codec = codec_from_str(Some("none"), 0);
+    fn test_codec_from_str_uncompressed() {
+        let codec = codec_from_str(Some("uncompressed"), None);
         assert!(matches!(codec, Codec::Null));
     }
 
     #[test]
     fn test_codec_from_str_null() {
-        let codec = codec_from_str(None, 0);
+        let codec = codec_from_str(None, None);
         assert!(matches!(codec, Codec::Null));
     }
 
     #[test]
     fn test_codec_from_str_unknown() {
-        let codec = codec_from_str(Some("unknown"), 1);
+        let codec = codec_from_str(Some("unknown"), Some(1));
         assert!(matches!(codec, Codec::Null));
+    }
+
+    #[test]
+    fn test_codec_from_str_gzip_default_level() {
+        // Test that None level defaults to 9 for gzip
+        let codec = codec_from_str(Some("gzip"), None);
+        assert_eq!(codec, Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression)));
+    }
+
+    #[test]
+    fn test_codec_from_str_zstd_default_level() {
+        // Test that None level defaults to 1 for zstd
+        let codec = codec_from_str(Some("zstd"), None);
+        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(1)));
     }
 
     #[test]
@@ -170,7 +194,7 @@ mod tests {
         // Test that different compression levels produce different output sizes
         let mut sizes = HashMap::new();
         for level in [0, 1, 5, 9, 10] {
-            let codec = codec_from_str(Some("gzip"), level);
+            let codec = codec_from_str(Some("gzip"), Some(level));
             let mut writer = Writer::with_codec(&schema, Vec::new(), codec);
 
             let mut record = Record::new(&schema).unwrap();
@@ -205,7 +229,7 @@ mod tests {
 
         // Test various levels by checking they produce valid codecs
         for level in [0, 3, 15, 22] {
-            let codec = codec_from_str(Some("zstd"), level);
+            let codec = codec_from_str(Some("zstd"), Some(level));
             assert!(matches!(codec, Codec::Zstandard(_)));
 
             // Verify the codec actually works by compressing data
@@ -219,8 +243,8 @@ mod tests {
         }
 
         // Test clamping - higher than 22 should be clamped to 22
-        let codec_100 = codec_from_str(Some("zstd"), 100);
-        let codec_22 = codec_from_str(Some("zstd"), 22);
+        let codec_100 = codec_from_str(Some("zstd"), Some(100));
+        let codec_22 = codec_from_str(Some("zstd"), Some(22));
 
         // Both should work and produce similar results
         let mut writer_100 = Writer::with_codec(&schema, Vec::new(), codec_100);
@@ -255,14 +279,14 @@ mod tests {
         let test_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
         // Test gzip level 0 (no compression) vs level 9 (best compression)
-        let codec_0 = codec_from_str(Some("gzip"), 0);
+        let codec_0 = codec_from_str(Some("gzip"), Some(0));
         let mut writer_0 = Writer::with_codec(&schema, Vec::new(), codec_0);
         let mut record_0 = Record::new(&schema).unwrap();
         record_0.put("field", test_str);
         writer_0.append(record_0).unwrap();
         let size_0 = writer_0.into_inner().unwrap().len();
 
-        let codec_9 = codec_from_str(Some("gzip"), 9);
+        let codec_9 = codec_from_str(Some("gzip"), Some(9));
         let mut writer_9 = Writer::with_codec(&schema, Vec::new(), codec_9);
         let mut record_9 = Record::new(&schema).unwrap();
         record_9.put("field", test_str);
