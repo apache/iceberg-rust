@@ -479,14 +479,14 @@ impl<'a> SnapshotProducer<'a> {
                 output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 output_file,
