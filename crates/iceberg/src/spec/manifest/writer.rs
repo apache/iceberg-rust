@@ -79,28 +79,6 @@ impl ManifestWriterBuilder {
         }
     }
 
-    /// Create a new builder from an [`EncryptedOutputFile`].
-    ///
-    /// Use this when writing manifests with transparent encryption.
-    pub fn new_from_encrypted(
-        encrypted_output: EncryptedOutputFile,
-        snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
-        schema: SchemaRef,
-        partition_spec: PartitionSpec,
-    ) -> Self {
-        let location = encrypted_output.location().to_owned();
-        Self {
-            writer_future: Box::pin(async move { encrypted_output.writer().await }),
-            location,
-            snapshot_id,
-            key_metadata,
-            schema,
-            partition_spec,
-            compression: CompressionSettings::default(),
-        }
-    }
-
     /// Build a [`ManifestWriter`] for format version 1.
     pub fn build_v1(self) -> ManifestWriter {
         let metadata = ManifestMetadata::builder()
@@ -753,6 +731,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionSettings::default(),
         )
         .build_v2_data();
         writer.add_entry(entries[0].clone()).unwrap();

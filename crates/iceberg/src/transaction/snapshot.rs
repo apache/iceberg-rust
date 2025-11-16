@@ -457,12 +457,10 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
-        let writer = self
+        let output_file = self
             .table
             .file_io()
-            .new_output(manifest_list_path.clone())?
-            .writer()
-            .await?;
+            .new_output(manifest_list_path.clone())?;
         let table_props =
             TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
                 Error::new(
@@ -478,25 +476,27 @@ impl<'a> SnapshotProducer<'a> {
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
+                compression.clone(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
+                compression.clone(),
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
+                compression,
             ),
-        }
-        .with_compression(compression);
+        };
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files
         // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary

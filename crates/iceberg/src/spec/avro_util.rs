@@ -122,11 +122,10 @@ mod tests {
     use std::collections::HashMap;
 
     use apache_avro::types::Record;
-    use apache_avro::{Schema, Writer};
+    use apache_avro::{DeflateSettings, Schema, Writer, ZstandardSettings};
+    use miniz_oxide::deflate::CompressionLevel;
 
     use super::*;
-    use apache_avro::{DeflateSettings, ZstandardSettings};
-    use miniz_oxide::deflate::CompressionLevel;
 
     #[test]
     fn test_codec_from_str_gzip() {
@@ -174,7 +173,10 @@ mod tests {
     fn test_codec_from_str_gzip_default_level() {
         // Test that None level defaults to 9 for gzip
         let codec = codec_from_str(Some("gzip"), None);
-        assert_eq!(codec, Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression)));
+        assert_eq!(
+            codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
     }
 
     #[test]

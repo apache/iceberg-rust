@@ -26,25 +26,25 @@ use super::_const_schema::{
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::error::Result;
-use crate::io::FileWrite;
+use crate::io::OutputFile;
 use crate::spec::avro_util::CompressionSettings;
 use crate::{Error, ErrorKind};
 
 /// A manifest list writer.
 pub struct ManifestListWriter {
     format_version: FormatVersion,
-    writer: Box<dyn FileWrite>,
+    output_file: OutputFile,
     avro_writer: Writer<'static, Vec<u8>>,
     sequence_number: i64,
     snapshot_id: i64,
     next_row_id: Option<u64>,
-    compression: CompressionSettings,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManifestListWriter")
             .field("format_version", &self.format_version)
+            .field("output_file", &self.output_file)
             .field("avro_writer", &self.avro_writer.schema())
             .finish_non_exhaustive()
     }
@@ -56,24 +56,12 @@ impl ManifestListWriter {
         self.next_row_id
     }
 
-    /// Set compression settings for the manifest list file.
-    pub fn with_compression(mut self, compression: CompressionSettings) -> Self {
-        let avro_schema = match self.format_version {
-            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
-            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
-            FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
-        };
-        let codec = compression.to_codec();
-        self.avro_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
-        self.compression = compression;
-        self
-    }
-
-    /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`FileWrite`].
+    /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v1(
-        writer: Box<dyn FileWrite>,
+        output_file: OutputFile,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
+        compression_settings: CompressionSettings,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -87,21 +75,22 @@ impl ManifestListWriter {
         }
         Self::new(
             FormatVersion::V1,
-            writer,
+            output_file,
             metadata,
             0,
             snapshot_id,
             None,
-            CompressionSettings::default(),
+            compression_settings,
         )
     }
 
-    /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`FileWrite`].
+    /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v2(
-        writer: Box<dyn FileWrite>,
+        output_file: OutputFile,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
+        compression_settings: CompressionSettings,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -116,22 +105,23 @@ impl ManifestListWriter {
         );
         Self::new(
             FormatVersion::V2,
-            writer,
+            output_file,
             metadata,
             sequence_number,
             snapshot_id,
             None,
-            CompressionSettings::default(),
+            compression_settings,
         )
     }
 
-    /// Construct a v3 [`ManifestListWriter`] that writes to a provided [`FileWrite`].
+    /// Construct a v3 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v3(
-        writer: Box<dyn FileWrite>,
+        output_file: OutputFile,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
         first_row_id: Option<u64>, // Always None for delete manifests
+        compression_settings: CompressionSettings,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -152,18 +142,18 @@ impl ManifestListWriter {
         );
         Self::new(
             FormatVersion::V3,
-            writer,
+            output_file,
             metadata,
             sequence_number,
             snapshot_id,
             first_row_id,
-            CompressionSettings::default(),
+            compression_settings,
         )
     }
 
     fn new(
         format_version: FormatVersion,
-        writer: Box<dyn FileWrite>,
+        output_file: OutputFile,
         metadata: HashMap<String, String>,
         sequence_number: i64,
         snapshot_id: i64,
@@ -184,12 +174,11 @@ impl ManifestListWriter {
         }
         Self {
             format_version,
-            writer,
+            output_file,
             avro_writer,
             sequence_number,
             snapshot_id,
             next_row_id: first_row_id,
-            compression,
         }
     }
 
@@ -227,8 +216,9 @@ impl ManifestListWriter {
     /// Write the manifest list to the output file.
     pub async fn close(mut self) -> Result<()> {
         let data = self.avro_writer.into_inner()?;
-        self.writer.write(Bytes::from(data)).await?;
-        self.writer.close().await?;
+        let mut writer = self.output_file.writer().await?;
+        writer.write(Bytes::from(data)).await?;
+        writer.close().await?;
         Ok(())
     }
 
@@ -347,9 +337,9 @@ mod test {
     use tempfile::TempDir;
 
     use super::ManifestListWriter;
-    use crate::io::{FileIO, FileWrite};
+    use crate::io::FileIO;
     use crate::spec::{
-        Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
+        CompressionSettings, Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
         UNASSIGNED_SEQUENCE_NUMBER,
     };
 
@@ -381,9 +371,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -428,9 +418,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v2(file_writer, snapshot_id, Some(0), seq_num);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -476,10 +466,10 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
         let mut writer =
-            ManifestListWriter::v3(file_writer, snapshot_id, Some(0), seq_num, Some(10));
+            ManifestListWriter::v3(output_file, snapshot_id, Some(0), seq_num, Some(10), CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -524,9 +514,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -569,9 +559,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -616,9 +606,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let file_writer = file_writer(&path, io).await;
+        let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v2(file_writer, snapshot_id, Some(0), seq_num);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, CompressionSettings::default());
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -635,11 +625,7 @@ mod test {
         temp_dir.close().unwrap();
     }
 
-    async fn file_writer(path: &Path, io: FileIO) -> Box<dyn FileWrite> {
-        io.new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap()
+    fn output_file(path: &Path, io: &FileIO) -> crate::io::OutputFile {
+        io.new_output(path.to_str().unwrap()).unwrap()
     }
 }
