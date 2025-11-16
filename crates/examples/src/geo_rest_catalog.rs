@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Float64Array, Int32Array, LargeBinaryArray, StringArray};
-use futures::TryStreamExt;
 use geo_types::{Geometry, Point};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::writer::IcebergWriterBuilder;
@@ -54,22 +53,6 @@ struct GeoFeature {
 }
 
 impl GeoFeature {
-    fn new(
-        id: i32,
-        name: &str,
-        properties: HashMap<String, String>,
-        geometry: Geometry,
-        srid: i32,
-    ) -> Self {
-        Self {
-            id,
-            name: name.to_string(),
-            properties,
-            geometry,
-            srid,
-        }
-    }
-
     fn bbox(&self) -> (f64, f64, f64, f64) {
         match &self.geometry {
             Geometry::Point(point) => {
@@ -286,14 +269,6 @@ async fn main() {
             .unwrap()
             .contains(&table_ident)
     );
-    let schema: Arc<arrow_schema::Schema> = Arc::new(
-        _created_table
-            .metadata()
-            .current_schema()
-            .as_ref()
-            .try_into()
-            .unwrap(),
-    );
     let location_generator =
         DefaultLocationGenerator::new(_created_table.metadata().clone()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
@@ -312,45 +287,47 @@ async fn main() {
         file_name_generator.clone(),
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
-    let data_file_writer = data_file_writer_builder.build(None).await.unwrap();
+    //let data_file_writer = data_file_writer_builder.build(None).await.unwrap();
 
     let features = mock_sample_features();
-    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(features.iter().map(|f| f.id)));
-    let names: ArrayRef = Arc::new(StringArray::from_iter_values(
-        features.iter().map(|f| f.name.as_str()),
-    ));
-    let geometries_wkb: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(
-        features.iter().map(|f| f.to_wkb()),
-    ));
-    let geometry_types: ArrayRef = Arc::new(StringArray::from_iter_values(
-        features.iter().map(|f| f.geometry_type()),
-    ));
-    let srids: ArrayRef = Arc::new(Int32Array::from_iter_values(
-        features.iter().map(|f| f.srid),
-    ));
-    let bbox_min_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().0),
-    ));
-    let bbox_min_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().1),
-    ));
-    let bbox_max_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().2),
-    ));
-    let bbox_max_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().3),
-    ));
+    /*
+        let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(features.iter().map(|f| f.id)));
+        let names: ArrayRef = Arc::new(StringArray::from_iter_values(
+            features.iter().map(|f| f.name.as_str()),
+        ));
+        let geometries_wkb: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(
+            features.iter().map(|f| f.to_wkb()),
+        ));
+        let geometry_types: ArrayRef = Arc::new(StringArray::from_iter_values(
+            features.iter().map(|f| f.geometry_type()),
+        ));
+        let srids: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            features.iter().map(|f| f.srid),
+        ));
+        let bbox_min_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+            features.iter().map(|f| f.bbox().0),
+        ));
+        let bbox_min_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+            features.iter().map(|f| f.bbox().1),
+        ));
+        let bbox_max_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+            features.iter().map(|f| f.bbox().2),
+        ));
+        let bbox_max_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+            features.iter().map(|f| f.bbox().3),
+        ));
 
-    let countries: ArrayRef = Arc::new(StringArray::from_iter_values(
-        features
-            .iter()
-            .map(|f| f.properties.get("country").unwrap().as_str()),
-    ));
-    let populations: ArrayRef = Arc::new(StringArray::from_iter_values(
-        features
-            .iter()
-            .map(|f| f.properties.get("population").unwrap().as_str()),
-    ));
+        let countries: ArrayRef = Arc::new(StringArray::from_iter_values(
+            features
+                .iter()
+                .map(|f| f.properties.get("country").unwrap().as_str()),
+        ));
+        let populations: ArrayRef = Arc::new(StringArray::from_iter_values(
+            features
+                .iter()
+                .map(|f| f.properties.get("population").unwrap().as_str()),
+        ));
+    */
     //TODO: make write with credentials
     /*let record_batch = RecordBatch::try_new(schema.clone(), vec![
             ids,
