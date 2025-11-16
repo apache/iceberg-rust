@@ -2096,4 +2096,96 @@ mod test {
         assert_eq!(v2_manifest.partitions, None);
         assert_eq!(v2_manifest.key_metadata, None);
     }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_with_compression() {
+        use std::fs;
+
+        use tempfile::TempDir;
+
+        use crate::io::FileIOBuilder;
+
+        // Create multiple manifest entries to make compression effective
+        let mut entries = Vec::new();
+        for i in 0..100 {
+            entries.push(ManifestFile {
+                manifest_path: format!("/test/manifest{}.avro", i),
+                manifest_length: 1000 + i,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 1646658105718557341,
+                added_files_count: Some(10),
+                existing_files_count: Some(5),
+                deleted_files_count: Some(2),
+                added_rows_count: Some(100),
+                existing_rows_count: Some(50),
+                deleted_rows_count: Some(20),
+                partitions: None,
+                key_metadata: None,
+                first_row_id: None,
+            });
+        }
+        let manifest_list = ManifestList { entries };
+
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+
+        // Write uncompressed manifest list
+        let uncompressed_path = tmp_dir
+            .path()
+            .join("uncompressed_manifest_list.avro")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mut writer = ManifestListWriter::v2(
+            file_io.new_output(&uncompressed_path).unwrap(),
+            1646658105718557341,
+            Some(0),
+            1,
+            CompressionSettings::new("uncompressed".to_string(), None),
+        );
+        writer
+            .add_manifests(manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
+
+        // Write compressed manifest list with gzip
+        let compressed_path = tmp_dir
+            .path()
+            .join("compressed_manifest_list.avro")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let compression = CompressionSettings::new("gzip".to_string(), Some(9));
+        let mut writer = ManifestListWriter::v2(
+            file_io.new_output(&compressed_path).unwrap(),
+            1646658105718557341,
+            Some(0),
+            1,
+            compression,
+        );
+        writer
+            .add_manifests(manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
+
+        // Verify compression is actually working
+        assert!(
+            compressed_size < uncompressed_size,
+            "Compressed size ({}) should be less than uncompressed size ({})",
+            compressed_size,
+            uncompressed_size
+        );
+
+        // Verify the compressed file can be read back correctly
+        let compressed_bytes = fs::read(&compressed_path).unwrap();
+        let parsed_manifest_list =
+            ManifestList::parse_with_version(&compressed_bytes, crate::spec::FormatVersion::V2)
+                .unwrap();
+        assert_eq!(manifest_list, parsed_manifest_list);
+    }
 }
