@@ -425,7 +425,7 @@ impl<'a> SnapshotProducer<'a> {
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
@@ -434,7 +434,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 self.table
