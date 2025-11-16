@@ -118,9 +118,10 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use apache_avro::{DeflateSettings, ZstandardSettings};
     use miniz_oxide::deflate::CompressionLevel;
+
+    use super::*;
 
     #[test]
     fn test_codec_from_str_gzip() {
@@ -168,7 +169,10 @@ mod tests {
     fn test_codec_from_str_gzip_default_level() {
         // Test that None level defaults to 9 for gzip
         let codec = codec_from_str(Some("gzip"), None);
-        assert_eq!(codec, Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression)));
+        assert_eq!(
+            codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
     }
 
     #[test]

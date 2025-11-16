@@ -220,8 +220,8 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-        )
-        .with_compression(compression);
+            compression,
+        );
 
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
@@ -425,6 +425,7 @@ impl<'a> SnapshotProducer<'a> {
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
+                compression.clone(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
@@ -433,6 +434,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
+                compression.clone(),
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 self.table
@@ -442,9 +444,9 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
+                compression,
             ),
-        }
-        .with_compression(compression);
+        };
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files
         // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary

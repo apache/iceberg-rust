@@ -387,10 +387,12 @@ mod tests {
         let props = HashMap::from([("test-key".to_string(), "invalid".to_string())]);
         let result = parse_optional_property::<u8>(&props, "test-key");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid value for test-key"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid value for test-key")
+        );
     }
 
     #[test]
@@ -415,9 +417,11 @@ mod tests {
         )]);
         let result = TableProperties::try_from(&props);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid value for write.avro.compression-level"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid value for write.avro.compression-level")
+        );
     }
 }

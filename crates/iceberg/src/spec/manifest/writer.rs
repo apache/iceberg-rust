@@ -55,7 +55,7 @@ impl ManifestWriterBuilder {
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-        compression_settings : CompressionSettings
+        compression: CompressionSettings,
     ) -> Self {
         Self {
             output,
@@ -63,7 +63,7 @@ impl ManifestWriterBuilder {
             key_metadata,
             schema,
             partition_spec,
-            compression_settings,
+            compression,
         }
     }
 
@@ -706,6 +706,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionSettings::default(),
         )
         .build_v2_data();
         writer.add_entry(entries[0].clone()).unwrap();
