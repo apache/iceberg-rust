@@ -21,7 +21,7 @@
 
 ## Background
 
-Issue #1819 proposes decoupling the protocol/metadata/plan logic that currently lives inside the `iceberg` crate so that it can serve as a reusable “kernel,” similar to the approach taken by delta-kernel-rs. Today the `iceberg` crate simultaneously exposes the public trait surface and the default engine (Tokio runtime, opendal-backed FileIO, Arrow readers, etc.). This tight coupling makes it difficult for downstream projects to embed Iceberg metadata while providing their own storage, runtime, or execution stack.
+Issue #1819 proposes decoupling the protocol/metadata/plan logic that currently lives inside the `iceberg` crate so that it can serve as a reusable “kernel,” similar to the approach taken by [delta-kernel-rs](https://github.com/delta-io/delta-kernel-rs). Today the `iceberg` crate simultaneously exposes the public trait surface and the default engine (Tokio runtime, opendal-backed FileIO, Arrow readers, etc.). This tight coupling makes it difficult for downstream projects to embed Iceberg metadata while providing their own storage, runtime, or execution stack.
 
 ## Goals and Scope
 
