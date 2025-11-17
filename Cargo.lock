@@ -2555,10 +2555,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepwiki-mcp"
-version = "0.7.0"
-
-[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
