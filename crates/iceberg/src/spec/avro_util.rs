@@ -128,7 +128,8 @@ mod tests {
 
     #[test]
     fn test_codec_from_str_gzip() {
-        let codec = codec_from_str(Some("gzip"), Some(5));
+        // Test with mixed case to verify case-insensitive matching
+        let codec = codec_from_str(Some("GZip"), Some(5));
         assert_eq!(
             codec,
             Codec::Deflate(DeflateSettings::new(CompressionLevel::DefaultLevel))

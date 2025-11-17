@@ -3643,11 +3643,11 @@ mod tests {
         // Get a test metadata and add gzip compression property
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
-        // Modify properties to enable gzip compression
+        // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
         let mut props = original_metadata.properties.clone();
         props.insert(
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
+            "GziP".to_string(),
         );
         // Use builder to create new metadata with updated properties
         let compressed_metadata =
@@ -3682,14 +3682,6 @@ mod tests {
         let read_metadata = TableMetadata::read_from(&file_io, &expected_compressed_location)
             .await
             .unwrap();
-
-        // Verify the properties include the compression codec
-        assert_eq!(
-            read_metadata
-                .properties
-                .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC),
-            Some(&"gzip".to_string())
-        );
 
         // Verify the complete round-trip: read metadata should match what we wrote
         assert_eq!(read_metadata, compressed_metadata);
