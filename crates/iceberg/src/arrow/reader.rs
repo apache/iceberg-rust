@@ -1753,7 +1753,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, RunArray, StringArray};
+    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
