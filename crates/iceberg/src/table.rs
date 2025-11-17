@@ -226,10 +226,14 @@ impl Table {
     }
 
     /// Creates an incremental table scan between two snapshots.
+    ///
+    /// # Arguments
+    /// * `from_snapshot_id` - Starting snapshot ID. If None, scans from the root (oldest) snapshot.
+    /// * `to_snapshot_id` - Ending snapshot ID. If None, scans to the current (latest) snapshot.
     pub fn incremental_scan(
         &self,
-        from_snapshot_id: i64,
-        to_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
+        to_snapshot_id: Option<i64>,
     ) -> IncrementalTableScanBuilder<'_> {
         IncrementalTableScanBuilder::new(self, from_snapshot_id, to_snapshot_id)
     }

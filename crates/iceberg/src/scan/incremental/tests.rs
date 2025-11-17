@@ -1195,7 +1195,7 @@ impl IncrementalTestFixture {
 
         let incremental_scan = self
             .table
-            .incremental_scan(from_snapshot_id, to_snapshot_id)
+            .incremental_scan(Some(from_snapshot_id), Some(to_snapshot_id))
             .build()
             .unwrap();
 
@@ -1638,9 +1638,10 @@ async fn test_incremental_scan_builder_options() {
     .await;
 
     // Test 1: Column projection - select only the "n" column
+    // Scan from root (None) to last (None)
     let scan = fixture
         .table
-        .incremental_scan(1, 4)
+        .incremental_scan(None, None)
         .select(vec!["n"])
         .build()
         .unwrap();
@@ -1672,9 +1673,10 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 2: Column projection - select only the "data" column
+    // Scan from root (None) to last (None)
     let scan = fixture
         .table
-        .incremental_scan(1, 4)
+        .incremental_scan(None, None)
         .select(vec!["data"])
         .build()
         .unwrap();
@@ -1702,9 +1704,10 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 3: Select both columns explicitly
+    // Scan from root (None) to last (None)
     let scan = fixture
         .table
-        .incremental_scan(1, 4)
+        .incremental_scan(None, None)
         .select(vec!["n", "data"])
         .build()
         .unwrap();
@@ -1729,9 +1732,10 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 4: Batch size configuration
+    // Scan from root (None) to snapshot 2
     let scan = fixture
         .table
-        .incremental_scan(1, 2)
+        .incremental_scan(None, Some(2))
         .with_batch_size(Some(3)) // Small batch size to test batching
         .build()
         .unwrap();
@@ -1753,9 +1757,10 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 5: Combining column projection and batch size
+    // Scan from root (None) to last (None)
     let scan = fixture
         .table
-        .incremental_scan(1, 4)
+        .incremental_scan(None, None)
         .select(vec!["n"])
         .with_batch_size(Some(4))
         .build()
@@ -1775,9 +1780,10 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 6: Verify actual data with column projection
+    // Scan from root (None) to snapshot 2
     let scan = fixture
         .table
-        .incremental_scan(1, 2)
+        .incremental_scan(None, Some(2))
         .select(vec!["n"])
         .build()
         .unwrap();
@@ -1813,7 +1819,11 @@ async fn test_incremental_scan_builder_options() {
     }
 
     // Test 7: Delete batches always have the same schema.
-    let scan = fixture.table.incremental_scan(2, 3).build().unwrap();
+    let scan = fixture
+        .table
+        .incremental_scan(Some(2), Some(3))
+        .build()
+        .unwrap();
 
     let stream = scan.to_arrow().await.unwrap();
     let batches: Vec<_> = stream.try_collect().await.unwrap();
@@ -2367,4 +2377,81 @@ async fn test_incremental_scan_with_replace_and_positional_deletes() {
     fixture
         .verify_incremental_scan(5, 6, vec![], test4_deletes)
         .await;
+}
+
+#[tokio::test]
+async fn test_incremental_scan_includes_root_when_from_is_none() {
+    // Test that when from=None, the root snapshot is INCLUDED in the scan
+    // (not excluded like when an explicit from snapshot is specified)
+    let fixture = IncrementalTestFixture::new(vec![
+        // Snapshot 1 (root): Add initial data - this should be INCLUDED when from=None
+        Operation::Add(
+            vec![(1, "one".to_string()), (2, "two".to_string())],
+            "root-data.parquet".to_string(),
+        ),
+        // Snapshot 2: Add more data
+        Operation::Add(
+            vec![(10, "ten".to_string()), (20, "twenty".to_string())],
+            "second-data.parquet".to_string(),
+        ),
+        // Snapshot 3: Add final data
+        Operation::Add(
+            vec![(100, "hundred".to_string())],
+            "third-data.parquet".to_string(),
+        ),
+    ])
+    .await;
+
+    // Test 1: Scan with explicit from=1 should EXCLUDE snapshot 1 (normal behavior)
+    fixture
+        .verify_incremental_scan(
+            1,                                                   // from snapshot 1 - EXCLUDED
+            3,                                                   // to snapshot 3
+            vec![(10, "ten"), (20, "twenty"), (100, "hundred")], // Only snapshots 2 and 3
+            vec![],
+        )
+        .await;
+
+    // Test 2: Scan using table.incremental_scan(None, None) API
+    // This should INCLUDE the root snapshot
+    let scan = fixture.table.incremental_scan(None, None).build().unwrap();
+    let stream = scan.to_arrow().await.unwrap();
+    let batches: Vec<_> = stream.try_collect().await.unwrap();
+
+    // Collect all appended data
+    let append_batches: Vec<_> = batches
+        .iter()
+        .filter(|(t, _)| *t == crate::arrow::IncrementalBatchType::Append)
+        .map(|(_, b)| b.clone())
+        .collect();
+
+    // Extract n and data values
+    use arrow_array::cast::AsArray;
+    let mut results = Vec::new();
+    for batch in append_batches {
+        let n_array = batch
+            .column_by_name("n")
+            .unwrap()
+            .as_primitive::<arrow_array::types::Int32Type>();
+        let data_array = batch.column_by_name("data").unwrap().as_string::<i32>();
+        for i in 0..batch.num_rows() {
+            results.push((n_array.value(i), data_array.value(i).to_string()));
+        }
+    }
+
+    // Sort for consistent comparison
+    results.sort();
+
+    // Should include ALL data including root snapshot
+    assert_eq!(
+        results,
+        vec![
+            (1, "one".to_string()),
+            (2, "two".to_string()),
+            (10, "ten".to_string()),
+            (20, "twenty".to_string()),
+            (100, "hundred".to_string()),
+        ],
+        "Scan with from=None should include root snapshot data"
+    );
 }

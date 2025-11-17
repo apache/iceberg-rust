@@ -26,7 +26,7 @@ use futures::stream::select;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{
     ArrowReader, RESERVED_COL_NAME_FILE_PATH, RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE_PATH,
     RESERVED_FIELD_ID_POS, StreamsInto,
@@ -257,7 +257,7 @@ async fn process_incremental_append_task(
     // that come back from the file, such as type promotion, default column insertion
     // and column re-ordering
     let mut record_batch_transformer =
-        RecordBatchTransformer::build(task.schema_ref(), &task.base.project_field_ids);
+        RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids).build();
 
     if let Some(batch_size) = batch_size {
         record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);

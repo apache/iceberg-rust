@@ -72,3 +72,17 @@ pub fn ancestors_between(
             .take_while(move |snapshot| snapshot.snapshot_id() != oldest_snapshot_id),
     )
 }
+
+/// Returns the root (oldest/first) snapshot ID in the table's snapshot lineage.
+///
+/// # Arguments
+/// * `table_metadata` - The table metadata
+///
+/// # Returns
+/// The snapshot ID of the root snapshot, or None if there are no snapshots
+pub fn root_snapshot_id(table_metadata: &TableMetadataRef) -> Option<i64> {
+    let current = table_metadata.current_snapshot()?;
+    ancestors_of(table_metadata, current.snapshot_id())
+        .last()
+        .map(|s| s.snapshot_id())
+}
