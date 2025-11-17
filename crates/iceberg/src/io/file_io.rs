@@ -114,7 +114,6 @@ impl FileIO {
         Ok(op.remove_all(&path).await?)
     }
 
-
     /// Check file exists.
     ///
     /// # Arguments
