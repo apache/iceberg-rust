@@ -23,7 +23,7 @@ use log::warn;
 /// Settings for compression codec and level.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressionSettings {
-    /// The compression codec name (e.g., "gzip", "zstd", "deflate", "uncompressed")
+    /// The compression codec name (e.g., "gzip", "zstd", "snappy", "uncompressed")
     pub codec: String,
     /// The compression level (None uses codec-specific defaults: gzip=9, zstd=1)
     pub level: Option<u8>,
@@ -56,8 +56,8 @@ impl Default for CompressionSettings {
 ///
 /// # Arguments
 ///
-/// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "deflate", "uncompressed")
-/// * `level` - The compression level (None uses codec defaults: gzip=9, zstd=1). For deflate/gzip:
+/// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "snappy", "uncompressed")
+/// * `level` - The compression level (None uses codec defaults: gzip=9, zstd=1). For gzip:
 ///   - 0: NoCompression
 ///   - 1: BestSpeed
 ///   - 9: BestCompression
@@ -66,8 +66,9 @@ impl Default for CompressionSettings {
 ///
 /// # Supported Codecs
 ///
-/// - `gzip` or `deflate`: Uses Deflate compression with specified level (default: 9)
+/// - `gzip`: Uses Deflate compression with specified level (default: 9)
 /// - `zstd`: Uses Zstandard compression (default: 1, level clamped to valid zstd range 0-22)
+/// - `snappy`: Uses Snappy compression (level parameter ignored)
 /// - `uncompressed` or `None`: No compression
 /// - Any other value: Defaults to no compression (Codec::Null)
 ///
@@ -82,8 +83,9 @@ impl Default for CompressionSettings {
 pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
     use apache_avro::{DeflateSettings, ZstandardSettings};
 
-    match codec {
-        Some("gzip") | Some("deflate") => {
+    // Use case-insensitive comparison to match Java implementation
+    match codec.map(|s| s.to_lowercase()).as_deref() {
+        Some("gzip") => {
             // Map compression level to miniz_oxide::deflate::CompressionLevel
             // Reference: https://docs.rs/miniz_oxide/latest/miniz_oxide/deflate/enum.CompressionLevel.html
             // Default level for gzip/deflate is 9 (BestCompression) to match Java
@@ -105,6 +107,7 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
             let zstd_level = level.unwrap_or(1).min(22);
             Codec::Zstandard(ZstandardSettings::new(zstd_level))
         }
+        Some("snappy") => Codec::Snappy,
         Some("uncompressed") | None => Codec::Null,
         Some(unknown) => {
             warn!(
@@ -133,12 +136,9 @@ mod tests {
     }
 
     #[test]
-    fn test_codec_from_str_deflate() {
-        let codec = codec_from_str(Some("deflate"), Some(9));
-        assert_eq!(
-            codec,
-            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
-        );
+    fn test_codec_from_str_snappy() {
+        let codec = codec_from_str(Some("snappy"), None);
+        assert_eq!(codec, Codec::Snappy);
     }
 
     #[test]

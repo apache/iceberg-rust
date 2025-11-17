@@ -206,7 +206,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_source(e)
             })?;
         let compression = CompressionSettings::new(
-            table_props.avro_compression_codec.clone(),
+            table_props.avro_compression_codec,
             table_props.avro_compression_level,
         );
 
@@ -414,7 +414,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_source(e)
             })?;
         let compression = CompressionSettings::new(
-            table_props.avro_compression_codec.clone(),
+            table_props.avro_compression_codec,
             table_props.avro_compression_level,
         );
 

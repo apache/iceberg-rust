@@ -424,7 +424,6 @@ impl ManifestWriter {
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
 
-        // Determine compression codec using CompressionSettings
         let codec = self.compression.to_codec();
 
         let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), codec);

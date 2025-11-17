@@ -166,7 +166,7 @@ impl TableProperties {
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "uncompressed";
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
 
     /// Compression codec for Avro files (manifests, manifest lists)
     pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";

@@ -474,7 +474,9 @@ impl TableMetadata {
             .map(|s| s.as_str())
             .unwrap_or(crate::spec::table_properties::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
 
-        let (data_to_write, actual_location) = match codec {
+        // Use case-insensitive comparison to match Java implementation
+        let codec_lower = codec.to_lowercase();
+        let (data_to_write, actual_location) = match codec_lower.as_str() {
             "gzip" => {
                 let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(&json_data).map_err(|e| {
@@ -500,7 +502,7 @@ impl TableMetadata {
 
                 (compressed_data, new_location)
             }
-            "uncompressed" | "" => (json_data, metadata_location.as_ref().to_string()),
+            "none" | "" => (json_data, metadata_location.as_ref().to_string()),
             other => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
