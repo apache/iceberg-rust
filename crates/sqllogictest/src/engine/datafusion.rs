@@ -78,11 +78,11 @@ impl DataFusionEngine {
 
         let catalog_provider = match catalog {
             Some(cat) => {
-                // 使用传入的 catalog
+                // Use the provided catalog
                 Arc::new(IcebergCatalogProvider::try_new(cat).await?)
             }
             None => {
-                // 后备方案：创建默认的 MemoryCatalog
+                // Fallback: create default MemoryCatalog
                 Self::create_default_catalog(&config).await?
             }
         };
@@ -98,7 +98,7 @@ impl DataFusionEngine {
     async fn create_default_catalog(
         _: &TomlTable,
     ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        // 创建默认的 MemoryCatalog 作为后备方案
+        // Create default MemoryCatalog as fallback
         let catalog = MemoryCatalogBuilder::default()
             .load(
                 "memory",

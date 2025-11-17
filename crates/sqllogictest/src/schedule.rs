@@ -117,7 +117,7 @@ impl Schedule {
             Some(val) => val
                 .as_table()
                 .ok_or_else(|| anyhow!("'catalogs' must be a table"))?,
-            None => return Ok(HashMap::new()), // catalogs 是可选的
+            None => return Ok(HashMap::new()), // catalogs are optional
         };
 
         let mut catalogs = HashMap::new();
@@ -144,10 +144,10 @@ impl Schedule {
             .as_table()
             .ok_or_else(|| anyhow!("Schedule file must be a TOML table"))?;
 
-        // 先解析 catalogs
+        // Parse catalogs first
         let catalogs = Schedule::parse_catalogs(toml_table).await?;
 
-        // 再解析 engines，传入 catalogs
+        // Then parse engines, passing in catalogs
         let engines = Schedule::parse_engines(toml_table, &catalogs).await?;
 
         let steps = Schedule::parse_steps(toml_table)?;
@@ -216,7 +216,7 @@ impl Schedule {
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Engine {name} type must be a string"))?;
 
-            // 获取 catalog 引用（如果配置了）
+            // Get catalog reference (if configured)
             let catalog = if let Some(catalog_name) = cfg_tbl.get("catalog") {
                 let catalog_name = catalog_name
                     .as_str()
@@ -338,12 +338,12 @@ mod tests {
         assert!(catalogs.contains_key("rest_catalog"));
         assert!(catalogs.contains_key("sql_catalog"));
 
-        // 验证memory catalog配置
+        // Verify memory catalog configuration
         let memory_cfg = &catalogs["memory_catalog"];
         assert_eq!(memory_cfg.r#type, "memory");
         assert_eq!(memory_cfg.properties.get("warehouse").unwrap(), "memory://test");
 
-        // 验证rest catalog配置
+        // Verify rest catalog configuration
         let rest_cfg = &catalogs["rest_catalog"];
         assert_eq!(rest_cfg.r#type, "rest");
         assert_eq!(rest_cfg.properties.get("uri").unwrap(), "http://localhost:8181");
@@ -437,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_config_validation() {
-        // 测试catalog配置必须有type字段
+        // Test that catalog configuration must have a type field
         let input = r#"
             [catalogs.invalid]
             warehouse = "memory://test"
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_catalog_usage() {
-        // 测试部分引擎使用自定义catalog，部分使用默认catalog
+        // Test that some engines use custom catalog, others use default catalog
         let input = r#"
             [catalogs.custom]
             type = "memory"

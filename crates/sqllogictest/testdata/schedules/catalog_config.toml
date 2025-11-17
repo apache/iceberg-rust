@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 测试catalog配置的基础功能
+# Test basic catalog configuration functionality
 [catalogs.test_memory]
 type = "memory"
 warehouse = "memory://test"

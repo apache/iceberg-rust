@@ -142,7 +142,7 @@ mod tests {
         let files = collect_schedule_files().unwrap();
         assert!(!files.is_empty(), "Should find at least some schedule files");
 
-        // 验证包含我们新创建的文件
+        // Verify that the newly created files are included
         let file_names: Vec<String> = files
             .iter()
             .filter_map(|p| p.file_name()?.to_str())

@@ -15,15 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 示例配置文件：展示各种catalog配置方式
-# 注意：这个文件仅用于示例，不会被测试框架执行（因为文件名不以.toml结尾，而是example_开头）
+# Example configuration file: demonstrates various catalog configuration methods
+# Note: This file is for example purposes only and will not be executed by the test framework
+# (because the filename does not end with .toml, but with .example)
 
-# 内存catalog示例
+# Memory catalog example
 [catalogs.memory_example]
 type = "memory"
 warehouse = "memory://example"
 
-# REST catalog示例（用于集成测试）
+# REST catalog example (for integration testing)
 [catalogs.rest_example]
 type = "rest"
 uri = "http://localhost:8181"
@@ -31,20 +32,20 @@ warehouse = "s3://test-bucket/warehouse"
 credential = "client_credentials"
 token = "your-token-here"
 
-# SQL catalog示例
+# SQL catalog example
 [catalogs.sql_example]
 type = "sql"
 uri = "postgresql://user:password@localhost:5432/iceberg_test"
 warehouse = "s3://test-bucket/warehouse"
 sql_bind_style = "DollarNumeric"
 
-# Glue catalog示例
+# Glue catalog example
 [catalogs.glue_example]
 type = "glue"
 warehouse = "s3://test-bucket/warehouse"
 region = "us-east-1"
 
-# 引擎配置示例
+# Engine configuration example
 [engines.memory_engine]
 type = "datafusion"
 catalog = "memory_example"
@@ -63,9 +64,9 @@ catalog = "glue_example"
 
 [engines.default_engine]
 type = "datafusion"
-# 不指定catalog，使用默认的MemoryCatalog
+# No catalog specified, uses default MemoryCatalog
 
-# 测试步骤示例
+# Test steps example
 [[steps]]
 engine = "memory_engine"
 slt = "df_test/show_tables.slt"

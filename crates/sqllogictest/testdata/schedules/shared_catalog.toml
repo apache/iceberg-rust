@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 测试多引擎共享同一个catalog
+# Test multiple engines sharing the same catalog
 [catalogs.shared]
 type = "memory"
 warehouse = "memory://shared"

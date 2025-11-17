@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 这个文件用于测试错误情况，正常情况下不应该被执行
-# 它会被集成测试框架自动发现，但我们需要确保它能正确处理错误
+# This file is used to test error cases and should not be executed under normal circumstances
+# It will be automatically discovered by the integration test framework, but we need to ensure it handles errors correctly
 
 [catalogs.valid]
 type = "memory"

@@ -15,6 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 验证writer引擎可以访问catalog
+# Verify that the writer engine can access the catalog
 statement ok
 SHOW TABLES;

@@ -15,6 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# 验证reader引擎可以访问相同的catalog
+# Verify that the reader engine can access the same catalog
 statement ok
 SHOW TABLES;
