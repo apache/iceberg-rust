@@ -764,6 +764,18 @@ impl Catalog for GlueCatalog {
         let current_table = self.load_table(&table_ident).await?;
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
+        // Get current VersionId for optimistic locking
+        let get_table_builder = self
+            .client
+            .0
+            .get_table()
+            .database_name(&table_namespace)
+            .name(table_ident.name());
+        let get_table_builder = with_catalog_id!(get_table_builder, self.config);
+        let glue_table = get_table_builder.send().await.map_err(from_aws_sdk_error)?;
+        let current_version_id = glue_table.table()
+            .and_then(|t| t.version_id.clone());
+
         let staged_table = commit.apply(current_table)?;
         let staged_metadata_location = staged_table.metadata_location_result()?;
 
@@ -773,8 +785,8 @@ impl Catalog for GlueCatalog {
             .write_to(staged_table.file_io(), staged_metadata_location)
             .await?;
 
-        // Persist staged table to Glue
-        let builder = self
+        // Persist staged table to Glue with optimistic locking
+        let mut builder = self
             .client
             .0
             .update_table()
@@ -787,6 +799,12 @@ impl Catalog for GlueCatalog {
                 staged_table.metadata().properties(),
                 Some(current_metadata_location),
             )?);
+
+        // Add VersionId for optimistic locking
+        if let Some(version_id) = current_version_id {
+            builder = builder.version_id(version_id);
+        }
+
         let builder = with_catalog_id!(builder, self.config);
         let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
