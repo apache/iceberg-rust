@@ -1,0 +1,75 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# 示例配置文件：展示各种catalog配置方式
+# 注意：这个文件仅用于示例，不会被测试框架执行（因为文件名不以.toml结尾，而是example_开头）
+
+# 内存catalog示例
+[catalogs.memory_example]
+type = "memory"
+warehouse = "memory://example"
+
+# REST catalog示例（用于集成测试）
+[catalogs.rest_example]
+type = "rest"
+uri = "http://localhost:8181"
+warehouse = "s3://test-bucket/warehouse"
+credential = "client_credentials"
+token = "your-token-here"
+
+# SQL catalog示例
+[catalogs.sql_example]
+type = "sql"
+uri = "postgresql://user:password@localhost:5432/iceberg_test"
+warehouse = "s3://test-bucket/warehouse"
+sql_bind_style = "DollarNumeric"
+
+# Glue catalog示例
+[catalogs.glue_example]
+type = "glue"
+warehouse = "s3://test-bucket/warehouse"
+region = "us-east-1"
+
+# 引擎配置示例
+[engines.memory_engine]
+type = "datafusion"
+catalog = "memory_example"
+
+[engines.rest_engine]
+type = "datafusion"
+catalog = "rest_example"
+
+[engines.sql_engine]
+type = "datafusion"
+catalog = "sql_example"
+
+[engines.glue_engine]
+type = "datafusion"
+catalog = "glue_example"
+
+[engines.default_engine]
+type = "datafusion"
+# 不指定catalog，使用默认的MemoryCatalog
+
+# 测试步骤示例
+[[steps]]
+engine = "memory_engine"
+slt = "df_test/show_tables.slt"
+
+[[steps]]
+engine = "default_engine"
+slt = "df_test/show_tables.slt"

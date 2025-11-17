@@ -18,8 +18,10 @@
 mod datafusion;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::anyhow;
+use iceberg::Catalog;
 use sqllogictest::{AsyncDB, MakeConnection, Runner, parse_file};
 use toml::Table as TomlTable;
 
@@ -29,16 +31,17 @@ use crate::error::{Error, Result};
 const TYPE_DATAFUSION: &str = "datafusion";
 
 #[async_trait::async_trait]
-pub trait EngineRunner: Send {
+pub trait EngineRunner: Send + std::fmt::Debug {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
 pub async fn load_engine_runner(
     engine_type: &str,
     cfg: TomlTable,
+    catalog: Option<Arc<dyn Catalog>>,
 ) -> Result<Box<dyn EngineRunner>> {
     match engine_type {
-        TYPE_DATAFUSION => Ok(Box::new(DataFusionEngine::new(cfg).await?)),
+        TYPE_DATAFUSION => Ok(Box::new(DataFusionEngine::new(cfg, catalog).await?)),
         _ => Err(anyhow::anyhow!("Unsupported engine type: {engine_type}").into()),
     }
 }
@@ -74,7 +77,7 @@ mod tests {
             random = { type = "random_engine", url = "http://localhost:8181" }
         "#;
         let tbl = toml::from_str(input).unwrap();
-        let result = load_engine_runner("random_engine", tbl).await;
+        let result = load_engine_runner("random_engine", tbl, None).await;
 
         assert!(result.is_err());
     }
@@ -86,7 +89,7 @@ mod tests {
             df = { type = "datafusion" }
         "#;
         let tbl = toml::from_str(input).unwrap();
-        let result = load_engine_runner(TYPE_DATAFUSION, tbl).await;
+        let result = load_engine_runner(TYPE_DATAFUSION, tbl, None).await;
 
         assert!(result.is_ok());
     }

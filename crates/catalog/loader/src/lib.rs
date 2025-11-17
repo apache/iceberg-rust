@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
+use iceberg::memory::MemoryCatalogBuilder;
 use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_hms::HmsCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -31,6 +32,7 @@ type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
 
 /// A registry of catalog builders.
 static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
+    ("memory", || Box::new(MemoryCatalogBuilder::default())),
     ("rest", || Box::new(RestCatalogBuilder::default())),
     ("glue", || Box::new(GlueCatalogBuilder::default())),
     ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
