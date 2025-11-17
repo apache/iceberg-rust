@@ -120,11 +120,6 @@ pub trait Runtime: Send + Sync + 'static {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static;
 
-    fn spawn_blocking<F, T>(&self, f: F) -> Self::JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static;
-
     fn sleep(&self, dur: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 ```
