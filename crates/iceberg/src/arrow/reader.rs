@@ -1860,7 +1860,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, RunArray, StringArray};
+    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use as_any::Downcast;
     use futures::TryStreamExt;
@@ -2678,24 +2678,14 @@ message schema {
             .as_primitive::<arrow_array::types::Int32Type>();
         assert_eq!(col_a.values(), &[1, 2, 3]);
 
-        // Column 'b' should be all NULLs (it didn't exist in the old file, added with REE)
-        let col_b = batch.column(1);
-        // For REE array with null, check the values array
-        if let Some(run_array) = col_b
-            .as_any()
-            .downcast_ref::<RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            assert!(
-                values.is_null(0),
-                "REE values should contain null for added column"
-            );
-        } else {
-            // Fallback to direct null check for simple arrays
-            assert!(col_b.is_null(0));
-            assert!(col_b.is_null(1));
-            assert!(col_b.is_null(2));
-        }
+        // Column 'b' should be all NULLs (it didn't exist in the old file)
+        let col_b = batch
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(col_b.null_count(), 3);
+        assert!(col_b.is_null(0));
+        assert!(col_b.is_null(1));
+        assert!(col_b.is_null(2));
     }
 
     #[test]
@@ -3890,23 +3880,11 @@ message schema {
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
 
-        // Verify missing column filled with NULLs (will be REE with null)
-        let city_col = batch.column(2);
-        if let Some(run_array) = city_col
-            .as_any()
-            .downcast_ref::<RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            assert!(
-                values.is_null(0),
-                "REE values should contain null for added column"
-            );
-        } else {
-            let city_array = city_col.as_string::<i32>();
-            assert_eq!(city_array.null_count(), 2);
-            assert!(city_array.is_null(0));
-            assert!(city_array.is_null(1));
-        }
+        // Verify missing column filled with NULLs
+        let city_array = batch.column(2).as_string::<i32>();
+        assert_eq!(city_array.null_count(), 2);
+        assert!(city_array.is_null(0));
+        assert!(city_array.is_null(1));
     }
 
     /// Test reading Parquet files without field IDs that have multiple row groups.
@@ -4223,23 +4201,13 @@ message schema {
         assert_eq!(result_col0.value(0), 1);
         assert_eq!(result_col0.value(1), 2);
 
-        // New column should be NULL (doesn't exist in old file, added with REE)
-        let newcol = batch.column(1);
-        if let Some(run_array) = newcol
-            .as_any()
-            .downcast_ref::<RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            assert!(
-                values.is_null(0),
-                "REE values should contain null for added column"
-            );
-        } else {
-            let result_newcol = newcol.as_primitive::<arrow_array::types::Int32Type>();
-            assert_eq!(result_newcol.null_count(), 2);
-            assert!(result_newcol.is_null(0));
-            assert!(result_newcol.is_null(1));
-        }
+        // New column should be NULL (doesn't exist in old file)
+        let result_newcol = batch
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(result_newcol.null_count(), 2);
+        assert!(result_newcol.is_null(0));
+        assert!(result_newcol.is_null(1));
 
         let result_col1 = batch
             .column(2)

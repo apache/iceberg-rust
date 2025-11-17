@@ -142,12 +142,12 @@ impl<'a> TableScanBuilder<'a> {
     /// let scan = table
     ///     .scan()
     ///     .select(["id", "name"])
-    ///     .with_file_path_column()
+    ///     .with_file_column()
     ///     .build()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_file_path_column(mut self) -> Self {
+    pub fn with_file_column(mut self) -> Self {
         use crate::metadata_columns::RESERVED_COL_NAME_FILE;
 
         let mut columns = self.column_names.unwrap_or_else(|| {

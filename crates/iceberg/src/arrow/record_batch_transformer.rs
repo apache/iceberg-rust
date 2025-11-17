@@ -19,9 +19,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array,
-    Float64Array, Int32Array, Int64Array, RecordBatch, RecordBatchOptions, RunArray, StringArray,
+    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
+    Float32Array, Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions,
+    RunArray, StringArray, StructArray,
 };
+use arrow_buffer::NullBuffer;
 use arrow_cast::cast;
 use arrow_schema::{
     DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
@@ -313,8 +315,6 @@ impl RecordBatchTransformer {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
             Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
-        let field_id_to_source_schema_map =
-            Self::build_field_id_to_arrow_schema_map(source_schema)?;
 
         // Create a new arrow schema by selecting fields from mapped_unprojected,
         // in the order of the field ids in projected_iceberg_field_ids
@@ -335,36 +335,19 @@ impl RecordBatchTransformer {
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                             .0;
                         let (arrow_type, _) = constant_fields.get(field_id).unwrap();
-                        // Use the REE type from constant_fields
-                        let ree_field =
+                        // Use the type from constant_fields (REE for constants)
+                        let constant_field =
                             Field::new(field.name(), arrow_type.clone(), field.is_nullable())
                                 .with_metadata(field.metadata().clone());
-                        Ok(Arc::new(ree_field))
+                        Ok(Arc::new(constant_field))
                     }
                 } else {
-                    // Get field from schema
-                    let field = &field_id_to_mapped_schema_map
+                    // Regular field - use schema as-is
+                    Ok(field_id_to_mapped_schema_map
                         .get(field_id)
                         .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                        .0;
-
-                    // Check if this field exists in the source - if not, it will be added with REE
-                    if !field_id_to_source_schema_map.contains_key(field_id) {
-                        // Field will be added - use REE type for the schema
-                        let run_ends_field =
-                            Arc::new(Field::new("run_ends", DataType::Int32, false));
-                        let values_field =
-                            Arc::new(Field::new("values", field.data_type().clone(), true));
-                        let ree_field = Field::new(
-                            field.name(),
-                            DataType::RunEndEncoded(run_ends_field, values_field),
-                            field.is_nullable(),
-                        )
-                        .with_metadata(field.metadata().clone());
-                        Ok(Arc::new(ree_field))
-                    } else {
-                        Ok(Arc::clone(field))
-                    }
+                        .0
+                        .clone())
                 }
             })
             .collect();
@@ -520,14 +503,9 @@ impl RecordBatchTransformer {
                         }
                     });
 
-                    // Always use REE for added columns (memory efficient)
-                    let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-                    let values_field = Arc::new(Field::new("values", target_type.clone(), true));
-                    let column_type = DataType::RunEndEncoded(run_ends_field, values_field);
-
                     ColumnSource::Add {
                         value: default_value,
-                        target_type: column_type,
+                        target_type: target_type.clone(),
                     }
                 };
 
@@ -593,135 +571,224 @@ impl RecordBatchTransformer {
         prim_lit: &Option<PrimitiveLiteral>,
         num_rows: usize,
     ) -> Result<ArrayRef> {
-        // All added columns use Run-End Encoding for memory efficiency
-        let DataType::RunEndEncoded(_, values_field) = target_type else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Expected RunEndEncoded type for added column, got: {}",
-                    target_type
-                ),
-            ));
-        };
-
-        // Helper to create a Run-End Encoded array
-        let create_ree_array = |values_array: ArrayRef| -> Result<ArrayRef> {
-            let run_ends = if num_rows == 0 {
-                Int32Array::from(Vec::<i32>::new())
-            } else {
-                Int32Array::from(vec![num_rows as i32])
-            };
-            Ok(Arc::new(
-                RunArray::try_new(&run_ends, &values_array).map_err(|e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to create RunArray for constant value",
-                    )
-                    .with_source(e)
-                })?,
-            ))
-        };
-
-        // Create the values array based on the literal value
-        let values_array: ArrayRef = match (values_field.data_type(), prim_lit) {
-            (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
-                Arc::new(BooleanArray::from(vec![*v]))
-            }
-            (DataType::Boolean, None) => Arc::new(BooleanArray::from(vec![Option::<bool>::None])),
-            (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
-                Arc::new(Int32Array::from(vec![*v]))
-            }
-            (DataType::Int32, None) => Arc::new(Int32Array::from(vec![Option::<i32>::None])),
-            (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
-                Arc::new(Date32Array::from(vec![*v]))
-            }
-            (DataType::Date32, None) => Arc::new(Date32Array::from(vec![Option::<i32>::None])),
-            (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
-                Arc::new(Int64Array::from(vec![*v]))
-            }
-            (DataType::Int64, None) => Arc::new(Int64Array::from(vec![Option::<i64>::None])),
-            (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
-                Arc::new(Float32Array::from(vec![v.0]))
-            }
-            (DataType::Float32, None) => Arc::new(Float32Array::from(vec![Option::<f32>::None])),
-            (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
-                Arc::new(Float64Array::from(vec![v.0]))
-            }
-            (DataType::Float64, None) => Arc::new(Float64Array::from(vec![Option::<f64>::None])),
-            (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
-                Arc::new(StringArray::from(vec![v.as_str()]))
-            }
-            (DataType::Utf8, None) => Arc::new(StringArray::from(vec![Option::<&str>::None])),
-            (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
-                Arc::new(BinaryArray::from_vec(vec![v.as_slice()]))
-            }
-            (DataType::Binary, None) => {
-                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-            }
-            (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(v))) => {
-                Arc::new(arrow_array::Decimal128Array::from(vec![{ *v }]))
-            }
-            (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(v))) => {
-                Arc::new(arrow_array::Decimal128Array::from(vec![*v as i128]))
-            }
-            (DataType::Decimal128(_, _), None) => {
-                Arc::new(arrow_array::Decimal128Array::from(vec![
-                    Option::<i128>::None,
-                ]))
-            }
-            (DataType::Struct(fields), None) => {
-                // Create a single-element StructArray with nulls
-                let null_arrays: Vec<ArrayRef> = fields
-                    .iter()
-                    .map(|f| {
-                        // Recursively create null arrays for struct fields
-                        // For primitive fields in structs, use simple null arrays (not REE within struct)
-                        match f.data_type() {
-                            DataType::Boolean => {
-                                Arc::new(BooleanArray::from(vec![Option::<bool>::None])) as ArrayRef
-                            }
-                            DataType::Int32 | DataType::Date32 => {
-                                Arc::new(Int32Array::from(vec![Option::<i32>::None]))
-                            }
-                            DataType::Int64 => {
-                                Arc::new(Int64Array::from(vec![Option::<i64>::None]))
-                            }
-                            DataType::Float32 => {
-                                Arc::new(Float32Array::from(vec![Option::<f32>::None]))
-                            }
-                            DataType::Float64 => {
-                                Arc::new(Float64Array::from(vec![Option::<f64>::None]))
-                            }
-                            DataType::Utf8 => {
-                                Arc::new(StringArray::from(vec![Option::<&str>::None]))
-                            }
-                            DataType::Binary => {
-                                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                            }
-                            _ => panic!("Unsupported struct field type: {:?}", f.data_type()),
-                        }
-                    })
-                    .collect();
-                Arc::new(arrow_array::StructArray::new(
-                    fields.clone(),
-                    null_arrays,
-                    Some(arrow_buffer::NullBuffer::new_null(1)),
+        // Check if this is a RunEndEncoded type (for constant fields)
+        if let DataType::RunEndEncoded(_, values_field) = target_type {
+            // Helper to create a Run-End Encoded array
+            let create_ree_array = |values_array: ArrayRef| -> Result<ArrayRef> {
+                let run_ends = if num_rows == 0 {
+                    Int32Array::from(Vec::<i32>::new())
+                } else {
+                    Int32Array::from(vec![num_rows as i32])
+                };
+                Ok(Arc::new(
+                    RunArray::try_new(&run_ends, &values_array).map_err(|e| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "Failed to create RunArray for constant value",
+                        )
+                        .with_source(e)
+                    })?,
                 ))
-            }
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    format!(
-                        "Unsupported constant type combination: {:?} with {:?}",
-                        values_field.data_type(),
-                        prim_lit
-                    ),
-                ));
-            }
-        };
+            };
 
-        // Wrap in Run-End Encoding
-        create_ree_array(values_array)
+            // Create the values array based on the literal value
+            let values_array: ArrayRef = match (values_field.data_type(), prim_lit) {
+                (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
+                    Arc::new(BooleanArray::from(vec![*v]))
+                }
+                (DataType::Boolean, None) => {
+                    Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
+                }
+                (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
+                    Arc::new(Int32Array::from(vec![*v]))
+                }
+                (DataType::Int32, None) => Arc::new(Int32Array::from(vec![Option::<i32>::None])),
+                (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
+                    Arc::new(Date32Array::from(vec![*v]))
+                }
+                (DataType::Date32, None) => Arc::new(Date32Array::from(vec![Option::<i32>::None])),
+                (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
+                    Arc::new(Int64Array::from(vec![*v]))
+                }
+                (DataType::Int64, None) => Arc::new(Int64Array::from(vec![Option::<i64>::None])),
+                (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
+                    Arc::new(Float32Array::from(vec![v.0]))
+                }
+                (DataType::Float32, None) => {
+                    Arc::new(Float32Array::from(vec![Option::<f32>::None]))
+                }
+                (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
+                    Arc::new(Float64Array::from(vec![v.0]))
+                }
+                (DataType::Float64, None) => {
+                    Arc::new(Float64Array::from(vec![Option::<f64>::None]))
+                }
+                (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
+                    Arc::new(StringArray::from(vec![v.as_str()]))
+                }
+                (DataType::Utf8, None) => Arc::new(StringArray::from(vec![Option::<&str>::None])),
+                (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
+                    Arc::new(BinaryArray::from_vec(vec![v.as_slice()]))
+                }
+                (DataType::Binary, None) => {
+                    Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
+                }
+                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(v))) => {
+                    Arc::new(arrow_array::Decimal128Array::from(vec![{ *v }]))
+                }
+                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(v))) => {
+                    Arc::new(arrow_array::Decimal128Array::from(vec![*v as i128]))
+                }
+                (DataType::Decimal128(_, _), None) => {
+                    Arc::new(arrow_array::Decimal128Array::from(vec![
+                        Option::<i128>::None,
+                    ]))
+                }
+                (DataType::Struct(fields), None) => {
+                    // Create a single-element StructArray with nulls
+                    let null_arrays: Vec<ArrayRef> = fields
+                        .iter()
+                        .map(|f| {
+                            // Recursively create null arrays for struct fields
+                            // For primitive fields in structs, use simple null arrays (not REE within struct)
+                            match f.data_type() {
+                                DataType::Boolean => {
+                                    Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
+                                        as ArrayRef
+                                }
+                                DataType::Int32 | DataType::Date32 => {
+                                    Arc::new(Int32Array::from(vec![Option::<i32>::None]))
+                                }
+                                DataType::Int64 => {
+                                    Arc::new(Int64Array::from(vec![Option::<i64>::None]))
+                                }
+                                DataType::Float32 => {
+                                    Arc::new(Float32Array::from(vec![Option::<f32>::None]))
+                                }
+                                DataType::Float64 => {
+                                    Arc::new(Float64Array::from(vec![Option::<f64>::None]))
+                                }
+                                DataType::Utf8 => {
+                                    Arc::new(StringArray::from(vec![Option::<&str>::None]))
+                                }
+                                DataType::Binary => {
+                                    Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
+                                }
+                                _ => panic!("Unsupported struct field type: {:?}", f.data_type()),
+                            }
+                        })
+                        .collect();
+                    Arc::new(arrow_array::StructArray::new(
+                        fields.clone(),
+                        null_arrays,
+                        Some(arrow_buffer::NullBuffer::new_null(1)),
+                    ))
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Unsupported constant type combination: {:?} with {:?}",
+                            values_field.data_type(),
+                            prim_lit
+                        ),
+                    ));
+                }
+            };
+
+            // Wrap in Run-End Encoding
+            create_ree_array(values_array)
+        } else {
+            // Non-REE type (simple arrays for non-constant fields)
+            Ok(match (target_type, prim_lit) {
+                (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
+                    Arc::new(BooleanArray::from(vec![*value; num_rows]))
+                }
+                (DataType::Boolean, None) => {
+                    let vals: Vec<Option<bool>> = vec![None; num_rows];
+                    Arc::new(BooleanArray::from(vals))
+                }
+                (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
+                    Arc::new(Int32Array::from(vec![*value; num_rows]))
+                }
+                (DataType::Int32, None) => {
+                    let vals: Vec<Option<i32>> = vec![None; num_rows];
+                    Arc::new(Int32Array::from(vals))
+                }
+                (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
+                    Arc::new(Date32Array::from(vec![*value; num_rows]))
+                }
+                (DataType::Date32, None) => {
+                    let vals: Vec<Option<i32>> = vec![None; num_rows];
+                    Arc::new(Date32Array::from(vals))
+                }
+                (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
+                    Arc::new(Int64Array::from(vec![*value; num_rows]))
+                }
+                (DataType::Int64, None) => {
+                    let vals: Vec<Option<i64>> = vec![None; num_rows];
+                    Arc::new(Int64Array::from(vals))
+                }
+                (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
+                    Arc::new(Float32Array::from(vec![value.0; num_rows]))
+                }
+                (DataType::Float32, None) => {
+                    let vals: Vec<Option<f32>> = vec![None; num_rows];
+                    Arc::new(Float32Array::from(vals))
+                }
+                (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
+                    Arc::new(Float64Array::from(vec![value.0; num_rows]))
+                }
+                (DataType::Float64, None) => {
+                    let vals: Vec<Option<f64>> = vec![None; num_rows];
+                    Arc::new(Float64Array::from(vals))
+                }
+                (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
+                    Arc::new(StringArray::from(vec![value.clone(); num_rows]))
+                }
+                (DataType::Utf8, None) => {
+                    let vals: Vec<Option<String>> = vec![None; num_rows];
+                    Arc::new(StringArray::from(vals))
+                }
+                (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
+                    Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
+                }
+                (DataType::Binary, None) => {
+                    let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
+                    Arc::new(BinaryArray::from_opt_vec(vals))
+                }
+                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
+                    Arc::new(Decimal128Array::from(vec![*value; num_rows]))
+                }
+                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(value))) => {
+                    Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
+                }
+                (DataType::Decimal128(_, _), None) => {
+                    let vals: Vec<Option<i128>> = vec![None; num_rows];
+                    Arc::new(Decimal128Array::from(vals))
+                }
+                (DataType::Struct(fields), None) => {
+                    // Create a StructArray filled with nulls
+                    let null_arrays: Vec<ArrayRef> = fields
+                        .iter()
+                        .map(|field| Self::create_column(field.data_type(), &None, num_rows))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Arc::new(StructArray::new(
+                        fields.clone(),
+                        null_arrays,
+                        Some(NullBuffer::new_null(num_rows)),
+                    ))
+                }
+                (DataType::Null, _) => Arc::new(NullArray::new(num_rows)),
+                (dt, _) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!("unexpected target column type {}", dt),
+                    ));
+                }
+            })
+        }
     }
 
     /// Converts a PrimitiveLiteral to its corresponding Arrow DataType.
@@ -763,7 +830,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
         StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -820,34 +887,6 @@ mod test {
         } else {
             panic!("Expected Int32Array or RunEndEncoded<Int32Array>");
         }
-    }
-
-    /// Helper to check if value is null in either simple or REE array
-    fn is_null_value(array: &dyn Array, index: usize) -> bool {
-        if let Some(run_array) = array
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            values.is_null(0) // For REE, check the single value
-        } else {
-            array.is_null(index)
-        }
-    }
-
-    /// Helper to create a RunEndEncoded StringArray for constant values
-    fn create_ree_string_array(value: Option<&str>, num_rows: usize) -> ArrayRef {
-        let run_ends = if num_rows == 0 {
-            Int32Array::from(Vec::<i32>::new())
-        } else {
-            Int32Array::from(vec![num_rows as i32])
-        };
-        let values = if num_rows == 0 {
-            StringArray::from(Vec::<Option<&str>>::new())
-        } else {
-            StringArray::from(vec![value])
-        };
-        Arc::new(arrow_array::RunArray::try_new(&run_ends, &values).unwrap())
     }
 
     #[test]
@@ -945,19 +984,30 @@ mod test {
         assert_eq!(result.num_columns(), 3);
         assert_eq!(result.num_rows(), 3);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 1), 2);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 2), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "Alice");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 1), "Bob");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 2), "Charlie");
+        let name_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_column.value(0), "Alice");
+        assert_eq!(name_column.value(1), "Bob");
+        assert_eq!(name_column.value(2), "Charlie");
 
-        // date_col added with null default - will be REE with null
-        assert!(is_null_value(result.column(2).as_ref(), 0));
-        assert!(is_null_value(result.column(2).as_ref(), 1));
-        assert!(is_null_value(result.column(2).as_ref(), 2));
+        let date_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        assert!(date_column.is_null(0));
+        assert!(date_column.is_null(1));
+        assert!(date_column.is_null(2));
     }
 
     #[test]
@@ -1011,19 +1061,30 @@ mod test {
         assert_eq!(result.num_columns(), 3);
         assert_eq!(result.num_rows(), 3);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 1), 2);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 2), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "a");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 1), "b");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 2), "c");
+        let data_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(data_column.value(0), "a");
+        assert_eq!(data_column.value(1), "b");
+        assert_eq!(data_column.value(2), "c");
 
-        // Struct column added with null - will be REE<StructArray>
-        assert!(is_null_value(result.column(2).as_ref(), 0));
-        assert!(is_null_value(result.column(2).as_ref(), 1));
-        assert!(is_null_value(result.column(2).as_ref(), 2));
+        let struct_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow_array::StructArray>()
+            .unwrap();
+        assert!(struct_column.is_null(0));
+        assert!(struct_column.is_null(1));
+        assert!(struct_column.is_null(2));
     }
 
     pub fn source_record_batch() -> RecordBatch {
@@ -1063,17 +1124,10 @@ mod test {
     }
 
     pub fn expected_record_batch_migration_required() -> RecordBatch {
-        // Build schema with REE type for added fields (a and f)
-        let schema = Arc::new(ArrowSchema::new(vec![
-            ree_field("a", DataType::Utf8, true, "10"), // Added field - REE with null
-            simple_field("b", DataType::Int64, false, "11"),
-            simple_field("c", DataType::Float64, false, "12"),
-            simple_field("e", DataType::Utf8, true, "14"),
-            ree_field("f", DataType::Utf8, false, "15"), // Added field - REE with default
-        ]));
-
-        RecordBatch::try_new(schema, vec![
-            create_ree_string_array(None, 3), // a - REE with null (not in source)
+        RecordBatch::try_new(arrow_schema_already_same_as_target(), vec![
+            Arc::new(StringArray::from(Vec::<Option<String>>::from([
+                None, None, None,
+            ]))), // a
             Arc::new(Int64Array::from(vec![Some(1001), Some(1002), Some(1003)])), // b
             Arc::new(Float64Array::from(vec![
                 Some(12.125),
@@ -1085,7 +1139,11 @@ mod test {
                 Some("Iceberg"),
                 Some("Rocks"),
             ])), // e (d skipped by projection)
-            create_ree_string_array(Some("(╯°□°）╯"), 3), // f - REE for constant default
+            Arc::new(StringArray::from(vec![
+                Some("(╯°□°）╯"),
+                Some("(╯°□°）╯"),
+                Some("(╯°□°）╯"),
+            ])), // f
         ])
         .unwrap()
     }
@@ -1138,21 +1196,6 @@ mod test {
         Field::new(name, ty, nullable).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             value.to_string(),
-        )]))
-    }
-
-    /// Helper to create a Field with RunEndEncoded type for constant columns
-    fn ree_field(name: &str, values_type: DataType, nullable: bool, field_id: &str) -> Field {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values_field = Arc::new(Field::new("values", values_type, true));
-        Field::new(
-            name,
-            DataType::RunEndEncoded(run_ends_field, values_field),
-            nullable,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            field_id.to_string(),
         )]))
     }
 
@@ -1235,14 +1278,33 @@ mod test {
         assert_eq!(result.num_columns(), 4);
         assert_eq!(result.num_rows(), 1);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1); // id from initial_default - REE
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "John Doe"); // name from Parquet
-        assert_eq!(get_string_value(result.column(2).as_ref(), 0), "hr"); // dept from initial_default - REE
-        assert_eq!(
-            get_string_value(result.column(3).as_ref(), 0),
-            "communications"
-        ); // subdept from Parquet
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.value(0), 1);
+
+        let name_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_column.value(0), "John Doe");
+
+        let dept_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(dept_column.value(0), "hr");
+
+        let subdept_column = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(subdept_column.value(0), "communications");
     }
 
     /// Test for bucket partitioning where source columns must be read from data files.
