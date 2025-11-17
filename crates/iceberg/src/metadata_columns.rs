@@ -51,7 +51,7 @@ pub const RESERVED_COL_NAME_POS: &str = "pos";
 
 /// Lazy-initialized Arrow Field definition for the _file metadata column.
 /// Uses Run-End Encoding for memory efficiency.
-static FILE_PATH_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
+static FILE_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
     let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
     let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
     Arc::new(
@@ -71,8 +71,8 @@ static FILE_PATH_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
 ///
 /// # Returns
 /// A reference to the _file field definition (RunEndEncoded type)
-pub fn file_path_field() -> &'static Arc<Field> {
-    &FILE_PATH_FIELD
+pub fn file_field() -> &'static Arc<Field> {
+    &FILE_FIELD
 }
 
 /// Returns the Arrow Field definition for a metadata field ID.
@@ -84,7 +84,7 @@ pub fn file_path_field() -> &'static Arc<Field> {
 /// The Arrow Field definition for the metadata column, or an error if not a metadata field
 pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
     match field_id {
-        RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_path_field())),
+        RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_field())),
         _ if is_metadata_field(field_id) => {
             // Future metadata fields can be added here
             Err(Error::new(
