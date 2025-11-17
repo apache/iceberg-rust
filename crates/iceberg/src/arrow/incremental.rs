@@ -254,10 +254,15 @@ async fn process_incremental_append_task(
     record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
     // RecordBatchTransformer performs any transformations required on the RecordBatches
-    // that come back from the file, such as type promotion, default column insertion
-    // and column re-ordering
+    // that come back from the file, such as type promotion, default column insertion,
+    // column re-ordering, and virtual field addition (like _file)
     let mut record_batch_transformer =
-        RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids).build();
+        RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids)
+            .with_constant(
+                crate::metadata_columns::RESERVED_FIELD_ID_FILE,
+                crate::spec::PrimitiveLiteral::String(task.base.data_file_path.clone()),
+            )?
+            .build();
 
     if let Some(batch_size) = batch_size {
         record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);

@@ -37,6 +37,12 @@ mod incremental;
 pub use incremental::*;
 pub use reader::*;
 pub use value::*;
+
+// Re-export delete file constants for convenience
+pub(crate) use crate::metadata_columns::{
+    RESERVED_COL_NAME_FILE_PATH, RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE_PATH,
+    RESERVED_FIELD_ID_POS,
+};
 /// Partition value calculator for computing partition values
 pub mod partition_value_calculator;
 pub use partition_value_calculator::*;

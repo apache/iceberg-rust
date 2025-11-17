@@ -37,6 +37,18 @@ pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
+/// Reserved field ID for the file_path column used in delete file reading (positional deletes)
+pub const RESERVED_FIELD_ID_FILE_PATH: i32 = i32::MAX - 200;
+
+/// Column name for the file_path column used in delete file reading (positional deletes)
+pub const RESERVED_COL_NAME_FILE_PATH: &str = "file_path";
+
+/// Reserved field ID for the pos column used in delete file reading (positional deletes)
+pub const RESERVED_FIELD_ID_POS: i32 = i32::MAX - 201;
+
+/// Column name for the pos column used in delete file reading (positional deletes)
+pub const RESERVED_COL_NAME_POS: &str = "pos";
+
 /// Lazy-initialized Arrow Field definition for the _file metadata column.
 /// Uses Run-End Encoding for memory efficiency.
 static FILE_PATH_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {

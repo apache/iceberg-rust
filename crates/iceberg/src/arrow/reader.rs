@@ -63,28 +63,6 @@ use crate::spec::{Datum, NameMapping, NestedField, PrimitiveLiteral, PrimitiveTy
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
-/// Reserved field ID for the file path (_file) column per Iceberg spec
-/// This is dead code for now but will be used when we add the _file column support.
-#[allow(dead_code)]
-pub(crate) const RESERVED_FIELD_ID_FILE: i32 = 2147483646;
-
-/// Column name for the file path metadata column per Iceberg spec
-/// This is dead code for now but will be used when we add the _file column support.
-#[allow(dead_code)]
-pub(crate) const RESERVED_COL_NAME_FILE: &str = "_file";
-
-/// Reserved field ID for the file path column used in delete file reading.
-pub(crate) const RESERVED_FIELD_ID_FILE_PATH: i32 = 2147483546;
-
-/// Column name for the file path metadata column used in delete file reading.
-pub(crate) const RESERVED_COL_NAME_FILE_PATH: &str = "file_path";
-
-/// Reserved field ID for the position column used in delete file reading.
-pub(crate) const RESERVED_FIELD_ID_POS: i32 = 2147483545;
-
-/// Column name for the position metadata column used in delete file reading.
-pub(crate) const RESERVED_COL_NAME_POS: &str = "pos";
-
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
@@ -1898,13 +1876,12 @@ mod tests {
 
     use crate::ErrorKind;
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
-    use crate::arrow::{
-        ArrowReader, ArrowReaderBuilder, RESERVED_COL_NAME_FILE, RESERVED_FIELD_ID_FILE,
-    };
+    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::delete_vector::DeleteVector;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
+    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_FIELD_ID_FILE};
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
         DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
