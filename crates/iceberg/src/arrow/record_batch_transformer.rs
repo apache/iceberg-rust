@@ -758,7 +758,7 @@ impl RecordBatchTransformer {
                     Arc::new(BinaryArray::from_opt_vec(vals))
                 }
                 (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
-                    Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
+                    Arc::new(Decimal128Array::from(vec![*value; num_rows]))
                 }
                 (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(value))) => {
                     Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
@@ -900,21 +900,6 @@ mod test {
         } else {
             array.is_null(index)
         }
-    }
-
-    /// Helper to create a RunEndEncoded StringArray for constant values
-    fn create_ree_string_array(value: Option<&str>, num_rows: usize) -> ArrayRef {
-        let run_ends = if num_rows == 0 {
-            Int32Array::from(Vec::<i32>::new())
-        } else {
-            Int32Array::from(vec![num_rows as i32])
-        };
-        let values = if num_rows == 0 {
-            StringArray::from(Vec::<Option<&str>>::new())
-        } else {
-            StringArray::from(vec![value])
-        };
-        Arc::new(arrow_array::RunArray::try_new(&run_ends, &values).unwrap())
     }
 
     #[test]
@@ -1130,18 +1115,10 @@ mod test {
     }
 
     pub fn expected_record_batch_migration_required() -> RecordBatch {
-        // Build schema - only constant fields (from constant_fields) use REE
-        // Field 'a' has no default, field 'f' has initial_default (not constant)
-        let schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("a", DataType::Utf8, true, "10"), // Added with null - simple type
-            simple_field("b", DataType::Int64, false, "11"),
-            simple_field("c", DataType::Float64, false, "12"),
-            simple_field("e", DataType::Utf8, true, "14"),
-            simple_field("f", DataType::Utf8, false, "15"), // Added with default - simple type
-        ]));
-
-        RecordBatch::try_new(schema, vec![
-            Arc::new(StringArray::from(vec![Option::<String>::None; 3])), // a - simple with null
+        RecordBatch::try_new(arrow_schema_already_same_as_target(), vec![
+            Arc::new(StringArray::from(Vec::<Option<String>>::from([
+                None, None, None,
+            ]))), // a
             Arc::new(Int64Array::from(vec![Some(1001), Some(1002), Some(1003)])), // b
             Arc::new(Float64Array::from(vec![
                 Some(12.125),
@@ -1153,7 +1130,11 @@ mod test {
                 Some("Iceberg"),
                 Some("Rocks"),
             ])), // e (d skipped by projection)
-            Arc::new(StringArray::from(vec!["(╯°□°）╯"; 3])), // f - simple for default value
+            Arc::new(StringArray::from(vec![
+                Some("(╯°□°）╯"),
+                Some("(╯°□°）╯"),
+                Some("(╯°□°）╯"),
+            ])), // f
         ])
         .unwrap()
     }
@@ -1206,21 +1187,6 @@ mod test {
         Field::new(name, ty, nullable).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             value.to_string(),
-        )]))
-    }
-
-    /// Helper to create a Field with RunEndEncoded type for constant columns
-    fn ree_field(name: &str, values_type: DataType, nullable: bool, field_id: &str) -> Field {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values_field = Arc::new(Field::new("values", values_type, true));
-        Field::new(
-            name,
-            DataType::RunEndEncoded(run_ends_field, values_field),
-            nullable,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            field_id.to_string(),
         )]))
     }
 
