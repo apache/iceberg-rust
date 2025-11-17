@@ -830,7 +830,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
         StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -886,19 +886,6 @@ mod test {
             int_values.value(0)
         } else {
             panic!("Expected Int32Array or RunEndEncoded<Int32Array>");
-        }
-    }
-
-    /// Helper to check if value is null in either simple or REE array
-    fn is_null_value(array: &dyn Array, index: usize) -> bool {
-        if let Some(run_array) = array
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            values.is_null(0) // For REE, check the single value
-        } else {
-            array.is_null(index)
         }
     }
 
@@ -997,19 +984,30 @@ mod test {
         assert_eq!(result.num_columns(), 3);
         assert_eq!(result.num_rows(), 3);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 1), 2);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 2), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "Alice");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 1), "Bob");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 2), "Charlie");
+        let name_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_column.value(0), "Alice");
+        assert_eq!(name_column.value(1), "Bob");
+        assert_eq!(name_column.value(2), "Charlie");
 
-        // date_col added with null default - will be REE with null
-        assert!(is_null_value(result.column(2).as_ref(), 0));
-        assert!(is_null_value(result.column(2).as_ref(), 1));
-        assert!(is_null_value(result.column(2).as_ref(), 2));
+        let date_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        assert!(date_column.is_null(0));
+        assert!(date_column.is_null(1));
+        assert!(date_column.is_null(2));
     }
 
     #[test]
@@ -1063,19 +1061,30 @@ mod test {
         assert_eq!(result.num_columns(), 3);
         assert_eq!(result.num_rows(), 3);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 1), 2);
-        assert_eq!(get_int_value(result.column(0).as_ref(), 2), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "a");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 1), "b");
-        assert_eq!(get_string_value(result.column(1).as_ref(), 2), "c");
+        let data_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(data_column.value(0), "a");
+        assert_eq!(data_column.value(1), "b");
+        assert_eq!(data_column.value(2), "c");
 
-        // Struct column added with null - will be REE<StructArray>
-        assert!(is_null_value(result.column(2).as_ref(), 0));
-        assert!(is_null_value(result.column(2).as_ref(), 1));
-        assert!(is_null_value(result.column(2).as_ref(), 2));
+        let struct_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow_array::StructArray>()
+            .unwrap();
+        assert!(struct_column.is_null(0));
+        assert!(struct_column.is_null(1));
+        assert!(struct_column.is_null(2));
     }
 
     pub fn source_record_batch() -> RecordBatch {
@@ -1269,14 +1278,33 @@ mod test {
         assert_eq!(result.num_columns(), 4);
         assert_eq!(result.num_rows(), 1);
 
-        // Use helpers to handle both simple and REE arrays
-        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 1); // id from initial_default - REE
-        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "John Doe"); // name from Parquet
-        assert_eq!(get_string_value(result.column(2).as_ref(), 0), "hr"); // dept from initial_default - REE
-        assert_eq!(
-            get_string_value(result.column(3).as_ref(), 0),
-            "communications"
-        ); // subdept from Parquet
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.value(0), 1);
+
+        let name_column = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_column.value(0), "John Doe");
+
+        let dept_column = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(dept_column.value(0), "hr");
+
+        let subdept_column = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(subdept_column.value(0), "communications");
     }
 
     /// Test for bucket partitioning where source columns must be read from data files.
