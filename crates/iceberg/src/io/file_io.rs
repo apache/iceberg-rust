@@ -114,6 +114,7 @@ impl FileIO {
         Ok(op.remove_all(&path).await?)
     }
 
+
     /// Check file exists.
     ///
     /// # Arguments
@@ -281,7 +282,6 @@ pub struct FileMetadata {
 /// Trait for reading file.
 ///
 /// # TODO
-///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 #[async_trait::async_trait]
