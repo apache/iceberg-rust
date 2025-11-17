@@ -761,10 +761,10 @@ impl Catalog for GlueCatalog {
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
         let table_namespace = validate_namespace(table_ident.namespace())?;
-        let current_table = self.load_table(&table_ident).await?;
-        let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
-        // Get current VersionId for optimistic locking
+        // Make a single get_table call to fetch both metadata location and version_id atomically
+        // This ensures optimistic locking works correctly: we use the version_id that was current
+        // when we read the metadata, not the version_id at commit time
         let get_table_builder = self
             .client
             .0
@@ -772,9 +772,28 @@ impl Catalog for GlueCatalog {
             .database_name(&table_namespace)
             .name(table_ident.name());
         let get_table_builder = with_catalog_id!(get_table_builder, self.config);
-        let glue_table = get_table_builder.send().await.map_err(from_aws_sdk_error)?;
-        let current_version_id = glue_table.table()
-            .and_then(|t| t.version_id.clone());
+        let glue_table_output = get_table_builder.send().await.map_err(from_aws_sdk_error)?;
+
+        let glue_table = glue_table_output.table().ok_or_else(|| {
+            Error::new(
+                ErrorKind::TableNotFound,
+                format!("Table {table_ident} not found"),
+            )
+        })?;
+
+        // Extract version_id for optimistic locking
+        let current_version_id = glue_table.version_id.clone();
+
+        // Extract metadata location and load the table
+        let current_metadata_location = get_metadata_location(&glue_table.parameters)?;
+        let metadata = TableMetadata::read_from(&self.file_io, &current_metadata_location).await?;
+
+        let current_table = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(current_metadata_location.clone())
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .build()?;
 
         let staged_table = commit.apply(current_table)?;
         let staged_metadata_location = staged_table.metadata_location_result()?;
