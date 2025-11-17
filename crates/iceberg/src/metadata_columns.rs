@@ -112,9 +112,11 @@ pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
 pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
     match column_name {
         RESERVED_COL_NAME_FILE => Ok(RESERVED_FIELD_ID_FILE),
+        RESERVED_COL_NAME_FILE_PATH => Ok(RESERVED_FIELD_ID_FILE_PATH),
+        RESERVED_COL_NAME_POS => Ok(RESERVED_FIELD_ID_POS),
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Unknown/unsupported metadata column name: {column_name}"),
+            format!("Unknown metadata column name: {column_name}"),
         )),
     }
 }
@@ -125,10 +127,12 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
 /// * `field_id` - The field ID to check
 ///
 /// # Returns
-/// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
+/// `true` if the field ID is a metadata field, `false` otherwise
 pub fn is_metadata_field(field_id: i32) -> bool {
-    field_id == RESERVED_FIELD_ID_FILE
-    // Additional metadata fields can be checked here in the future
+    matches!(
+        field_id,
+        RESERVED_FIELD_ID_FILE | RESERVED_FIELD_ID_FILE_PATH | RESERVED_FIELD_ID_POS
+    )
 }
 
 /// Checks if a column name is a metadata column.
