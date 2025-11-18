@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::PhysicalSortExpr;
@@ -82,7 +81,7 @@ pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn Exec
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray, StructArray};
-    use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema};
     use datafusion::datasource::{MemTable, TableProvider};
     use datafusion::prelude::SessionContext;
 
