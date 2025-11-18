@@ -24,9 +24,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 
 /// Sorts an ExecutionPlan by partition values for Iceberg tables.
@@ -57,8 +57,11 @@ pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn Exec
         })?;
 
     // Create a single sort expression for the partition column
-    let column_expr = Arc::new(Column::new(PROJECTED_PARTITION_VALUE_COLUMN, partition_column_index));
-    
+    let column_expr = Arc::new(Column::new(
+        PROJECTED_PARTITION_VALUE_COLUMN,
+        partition_column_index,
+    ));
+
     let sort_expr = PhysicalSortExpr {
         expr: column_expr,
         options: SortOptions::default(), // Ascending, nulls last
@@ -66,9 +69,11 @@ pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn Exec
 
     // Create a SortExec with preserve_partitioning=true to ensure the output partitioning
     // is the same as the input partitioning, and the data is sorted within each partition
-    let lex_ordering = datafusion::physical_expr::LexOrdering::new(vec![sort_expr])
-        .ok_or_else(|| DataFusionError::Plan("Failed to create LexOrdering from sort expression".to_string()))?;
-    
+    let lex_ordering =
+        datafusion::physical_expr::LexOrdering::new(vec![sort_expr]).ok_or_else(|| {
+            DataFusionError::Plan("Failed to create LexOrdering from sort expression".to_string())
+        })?;
+
     let sort_exec = SortExec::new(lex_ordering, input).with_preserve_partitioning(true);
 
     Ok(Arc::new(sort_exec))
@@ -86,7 +91,8 @@ mod tests {
     #[tokio::test]
     async fn test_sort_by_partition_basic() {
         // Create a schema with a partition column
-        let partition_fields = Fields::from(vec![Field::new("id_partition", DataType::Int32, false)]);
+        let partition_fields =
+            Fields::from(vec![Field::new("id_partition", DataType::Int32, false)]);
 
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -106,11 +112,9 @@ mod tests {
             Arc::new(Int32Array::from(vec![3, 1, 2])) as _,
         )]));
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![id_array, name_array, partition_array],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![id_array, name_array, partition_array])
+                .unwrap();
 
         let ctx = SessionContext::new();
         let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
@@ -146,13 +150,10 @@ mod tests {
             Field::new("name", DataType::Utf8, false),
         ]));
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(StringArray::from(vec!["a", "b", "c"])),
-            ],
-        )
+        let batch = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ])
         .unwrap();
 
         let ctx = SessionContext::new();
@@ -161,10 +162,12 @@ mod tests {
 
         let result = sort_by_partition(input);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Partition column '_partition' not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Partition column '_partition' not found")
+        );
     }
 
     #[tokio::test]
@@ -188,11 +191,11 @@ mod tests {
         // Create test data with partition values (year, month)
         let id_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
         let data_array = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
-        
+
         // Partition values: (2024, 2), (2024, 1), (2023, 12), (2024, 1)
         let year_array = Arc::new(Int32Array::from(vec![2024, 2024, 2023, 2024]));
         let month_array = Arc::new(Int32Array::from(vec![2, 1, 12, 1]));
-        
+
         let partition_array = Arc::new(StructArray::from(vec![
             (
                 Arc::new(Field::new("year", DataType::Int32, false)),
@@ -204,11 +207,9 @@ mod tests {
             ),
         ]));
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![id_array, data_array, partition_array],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![id_array, data_array, partition_array])
+                .unwrap();
 
         let ctx = SessionContext::new();
         let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
