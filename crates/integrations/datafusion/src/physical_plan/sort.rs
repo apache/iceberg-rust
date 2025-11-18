@@ -15,213 +15,228 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
+//! Partition-based sorting for Iceberg tables.
+
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
-use datafusion::execution::TaskContext;
-use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
-};
-use iceberg::spec::{PartitionSpecRef, Transform};
-use iceberg::table::Table;
+use datafusion::physical_plan::ExecutionPlan;
+use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 
-/// An execution plan that sorts incoming data by Iceberg partition values.
+/// Sorts an ExecutionPlan by partition values for Iceberg tables.
 ///
-/// This execution plan takes input data that has been repartitioned and sorts it by
-/// partition values within each partition. This ensures that data belonging to the
-/// same Iceberg partition is grouped together, allowing a single writer to efficiently
-/// process it in subsequent steps.
-#[derive(Debug)]
-pub struct IcebergPartitionSortExec {
-    table: Table,
-    input: Arc<dyn ExecutionPlan>,
-    sort_exprs: Vec<PhysicalSortExpr>,
-    cache: PlanProperties,
-}
+/// This function takes an input ExecutionPlan that has been extended with partition values
+/// (via `project_with_partition`) and returns a SortExec that sorts by the partition column.
+/// The partition values are expected to be in a struct column named `PROJECTED_PARTITION_VALUE_COLUMN`.
+///
+/// For unpartitioned tables or plans without the partition column, returns an error.
+///
+/// # Arguments
+/// * `input` - The input ExecutionPlan with projected partition values
+///
+/// # Returns
+/// * `Ok(Arc<dyn ExecutionPlan>)` - A SortExec that sorts by partition values
+/// * `Err` - If the partition column is not found
+pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
 
-impl IcebergPartitionSortExec {
-    /// Create a new IcebergPartitionSortExec
-    pub fn new(input: Arc<dyn ExecutionPlan>, table: Table) -> DFResult<Self> {
-        // Extract partition spec from table
-        let partition_spec = table.metadata().default_partition_spec();
+    // Find the partition column in the schema
+    let (partition_column_index, _partition_field) = schema
+        .column_with_name(PROJECTED_PARTITION_VALUE_COLUMN)
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Partition column '{}' not found in schema. Ensure the plan has been extended with partition values using project_with_partition.",
+                PROJECTED_PARTITION_VALUE_COLUMN
+            ))
+        })?;
 
-        // Generate sort expressions from partition spec
-        let sort_exprs = Self::create_sort_expressions(partition_spec, input.schema())?;
+    // Create a single sort expression for the partition column
+    let column_expr = Arc::new(Column::new(PROJECTED_PARTITION_VALUE_COLUMN, partition_column_index));
+    
+    let sort_expr = PhysicalSortExpr {
+        expr: column_expr,
+        options: SortOptions::default(), // Ascending, nulls last
+    };
 
-        // Compute plan properties
-        let cache = Self::compute_properties(&input);
+    // Create a SortExec with preserve_partitioning=true to ensure the output partitioning
+    // is the same as the input partitioning, and the data is sorted within each partition
+    let lex_ordering = datafusion::physical_expr::LexOrdering::new(vec![sort_expr])
+        .ok_or_else(|| DataFusionError::Plan("Failed to create LexOrdering from sort expression".to_string()))?;
+    
+    let sort_exec = SortExec::new(lex_ordering, input).with_preserve_partitioning(true);
 
-        Ok(Self {
-            input,
-            table,
-            sort_exprs,
-            cache,
-        })
-    }
-
-    /// Create sort expressions from partition spec
-    fn create_sort_expressions(
-        partition_spec: &PartitionSpecRef,
-        schema: ArrowSchemaRef,
-    ) -> DFResult<Vec<PhysicalSortExpr>> {
-        if partition_spec.is_unpartitioned() {
-            return Err(DataFusionError::Execution(
-                "IcebergPartitionSortExec is expected to be used on partitioned table only!"
-                    .to_string(),
-            ));
-        }
-
-        let mut sort_exprs = Vec::new();
-
-        // For each partition field, create a sort expression
-        for field in partition_spec.fields() {
-            // Skip void transforms as they don't contribute to sorting
-            if matches!(field.transform, Transform::Void) {
-                continue;
-            }
-
-            // todo revisit this part, the input schema may not have field ids, and using field ids as indices is wrong
-            // Find the column in the schema that corresponds to the source_id
-            // In a real implementation, we would need to map from Iceberg schema to Arrow schema
-            let source_id_usize = field.source_id as usize;
-            let schema_len = schema.fields().len();
-            let column_index_and_name = if source_id_usize >= schema_len {
-                None
-            } else {
-                let f = schema.field(source_id_usize);
-                Some((source_id_usize, f.name().to_string()))
-            };
-
-            let column_index_and_name = column_index_and_name.ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Could not find column for source_id: {}",
-                    field.source_id
-                ))
-            })?;
-
-            // todo need to handle partition value transform as well (how without field ids??)
-            // Create a physical expression based on the transform
-            // For now, we'll just use the column directly for all transforms
-            let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
-                &column_index_and_name.1,
-                column_index_and_name.0,
-            ));
-
-            // Add to sort expressions
-            sort_exprs.push(PhysicalSortExpr {
-                expr,
-                options: SortOptions::default(), // Ascending, nulls last
-            });
-        }
-
-        Ok(sort_exprs)
-    }
-
-    /// Compute plan properties
-    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        PlanProperties::new(
-            // Equivalence properties would be calculated in [`SortExec`] according to the sort expressions
-            input.properties().equivalence_properties().clone(),
-            input.properties().output_partitioning().clone(),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        )
-    }
-}
-
-impl ExecutionPlan for IcebergPartitionSortExec {
-    fn name(&self) -> &str {
-        "IcebergPartitionSortExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return Err(DataFusionError::Internal(format!(
-                "IcebergPartitionSortExec expects exactly one child, got {}",
-                children.len()
-            )));
-        }
-
-        // Create a new instance with the new child
-        IcebergPartitionSortExec::new(Arc::clone(&children[0]), self.table.clone())
-            .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>)
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> DFResult<SendableRecordBatchStream> {
-        // Convert Vec<PhysicalSortExpr> to LexOrdering
-        let lex_ordering = LexOrdering::from(self.sort_exprs.clone());
-
-        // We always set preserve_partitioning to true to ensure the output partitioning
-        // is the same as the input partitioning
-        let sort_exec = Arc::new(
-            SortExec::new(lex_ordering, Arc::clone(&self.input)).with_preserve_partitioning(true),
-        );
-
-        // Execute the sort
-        sort_exec.execute(partition, context)
-    }
-}
-
-impl DisplayAs for IcebergPartitionSortExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "IcebergPartitionSortExec: table={}",
-                    self.table.identifier()
-                )
-            }
-            DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "IcebergPartitionSortExec: table={}, sort_exprs=[{}]",
-                    self.table.identifier(),
-                    self.sort_exprs
-                        .iter()
-                        .map(|e| format!("{}", e))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(
-                    f,
-                    "IcebergPartitionSortExec: table={}",
-                    self.table.identifier()
-                )
-            }
-        }
-    }
+    Ok(Arc::new(sort_exec))
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
+    use datafusion::datasource::{MemTable, TableProvider};
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sort_by_partition_basic() {
+        // Create a schema with a partition column
+        let partition_fields = Fields::from(vec![Field::new("id_partition", DataType::Int32, false)]);
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new(
+                PROJECTED_PARTITION_VALUE_COLUMN,
+                DataType::Struct(partition_fields.clone()),
+                false,
+            ),
+        ]));
+
+        // Create test data with partition values
+        let id_array = Arc::new(Int32Array::from(vec![3, 1, 2]));
+        let name_array = Arc::new(StringArray::from(vec!["c", "a", "b"]));
+        let partition_array = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("id_partition", DataType::Int32, false)),
+            Arc::new(Int32Array::from(vec![3, 1, 2])) as _,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![id_array, name_array, partition_array],
+        )
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
+        let input = mem_table.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        // Apply sort
+        let sorted_plan = sort_by_partition(input).unwrap();
+
+        // Execute and verify
+        let result = datafusion::physical_plan::collect(sorted_plan, ctx.task_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let result_batch = &result[0];
+
+        let id_col = result_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Verify data is sorted by partition value
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 2);
+        assert_eq!(id_col.value(2), 3);
+    }
+
+    #[tokio::test]
+    async fn test_sort_by_partition_missing_column() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
+        let input = mem_table.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        let result = sort_by_partition(input);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Partition column '_partition' not found"));
+    }
+
+    #[tokio::test]
+    async fn test_sort_by_partition_multi_field() {
+        // Test with multiple partition fields in the struct
+        let partition_fields = Fields::from(vec![
+            Field::new("year", DataType::Int32, false),
+            Field::new("month", DataType::Int32, false),
+        ]);
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Utf8, false),
+            Field::new(
+                PROJECTED_PARTITION_VALUE_COLUMN,
+                DataType::Struct(partition_fields.clone()),
+                false,
+            ),
+        ]));
+
+        // Create test data with partition values (year, month)
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let data_array = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        
+        // Partition values: (2024, 2), (2024, 1), (2023, 12), (2024, 1)
+        let year_array = Arc::new(Int32Array::from(vec![2024, 2024, 2023, 2024]));
+        let month_array = Arc::new(Int32Array::from(vec![2, 1, 12, 1]));
+        
+        let partition_array = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("year", DataType::Int32, false)),
+                year_array as _,
+            ),
+            (
+                Arc::new(Field::new("month", DataType::Int32, false)),
+                month_array as _,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![id_array, data_array, partition_array],
+        )
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
+        let input = mem_table.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        // Apply sort
+        let sorted_plan = sort_by_partition(input).unwrap();
+
+        // Execute and verify
+        let result = datafusion::physical_plan::collect(sorted_plan, ctx.task_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let result_batch = &result[0];
+
+        let id_col = result_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Verify data is sorted by partition value (struct comparison)
+        // Expected order: (2023, 12), (2024, 1), (2024, 1), (2024, 2)
+        // Which corresponds to ids: 3, 2, 4, 1
+        assert_eq!(id_col.value(0), 3);
+        assert_eq!(id_col.value(1), 2);
+        assert_eq!(id_col.value(2), 4);
+        assert_eq!(id_col.value(3), 1);
+    }
+}
