@@ -22,7 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -68,10 +68,9 @@ pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn Exec
 
     // Create a SortExec with preserve_partitioning=true to ensure the output partitioning
     // is the same as the input partitioning, and the data is sorted within each partition
-    let lex_ordering =
-        datafusion::physical_expr::LexOrdering::new(vec![sort_expr]).ok_or_else(|| {
-            DataFusionError::Plan("Failed to create LexOrdering from sort expression".to_string())
-        })?;
+    let lex_ordering = LexOrdering::new(vec![sort_expr]).ok_or_else(|| {
+        DataFusionError::Plan("Failed to create LexOrdering from sort expression".to_string())
+    })?;
 
     let sort_exec = SortExec::new(lex_ordering, input).with_preserve_partitioning(true);
 
