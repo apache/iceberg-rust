@@ -35,8 +35,9 @@ use arrow_schema::{
 use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
+use futures::channel::mpsc::channel;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
@@ -57,6 +58,7 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
+use crate::runtime::spawn;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -171,34 +173,80 @@ pub trait StreamsInto<R, S = ArrowRecordBatchStream> {
 
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
-    /// Returns a stream of Arrow RecordBatches containing the data from the files
+    /// Returns a stream of Arrow RecordBatches containing the data from the files.
+    ///
+    /// This implementation provides both file-level and batch-level parallelism:
+    /// - Multiple files are processed in parallel (IO-heavy operations)
+    /// - Multiple batches are processed in parallel across all files (CPU-heavy operations)
     pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
-        let file_io = self.file_io.clone();
+        let (tx, rx) = channel(self.concurrency_limit_data_files);
+
+        let file_io = self.file_io;
         let batch_size = self.batch_size;
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
+        let delete_file_loader = self.delete_file_loader;
 
-        let stream = tasks
-            .map_ok(move |task| {
-                let file_io = file_io.clone();
+        // Outer spawn for coordination - runs the entire processing pipeline in background
+        spawn(async move {
+            let _ = tasks
+                .try_for_each_concurrent(concurrency_limit_data_files, |task| {
+                    let file_io = file_io.clone();
+                    let delete_file_loader = delete_file_loader.clone();
+                    let mut tx = tx.clone();
 
-                Self::process_file_scan_task(
-                    task,
-                    batch_size,
-                    file_io,
-                    self.delete_file_loader.clone(),
-                    row_group_filtering_enabled,
-                    row_selection_enabled,
-                )
-            })
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
-            })
-            .try_buffer_unordered(concurrency_limit_data_files)
-            .try_flatten_unordered(concurrency_limit_data_files);
+                    async move {
+                        // Inner spawn for IO-heavy file operations (parallel file processing)
+                        spawn(async move {
+                            let record_batch_stream = Self::process_file_scan_task(
+                                task,
+                                batch_size,
+                                file_io,
+                                delete_file_loader,
+                                row_group_filtering_enabled,
+                                row_selection_enabled,
+                            )
+                            .await;
 
-        Ok(Box::pin(stream) as ArrowRecordBatchStream)
+                            match record_batch_stream {
+                                Ok(stream) => {
+                                    // Process batches with parallelism for CPU-heavy operations
+                                    // Each batch gets its own spawned task, enabling true parallel processing
+                                    let _: Vec<_> = stream
+                                        .map(|batch_result| {
+                                            let mut tx = tx.clone();
+                                            spawn(async move {
+                                                // CPU-heavy batch processing happens here in parallel
+                                                let result = batch_result.map_err(|e| {
+                                                    Error::new(
+                                                        ErrorKind::Unexpected,
+                                                        "failed to read record batch",
+                                                    )
+                                                    .with_source(e)
+                                                });
+
+                                                let _ = tx.send(result).await;
+                                            })
+                                        })
+                                        .buffer_unordered(concurrency_limit_data_files)
+                                        .collect()
+                                        .await;
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Err(e)).await;
+                                }
+                            }
+                        })
+                        .await;
+
+                        Ok(())
+                    }
+                })
+                .await;
+        });
+
+        Ok(Box::pin(rx) as ArrowRecordBatchStream)
     }
 
     #[allow(clippy::too_many_arguments)]

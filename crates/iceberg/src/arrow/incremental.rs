@@ -118,22 +118,25 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     .await;
 
                                     match record_batch_stream {
-                                        Ok(mut stream) => {
-                                            while let Some(batch) = stream.next().await {
-                                                let result = appends_tx
-                                                    .send(batch.map_err(|e| {
-                                                        Error::new(
-                                                            ErrorKind::Unexpected,
-                                                            "failed to read appended record batch",
-                                                        )
-                                                        .with_source(e)
-                                                    }))
-                                                    .await;
-
-                                                if result.is_err() {
-                                                    break;
-                                                }
-                                            }
+                                        Ok(stream) => {
+                                            // Process batches with parallelism for CPU-heavy operations
+                                            let _: Vec<_> = stream
+                                                .map(|batch_result| {
+                                                    let mut appends_tx = appends_tx.clone();
+                                                    spawn(async move {
+                                                        let result = batch_result.map_err(|e| {
+                                                            Error::new(
+                                                                ErrorKind::Unexpected,
+                                                                "failed to read appended record batch",
+                                                            )
+                                                            .with_source(e)
+                                                        });
+                                                        let _ = appends_tx.send(result).await;
+                                                    })
+                                                })
+                                                .buffer_unordered(concurrency_limit_data_files)
+                                                .collect()
+                                                .await;
                                         }
                                         Err(e) => {
                                             let _ = appends_tx.send(Err(e)).await;
@@ -154,22 +157,25 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     );
 
                                     match record_batch_stream {
-                                        Ok(mut stream) => {
-                                            while let Some(batch) = stream.next().await {
-                                                let result = deletes_tx
-                                                    .send(batch.map_err(|e| {
-                                                        Error::new(
-                                                            ErrorKind::Unexpected,
-                                                            "failed to read deleted file record batch",
-                                                        )
-                                                        .with_source(e)
-                                                    }))
-                                                    .await;
-
-                                                if result.is_err() {
-                                                    break;
-                                                }
-                                            }
+                                        Ok(stream) => {
+                                            // Process batches with parallelism for CPU-heavy operations
+                                            let _: Vec<_> = stream
+                                                .map(|batch_result| {
+                                                    let mut deletes_tx = deletes_tx.clone();
+                                                    spawn(async move {
+                                                        let result = batch_result.map_err(|e| {
+                                                            Error::new(
+                                                                ErrorKind::Unexpected,
+                                                                "failed to read deleted file record batch",
+                                                            )
+                                                            .with_source(e)
+                                                        });
+                                                        let _ = deletes_tx.send(result).await;
+                                                    })
+                                                })
+                                                .buffer_unordered(concurrency_limit_data_files)
+                                                .collect()
+                                                .await;
                                         }
                                         Err(e) => {
                                             let _ = deletes_tx.send(Err(e)).await;
@@ -190,22 +196,25 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     );
 
                                     match record_batch_stream {
-                                        Ok(mut stream) => {
-                                            while let Some(batch) = stream.next().await {
-                                                let result = deletes_tx
-                                                    .send(batch.map_err(|e| {
-                                                        Error::new(
-                                                            ErrorKind::Unexpected,
-                                                            "failed to read deleted record batch",
-                                                        )
-                                                        .with_source(e)
-                                                    }))
-                                                    .await;
-
-                                                if result.is_err() {
-                                                    break;
-                                                }
-                                            }
+                                        Ok(stream) => {
+                                            // Process batches with parallelism for CPU-heavy operations
+                                            let _: Vec<_> = stream
+                                                .map(|batch_result| {
+                                                    let mut deletes_tx = deletes_tx.clone();
+                                                    spawn(async move {
+                                                        let result = batch_result.map_err(|e| {
+                                                            Error::new(
+                                                                ErrorKind::Unexpected,
+                                                                "failed to read deleted record batch",
+                                                            )
+                                                            .with_source(e)
+                                                        });
+                                                        let _ = deletes_tx.send(result).await;
+                                                    })
+                                                })
+                                                .buffer_unordered(concurrency_limit_data_files)
+                                                .collect()
+                                                .await;
                                         }
                                         Err(e) => {
                                             let _ = deletes_tx.send(Err(e)).await;
