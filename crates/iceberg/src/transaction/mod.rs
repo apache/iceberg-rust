@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod merge_append;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -71,6 +72,10 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::merge_append::MergeAppendAction;
+pub use crate::transaction::merge_append::{
+    MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES,
+};
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -139,6 +144,11 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a merge append action.
+    pub fn merge_append(&self) -> Result<MergeAppendAction> {
+        MergeAppendAction::new(&self.table)
     }
 
     /// Creates replace sort order action.
