@@ -61,5 +61,6 @@ notifications:
   commits: commits@iceberg.apache.org
   issues: issues@iceberg.apache.org
   pullrequests: issues@iceberg.apache.org
+  jobs:         ci-jobs@iceberg.apache.org
   jira_options: link label link label
   discussions: issues@iceberg.apache.org
