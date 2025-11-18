@@ -29,7 +29,6 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 futures = { workspace = true }
 geo-types = "0.7.17"
-geojson = "0.24"
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 parquet.workspace = true

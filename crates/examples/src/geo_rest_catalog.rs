@@ -53,37 +53,42 @@ struct GeoFeature {
 }
 
 impl GeoFeature {
-    fn bbox(&self) -> (f64, f64, f64, f64) {
+    fn bbox(&self) -> Option<(f64, f64, f64, f64)> {
         match &self.geometry {
             Geometry::Point(point) => {
                 let coord = point.0;
-                (coord.x, coord.y, coord.x, coord.y)
+                Some((coord.x, coord.y, coord.x, coord.y))
             }
-            Geometry::LineString(line) => {
-                let coords: Vec<_> = line.coords().collect();
-                let xs: Vec<f64> = coords.iter().map(|p| p.x).collect();
-                let ys: Vec<f64> = coords.iter().map(|p| p.y).collect();
-                (
-                    xs.iter().cloned().fold(f64::INFINITY, f64::min),
-                    ys.iter().cloned().fold(f64::INFINITY, f64::min),
-                    xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                    ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                )
+            Geometry::LineString(line) => Self::coords_to_bbox(line.coords()),
+            Geometry::Polygon(poly) => Self::coords_to_bbox(poly.exterior().coords()),
+            Geometry::MultiPoint(mp) => Self::coords_to_bbox(mp.iter().map(|p| &p.0)),
+            Geometry::MultiLineString(mls) => {
+                Self::coords_to_bbox(mls.iter().flat_map(|line| line.coords()))
             }
-            Geometry::Polygon(poly) => {
-                let exterior = poly.exterior();
-                let coords: Vec<_> = exterior.coords().collect();
-                let xs: Vec<f64> = coords.iter().map(|p| p.x).collect();
-                let ys: Vec<f64> = coords.iter().map(|p| p.y).collect();
-                (
-                    xs.iter().cloned().fold(f64::INFINITY, f64::min),
-                    ys.iter().cloned().fold(f64::INFINITY, f64::min),
-                    xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                    ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                )
+            Geometry::MultiPolygon(mpoly) => {
+                Self::coords_to_bbox(mpoly.iter().flat_map(|poly| poly.exterior().coords()))
             }
-            _ => (0.0, 0.0, 0.0, 0.0),
+            _ => None,
         }
+    }
+
+    fn coords_to_bbox<'a>(
+        mut coords: impl Iterator<Item = &'a geo_types::Coord>,
+    ) -> Option<(f64, f64, f64, f64)> {
+        // Start with first coord, then fold over the rest
+        coords.next().map(|first| {
+            coords.fold(
+                (first.x, first.y, first.x, first.y),
+                |(min_x, min_y, max_x, max_y), coord| {
+                    (
+                        min_x.min(coord.x),
+                        min_y.min(coord.y),
+                        max_x.max(coord.x),
+                        max_y.max(coord.y),
+                    )
+                },
+            )
+        })
     }
 
     fn geometry_type(&self) -> &str {
@@ -291,16 +296,24 @@ async fn main() {
         features.iter().map(|f| f.srid),
     ));
     let bbox_min_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().0),
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").0),
     ));
     let bbox_min_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().1),
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").1),
     ));
     let bbox_max_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().2),
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").2),
     ));
     let bbox_max_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        features.iter().map(|f| f.bbox().3),
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").3),
     ));
 
     let countries: ArrayRef = Arc::new(StringArray::from_iter_values(
@@ -331,7 +344,7 @@ async fn main() {
     .unwrap();
 
     data_file_writer.write(record_batch.clone()).await.unwrap();
-    let data_file = data_file_writer.close().await.unwrap();
+    let _data_file = data_file_writer.close().await.unwrap();
 
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();
     println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
