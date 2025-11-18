@@ -36,7 +36,9 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_FILE, get_metadata_field_id, is_metadata_column_name,
+};
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
@@ -145,8 +147,6 @@ impl<'a> TableScanBuilder<'a> {
     /// # }
     /// ```
     pub fn with_file_column(mut self) -> Self {
-        use crate::metadata_columns::RESERVED_COL_NAME_FILE;
-
         let mut columns = self.column_names.unwrap_or_else(|| {
             // No explicit selection - get all column names from schema
             self.table
