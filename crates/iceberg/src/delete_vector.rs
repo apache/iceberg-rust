@@ -41,6 +41,16 @@ impl DeleteVector {
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Get a reference to the inner RoaringTreemap
+    pub fn inner(&self) -> &RoaringTreemap {
+        &self.inner
+    }
+
+    /// Consume self and return the inner RoaringTreemap
+    pub fn into_inner(self) -> RoaringTreemap {
+        self.inner
+    }
+
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }

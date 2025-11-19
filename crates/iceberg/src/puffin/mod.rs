@@ -34,5 +34,8 @@ pub use reader::PuffinReader;
 mod writer;
 pub use writer::PuffinWriter;
 
+mod deletion_vector;
+pub use deletion_vector::{deserialize_deletion_vector, serialize_deletion_vector};
+
 #[cfg(test)]
 mod test_utils;

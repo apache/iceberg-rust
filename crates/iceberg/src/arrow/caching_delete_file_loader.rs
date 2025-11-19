@@ -46,9 +46,12 @@ pub(crate) struct CachingDeleteFileLoader {
 
 // Intermediate context during processing of a delete file task.
 enum DeleteFileContext {
-    // TODO: Delete Vector loader from Puffin files
     ExistingEqDel,
     PosDels(ArrowRecordBatchStream),
+    DelVec {
+        data_file_path: String,
+        puffin_bytes: Vec<u8>,
+    },
     FreshEqDel {
         batch_stream: ArrowRecordBatchStream,
         equality_ids: HashSet<i32>,
@@ -115,7 +118,7 @@ impl CachingDeleteFileLoader {
     ///                                                     |
     ///                                                     |
     ///                       +-----------------------------+--------------------------+
-    ///                     Pos Del           Del Vec (Not yet Implemented)         EQ Del
+    ///                     Pos Del                      Del Vec                    EQ Del
     ///                       |                             |                          |
     ///              [parse pos del stream]         [parse del vec puffin]       [parse eq del]
     ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
@@ -210,11 +213,38 @@ impl CachingDeleteFileLoader {
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
         match task.file_type {
-            DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
-                basic_delete_file_loader
-                    .parquet_to_batch_stream(&task.file_path)
-                    .await?,
-            )),
+            DataContentType::PositionDeletes => {
+                // Check if this is a deletion vector from a Puffin file
+                if let (Some(data_file_path), Some(offset), Some(size)) = (
+                    &task.referenced_data_file,
+                    task.content_offset,
+                    task.content_size_in_bytes,
+                ) {
+                    // This is a deletion vector - load from Puffin file
+                    use crate::io::FileRead;
+
+                    let file_io = basic_delete_file_loader.file_io.clone();
+                    let input_file = file_io.new_input(&task.file_path)?;
+                    let file_read = input_file.reader().await?;
+
+                    // Read the blob at the specified offset and size
+                    let start = offset as u64;
+                    let end = start + size as u64;
+                    let puffin_bytes = file_read.read(start..end).await?.to_vec();
+
+                    Ok(DeleteFileContext::DelVec {
+                        data_file_path: data_file_path.clone(),
+                        puffin_bytes,
+                    })
+                } else {
+                    // Regular positional delete file
+                    Ok(DeleteFileContext::PosDels(
+                        basic_delete_file_loader
+                            .parquet_to_batch_stream(&task.file_path)
+                            .await?,
+                    ))
+                }
+            }
 
             DataContentType::EqualityDeletes => {
                 let Some(notify) = del_filter.try_start_eq_del_load(&task.file_path) else {
@@ -258,6 +288,21 @@ impl CachingDeleteFileLoader {
             DeleteFileContext::PosDels(batch_stream) => {
                 let del_vecs =
                     Self::parse_positional_deletes_record_batch_stream(batch_stream).await?;
+                Ok(ParsedDeleteFileContext::DelVecs(del_vecs))
+            }
+            DeleteFileContext::DelVec {
+                data_file_path,
+                puffin_bytes,
+            } => {
+                // Deserialize the deletion vector from the Puffin blob
+                use crate::puffin::deserialize_deletion_vector;
+
+                let roaring_treemap = deserialize_deletion_vector(&puffin_bytes)?;
+                let delete_vector = DeleteVector::new(roaring_treemap);
+
+                let mut del_vecs = HashMap::new();
+                del_vecs.insert(data_file_path, delete_vector);
+
                 Ok(ParsedDeleteFileContext::DelVecs(del_vecs))
             }
             DeleteFileContext::FreshEqDel {
@@ -870,6 +915,9 @@ mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let eq_del = FileScanTaskDeleteFile {
@@ -877,6 +925,9 @@ mod tests {
             file_type: DataContentType::EqualityDeletes,
             partition_spec_id: 0,
             equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let file_scan_task = FileScanTask {
@@ -911,5 +962,118 @@ mod tests {
             "Failed to build equality delete predicate: {:?}",
             result.err()
         );
+    }
+
+    /// Test loading deletion vectors from Puffin files
+    #[tokio::test]
+    async fn test_load_deletion_vector_from_puffin() {
+        use std::collections::HashMap;
+
+        use crate::io::FileIO;
+        use crate::puffin::{Blob, CompressionCodec, PuffinWriter, DELETION_VECTOR_V1};
+        use crate::scan::FileScanTask;
+        use crate::spec::{DataFileFormat, Schema};
+        use roaring::RoaringTreemap;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path();
+        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Create data file path
+        let data_file_path = format!("{}/data-1.parquet", table_location.to_str().unwrap());
+
+        // Create a deletion vector with some positions
+        let mut deletion_vector_treemap = RoaringTreemap::new();
+        deletion_vector_treemap.insert(0);
+        deletion_vector_treemap.insert(5);
+        deletion_vector_treemap.insert(10);
+        deletion_vector_treemap.insert(100);
+        deletion_vector_treemap.insert((1u64 << 32) + 42); // Test 64-bit value
+
+        // Serialize the deletion vector
+        let dv_bytes = crate::puffin::serialize_deletion_vector(&deletion_vector_treemap).unwrap();
+
+        // Create Puffin file with deletion vector blob
+        let puffin_path = format!("{}/deletion-vectors.puffin", table_location.to_str().unwrap());
+        let puffin_output_file = file_io.new_output(&puffin_path).unwrap();
+
+        let mut puffin_writer =
+            PuffinWriter::new(&puffin_output_file, HashMap::new(), false)
+                .await
+                .unwrap();
+
+        let blob = Blob::builder()
+            .r#type(DELETION_VECTOR_V1.to_string())
+            .fields(vec![])
+            .snapshot_id(1)
+            .sequence_number(1)
+            .data(dv_bytes.clone())
+            .properties({
+                let mut props = HashMap::new();
+                props.insert("referenced-data-file".to_string(), data_file_path.clone());
+                props.insert("cardinality".to_string(), "5".to_string());
+                props
+            })
+            .build();
+
+        // Track the offset before adding the blob
+        // Puffin header is "PFA1" (4 bytes)
+        let content_offset = 4i64;
+        let content_size = dv_bytes.len() as i64;
+
+        puffin_writer
+            .add(blob, CompressionCodec::None)
+            .await
+            .unwrap();
+        puffin_writer.close().await.unwrap();
+
+        // Create FileScanTask with deletion vector
+        let data_file_schema = Arc::new(Schema::builder().build().unwrap());
+        let del_vec_task = FileScanTaskDeleteFile {
+            file_path: puffin_path.clone(),
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+            referenced_data_file: Some(data_file_path.clone()),
+            content_offset: Some(content_offset),
+            content_size_in_bytes: Some(content_size),
+        };
+
+        let file_scan_task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![del_vec_task],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+        };
+
+        // Load the deletion vector
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_filter = delete_file_loader
+            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify the deletion vector was loaded correctly
+        let loaded_dv = delete_filter.get_delete_vector(&file_scan_task).unwrap();
+        let locked_dv = loaded_dv.lock().unwrap();
+
+        assert_eq!(locked_dv.len(), 5);
+        assert!(locked_dv.iter().any(|pos| pos == 0));
+        assert!(locked_dv.iter().any(|pos| pos == 5));
+        assert!(locked_dv.iter().any(|pos| pos == 10));
+        assert!(locked_dv.iter().any(|pos| pos == 100));
+        assert!(locked_dv.iter().any(|pos| pos == (1u64 << 32) + 42));
     }
 }
