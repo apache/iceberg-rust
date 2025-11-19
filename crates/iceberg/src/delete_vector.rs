@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Deletion vector implementation using Roaring bitmaps
+//!
+//! This module provides a space-efficient representation of row positions to delete
+//! using RoaringTreemap for 64-bit position support.
+
 use std::ops::BitOrAssign;
 
 use roaring::RoaringTreemap;
@@ -23,12 +28,16 @@ use roaring::treemap::BitmapIter;
 
 use crate::{Error, ErrorKind, Result};
 
+/// A deletion vector representing row positions to delete
+///
+/// Uses RoaringTreemap internally for efficient storage of 64-bit positions.
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
 
 impl DeleteVector {
+    /// Create a new deletion vector from a RoaringTreemap
     #[allow(unused)]
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
@@ -36,6 +45,7 @@ impl DeleteVector {
         }
     }
 
+    /// Returns an iterator over the deleted positions
     pub fn iter(&self) -> DeleteVectorIterator {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
@@ -51,6 +61,9 @@ impl DeleteVector {
         self.inner
     }
 
+    /// Insert a position into the deletion vector
+    ///
+    /// Returns true if the value was newly inserted
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }
@@ -74,18 +87,21 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
+    /// Returns the number of deleted positions
     #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
 }
 
-// Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
-// But right now, it does not have a corresponding implementation of `roaring::bitmap::Iter::advance_to`,
-// which is very handy in ArrowReader::build_deletes_row_selection.
-// There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
-// and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
-// to just a wrapper around the underlying iterator's method.
+/// Iterator over deleted positions in a deletion vector
+///
+/// Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
+/// But right now, it does not have a corresponding implementation of `roaring::bitmap::Iter::advance_to`,
+/// which is very handy in ArrowReader::build_deletes_row_selection.
+/// There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
+/// and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
+/// to just a wrapper around the underlying iterator's method.
 pub struct DeleteVectorIterator<'a> {
     // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
     // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
@@ -123,6 +139,10 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Advance the iterator to the specified position
+    ///
+    /// Skips all positions less than `pos`. The next value returned by the iterator
+    /// will be >= `pos` (if any such value exists).
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;
