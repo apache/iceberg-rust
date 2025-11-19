@@ -104,6 +104,25 @@ impl IcebergTableProvider {
         let table = self.catalog.load_table(&self.table_ident).await?;
         Ok(IcebergMetadataTableProvider { table, r#type })
     }
+
+    /// Reload the table from the catalog if needed to get fresh metadata.
+    /// This is useful after INSERT operations that modify the table.
+    pub(crate) async fn reload_if_needed(&self) -> Result<Self> {
+        if let Some(catalog) = &self.catalog {
+            // Reload the table from the catalog to get the latest metadata
+            let table = catalog.load_table(self.table.identifier()).await?;
+            let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+            Ok(IcebergTableProvider {
+                table,
+                snapshot_id: self.snapshot_id,
+                schema,
+                catalog: self.catalog.clone(),
+            })
+        } else {
+            // If no catalog is available, return a clone of self
+            Ok(self.clone())
+        }
+    }
 }
 
 #[async_trait]

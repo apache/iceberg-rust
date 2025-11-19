@@ -22,8 +22,9 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
-use iceberg::CatalogBuilder;
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 use toml::Table as TomlTable;
@@ -84,8 +85,77 @@ impl DataFusionEngine {
             )
             .await?;
 
+        // Create a test namespace for INSERT INTO tests
+        let namespace = NamespaceIdent::new("default".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        // Create test tables
+        Self::create_unpartitioned_table(&catalog, &namespace).await?;
+        Self::create_partitioned_table(&catalog, &namespace).await?;
+
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
         ))
+    }
+
+    /// Create an unpartitioned test table with id and name columns
+    async fn create_unpartitioned_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_table".to_string())
+                    .schema(schema)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Create a partitioned test table with id, category, and value columns
+    /// Partitioned by category using identity transform
+    async fn create_partitioned_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(2, "category", Transform::Identity)?
+            .build();
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_partitioned_table".to_string())
+                    .schema(schema)
+                    .partition_spec(partition_spec)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
     }
 }
