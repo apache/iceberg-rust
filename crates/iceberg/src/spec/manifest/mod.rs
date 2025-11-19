@@ -166,9 +166,7 @@ mod tests {
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::{
-        CompressionSettings, Literal, NestedField, PrimitiveType, Struct, Transform, Type,
-    };
+    use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
     #[tokio::test]
     async fn test_parse_manifest_v2_unpartition() {
@@ -274,7 +272,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v2_data();
         for entry in &entries {
@@ -460,7 +457,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v2_data();
         for entry in &entries {
@@ -558,7 +554,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v1();
         for entry in &entries {
@@ -668,7 +663,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v1();
         for entry in &entries {
@@ -777,7 +771,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v2_data();
         for entry in &entries {
@@ -1057,7 +1050,6 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            CompressionSettings::default(),
         )
         .build_v2_data();
         for entry in &entries {

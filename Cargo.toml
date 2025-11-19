@@ -40,7 +40,7 @@ rust-version = "1.87"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = { version = "0.20", features = ["zstandard", "snappy"] }
+apache-avro = { version = "0.20", features = ["zstandard"] }
 array-init = "2"
 arrow-arith = "56.2"
 arrow-array = "56.2"
