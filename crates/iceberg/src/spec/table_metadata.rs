@@ -1619,7 +1619,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        Summary, Transform, Type, UnboundPartitionField,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -3717,6 +3717,7 @@ mod tests {
         // Verify the complete round-trip: read metadata should match what we wrote
         assert_eq!(read_metadata, compressed_metadata);
     }
+
 
     #[test]
     fn test_partition_name_exists() {

@@ -232,9 +232,9 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
-    /// Compression codec for metadata files (JSON)
+    /// Compression codec for metadata files (JSON).
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
-    /// Default metadata compression codec - uncompressed
+    /// Default metadata compression codec
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
 
     /// Compression codec for Avro files (manifests, manifest lists)
@@ -501,10 +501,6 @@ mod tests {
     #[test]
     fn test_table_properties_compression() {
         let props = HashMap::from([
-            (
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-                "gzip".to_string(),
-            ),
             (
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
                 "zstd".to_string(),
