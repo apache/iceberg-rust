@@ -97,6 +97,7 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
+
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -345,6 +346,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
             )?,
+<<<<<<< HEAD
             avro_compression_level: props
                 .get(TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL)
                 .map(|v| {
@@ -412,6 +414,20 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
             )?,
+=======
+            avro_compression_level: {
+                let level = parse_property(
+                    props,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
+                    255u8,
+                )?;
+                if level == 255 {
+                    None
+                } else {
+                    Some(level)
+                }
+            },
+>>>>>>> 5370f775 (remove parse optional property)
         })
     }
 }
@@ -658,6 +674,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_table_properties_compression_invalid_rejected() {
         let invalid_codecs = ["lz4", "zstd", "snappy"];
 
@@ -910,6 +927,8 @@ mod tests {
     }
 
     #[test]
+=======
+>>>>>>> 5370f775 (remove parse optional property)
     fn test_table_properties_optional_compression_level() {
         // Test that compression level is None when not specified
         let props = HashMap::new();
