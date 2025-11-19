@@ -16,39 +16,43 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::str::FromStr;
+
+use crate::error::{Error, ErrorKind};
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
-fn parse_property<T: std::str::FromStr>(
+fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
-) -> Result<T, anyhow::Error>
+) -> crate::error::Result<T>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
         value
             .parse::<T>()
-            .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+            .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
     })
 }
 
 // Helper function to parse an optional property from a HashMap
 // If the property is not found, returns None
-fn parse_optional_property<T: std::str::FromStr>(
+fn parse_optional_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
-) -> Result<Option<T>, anyhow::Error>
+) -> crate::error::Result<Option<T>>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties
         .get(key)
         .map(|value| {
             value
                 .parse::<T>()
-                .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+                .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
         })
         .transpose()
 }
@@ -68,8 +72,6 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
-    /// Compression codec for metadata files (JSON)
-    pub metadata_compression_codec: String,
     /// Compression codec for Avro files (manifests, manifest lists)
     pub avro_compression_codec: String,
     /// Compression level for Avro files (None uses codec-specific defaults: gzip=9, zstd=1)
@@ -163,11 +165,6 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
-    /// Compression codec for metadata files (JSON)
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
-    /// Default metadata compression codec - uncompressed
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
-
     /// Compression codec for Avro files (manifests, manifest lists)
     pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
     /// Default Avro compression codec - gzip
@@ -181,7 +178,7 @@ impl TableProperties {
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     // parse by entry key or use default value
-    type Error = anyhow::Error;
+    type Error = crate::Error;
 
     fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(TableProperties {
@@ -214,11 +211,6 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-            )?,
-            metadata_compression_codec: parse_property(
-                props,
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC,
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT.to_string(),
             )?,
             avro_compression_codec: parse_property(
                 props,
@@ -263,10 +255,6 @@ mod tests {
         );
         // Test compression defaults
         assert_eq!(
-            table_properties.metadata_compression_codec,
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT.to_string()
-        );
-        assert_eq!(
             table_properties.avro_compression_codec,
             TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string()
         );
@@ -280,10 +268,6 @@ mod tests {
     fn test_table_properties_compression() {
         let props = HashMap::from([
             (
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-                "gzip".to_string(),
-            ),
-            (
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
                 "zstd".to_string(),
             ),
@@ -293,7 +277,6 @@ mod tests {
             ),
         ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.metadata_compression_codec, "gzip");
         assert_eq!(table_properties.avro_compression_codec, "zstd");
         assert_eq!(table_properties.avro_compression_level, Some(3));
     }

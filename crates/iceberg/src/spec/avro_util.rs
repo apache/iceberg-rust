@@ -20,6 +20,8 @@
 use apache_avro::Codec;
 use log::warn;
 
+use crate::spec::TableProperties;
+
 /// Settings for compression codec and level.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressionSettings {
@@ -43,7 +45,6 @@ impl CompressionSettings {
 
 impl Default for CompressionSettings {
     fn default() -> Self {
-        use crate::spec::TableProperties;
         Self {
             codec: TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
             level: None,
