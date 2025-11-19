@@ -38,25 +38,6 @@ where
     })
 }
 
-// Helper function to parse an optional property from a HashMap
-// If the property is not found, returns None
-fn parse_optional_property<T: FromStr>(
-    properties: &HashMap<String, String>,
-    key: &str,
-) -> crate::error::Result<Option<T>>
-where
-    <T as FromStr>::Err: Display,
-{
-    properties
-        .get(key)
-        .map(|value| {
-            value
-                .parse::<T>()
-                .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
-        })
-        .transpose()
-}
-
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -217,10 +198,18 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
             )?,
-            avro_compression_level: parse_optional_property(
-                props,
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
-            )?,
+            avro_compression_level: {
+                let level = parse_property(
+                    props,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
+                    255u8,
+                )?;
+                if level == 255 {
+                    None
+                } else {
+                    Some(level)
+                }
+            },
         })
     }
 }
@@ -352,30 +341,6 @@ mod tests {
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
-    }
-
-    #[test]
-    fn test_parse_optional_property() {
-        // Test when key is not present - should return None
-        let props = HashMap::new();
-        let result: Option<u8> = parse_optional_property(&props, "missing-key").unwrap();
-        assert_eq!(result, None);
-
-        // Test when key is present with valid value - should return Some(value)
-        let props = HashMap::from([("test-key".to_string(), "42".to_string())]);
-        let result: Option<u8> = parse_optional_property(&props, "test-key").unwrap();
-        assert_eq!(result, Some(42));
-
-        // Test when key is present with invalid value - should return error
-        let props = HashMap::from([("test-key".to_string(), "invalid".to_string())]);
-        let result = parse_optional_property::<u8>(&props, "test-key");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid value for test-key")
-        );
     }
 
     #[test]
