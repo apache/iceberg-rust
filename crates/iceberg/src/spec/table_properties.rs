@@ -137,6 +137,12 @@ impl TableProperties {
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
+
+    /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
+    /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
+    pub const PROPERTY_WRITE_FANOUT_ENABLED: &str = "write.fanout.enabled";
+    /// Default value for fanout writer enabled
+    pub const PROPERTY_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
