@@ -28,6 +28,9 @@ use crate::arrow::{
 };
 use crate::delete_file_index::DeleteFileIndex;
 use crate::io::FileIO;
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_FILE, get_metadata_field_id, is_metadata_column_name,
+};
 use crate::scan::DeleteFileContext;
 use crate::scan::cache::ExpressionEvaluatorCache;
 use crate::scan::context::ManifestEntryContext;
@@ -108,6 +111,45 @@ impl<'a> IncrementalTableScanBuilder<'a> {
                 .map(|item| item.to_string())
                 .collect(),
         );
+        self
+    }
+
+    /// Include the _file metadata column in the incremental scan.
+    ///
+    /// This is a convenience method that adds the _file column to the current selection.
+    /// If no columns are currently selected (select_all), this will select all columns plus _file.
+    /// If specific columns are selected, this adds _file to that selection.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use iceberg::table::Table;
+    /// # async fn example(table: Table) -> iceberg::Result<()> {
+    /// // Select id, name, and _file for incremental scan
+    /// let scan = table
+    ///     .incremental_scan(None, None)
+    ///     .select(["id", "name"])
+    ///     .with_file_column()
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_file_column(mut self) -> Self {
+        let mut columns = self.column_names.unwrap_or_else(|| {
+            // No explicit selection - get all column names from schema
+            self.table
+                .metadata()
+                .current_schema()
+                .as_struct()
+                .fields()
+                .iter()
+                .map(|f| f.name.clone())
+                .collect()
+        });
+
+        // Add _file column
+        columns.push(RESERVED_COL_NAME_FILE.to_string());
+
+        self.column_names = Some(columns);
         self
     }
 
@@ -216,8 +258,13 @@ impl<'a> IncrementalTableScanBuilder<'a> {
 
         let schema = snapshot_to.schema(self.table.metadata())?;
 
+        // Check that all column names exist in the schema (skip metadata columns)
         if let Some(column_names) = self.column_names.as_ref() {
             for column_name in column_names {
+                // Skip metadata columns that don't exist in the schema
+                if is_metadata_column_name(column_name) {
+                    continue;
+                }
                 if schema.field_by_name(column_name).is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
@@ -241,6 +288,12 @@ impl<'a> IncrementalTableScanBuilder<'a> {
         });
 
         for column_name in column_names.iter() {
+            // Handle metadata columns (like "_file")
+            if is_metadata_column_name(column_name) {
+                field_ids.push(get_metadata_field_id(column_name)?);
+                continue;
+            }
+
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,

@@ -15,22 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_array::{RecordBatch, UInt64Array};
-use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_schema::Schema as ArrowSchema;
 use futures::channel::mpsc::channel;
 use futures::stream::select;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::{
-    ArrowReader, RESERVED_COL_NAME_FILE_PATH, RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE_PATH,
-    RESERVED_FIELD_ID_POS, StreamsInto,
-};
+use crate::arrow::{ArrowReader, StreamsInto};
 use crate::delete_vector::DeleteVector;
 use crate::io::FileIO;
 use crate::runtime::spawn;
@@ -42,19 +37,6 @@ use crate::{Error, ErrorKind, Result};
 
 /// Default batch size for incremental delete operations.
 const DEFAULT_BATCH_SIZE: usize = 1024;
-
-/// Creates the schema for positional delete records containing the "pos" column.
-/// The pos field includes the reserved field ID as metadata.
-fn create_pos_delete_schema() -> Arc<ArrowSchema> {
-    let pos_field =
-        Field::new(RESERVED_COL_NAME_POS, DataType::UInt64, false).with_metadata(HashMap::from([
-            (
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                RESERVED_FIELD_ID_POS.to_string(),
-            ),
-        ]));
-    Arc::new(ArrowSchema::new(vec![pos_field]))
-}
 
 /// The type of incremental batch: appended data or deleted records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,10 +236,15 @@ async fn process_incremental_append_task(
     record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
     // RecordBatchTransformer performs any transformations required on the RecordBatches
-    // that come back from the file, such as type promotion, default column insertion
-    // and column re-ordering
+    // that come back from the file, such as type promotion, default column insertion,
+    // column re-ordering, and virtual field addition (like _file)
     let mut record_batch_transformer =
-        RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids).build();
+        RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids)
+            .with_constant(
+                crate::metadata_columns::RESERVED_FIELD_ID_FILE,
+                crate::spec::PrimitiveLiteral::String(task.base.data_file_path.clone()),
+            )?
+            .build();
 
     if let Some(batch_size) = batch_size {
         record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -295,7 +282,9 @@ fn process_incremental_delete_task(
     delete_vector: DeleteVector,
     batch_size: Option<usize>,
 ) -> Result<ArrowRecordBatchStream> {
-    let schema = create_pos_delete_schema();
+    let schema = Arc::new(ArrowSchema::new(vec![Arc::clone(
+        crate::metadata_columns::pos_field(),
+    )]));
 
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
 
@@ -315,14 +304,7 @@ fn process_incremental_delete_task(
                     "Failed to create RecordBatch for DeleteVector",
                 )
             })
-            .and_then(|batch| {
-                ArrowReader::add_file_path_column(
-                    batch,
-                    &file_path,
-                    RESERVED_COL_NAME_FILE_PATH,
-                    RESERVED_FIELD_ID_FILE_PATH,
-                )
-            })
+            .and_then(|batch| ArrowReader::add_file_path_column(batch, &file_path))
         });
 
     Ok(Box::pin(stream) as ArrowRecordBatchStream)
@@ -333,7 +315,9 @@ fn process_incremental_deleted_file_task(
     total_records: u64,
     batch_size: Option<usize>,
 ) -> Result<ArrowRecordBatchStream> {
-    let schema = create_pos_delete_schema();
+    let schema = Arc::new(ArrowSchema::new(vec![Arc::clone(
+        crate::metadata_columns::pos_field(),
+    )]));
 
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
 
@@ -352,14 +336,7 @@ fn process_incremental_deleted_file_task(
                     "Failed to create RecordBatch for deleted file",
                 )
             })
-            .and_then(|batch| {
-                ArrowReader::add_file_path_column(
-                    batch,
-                    &file_path,
-                    RESERVED_COL_NAME_FILE_PATH,
-                    RESERVED_FIELD_ID_FILE_PATH,
-                )
-            })
+            .and_then(|batch| ArrowReader::add_file_path_column(batch, &file_path))
         });
 
     Ok(Box::pin(stream) as ArrowRecordBatchStream)

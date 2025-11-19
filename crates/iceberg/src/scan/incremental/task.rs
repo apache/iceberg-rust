@@ -39,7 +39,7 @@ pub struct BaseIncrementalFileScanTask {
     /// The format of the data file to scan.
     pub data_file_format: DataFileFormat,
     /// The schema of the data file to scan.
-    pub schema: crate::spec::SchemaRef,
+    pub schema: SchemaRef,
     /// The field ids to project.
     pub project_field_ids: Vec<i32>,
 }

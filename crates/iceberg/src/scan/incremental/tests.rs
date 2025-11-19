@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use crate::TableIdent;
 use crate::io::{FileIO, OutputFile};
+use crate::metadata_columns::RESERVED_COL_NAME_FILE;
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestListWriter,
     ManifestStatus, ManifestWriterBuilder, PartitionSpec, SchemaRef, Struct, TableMetadata,
@@ -2454,4 +2455,87 @@ async fn test_incremental_scan_includes_root_when_from_is_none() {
         ],
         "Scan with from=None should include root snapshot data"
     );
+}
+
+#[tokio::test]
+async fn test_incremental_scan_with_file_column() {
+    // Test that the _file metadata column works correctly in incremental scans
+
+    let fixture = IncrementalTestFixture::new(vec![
+        Operation::Add(vec![], "empty.parquet".to_string()),
+        Operation::Add(
+            vec![(1, "data1".to_string()), (2, "data2".to_string())],
+            "file1.parquet".to_string(),
+        ),
+        Operation::Add(
+            vec![(10, "data10".to_string())],
+            "file2.parquet".to_string(),
+        ),
+    ])
+    .await;
+
+    // Scan with _file column using the builder helper
+    let scan = fixture
+        .table
+        .incremental_scan(Some(1), Some(3))
+        .select(vec!["n", "data"])
+        .with_file_column()
+        .build()
+        .unwrap();
+
+    let stream = scan.to_arrow().await.unwrap();
+    let batches: Vec<_> = stream.try_collect().await.unwrap();
+
+    // Get append batches
+    let append_batches: Vec<_> = batches
+        .iter()
+        .filter(|(t, _)| *t == crate::arrow::IncrementalBatchType::Append)
+        .map(|(_, b)| b.clone())
+        .collect();
+
+    // Verify we have data and the _file column
+    assert!(!append_batches.is_empty(), "Should have append batches");
+
+    for batch in append_batches {
+        // Should have 3 columns: n, data, _file
+        assert_eq!(
+            batch.num_columns(),
+            3,
+            "Should have n, data, and _file columns"
+        );
+
+        // Verify _file column exists
+        let file_column = batch.column_by_name(RESERVED_COL_NAME_FILE);
+        assert!(file_column.is_some(), "_file column should exist");
+
+        // Verify _file column contains a file path
+        let file_col = file_column.unwrap();
+
+        // The _file column will be a RunEndEncoded array with the file path
+        if let Some(run_array) = file_col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+        {
+            let values = run_array.values();
+            let string_values = values
+                .as_any()
+                .downcast_ref::<arrow_array::StringArray>()
+                .unwrap();
+            let file_path = string_values.value(0);
+
+            // Verify file path ends with .parquet and contains the table location
+            assert!(
+                file_path.ends_with(".parquet"),
+                "File path should end with .parquet: {}",
+                file_path
+            );
+            assert!(
+                file_path.contains("/data/"),
+                "File path should contain /data/: {}",
+                file_path
+            );
+        } else {
+            panic!("_file column should be RunEndEncoded array");
+        }
+    }
 }
