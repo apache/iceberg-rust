@@ -1016,4 +1016,165 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_referenced_data_file_optimization_with_multiple_output_files(
+    ) -> Result<(), anyhow::Error> {
+        // This test validates the batch_cumulative_start tracking fix.
+        // The scenario: write multiple batches that together exceed target file size,
+        // causing the RollingFileWriter to create multiple output files.
+        // All batches reference the same data file, so all output files should have
+        // referenced_data_file set correctly.
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_POS.to_string(),
+            )])),
+        ]));
+
+        let schema = Arc::new(arrow_schema_to_schema(&arrow_schema).unwrap());
+
+        // Use a VERY SMALL target file size to force multiple output files
+        let pb = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema);
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            pb,
+            1, // Extremely small size to force rollover
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut position_delete_writer =
+            PositionDeleteFileWriterBuilder::new(rolling_writer_builder)
+                .build(None)
+                .await?;
+
+        let target_data_file = "s3://bucket/table/data/file1.parquet";
+
+        // Write multiple batches, each with 100 rows, all referencing the same data file
+        for i in 0..10 {
+            let file_paths = Arc::new(StringArray::from(
+                (0..100)
+                    .map(|_| target_data_file)
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef;
+            let positions = Arc::new(Int64Array::from(
+                (i * 100..(i + 1) * 100).collect::<Vec<_>>(),
+            )) as ArrayRef;
+
+            let batch =
+                RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
+            position_delete_writer.write(batch).await?;
+        }
+
+        let result = position_delete_writer.close().await?;
+
+        // With very small target size, we should get multiple output files
+        assert!(
+            result.len() > 1,
+            "Expected multiple output files with small target size, got {} file(s)",
+            result.len()
+        );
+
+        // CRITICAL ASSERTION: All output files should have referenced_data_file set
+        // because all batches referenced the same data file
+        for (idx, data_file) in result.iter().enumerate() {
+            assert_eq!(
+                data_file.referenced_data_file(),
+                Some(target_data_file.to_string()),
+                "File {} should have referenced_data_file set",
+                idx
+            );
+            assert_eq!(data_file.content_type(), DataContentType::PositionDeletes);
+        }
+
+        // Verify total row count matches all batches combined
+        let total_rows: u64 = result.iter().map(|f| f.record_count).sum();
+        assert_eq!(total_rows, 1000, "Total rows across all files should equal all batches");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_batch_handling() -> Result<(), anyhow::Error> {
+        // Test that empty batches don't cause issues
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_POS.to_string(),
+            )])),
+        ]));
+
+        let schema = Arc::new(arrow_schema_to_schema(&arrow_schema).unwrap());
+
+        let pb = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema);
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            pb,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut position_delete_writer =
+            PositionDeleteFileWriterBuilder::new(rolling_writer_builder)
+                .build(None)
+                .await?;
+
+        // Write an empty batch
+        let empty_batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef,
+                Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef,
+            ],
+        )?;
+
+        position_delete_writer.write(empty_batch).await?;
+
+        // Write a normal batch after the empty one
+        let normal_batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "s3://bucket/file1.parquet",
+                    "s3://bucket/file1.parquet",
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![5, 10])) as ArrayRef,
+            ],
+        )?;
+
+        position_delete_writer.write(normal_batch).await?;
+        let result = position_delete_writer.close().await?;
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].record_count, 2); // Only the normal batch's rows
+        assert_eq!(
+            result[0].referenced_data_file(),
+            Some("s3://bucket/file1.parquet".to_string())
+        );
+
+        Ok(())
+    }
 }
