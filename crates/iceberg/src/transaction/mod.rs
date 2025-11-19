@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod delete;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -71,6 +72,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::delete::AppendDeleteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -139,6 +141,14 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates an append delete files action.
+    ///
+    /// This allows appending position delete files or equality delete files to the table,
+    /// enabling DELETE and UPDATE operations without rewriting data files.
+    pub fn append_delete_files(&self) -> AppendDeleteFilesAction {
+        AppendDeleteFilesAction::new()
     }
 
     /// Creates replace sort order action.
