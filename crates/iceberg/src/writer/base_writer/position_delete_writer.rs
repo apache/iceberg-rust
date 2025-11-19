@@ -26,18 +26,6 @@ use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileW
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
-/// Field ID for the `file_path` column in position delete files.
-///
-/// This is the required field that stores the path to the data file
-/// from which rows are being deleted. Value: 2147483546
-pub const FIELD_ID_POSITION_DELETE_FILE_PATH: i32 = 2147483546;
-
-/// Field ID for the `pos` column in position delete files.
-///
-/// This is the required field that stores the position (row number)
-/// within the data file to delete. Value: 2147483545
-pub const FIELD_ID_POSITION_DELETE_POS: i32 = 2147483545;
-
 /// Builder for `PositionDeleteWriter`.
 #[derive(Clone, Debug)]
 pub struct PositionDeleteFileWriterBuilder<
@@ -59,12 +47,13 @@ where
     /// # Arguments
     ///
     /// * `inner` - A `RollingFileWriterBuilder` configured with the appropriate schema.
-    ///   The schema should contain at minimum the two required fields:
-    ///   - `file_path` (string) with field id 2147483546
-    ///   - `pos` (long) with field id 2147483545
+    ///
+    /// The schema must contain the two required fields as per the Iceberg spec:
+    ///   - `file_path` (string) with field id `2147483546`
+    ///   - `pos` (long) with field id `2147483545`
     ///
     /// The schema may optionally include additional columns from the deleted rows
-    /// for more context.
+    /// for debugging context.
     pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
         Self { inner }
     }
@@ -95,10 +84,11 @@ where
 /// According to the Iceberg spec, position delete files:
 /// - Must be sorted by (file_path, pos)
 /// - Must have two required fields:
-///   - `file_path` (string) with field id 2147483546
-///   - `pos` (long) with field id 2147483545
-/// - May optionally include additional columns from the deleted rows
+///   - `file_path` (string) with field id `2147483546`
+///   - `pos` (long) with field id `2147483545`
+/// - May optionally include additional columns from the deleted rows for debugging
 /// - Should set `sort_order_id` to null (position deletes use file+pos ordering)
+/// - May set `referenced_data_file` when all deletes reference a single data file (optimization)
 ///
 /// # Example
 ///
@@ -110,30 +100,27 @@ where
 /// use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 /// use iceberg::arrow::arrow_schema_to_schema;
 /// use iceberg::io::FileIOBuilder;
-/// use iceberg::spec::{DataFileFormat, Schema};
-/// use iceberg::writer::base_writer::position_delete_writer::{
-///     FIELD_ID_POSITION_DELETE_FILE_PATH, FIELD_ID_POSITION_DELETE_POS,
-///     PositionDeleteFileWriterBuilder,
-/// };
-/// use iceberg::writer::file_writer::ParquetWriterBuilder;
+/// use iceberg::spec::DataFileFormat;
+/// use iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
 /// use iceberg::writer::file_writer::location_generator::{
 ///     DefaultFileNameGenerator, DefaultLocationGenerator,
 /// };
 /// use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+/// use iceberg::writer::file_writer::ParquetWriterBuilder;
 /// use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 /// use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 /// use parquet::file::properties::WriterProperties;
 ///
 /// # async fn example() -> iceberg::Result<()> {
-/// // Create the position delete schema
+/// // Create the position delete schema with required field IDs per Iceberg spec
 /// let arrow_schema = Arc::new(ArrowSchema::new(vec![
 ///     Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
 ///         PARQUET_FIELD_ID_META_KEY.to_string(),
-///         FIELD_ID_POSITION_DELETE_FILE_PATH.to_string(),
+///         "2147483546".to_string(), // Required field ID for file_path
 ///     )])),
 ///     Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
 ///         PARQUET_FIELD_ID_META_KEY.to_string(),
-///         FIELD_ID_POSITION_DELETE_POS.to_string(),
+///         "2147483545".to_string(), // Required field ID for pos
 ///     )])),
 /// ]));
 ///
@@ -213,6 +200,15 @@ where
                     // Per the Iceberg spec: "Readers must ignore sort order id for
                     // position delete files" because they are sorted by file+position,
                     // not by a table sort order. The default sort_order_id is None.
+
+                    // TODO: Implement referenced_data_file optimization
+                    // When all position deletes in this file reference a single data file,
+                    // we should set referenced_data_file to that path. This requires:
+                    // 1. Tracking all file_path values written across all batches
+                    // 2. Checking if they're all identical
+                    // 3. Setting res.referenced_data_file(Some(path)) if so
+                    // This optimization is particularly important for deletion vectors.
+
                     if let Some(pk) = self.partition_key.as_ref() {
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
@@ -242,24 +238,25 @@ mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use arrow_select::concat::concat_batches;
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
     use crate::arrow::arrow_schema_to_schema;
     use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{DataContentType, DataFile, DataFileFormat};
-    use crate::writer::base_writer::position_delete_writer::{
-        FIELD_ID_POSITION_DELETE_FILE_PATH, FIELD_ID_POSITION_DELETE_POS,
-        PositionDeleteFileWriterBuilder,
-    };
-    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+
+    // Field IDs for position delete files as defined by the Iceberg spec
+    const FIELD_ID_POSITION_DELETE_FILE_PATH: i32 = 2147483546;
+    const FIELD_ID_POSITION_DELETE_POS: i32 = 2147483545;
 
     async fn check_parquet_position_delete_file(
         file_io: &FileIO,
