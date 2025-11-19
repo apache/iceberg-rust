@@ -57,7 +57,7 @@ const META_ROOT_PATH: &str = "metadata";
 ///    - An `Append` operation typically includes all existing manifests plus new ones
 ///    - An `Overwrite` operation might exclude manifests for partitions being overwritten
 ///
-/// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete 
+/// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
 ///    operations to specify which manifest entries should be marked as deleted.
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// Returns the operation type that will be recorded in the snapshot summary.
