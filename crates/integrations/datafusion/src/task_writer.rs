@@ -34,7 +34,7 @@ use iceberg::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
 ///
 /// TaskWriter coordinates writing data to Iceberg tables by:
 /// - Selecting the appropriate partitioning strategy (unpartitioned, fanout, or clustered)
-/// - Lazily initializing the partition splitter on first write
+/// - Initializing the partition splitter in the constructor for partitioned tables
 /// - Routing data to the underlying writer
 /// - Collecting all written data files
 ///
@@ -63,23 +63,17 @@ use iceberg::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
 /// // Close and get data files
 /// let data_files = task_writer.close().await?;
 /// ```
-#[allow(dead_code)]
 pub(crate) struct TaskWriter<B: IcebergWriterBuilder> {
     /// The underlying writer (UnpartitionedWriter, FanoutWriter, or ClusteredWriter)
     writer: SupportedWriter<B>,
-    /// Lazily initialized partition splitter for partitioned tables
+    /// Partition splitter for partitioned tables (initialized in constructor)
     partition_splitter: Option<RecordBatchPartitionSplitter>,
-    /// Iceberg schema reference
-    schema: SchemaRef,
-    /// Partition specification reference
-    partition_spec: PartitionSpecRef,
 }
 
 /// Internal enum to hold the different writer types.
 ///
 /// This enum allows TaskWriter to work with different partitioning strategies
 /// while maintaining a unified interface.
-#[allow(dead_code)]
 enum SupportedWriter<B: IcebergWriterBuilder> {
     /// Writer for unpartitioned tables
     Unpartitioned(UnpartitionedWriter<B>),
@@ -89,7 +83,6 @@ enum SupportedWriter<B: IcebergWriterBuilder> {
     Clustered(ClusteredWriter<B>),
 }
 
-#[allow(dead_code)]
 impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// Create a new TaskWriter.
     ///
@@ -125,12 +118,12 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     ///     partition_spec,
     /// );
     /// ```
-    pub fn new(
+    pub fn try_new(
         writer_builder: B,
         fanout_enabled: bool,
         schema: SchemaRef,
         partition_spec: PartitionSpecRef,
-    ) -> Self {
+    ) -> Result<Self> {
         let writer = if partition_spec.is_unpartitioned() {
             SupportedWriter::Unpartitioned(UnpartitionedWriter::new(writer_builder))
         } else if fanout_enabled {
@@ -139,17 +132,28 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
             SupportedWriter::Clustered(ClusteredWriter::new(writer_builder))
         };
 
-        Self {
+        // Initialize partition splitter in constructor for partitioned tables
+        let partition_splitter = if !partition_spec.is_unpartitioned() {
+            Some(
+                RecordBatchPartitionSplitter::try_new_with_precomputed_values(
+                    schema.clone(),
+                    partition_spec.clone(),
+                )?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Self {
             writer,
-            partition_splitter: None,
-            schema,
-            partition_spec,
-        }
+            partition_splitter,
+        })
     }
 
     /// Write a RecordBatch to the TaskWriter.
     ///
-    /// For the first write to a partitioned table, this method initializes the partition splitter.
+    /// For partitioned tables, uses the partition splitter to split
+    /// the batch by partition key and route each partition to the underlying writer.
     /// For unpartitioned tables, data is written directly without splitting.
     ///
     /// # Parameters
@@ -163,7 +167,6 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// # Errors
     ///
     /// This method will return an error if:
-    /// - Partition splitter initialization fails
     /// - Splitting the batch by partition fails
     /// - Writing to the underlying writer fails
     ///
@@ -183,29 +186,9 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
                 writer.write(batch).await
             }
             SupportedWriter::Fanout(writer) => {
-                // Initialize splitter on first write if needed
-                if self.partition_splitter.is_none() {
-                    self.partition_splitter =
-                        Some(RecordBatchPartitionSplitter::new_with_precomputed_values(
-                            self.schema.clone(),
-                            self.partition_spec.clone(),
-                        )?);
-                }
-
-                // Split and write partitioned data
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
             SupportedWriter::Clustered(writer) => {
-                // Initialize splitter on first write if needed
-                if self.partition_splitter.is_none() {
-                    self.partition_splitter =
-                        Some(RecordBatchPartitionSplitter::new_with_precomputed_values(
-                            self.schema.clone(),
-                            self.partition_spec.clone(),
-                        )?);
-                }
-
-                // Split and write partitioned data
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
         }
@@ -214,13 +197,13 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
     /// Helper method to split and write partitioned data.
     ///
     /// This method handles the common logic for both FanoutWriter and ClusteredWriter:
-    /// - Splits the batch by partition key using the provided splitter
-    /// - Writes each partition to the underlying writer
+    /// - Splits the batch by partition key using the partition splitter
+    /// - Writes each partition to the underlying writer with its corresponding partition key
     ///
     /// # Parameters
     ///
     /// * `writer` - The underlying PartitioningWriter (FanoutWriter or ClusteredWriter)
-    /// * `partition_splitter` - The partition splitter (must be initialized)
+    /// * `partition_splitter` - The partition splitter
     /// * `batch` - The RecordBatch to write
     ///
     /// # Returns
@@ -393,7 +376,7 @@ mod tests {
         let partition_spec = Arc::new(PartitionSpec::builder(schema.clone()).build()?);
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, false, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, false, schema, partition_spec)?;
 
         // Write data
         let batch = RecordBatch::try_new(arrow_schema, vec![
@@ -459,7 +442,7 @@ mod tests {
         );
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, true, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, true, schema, partition_spec)?;
 
         // Create partition column
         let partition_field = Field::new("region", DataType::Utf8, false).with_metadata(
@@ -502,7 +485,7 @@ mod tests {
         );
 
         let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
-        let mut task_writer = TaskWriter::new(writer_builder, false, schema, partition_spec);
+        let mut task_writer = TaskWriter::try_new(writer_builder, false, schema, partition_spec)?;
 
         // Create partition column
         let partition_field = Field::new("region", DataType::Utf8, false).with_metadata(

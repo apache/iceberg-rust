@@ -19,6 +19,7 @@ pub mod metadata_table;
 pub mod table_provider_factory;
 
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -38,6 +39,8 @@ use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
 use crate::physical_plan::commit::IcebergCommitExec;
+use crate::physical_plan::project::project_with_partition;
+use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -170,32 +173,42 @@ impl TableProvider for IcebergTableProvider {
 
     async fn insert_into(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        if !self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .is_unpartitioned()
-        {
-            // TODO add insert into support for partitioned tables
-            return Err(DataFusionError::NotImplemented(
-                "IcebergTableProvider::insert_into does not support partitioned tables yet"
-                    .to_string(),
-            ));
-        }
-
         let Some(catalog) = self.catalog.clone() else {
             return Err(DataFusionError::Execution(
                 "Catalog cannot be none for insert_into".to_string(),
             ));
         };
 
+        let partition_spec = self.table.metadata().default_partition_spec();
+
+        // Step 1: Project partition values for partitioned tables
+        let plan_with_partition = if !partition_spec.is_unpartitioned() {
+            project_with_partition(input, &self.table)?
+        } else {
+            input
+        };
+
+        // Step 2: Repartition for parallel processing
+        let target_partitions =
+            NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
+                DataFusionError::Configuration(
+                    "target_partitions must be greater than 0".to_string(),
+                )
+            })?;
+
+        let repartitioned_plan = repartition(
+            plan_with_partition,
+            self.table.metadata_ref(),
+            target_partitions,
+        )?;
+
         let write_plan = Arc::new(IcebergWriteExec::new(
             self.table.clone(),
-            input,
+            repartitioned_plan,
             self.schema.clone(),
         ));
 
