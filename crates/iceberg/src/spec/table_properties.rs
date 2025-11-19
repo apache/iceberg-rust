@@ -16,39 +16,43 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::str::FromStr;
+
+use crate::error::{Error, ErrorKind};
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
-fn parse_property<T: std::str::FromStr>(
+fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
-) -> Result<T, anyhow::Error>
+) -> crate::error::Result<T>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
         value
             .parse::<T>()
-            .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+            .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
     })
 }
 
 // Helper function to parse an optional property from a HashMap
 // If the property is not found, returns None
-fn parse_optional_property<T: std::str::FromStr>(
+fn parse_optional_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
-) -> Result<Option<T>, anyhow::Error>
+) -> crate::error::Result<Option<T>>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties
         .get(key)
         .map(|value| {
             value
                 .parse::<T>()
-                .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+                .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
         })
         .transpose()
 }
@@ -181,7 +185,7 @@ impl TableProperties {
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     // parse by entry key or use default value
-    type Error = anyhow::Error;
+    type Error = crate::Error;
 
     fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(TableProperties {

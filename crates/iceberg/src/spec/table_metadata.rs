@@ -22,12 +22,13 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -37,6 +38,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -461,18 +463,14 @@ impl TableMetadata {
         file_io: &FileIO,
         metadata_location: impl AsRef<str>,
     ) -> Result<()> {
-        use std::io::Write as _;
-
-        use flate2::write::GzEncoder;
-
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression is enabled via table properties
         let codec = self
             .properties
-            .get(crate::spec::table_properties::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
             .map(|s| s.as_str())
-            .unwrap_or(crate::spec::table_properties::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
+            .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
 
         // Use case-insensitive comparison to match Java implementation
         let codec_lower = codec.to_lowercase();
