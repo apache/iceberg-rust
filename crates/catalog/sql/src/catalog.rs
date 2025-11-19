@@ -155,12 +155,20 @@ impl CatalogBuilder for SqlCatalogBuilder {
         if let Some(uri) = self.catalog_config().props.remove(SQL_CATALOG_PROP_URI) {
             self.catalog_config().uri = uri;
         }
-        if let Some(warehouse_location) = self.catalog_config().props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
+        if let Some(warehouse_location) = self
+            .catalog_config()
+            .props
+            .remove(SQL_CATALOG_PROP_WAREHOUSE)
+        {
             self.catalog_config().warehouse_location = warehouse_location;
         }
 
         let mut valid_sql_bind_style = true;
-        if let Some(sql_bind_style) = self.catalog_config().props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+        if let Some(sql_bind_style) = self
+            .catalog_config()
+            .props
+            .remove(SQL_CATALOG_PROP_BIND_STYLE)
+        {
             if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
                 self.catalog_config().sql_bind_style = sql_bind_style;
             } else {

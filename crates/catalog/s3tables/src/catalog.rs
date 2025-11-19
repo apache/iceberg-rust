@@ -144,7 +144,8 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
         }
 
         if props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
-            self.catalog_config().endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
+            self.catalog_config().endpoint_url =
+                props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
         }
 
         // Collect other remaining properties

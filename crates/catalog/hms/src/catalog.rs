@@ -89,7 +89,8 @@ impl CatalogBuilder for HmsCatalogBuilder {
         self.catalog_config().name = Some(name.into());
 
         if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.catalog_config().address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
+            self.catalog_config().address =
+                props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
         }
 
         if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
