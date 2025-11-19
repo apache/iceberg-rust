@@ -32,9 +32,12 @@ where
     <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
-        value
-            .parse::<T>()
-            .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
+        value.parse::<T>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
     })
 }
 
@@ -204,11 +207,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                     TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
                     255u8,
                 )?;
-                if level == 255 {
-                    None
-                } else {
-                    Some(level)
-                }
+                if level == 255 { None } else { Some(level) }
             },
         })
     }
