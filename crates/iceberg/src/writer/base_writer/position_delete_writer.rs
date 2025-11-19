@@ -232,8 +232,16 @@ where
             return Ok(None);
         }
 
-        // Check if all non-null values are identical
-        // Note: Per Iceberg spec, file_path should not be null, but we handle it defensively
+        // Per Iceberg spec, file_path should never be null in position delete files,
+        // but we validate this to avoid panics from malformed data
+        if file_path_array.null_count() > 0 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "file_path column in position delete file must not contain null values per Iceberg spec",
+            ));
+        }
+
+        // Check if all values are identical
         let first_value = file_path_array.value(0);
 
         let all_same = (1..array_len).all(|i| {
@@ -298,6 +306,9 @@ where
             // Map batches to output files and apply the referenced_data_file optimization
             let mut batch_idx = 0;
             let mut rows_consumed = 0u64;
+            // Track the cumulative start position of the current batch across all files.
+            // This is critical for handling batches that span multiple output files.
+            let mut batch_cumulative_start = 0u64;
 
             temp_data_files
                 .into_iter()
@@ -345,15 +356,14 @@ where
 
                     // Find all batches that contributed rows to this file
                     let mut referenced_file: Option<String> = None;
-                    let mut batch_start_row = rows_consumed;
 
                     while batch_idx < self.batch_tracking.len() {
                         let batch_info = &self.batch_tracking[batch_idx];
-                        let batch_end_row = batch_start_row + batch_info.row_count;
+                        let batch_end_row = batch_cumulative_start + batch_info.row_count;
 
                         // Check if this batch contributed to the current file
-                        // A batch contributes if its range [batch_start_row, batch_end_row) overlaps with [rows_consumed, file_end_row)
-                        if batch_start_row < file_end_row && batch_end_row > rows_consumed {
+                        // A batch contributes if its range [batch_cumulative_start, batch_end_row) overlaps with [rows_consumed, file_end_row)
+                        if batch_cumulative_start < file_end_row && batch_end_row > rows_consumed {
                             match (&referenced_file, &batch_info.single_referenced_file) {
                                 // First batch with a single reference - initialize
                                 (None, Some(path)) => {
@@ -372,7 +382,7 @@ where
 
                         // Move to next batch if current batch is fully consumed by this file
                         if batch_end_row <= file_end_row {
-                            batch_start_row = batch_end_row;
+                            batch_cumulative_start = batch_end_row;
                             batch_idx += 1;
                         } else {
                             // Current batch extends beyond this file, will continue in next file
@@ -428,6 +438,7 @@ mod tests {
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+    use crate::ErrorKind;
 
     // Field IDs for position delete files as defined by the Iceberg spec
     const FIELD_ID_POSITION_DELETE_FILE_PATH: i32 = 2147483546;
@@ -940,6 +951,68 @@ mod tests {
         );
         assert_eq!(data_file.content_type(), DataContentType::PositionDeletes);
         assert_eq!(data_file.record_count, 4);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_null_file_path_rejected() -> Result<(), anyhow::Error> {
+        // Test that position deletes with null file_path values are rejected per Iceberg spec
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // Create schema with nullable file_path to allow testing null validation
+        // (In practice, Iceberg spec requires non-null, but we need nullable Arrow type to create the test data)
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                FIELD_ID_POSITION_DELETE_POS.to_string(),
+            )])),
+        ]));
+
+        let schema = Arc::new(arrow_schema_to_schema(&arrow_schema).unwrap());
+
+        let pb = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema);
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            pb,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut position_delete_writer =
+            PositionDeleteFileWriterBuilder::new(rolling_writer_builder)
+                .build(None)
+                .await?;
+
+        // Create a batch with a null file_path (violates Iceberg spec)
+        use arrow_array::builder::StringBuilder;
+        let mut file_path_builder = StringBuilder::new();
+        file_path_builder.append_value("s3://bucket/file1.parquet");
+        file_path_builder.append_null(); // Invalid!
+        file_path_builder.append_value("s3://bucket/file1.parquet");
+        let file_paths = Arc::new(file_path_builder.finish()) as ArrayRef;
+
+        let positions = Arc::new(Int64Array::from(vec![5, 10, 15])) as ArrayRef;
+
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
+
+        // Writing should fail with a clear error message
+        let result = position_delete_writer.write(batch).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err
+            .message()
+            .contains("file_path column in position delete file must not contain null values"));
 
         Ok(())
     }
