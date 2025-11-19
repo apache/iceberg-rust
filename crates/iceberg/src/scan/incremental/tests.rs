@@ -2508,22 +2508,14 @@ async fn test_incremental_scan_with_file_column() {
         let file_column = batch.column_by_name(RESERVED_COL_NAME_FILE);
         assert!(file_column.is_some(), "_file column should exist");
 
-        // Verify _file column contains a file path
+        // Verify _file column contains a file path (simple StringArray)
         let file_col = file_column.unwrap();
+        let string_array = file_col.as_string::<i32>();
 
-        // The _file column will be a RunEndEncoded array with the file path
-        if let Some(run_array) = file_col
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-        {
-            let values = run_array.values();
-            let string_values = values
-                .as_any()
-                .downcast_ref::<arrow_array::StringArray>()
-                .unwrap();
-            let file_path = string_values.value(0);
-
-            // Verify file path ends with .parquet and contains the table location
+        // Verify file path ends with .parquet and contains the table location
+        // All rows have the same file path in a constant column
+        for i in 0..batch.num_rows() {
+            let file_path = string_array.value(i);
             assert!(
                 file_path.ends_with(".parquet"),
                 "File path should end with .parquet: {}",
@@ -2534,8 +2526,6 @@ async fn test_incremental_scan_with_file_column() {
                 "File path should contain /data/: {}",
                 file_path
             );
-        } else {
-            panic!("_file column should be RunEndEncoded array");
         }
     }
 }

@@ -793,27 +793,17 @@ impl RecordBatchTransformer {
 
     /// Converts a PrimitiveLiteral to its corresponding Arrow DataType.
     /// This is used for constant fields to determine the Arrow type.
-    /// For constant values, we use Run-End Encoding for all types to save memory.
     fn primitive_literal_to_arrow_type(literal: &PrimitiveLiteral) -> Result<DataType> {
-        // Helper to create REE type with the given values type
-        // Note: values field is nullable as Arrow expects this when building the
-        // final Arrow schema with `RunArray::try_new`.
-        let make_ree = |values_type: DataType| -> DataType {
-            let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-            let values_field = Arc::new(Field::new("values", values_type, true));
-            DataType::RunEndEncoded(run_ends_field, values_field)
-        };
-
         Ok(match literal {
-            PrimitiveLiteral::Boolean(_) => make_ree(DataType::Boolean),
-            PrimitiveLiteral::Int(_) => make_ree(DataType::Int32),
-            PrimitiveLiteral::Long(_) => make_ree(DataType::Int64),
-            PrimitiveLiteral::Float(_) => make_ree(DataType::Float32),
-            PrimitiveLiteral::Double(_) => make_ree(DataType::Float64),
-            PrimitiveLiteral::String(_) => make_ree(DataType::Utf8),
-            PrimitiveLiteral::Binary(_) => make_ree(DataType::Binary),
-            PrimitiveLiteral::Int128(_) => make_ree(DataType::Decimal128(38, 0)),
-            PrimitiveLiteral::UInt128(_) => make_ree(DataType::Decimal128(38, 0)),
+            PrimitiveLiteral::Boolean(_) => DataType::Boolean,
+            PrimitiveLiteral::Int(_) => DataType::Int32,
+            PrimitiveLiteral::Long(_) => DataType::Int64,
+            PrimitiveLiteral::Float(_) => DataType::Float32,
+            PrimitiveLiteral::Double(_) => DataType::Float64,
+            PrimitiveLiteral::String(_) => DataType::Utf8,
+            PrimitiveLiteral::Binary(_) => DataType::Binary,
+            PrimitiveLiteral::Int128(_) => DataType::Decimal128(38, 0),
+            PrimitiveLiteral::UInt128(_) => DataType::Decimal128(38, 0),
             PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,

@@ -1893,27 +1893,17 @@ pub mod tests {
             "_file column should be present in the batch"
         );
 
-        // Verify the _file column contains a file path
+        // Verify the _file column contains a file path (simple StringArray)
         let file_col = file_col.unwrap();
-        assert!(
-            matches!(
-                file_col.data_type(),
-                arrow_schema::DataType::RunEndEncoded(_, _)
-            ),
-            "_file column should use RunEndEncoded type"
+        assert_eq!(
+            file_col.data_type(),
+            &arrow_schema::DataType::Utf8,
+            "_file column should use Utf8 type"
         );
 
-        // Decode the RunArray to verify it contains the file path
-        let run_array = file_col
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-            .expect("_file column should be a RunArray");
-
-        let values = run_array.values();
-        let string_values = values.as_string::<i32>();
-        assert_eq!(string_values.len(), 1, "Should have a single file path");
-
-        let file_path = string_values.value(0);
+        // Get the file path from the StringArray
+        let string_array = file_col.as_string::<i32>();
+        let file_path = string_array.value(0);
         assert!(
             file_path.ends_with(".parquet"),
             "File path should end with .parquet, got: {}",
@@ -2006,15 +1996,9 @@ pub mod tests {
         let mut file_paths = HashSet::new();
         for batch in &batches {
             let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
-            let run_array = file_col
-                .as_any()
-                .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-                .expect("_file column should be a RunArray");
-
-            let values = run_array.values();
-            let string_values = values.as_string::<i32>();
-            for i in 0..string_values.len() {
-                file_paths.insert(string_values.value(i).to_string());
+            let string_array = file_col.as_string::<i32>();
+            for i in 0..string_array.len() {
+                file_paths.insert(string_array.value(i).to_string());
             }
         }
 
@@ -2158,19 +2142,15 @@ pub mod tests {
             matches!(schema.field(5).data_type(), arrow_schema::DataType::Int64),
             "Column y (duplicate) should be Int64"
         );
-        assert!(
-            matches!(
-                schema.field(1).data_type(),
-                arrow_schema::DataType::RunEndEncoded(_, _)
-            ),
-            "_file column should use RunEndEncoded type"
+        assert_eq!(
+            schema.field(1).data_type(),
+            &arrow_schema::DataType::Utf8,
+            "_file column should use Utf8 type"
         );
-        assert!(
-            matches!(
-                schema.field(4).data_type(),
-                arrow_schema::DataType::RunEndEncoded(_, _)
-            ),
-            "_file column (duplicate) should use RunEndEncoded type"
+        assert_eq!(
+            schema.field(4).data_type(),
+            &arrow_schema::DataType::Utf8,
+            "_file column (duplicate) should use Utf8 type"
         );
     }
 }

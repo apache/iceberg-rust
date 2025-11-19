@@ -50,17 +50,9 @@ pub const RESERVED_FIELD_ID_POS: i32 = i32::MAX - 201;
 pub const RESERVED_COL_NAME_POS: &str = "pos";
 
 /// Lazy-initialized Arrow Field definition for the _file metadata column.
-/// Uses Run-End Encoding for memory efficiency.
 static FILE_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
-    let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-    let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
     Arc::new(
-        Field::new(
-            RESERVED_COL_NAME_FILE,
-            DataType::RunEndEncoded(run_ends_field, values_field),
-            false,
-        )
-        .with_metadata(HashMap::from([(
+        Field::new(RESERVED_COL_NAME_FILE, DataType::Utf8, false).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             RESERVED_FIELD_ID_FILE.to_string(),
         )])),
