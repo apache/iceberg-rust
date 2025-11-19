@@ -42,7 +42,7 @@ pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
 
 /// S3Tables catalog configuration.
 #[derive(Debug)]
-struct S3TablesCatalogConfig {
+pub(crate) struct S3TablesCatalogConfig {
     /// Catalog name.
     name: Option<String>,
     /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
@@ -82,6 +82,16 @@ impl Default for S3TablesCatalogBuilder {
 
 /// Builder methods for [`S3TablesCatalog`].
 impl S3TablesCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut S3TablesCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> S3TablesCatalogConfig {
+        self.0
+    }
+
     /// Configure the catalog with a custom endpoint URL (useful for local testing/mocking).
     ///
     /// # Behavior with Properties
@@ -91,13 +101,13 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
-        self.0.endpoint_url = Some(endpoint_url.into());
+        self.catalog_config().endpoint_url = Some(endpoint_url.into());
         self
     }
 
     /// Configure the catalog with a pre-built AWS SDK client.
     pub fn with_client(mut self, client: aws_sdk_s3tables::Client) -> Self {
-        self.0.client = Some(client);
+        self.catalog_config().client = Some(client);
         self
     }
 
@@ -110,7 +120,7 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_table_bucket_arn(mut self, table_bucket_arn: impl Into<String>) -> Self {
-        self.0.table_bucket_arn = table_bucket_arn.into();
+        self.catalog_config().table_bucket_arn = table_bucket_arn.into();
         self
     }
 }
@@ -124,21 +134,21 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let catalog_name = name.into();
-        self.0.name = Some(catalog_name.clone());
+        self.catalog_config().name = Some(catalog_name.clone());
 
         if props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
-            self.0.table_bucket_arn = props
+            self.catalog_config().table_bucket_arn = props
                 .get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN)
                 .cloned()
                 .unwrap_or_default();
         }
 
         if props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
-            self.0.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
+            self.catalog_config().endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.catalog_config().props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN
@@ -146,19 +156,20 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
             })
             .collect();
 
+        let config = self.into_config();
         async move {
             if catalog_name.trim().is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
                 ))
-            } else if self.0.table_bucket_arn.is_empty() {
+            } else if config.table_bucket_arn.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Table bucket ARN is required",
                 ))
             } else {
-                S3TablesCatalog::new(self.0).await
+                S3TablesCatalog::new(config).await
             }
         }
     }

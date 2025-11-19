@@ -78,12 +78,22 @@ impl Default for SqlCatalogBuilder {
 }
 
 impl SqlCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut SqlCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> SqlCatalogConfig {
+        self.0
+    }
+
     /// Configure the database URI
     ///
     /// If `SQL_CATALOG_PROP_URI` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn uri(mut self, uri: impl Into<String>) -> Self {
-        self.0.uri = uri.into();
+        self.catalog_config().uri = uri.into();
         self
     }
 
@@ -92,7 +102,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_WAREHOUSE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
-        self.0.warehouse_location = location.into();
+        self.catalog_config().warehouse_location = location.into();
         self
     }
 
@@ -101,7 +111,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
-        self.0.sql_bind_style = sql_bind_style;
+        self.catalog_config().sql_bind_style = sql_bind_style;
         self
     }
 
@@ -111,7 +121,7 @@ impl SqlCatalogBuilder {
     /// those values will take precedence.
     pub fn props(mut self, props: HashMap<String, String>) -> Self {
         for (k, v) in props {
-            self.0.props.insert(k, v);
+            self.catalog_config().props.insert(k, v);
         }
         self
     }
@@ -123,7 +133,7 @@ impl SqlCatalogBuilder {
     /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
     /// those values will take precedence.
     pub fn prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.0.props.insert(key.into(), value.into());
+        self.catalog_config().props.insert(key.into(), value.into());
         self
     }
 }
@@ -139,25 +149,26 @@ impl CatalogBuilder for SqlCatalogBuilder {
         let name = name.into();
 
         for (k, v) in props {
-            self.0.props.insert(k, v);
+            self.catalog_config().props.insert(k, v);
         }
 
-        if let Some(uri) = self.0.props.remove(SQL_CATALOG_PROP_URI) {
-            self.0.uri = uri;
+        if let Some(uri) = self.catalog_config().props.remove(SQL_CATALOG_PROP_URI) {
+            self.catalog_config().uri = uri;
         }
-        if let Some(warehouse_location) = self.0.props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse_location = warehouse_location;
+        if let Some(warehouse_location) = self.catalog_config().props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
+            self.catalog_config().warehouse_location = warehouse_location;
         }
 
         let mut valid_sql_bind_style = true;
-        if let Some(sql_bind_style) = self.0.props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+        if let Some(sql_bind_style) = self.catalog_config().props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
             if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
-                self.0.sql_bind_style = sql_bind_style;
+                self.catalog_config().sql_bind_style = sql_bind_style;
             } else {
                 valid_sql_bind_style = false;
             }
         }
 
+        let config = self.into_config();
         async move {
             if name.trim().is_empty() {
                 Err(Error::new(
@@ -175,7 +186,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
                     ),
                 ))
             } else {
-                SqlCatalog::new(self.0).await
+                SqlCatalog::new(config).await
             }
         }
     }
@@ -190,7 +201,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
 /// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
 /// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
 #[derive(Debug)]
-struct SqlCatalogConfig {
+pub(crate) struct SqlCatalogConfig {
     uri: String,
     name: String,
     warehouse_location: String,

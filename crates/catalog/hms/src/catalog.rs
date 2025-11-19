@@ -66,6 +66,18 @@ impl Default for HmsCatalogBuilder {
     }
 }
 
+impl HmsCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut HmsCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> HmsCatalogConfig {
+        self.0
+    }
+}
+
 impl CatalogBuilder for HmsCatalogBuilder {
     type C = HmsCatalog;
 
@@ -74,14 +86,14 @@ impl CatalogBuilder for HmsCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.catalog_config().name = Some(name.into());
 
         if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.0.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
+            self.catalog_config().address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
         }
 
         if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
-            self.0.thrift_transport = match tt.to_lowercase().as_str() {
+            self.catalog_config().thrift_transport = match tt.to_lowercase().as_str() {
                 THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
                 THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
                 _ => HmsThriftTransport::default(),
@@ -89,13 +101,13 @@ impl CatalogBuilder for HmsCatalogBuilder {
         }
 
         if props.contains_key(HMS_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
+            self.catalog_config().warehouse = props
                 .get(HMS_CATALOG_PROP_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default();
         }
 
-        self.0.props = props
+        self.catalog_config().props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != HMS_CATALOG_PROP_URI
@@ -104,24 +116,25 @@ impl CatalogBuilder for HmsCatalogBuilder {
             })
             .collect();
 
+        let config = self.into_config();
         let result = {
-            if self.0.name.is_none() {
+            if config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.address.is_empty() {
+            } else if config.address.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
                 ))
-            } else if self.0.warehouse.is_empty() {
+            } else if config.warehouse.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ))
             } else {
-                HmsCatalog::new(self.0)
+                HmsCatalog::new(config)
             }
         };
 

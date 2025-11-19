@@ -65,6 +65,18 @@ impl Default for GlueCatalogBuilder {
     }
 }
 
+impl GlueCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut GlueCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> GlueCatalogConfig {
+        self.0
+    }
+}
+
 impl CatalogBuilder for GlueCatalogBuilder {
     type C = GlueCatalog;
 
@@ -73,25 +85,25 @@ impl CatalogBuilder for GlueCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.catalog_config().name = Some(name.into());
 
         if props.contains_key(GLUE_CATALOG_PROP_URI) {
-            self.0.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
+            self.catalog_config().uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
-            self.0.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
+            self.catalog_config().catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
+            self.catalog_config().warehouse = props
                 .get(GLUE_CATALOG_PROP_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.catalog_config().props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != GLUE_CATALOG_PROP_URI
@@ -100,21 +112,22 @@ impl CatalogBuilder for GlueCatalogBuilder {
             })
             .collect();
 
+        let config = self.into_config();
         async move {
-            if self.0.name.is_none() {
+            if config.name.is_none() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ));
             }
-            if self.0.warehouse.is_empty() {
+            if config.warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ));
             }
 
-            GlueCatalog::new(self.0).await
+            GlueCatalog::new(config).await
         }
     }
 }

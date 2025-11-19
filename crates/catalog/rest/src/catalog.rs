@@ -71,6 +71,24 @@ impl Default for RestCatalogBuilder {
     }
 }
 
+impl RestCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut RestCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> RestCatalogConfig {
+        self.0
+    }
+
+    /// Configures the catalog with a custom HTTP client.
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.catalog_config().client = Some(client);
+        self
+    }
+}
+
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
@@ -79,50 +97,43 @@ impl CatalogBuilder for RestCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.catalog_config().name = Some(name.into());
 
         if props.contains_key(REST_CATALOG_PROP_URI) {
-            self.0.uri = props
+            self.catalog_config().uri = props
                 .get(REST_CATALOG_PROP_URI)
                 .cloned()
                 .unwrap_or_default();
         }
 
         if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
+            self.catalog_config().warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.catalog_config().props = props
             .into_iter()
             .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
             .collect();
 
+        let config = self.into_config();
         let result = {
-            if self.0.name.is_none() {
+            if config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.uri.is_empty() {
+            } else if config.uri.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog uri is required",
                 ))
             } else {
-                Ok(RestCatalog::new(self.0))
+                Ok(RestCatalog::new(config))
             }
         };
 
         std::future::ready(result)
-    }
-}
-
-impl RestCatalogBuilder {
-    /// Configures the catalog with a custom HTTP client.
-    pub fn with_client(mut self, client: Client) -> Self {
-        self.0.client = Some(client);
-        self
     }
 }
 
