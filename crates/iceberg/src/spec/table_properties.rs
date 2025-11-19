@@ -421,11 +421,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                     TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
                     255u8,
                 )?;
-                if level == 255 {
-                    None
-                } else {
-                    Some(level)
-                }
+                if level == 255 { None } else { Some(level) }
             },
 >>>>>>> 5370f775 (remove parse optional property)
         })
