@@ -15,21 +15,30 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[engines]
-df = { type = "datafusion" }
+# Test CREATE TABLE with simple schema
+statement ok
+CREATE TABLE default.default.test_create_simple (
+    id INT,
+    name STRING
+)
 
-[[steps]]
-engine = "df"
-slt = "df_test/show_tables.slt"
+# Verify table was created and is empty
+query IT rowsort
+SELECT * FROM default.default.test_create_simple
+----
 
-[[steps]]
-engine = "df"
-slt = "df_test/create_table.slt"
+# Insert data to verify table works
+query I
+INSERT INTO default.default.test_create_simple VALUES (1, 'test')
+----
+1
 
-[[steps]]
-engine = "df"
-slt = "df_test/insert_into.slt"
+# Verify the insert worked
+query IT rowsort
+SELECT * FROM default.default.test_create_simple
+----
+1 test
 
-[[steps]]
-engine = "df"
-slt = "df_test/partitioned_table.slt"
+# Note: CREATE TABLE with PARTITIONED BY is not supported in DataFusion SQL syntax
+# Partitioned tables must be created using the Iceberg catalog API directly
+# See crates/sqllogictest/src/engine/datafusion.rs for examples

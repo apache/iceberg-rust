@@ -33,6 +33,7 @@ use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
 
+use super::id_assigner::ArrowSchemaIdAssigner;
 use crate::error::Result;
 use crate::spec::{
     Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
@@ -221,6 +222,17 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     visit_schema(schema, &mut visitor)
 }
 
+/// Convert Arrow schema to Iceberg schema with auto-assigned field IDs.
+///
+/// This function is useful when converting Arrow schemas that don't have field IDs
+/// in their metadata (e.g., from DataFusion CREATE TABLE statements). Field IDs
+/// are assigned sequentially starting from 1, using breadth-first traversal to assign
+/// IDs level by level (all fields at one level before descending to nested fields).
+pub fn arrow_schema_to_schema_with_assigned_ids(schema: &ArrowSchema) -> Result<Schema> {
+    let mut assigner = ArrowSchemaIdAssigner::new(1);
+    assigner.convert_schema(schema)
+}
+
 /// Convert Arrow type to iceberg type.
 pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
     let mut visitor = ArrowSchemaConverter::new();
@@ -229,7 +241,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-pub(super) fn get_field_id(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -246,7 +258,7 @@ pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     ))
 }
 
-fn get_field_doc(field: &Field) -> Option<String> {
+pub(super) fn get_field_doc(field: &Field) -> Option<String> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
         return Some(value.clone());
     }
@@ -257,7 +269,7 @@ struct ArrowSchemaConverter;
 
 impl ArrowSchemaConverter {
     fn new() -> Self {
-        Self {}
+        Self
     }
 
     fn convert_fields(fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
@@ -265,7 +277,7 @@ impl ArrowSchemaConverter {
         for i in 0..fields.len() {
             let field = &fields[i];
             let field_type = &field_results[i];
-            let id = get_field_id(field)?;
+            let id = get_field_id_from_metadata(field)?;
             let doc = get_field_doc(field);
             let nested_field = NestedField {
                 id,
@@ -310,7 +322,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
-        let id = get_field_id(element_field)?;
+        let id = get_field_id_from_metadata(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
             NestedField::list_element(id, value.clone(), !element_field.is_nullable());
@@ -335,7 +347,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     let key_field = &fields[0];
                     let value_field = &fields[1];
 
-                    let key_id = get_field_id(key_field)?;
+                    let key_id = get_field_id_from_metadata(key_field)?;
                     let key_doc = get_field_doc(key_field);
                     let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
                     if let Some(doc) = key_doc {
@@ -343,7 +355,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     }
                     let key_field = Arc::new(key_field);
 
-                    let value_id = get_field_id(value_field)?;
+                    let value_id = get_field_id_from_metadata(value_field)?;
                     let value_doc = get_field_doc(value_field);
                     let mut value_field = NestedField::map_value_element(
                         value_id,

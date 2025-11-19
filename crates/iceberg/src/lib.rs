@@ -87,7 +87,11 @@ pub mod expr;
 pub mod transaction;
 pub mod transform;
 
-mod runtime;
+/// Runtime abstraction for async operations.
+///
+/// Provides runtime-agnostic functions for spawning tasks and blocking operations,
+/// supporting both tokio and smol runtimes.
+pub mod runtime;
 
 pub mod arrow;
 pub(crate) mod delete_file_index;
