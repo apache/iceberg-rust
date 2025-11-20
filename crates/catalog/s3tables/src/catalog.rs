@@ -655,7 +655,7 @@ where T: std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::spec::{ManifestContentType, NestedField, PrimitiveType, Schema, Type};
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
     use super::*;
@@ -866,6 +866,185 @@ mod tests {
             updated_table.metadata_location(),
             "Reloaded table should have the same metadata location as the updated table"
         );
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_append_delete_files() {
+        use std::sync::Arc;
+
+        use iceberg::arrow::arrow_schema_to_schema;
+        use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
+        use iceberg::transaction::ApplyTransactionAction;
+        use iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
+        use iceberg::writer::file_writer::location_generator::{
+            DefaultFileNameGenerator, DefaultLocationGenerator,
+        };
+        use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+        use iceberg::writer::file_writer::ParquetWriterBuilder;
+        use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        // Create a test namespace and table
+        let namespace = NamespaceIdent::new("test_s3tables_deletes".to_string());
+        let table_ident =
+            TableIdent::new(namespace.clone(), "test_s3tables_deletes".to_string());
+
+        // Clean up any existing resources
+        catalog.drop_table(&table_ident).await.ok();
+        catalog.drop_namespace(&namespace).await.ok();
+
+        // Create namespace and table with simple schema
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let creation = {
+            let schema = Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap();
+            TableCreation::builder()
+                .name(table_ident.name().to_string())
+                .properties(HashMap::new())
+                .schema(schema)
+                .build()
+        };
+
+        let table = catalog.create_table(&namespace, creation).await.unwrap();
+
+        // Step 1: Append a data file to the table
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("s3://test-bucket/data/file1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(1024)
+            .record_count(100)
+            .partition(Struct::empty())
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file.clone()])
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Step 2: Create position delete file using writer
+        let pos_delete_schema = {
+            use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "2147483546".to_string(),
+                )])),
+                Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                    "PARQUET:field_id".to_string(),
+                    "2147483545".to_string(),
+                )])),
+            ]))
+        };
+
+        let iceberg_schema = Arc::new(arrow_schema_to_schema(&pos_delete_schema).unwrap());
+
+        // Write position delete file
+        let location_gen = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let file_name_gen =
+            DefaultFileNameGenerator::new("pos-delete".to_string(), None, DataFileFormat::Parquet);
+
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            parquet::file::properties::WriterProperties::builder().build(),
+            iceberg_schema,
+        );
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
+            table.file_io().clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut pos_delete_writer = PositionDeleteFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
+            .await
+            .unwrap();
+
+        // Create position delete batch (delete rows at positions 5, 10, 15)
+        let delete_batch = {
+            use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+
+            let file_paths = StringArray::from(vec![
+                data_file.file_path(),
+                data_file.file_path(),
+                data_file.file_path(),
+            ]);
+            let positions = Int64Array::from(vec![5, 10, 15]);
+            RecordBatch::try_new(
+                pos_delete_schema.clone(),
+                vec![Arc::new(file_paths) as ArrayRef, Arc::new(positions) as ArrayRef],
+            )
+            .unwrap()
+        };
+
+        pos_delete_writer.write(delete_batch).await.unwrap();
+        let delete_files = pos_delete_writer.close().await.unwrap();
+
+        assert_eq!(delete_files.len(), 1);
+        assert_eq!(
+            delete_files[0].content_type(),
+            DataContentType::PositionDeletes
+        );
+        assert_eq!(delete_files[0].record_count(), 3);
+
+        // Step 3: Append delete files using transaction
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .append_delete_files()
+            .add_files(delete_files.clone())
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Step 4: Verify the delete files are in the table metadata
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        // Find the manifest with delete files
+        let delete_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|entry| entry.has_added_files() && entry.content == ManifestContentType::Deletes)
+            .expect("Should have a delete manifest");
+
+        let manifest = delete_manifest
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
+
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(
+            manifest.entries()[0].data_file().content_type(),
+            DataContentType::PositionDeletes
+        );
+        assert_eq!(manifest.entries()[0].data_file().record_count(), 3);
+
+        // Clean up
+        catalog.drop_table(&table_ident).await.ok();
+        catalog.drop_namespace(&namespace).await.ok();
     }
 
     #[tokio::test]
