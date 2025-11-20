@@ -32,9 +32,12 @@ where
     <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
-        value
-            .parse::<T>()
-            .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Invalid value for {key}: {e}")))
+        value.parse::<T>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
     })
 }
 

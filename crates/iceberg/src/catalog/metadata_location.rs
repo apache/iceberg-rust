@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -52,7 +53,10 @@ impl MetadataLocation {
     /// Creates a completely new metadata location starting at version 0,
     /// with compression settings from the table's properties.
     /// Only used for creating a new table. For updates, see `with_next_version`.
-    pub fn new_with_table(table_location: impl ToString, properties: &std::collections::HashMap<String, String>) -> Self {
+    pub fn new_with_table(
+        table_location: impl ToString,
+        properties: &HashMap<String, String>,
+    ) -> Self {
         let compression_suffix = properties
             .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
             .and_then(|codec| match codec.to_lowercase().as_str() {
@@ -91,12 +95,10 @@ impl MetadataLocation {
     /// Parses a file name of the format `<version>-<uuid>.metadata.json`
     /// or with compression: `<version>-<uuid>.gz.metadata.json`.
     fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, Option<String>)> {
-        let stripped = file_name
-            .strip_suffix(".metadata.json")
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Invalid metadata file ending: {file_name}"),
-            ))?;
+        let stripped = file_name.strip_suffix(".metadata.json").ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("Invalid metadata file ending: {file_name}"),
+        ))?;
 
         // Check for compression suffix (e.g., .gz)
         let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(".gz") {
@@ -105,14 +107,16 @@ impl MetadataLocation {
             (stripped, None)
         };
 
-        let (version, id) = stripped
-            .split_once('-')
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Invalid metadata file name format: {file_name}"),
-            ))?;
+        let (version, id) = stripped.split_once('-').ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("Invalid metadata file name format: {file_name}"),
+        ))?;
 
-        Ok((version.parse::<i32>()?, Uuid::parse_str(id)?, compression_suffix))
+        Ok((
+            version.parse::<i32>()?,
+            Uuid::parse_str(id)?,
+            compression_suffix,
+        ))
     }
 }
 
@@ -317,7 +321,10 @@ mod test {
         assert_eq!(location.compression_suffix, Some(".gz".to_string()));
         assert_eq!(
             location.to_string(),
-            format!("/test/table/metadata/00000-{}.gz.metadata.json", location.id)
+            format!(
+                "/test/table/metadata/00000-{}.gz.metadata.json",
+                location.id
+            )
         );
 
         // Test with "none" codec (explicitly no compression)

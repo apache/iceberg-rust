@@ -468,7 +468,7 @@ impl Catalog for S3TablesCatalog {
                     .await
                     .map_err(from_aws_sdk_error)?;
                 let warehouse_location = get_resp.warehouse_location().to_string();
-                MetadataLocation::new_with_table_location(warehouse_location).to_string()
+                warehouse_location
             }
         };
 
@@ -477,6 +477,8 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
+        let metadata_location =
+            MetadataLocation::new_with_table(metadata_location, &metadata.properties).to_string();
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location

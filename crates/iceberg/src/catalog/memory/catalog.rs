@@ -275,7 +275,8 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
+        let metadata_location =
+            MetadataLocation::new_with_table(location, &metadata.properties).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
