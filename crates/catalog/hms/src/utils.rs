@@ -345,7 +345,7 @@ mod tests {
         let location = "s3a://warehouse/hms".to_string();
         let properties = HashMap::new();
         let metadata_location =
-            MetadataLocation::new_with_table(location.clone(), &properties).to_string();
+            MetadataLocation::new_with_properties(location.clone(), &properties).to_string();
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![

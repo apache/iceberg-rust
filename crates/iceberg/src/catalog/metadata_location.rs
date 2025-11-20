@@ -39,7 +39,7 @@ impl MetadataLocation {
     /// Only used for creating a new table. For updates, see `with_next_version`.
     #[deprecated(
         since = "0.7.0",
-        note = "Use new_with_table instead to properly handle compression settings"
+        note = "Use new_with_properties instead to properly handle compression settings"
     )]
     pub fn new_with_table_location(table_location: impl ToString) -> Self {
         Self {
@@ -53,7 +53,7 @@ impl MetadataLocation {
     /// Creates a completely new metadata location starting at version 0,
     /// with compression settings from the table's properties.
     /// Only used for creating a new table. For updates, see `with_next_version`.
-    pub fn new_with_table(
+    pub fn new_with_properties(
         table_location: impl ToString,
         properties: &HashMap<String, String>,
     ) -> Self {
@@ -297,12 +297,12 @@ mod test {
     }
 
     #[test]
-    fn test_metadata_location_new_with_table() {
+    fn test_metadata_location_new_with_properties() {
         use std::collections::HashMap;
 
         // Test with no compression
         let props_none = HashMap::new();
-        let location = MetadataLocation::new_with_table("/test/table", &props_none);
+        let location = MetadataLocation::new_with_properties("/test/table", &props_none);
         assert_eq!(location.table_location, "/test/table");
         assert_eq!(location.version, 0);
         assert_eq!(location.compression_suffix, None);
@@ -317,7 +317,7 @@ mod test {
             "write.metadata.compression-codec".to_string(),
             "gzip".to_string(),
         );
-        let location = MetadataLocation::new_with_table("/test/table", &props_gzip);
+        let location = MetadataLocation::new_with_properties("/test/table", &props_gzip);
         assert_eq!(location.compression_suffix, Some(".gz".to_string()));
         assert_eq!(
             location.to_string(),
@@ -333,7 +333,7 @@ mod test {
             "write.metadata.compression-codec".to_string(),
             "none".to_string(),
         );
-        let location = MetadataLocation::new_with_table("/test/table", &props_explicit_none);
+        let location = MetadataLocation::new_with_properties("/test/table", &props_explicit_none);
         assert_eq!(location.compression_suffix, None);
 
         // Test case insensitivity
@@ -342,7 +342,7 @@ mod test {
             "write.metadata.compression-codec".to_string(),
             "GZIP".to_string(),
         );
-        let location = MetadataLocation::new_with_table("/test/table", &props_gzip_upper);
+        let location = MetadataLocation::new_with_properties("/test/table", &props_gzip_upper);
         assert_eq!(location.compression_suffix, Some(".gz".to_string()));
     }
 }
