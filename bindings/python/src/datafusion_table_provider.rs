@@ -23,7 +23,7 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use iceberg::TableIdent;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
-use iceberg_datafusion::table::IcebergTableProvider;
+use iceberg_datafusion::table::IcebergStaticTableProvider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
@@ -32,7 +32,7 @@ use crate::runtime::runtime;
 
 #[pyclass(name = "IcebergDataFusionTable")]
 pub struct PyIcebergDataFusionTable {
-    inner: Arc<IcebergTableProvider>,
+    inner: Arc<IcebergStaticTableProvider>,
 }
 
 #[pymethods]
@@ -69,7 +69,7 @@ impl PyIcebergDataFusionTable {
 
             let table = static_table.into_table();
 
-            IcebergTableProvider::try_new_from_table(table)
+            IcebergStaticTableProvider::try_new_from_table(table)
                 .await
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to create table provider: {e}"))
