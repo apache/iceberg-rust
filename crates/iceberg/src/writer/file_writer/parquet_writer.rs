@@ -27,12 +27,9 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
-use parquet::format::FileMetaData;
-use parquet::thrift::{TCompactOutputProtocol, TSerializable};
-use thrift::protocol::TOutputProtocol;
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
@@ -349,29 +346,6 @@ impl ParquetWriter {
         Ok(data_files)
     }
 
-    fn thrift_to_parquet_metadata(&self, file_metadata: FileMetaData) -> Result<ParquetMetaData> {
-        let mut buffer = Vec::new();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut buffer);
-            file_metadata
-                .write_to_out_protocol(&mut protocol)
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, "Failed to write parquet metadata")
-                        .with_source(err)
-                })?;
-
-            protocol.flush().map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to flush protocol").with_source(err)
-            })?;
-        }
-
-        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
-        })?;
-
-        Ok(parquet_metadata)
-    }
-
     /// `ParquetMetadata` to data file builder
     pub(crate) fn parquet_to_data_file_builder(
         schema: SchemaRef,
@@ -564,14 +538,7 @@ impl FileWriter for ParquetWriter {
             })?;
             Ok(vec![])
         } else {
-            let parquet_metadata =
-                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to convert metadata from thrift to parquet.",
-                    )
-                    .with_source(err)
-                })?);
+            let parquet_metadata = Arc::new(metadata);
 
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,

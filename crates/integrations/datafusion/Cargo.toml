@@ -16,29 +16,30 @@
 # under the License.
 
 [package]
-edition = { workspace = true }
-homepage = { workspace = true }
+edition = "2024"
+homepage = "https://rust.iceberg.apache.org/"
 name = "iceberg-datafusion"
-rust-version = { workspace = true }
-version = { workspace = true }
+rust-version = "1.87"
+version = "0.7.0"
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"
 keywords = ["iceberg", "integrations", "datafusion"]
-license = { workspace = true }
-repository = { workspace = true }
+license = "Apache-2.0"
+repository = "https://github.com/apache/iceberg-rust"
 
 [dependencies]
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-datafusion = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-parquet = { workspace = true }
-tokio = { workspace = true }
-uuid = { workspace = true }
+# Dependencies commented out - this crate is excluded from workspace
+# anyhow = { workspace = true }
+# async-trait = { workspace = true }
+# datafusion = { workspace = true }
+# futures = { workspace = true }
+# iceberg = { workspace = true }
+# parquet = { workspace = true }
+# tokio = { workspace = true }
+# uuid = { workspace = true }
 
 [dev-dependencies]
-expect-test = { workspace = true }
-parquet = { workspace = true }
-tempfile = { workspace = true }
+# expect-test = { workspace = true }
+# parquet = { workspace = true }
+# tempfile = { workspace = true }

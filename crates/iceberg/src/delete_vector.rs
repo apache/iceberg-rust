@@ -36,7 +36,7 @@ impl DeleteVector {
         }
     }
 
-    pub fn iter(&self) -> DeleteVectorIterator {
+    pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
