@@ -353,13 +353,16 @@ impl TableCommit {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        // Bump the version of metadata
+        // Build the new metadata
+        let new_metadata = metadata_builder.build()?.metadata;
+
+        // Bump the version of metadata, using properties from the new metadata
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
-            .with_next_version()
+            .with_next_version_and_properties(&new_metadata.properties)
             .to_string();
 
         Ok(table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata))
+            .with_metadata(Arc::new(new_metadata))
             .with_metadata_location(new_metadata_location))
     }
 }

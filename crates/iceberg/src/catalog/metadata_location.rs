@@ -74,12 +74,33 @@ impl MetadataLocation {
     }
 
     /// Creates a new metadata location for an updated metadata file.
+    /// Preserves the compression settings from the current location.
     pub fn with_next_version(&self) -> Self {
         Self {
             table_location: self.table_location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
             compression_suffix: self.compression_suffix.clone(),
+        }
+    }
+
+    /// Creates a new metadata location for an updated metadata file.
+    /// Takes table properties to determine compression settings, which may have changed
+    /// from the previous version.
+    pub fn with_next_version_and_properties(&self, properties: &HashMap<String, String>) -> Self {
+        let compression_suffix = properties
+            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            .and_then(|codec| match codec.to_lowercase().as_str() {
+                "gzip" => Some(".gz".to_string()),
+                "none" | "" => None,
+                _ => None,
+            });
+
+        Self {
+            table_location: self.table_location.clone(),
+            version: self.version + 1,
+            id: Uuid::new_v4(),
+            compression_suffix,
         }
     }
 
@@ -154,6 +175,7 @@ impl FromStr for MetadataLocation {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     use uuid::Uuid;
@@ -344,5 +366,46 @@ mod test {
         );
         let location = MetadataLocation::new_with_properties("/test/table", &props_gzip_upper);
         assert_eq!(location.compression_suffix, Some(".gz".to_string()));
+    }
+
+    #[test]
+    fn test_with_next_version_and_properties() {
+        use std::collections::HashMap;
+
+        // Start with a location without compression
+        let props_none = HashMap::new();
+        let location = MetadataLocation::new_with_properties("/test/table", &props_none);
+        assert_eq!(location.compression_suffix, None);
+        assert_eq!(location.version, 0);
+
+        // Update to next version with gzip compression
+        let mut props_gzip = HashMap::new();
+        props_gzip.insert(
+            "write.metadata.compression-codec".to_string(),
+            "gzip".to_string(),
+        );
+        let next_location = location.with_next_version_and_properties(&props_gzip);
+        assert_eq!(next_location.compression_suffix, Some(".gz".to_string()));
+        assert_eq!(next_location.version, 1);
+        assert_eq!(
+            next_location.to_string(),
+            format!(
+                "/test/table/metadata/00001-{}.gz.metadata.json",
+                next_location.id
+            )
+        );
+
+        // Update to next version without compression (changed from gzip)
+        let props_none_again = HashMap::new();
+        let final_location = next_location.with_next_version_and_properties(&props_none_again);
+        assert_eq!(final_location.compression_suffix, None);
+        assert_eq!(final_location.version, 2);
+        assert_eq!(
+            final_location.to_string(),
+            format!(
+                "/test/table/metadata/00002-{}.metadata.json",
+                final_location.id
+            )
+        );
     }
 }
