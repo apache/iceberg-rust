@@ -108,18 +108,17 @@ impl CatalogBuilder for HmsCatalogBuilder {
             .collect();
 
         async move {
-            let name = self.name.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
-            })?;
+            let name = self
+                .name
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog name is required"))?;
 
-            let address = self.address.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog address is required")
-            })?;
+            let address = self
+                .address
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog address is required"))?;
 
             let warehouse = self.warehouse.ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
             })?;
-
 
             if address.is_empty() {
                 return Err(Error::new(
@@ -127,7 +126,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
                     "Catalog address cannot be empty",
                 ));
             }
-            
+
             if warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,

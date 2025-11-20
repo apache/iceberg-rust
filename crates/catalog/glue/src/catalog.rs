@@ -105,13 +105,13 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
         async move {
             // Catalog name and warehouse are required
-            let name = self.name.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
-            })?;
+            let name = self
+                .name
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog name is required"))?;
             let warehouse = self.warehouse.ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
             })?;
-            
+
             if warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -135,7 +135,7 @@ impl CatalogBuilder for GlueCatalogBuilder {
 /// Glue Catalog configuration
 #[derive(Debug)]
 pub(crate) struct GlueCatalogConfig {
-    #[allow(dead_code)] // can be used for debugging 
+    #[allow(dead_code)] // can be used for debugging
     name: String,
     uri: Option<String>,
     catalog_id: Option<String>,

@@ -184,9 +184,9 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 ));
             }
 
-            let uri = self.uri.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog uri is required")
-            })?;
+            let uri = self
+                .uri
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog uri is required"))?;
 
             if uri.is_empty() {
                 return Err(Error::new(
@@ -196,7 +196,10 @@ impl CatalogBuilder for SqlCatalogBuilder {
             }
 
             let warehouse_location = self.warehouse_location.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog warehouse location is required")
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse location is required",
+                )
             })?;
 
             if warehouse_location.is_empty() {

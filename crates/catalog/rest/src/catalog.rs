@@ -110,13 +110,13 @@ impl CatalogBuilder for RestCatalogBuilder {
             .collect();
 
         async move {
-            let name = self.name.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
-            })?;
+            let name = self
+                .name
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog name is required"))?;
 
-            let uri = self.uri.ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Catalog uri is required")
-            })?;
+            let uri = self
+                .uri
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog uri is required"))?;
 
             if uri.is_empty() {
                 return Err(Error::new(
