@@ -42,8 +42,9 @@ pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
 
 /// S3Tables catalog configuration.
 #[derive(Debug)]
-struct S3TablesCatalogConfig {
+pub(crate) struct S3TablesCatalogConfig {
     /// Catalog name.
+    #[allow(dead_code)] // Stored for debugging and potential future use
     name: Option<String>,
     /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
     /// that is managed by s3tables. We can't directly access the bucket with path like
@@ -65,18 +66,24 @@ struct S3TablesCatalogConfig {
 
 /// Builder for [`S3TablesCatalog`].
 #[derive(Debug)]
-pub struct S3TablesCatalogBuilder(S3TablesCatalogConfig);
+pub struct S3TablesCatalogBuilder {
+    name: Option<String>,
+    table_bucket_arn: Option<String>,
+    endpoint_url: Option<String>,
+    client: Option<aws_sdk_s3tables::Client>,
+    props: HashMap<String, String>,
+}
 
 /// Default builder for [`S3TablesCatalog`].
 impl Default for S3TablesCatalogBuilder {
     fn default() -> Self {
-        Self(S3TablesCatalogConfig {
+        Self {
             name: None,
-            table_bucket_arn: "".to_string(),
+            table_bucket_arn: None,
             endpoint_url: None,
             client: None,
             props: HashMap::new(),
-        })
+        }
     }
 }
 
@@ -91,13 +98,13 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
-        self.0.endpoint_url = Some(endpoint_url.into());
+        self.endpoint_url = Some(endpoint_url.into());
         self
     }
 
     /// Configure the catalog with a pre-built AWS SDK client.
     pub fn with_client(mut self, client: aws_sdk_s3tables::Client) -> Self {
-        self.0.client = Some(client);
+        self.client = Some(client);
         self
     }
 
@@ -110,7 +117,7 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_table_bucket_arn(mut self, table_bucket_arn: impl Into<String>) -> Self {
-        self.0.table_bucket_arn = table_bucket_arn.into();
+        self.table_bucket_arn = Some(table_bucket_arn.into());
         self
     }
 }
@@ -124,21 +131,18 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let catalog_name = name.into();
-        self.0.name = Some(catalog_name.clone());
+        self.name = Some(catalog_name.clone());
 
         if props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
-            self.0.table_bucket_arn = props
-                .get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN)
-                .cloned()
-                .unwrap_or_default();
+            self.table_bucket_arn = props.get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN).cloned();
         }
 
         if props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
-            self.0.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
+            self.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN
@@ -148,18 +152,32 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
 
         async move {
             if catalog_name.trim().is_empty() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
-                ))
-            } else if self.0.table_bucket_arn.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Table bucket ARN is required",
-                ))
-            } else {
-                S3TablesCatalog::new(self.0).await
+                ));
             }
+
+            let table_bucket_arn = self.table_bucket_arn.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Table bucket ARN is required")
+            })?;
+
+            if table_bucket_arn.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Table bucket ARN cannot be empty",
+                ));
+            }
+
+            let config = S3TablesCatalogConfig {
+                name: Some(catalog_name),
+                table_bucket_arn,
+                endpoint_url: self.endpoint_url,
+                client: self.client,
+                props: self.props,
+            };
+
+            S3TablesCatalog::new(config).await
         }
     }
 }

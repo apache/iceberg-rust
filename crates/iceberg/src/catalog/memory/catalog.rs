@@ -52,6 +52,18 @@ impl Default for MemoryCatalogBuilder {
     }
 }
 
+impl MemoryCatalogBuilder {
+    /// Get a mutable reference to the catalog configuration.
+    pub(crate) fn catalog_config(&mut self) -> &mut MemoryCatalogConfig {
+        &mut self.0
+    }
+
+    /// Consume the builder and return the catalog configuration.
+    pub(crate) fn into_config(self) -> MemoryCatalogConfig {
+        self.0
+    }
+}
+
 impl CatalogBuilder for MemoryCatalogBuilder {
     type C = MemoryCatalog;
 
@@ -60,34 +72,35 @@ impl CatalogBuilder for MemoryCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.catalog_config().name = Some(name.into());
 
         if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.0.warehouse = props
+            self.catalog_config().warehouse = props
                 .get(MEMORY_CATALOG_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default()
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.catalog_config().props = props
             .into_iter()
             .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
+        let config = self.into_config();
         let result = {
-            if self.0.name.is_none() {
+            if config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.warehouse.is_empty() {
+            } else if config.warehouse.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ))
             } else {
-                MemoryCatalog::new(self.0)
+                MemoryCatalog::new(config)
             }
         };
 
