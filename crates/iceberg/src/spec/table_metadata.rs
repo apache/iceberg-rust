@@ -469,13 +469,11 @@ impl TableMetadata {
         let codec = self
             .properties
             .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-            .map(|s| s.as_str())
-            .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
+            .map(|s| s.as_str());
 
         // Use case-insensitive comparison to match Java implementation
-        let codec_lower = codec.to_lowercase();
-        let (data_to_write, actual_location) = match codec_lower.as_str() {
-            "gzip" => {
+        let (data_to_write, actual_location) = match codec.map(|s| s.to_lowercase()).as_deref() {
+            Some("gzip") => {
                 let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(&json_data).map_err(|e| {
                     Error::new(
@@ -491,17 +489,22 @@ impl TableMetadata {
 
                 // Modify filename to add .gz before .metadata.json
                 let location = metadata_location.as_ref();
-                let new_location = if location.ends_with(".metadata.json") {
+                let new_location = if location.ends_with(".gz.metadata.json") {
+                    // File already has the correct compressed naming convention
+                    // This check can be removed after the deprecated method for naming is removed,
+                    // but provides safety that compressed files have the correct naming convention.
+                    location.to_string()
+                } else if location.ends_with(".metadata.json") {
                     location.replace(".metadata.json", ".gz.metadata.json")
                 } else {
-                    // If it doesn't end with expected pattern, just append .gz
-                    format!("{}.gz", location)
+                    // Location doesn't end with expected pattern, use as-is
+                    location.to_string()
                 };
 
                 (compressed_data, new_location)
             }
-            "none" | "" => (json_data, metadata_location.as_ref().to_string()),
-            other => {
+            None | Some("none") | Some("") => (json_data, metadata_location.as_ref().to_string()),
+            Some(other) => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!("Unsupported metadata compression codec: {}", other),

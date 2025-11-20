@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use crate::error::{Error, ErrorKind};
+use crate::error::{Error, ErrorKind, Result};
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
@@ -27,7 +27,7 @@ fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
-) -> crate::error::Result<T>
+) -> Result<T>
 where
     <T as FromStr>::Err: Display,
 {
@@ -53,8 +53,8 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
-    /// Compression codec for metadata files (JSON)
-    pub metadata_compression_codec: String,
+    /// Compression codec for metadata files (JSON), None means no compression
+    pub metadata_compression_codec: Option<String>,
 }
 
 impl TableProperties {
@@ -152,9 +152,9 @@ impl TableProperties {
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     // parse by entry key or use default value
-    type Error = crate::Error;
+    type Error = Error;
 
-    fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
+    fn try_from(props: &HashMap<String, String>) -> Result<Self> {
         Ok(TableProperties {
             commit_num_retries: parse_property(
                 props,
@@ -186,11 +186,12 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
-            metadata_compression_codec: parse_property(
-                props,
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC,
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT.to_string(),
-            )?,
+            metadata_compression_codec: props
+                .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+                .and_then(|v| match v.as_str() {
+                    "none" | "" => None,
+                    codec => Some(codec.to_string()),
+                }),
         })
     }
 }
@@ -223,11 +224,8 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
-        // Test compression defaults
-        assert_eq!(
-            table_properties.metadata_compression_codec,
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT.to_string()
-        );
+        // Test compression defaults (none means None)
+        assert_eq!(table_properties.metadata_compression_codec, None);
     }
 
     #[test]
@@ -237,7 +235,20 @@ mod tests {
             "gzip".to_string(),
         )]);
         let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.metadata_compression_codec, "gzip");
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+    }
+
+    #[test]
+    fn test_table_properties_compression_none() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "none".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.metadata_compression_codec, None);
     }
 
     #[test]

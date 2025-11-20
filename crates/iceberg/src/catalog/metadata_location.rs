@@ -20,24 +20,52 @@ use std::str::FromStr;
 
 use uuid::Uuid;
 
+use crate::spec::TableProperties;
 use crate::{Error, ErrorKind, Result};
 
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
+/// or with compression: `<location>/metadata/<version>-<uuid>.gz.metadata.json`
 #[derive(Clone, Debug, PartialEq)]
 pub struct MetadataLocation {
     table_location: String,
     version: i32,
     id: Uuid,
+    compression_suffix: Option<String>,
 }
 
 impl MetadataLocation {
     /// Creates a completely new metadata location starting at version 0.
     /// Only used for creating a new table. For updates, see `with_next_version`.
+    #[deprecated(
+        since = "0.7.0",
+        note = "Use new_with_table instead to properly handle compression settings"
+    )]
     pub fn new_with_table_location(table_location: impl ToString) -> Self {
         Self {
             table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
+            compression_suffix: None,
+        }
+    }
+
+    /// Creates a completely new metadata location starting at version 0,
+    /// with compression settings from the table's properties.
+    /// Only used for creating a new table. For updates, see `with_next_version`.
+    pub fn new_with_table(table_location: impl ToString, properties: &std::collections::HashMap<String, String>) -> Self {
+        let compression_suffix = properties
+            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            .and_then(|codec| match codec.to_lowercase().as_str() {
+                "gzip" => Some(".gz".to_string()),
+                "none" | "" => None,
+                _ => None,
+            });
+
+        Self {
+            table_location: table_location.to_string(),
+            version: 0,
+            id: Uuid::new_v4(),
+            compression_suffix,
         }
     }
 
@@ -47,6 +75,7 @@ impl MetadataLocation {
             table_location: self.table_location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
+            compression_suffix: self.compression_suffix.clone(),
         }
     }
 
@@ -59,30 +88,41 @@ impl MetadataLocation {
         Ok(prefix.to_string())
     }
 
-    /// Parses a file name of the format `<version>-<uuid>.metadata.json`.
-    fn parse_file_name(file_name: &str) -> Result<(i32, Uuid)> {
-        let (version, id) = file_name
+    /// Parses a file name of the format `<version>-<uuid>.metadata.json`
+    /// or with compression: `<version>-<uuid>.gz.metadata.json`.
+    fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, Option<String>)> {
+        let stripped = file_name
             .strip_suffix(".metadata.json")
             .ok_or(Error::new(
                 ErrorKind::Unexpected,
                 format!("Invalid metadata file ending: {file_name}"),
-            ))?
+            ))?;
+
+        // Check for compression suffix (e.g., .gz)
+        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(".gz") {
+            (s, Some(".gz".to_string()))
+        } else {
+            (stripped, None)
+        };
+
+        let (version, id) = stripped
             .split_once('-')
             .ok_or(Error::new(
                 ErrorKind::Unexpected,
                 format!("Invalid metadata file name format: {file_name}"),
             ))?;
 
-        Ok((version.parse::<i32>()?, Uuid::parse_str(id)?))
+        Ok((version.parse::<i32>()?, Uuid::parse_str(id)?, compression_suffix))
     }
 }
 
 impl Display for MetadataLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let suffix = self.compression_suffix.as_deref().unwrap_or("");
         write!(
             f,
-            "{}/metadata/{:0>5}-{}.metadata.json",
-            self.table_location, self.version, self.id
+            "{}/metadata/{:0>5}-{}{}.metadata.json",
+            self.table_location, self.version, self.id, suffix
         )
     }
 }
@@ -97,12 +137,13 @@ impl FromStr for MetadataLocation {
         ))?;
 
         let prefix = Self::parse_metadata_path_prefix(path)?;
-        let (version, id) = Self::parse_file_name(file_name)?;
+        let (version, id, compression_suffix) = Self::parse_file_name(file_name)?;
 
         Ok(MetadataLocation {
             table_location: prefix,
             version,
             id,
+            compression_suffix,
         })
     }
 }
@@ -125,6 +166,7 @@ mod test {
                     table_location: "".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: None,
                 }),
             ),
             // Some prefix
@@ -134,6 +176,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: None,
                 }),
             ),
             // Longer prefix
@@ -143,6 +186,7 @@ mod test {
                     table_location: "/abc/def".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: None,
                 }),
             ),
             // Prefix with special characters
@@ -152,6 +196,7 @@ mod test {
                     table_location: "https://127.0.0.1".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: None,
                 }),
             ),
             // Another id
@@ -161,6 +206,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap(),
+                    compression_suffix: None,
                 }),
             ),
             // Version 0
@@ -170,6 +216,17 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 0,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: None,
+                }),
+            ),
+            // With gzip compression
+            (
+                "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.gz.metadata.json",
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
+                    version: 1234567,
+                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_suffix: Some(".gz".to_string()),
                 }),
             ),
             // Negative version
@@ -217,6 +274,7 @@ mod test {
     #[test]
     fn test_metadata_location_with_next_version() {
         let test_cases = vec![
+            #[allow(deprecated)]
             MetadataLocation::new_with_table_location("/abc"),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
@@ -232,5 +290,52 @@ mod test {
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
         }
+    }
+
+    #[test]
+    fn test_metadata_location_new_with_table() {
+        use std::collections::HashMap;
+
+        // Test with no compression
+        let props_none = HashMap::new();
+        let location = MetadataLocation::new_with_table("/test/table", &props_none);
+        assert_eq!(location.table_location, "/test/table");
+        assert_eq!(location.version, 0);
+        assert_eq!(location.compression_suffix, None);
+        assert_eq!(
+            location.to_string(),
+            format!("/test/table/metadata/00000-{}.metadata.json", location.id)
+        );
+
+        // Test with gzip compression
+        let mut props_gzip = HashMap::new();
+        props_gzip.insert(
+            "write.metadata.compression-codec".to_string(),
+            "gzip".to_string(),
+        );
+        let location = MetadataLocation::new_with_table("/test/table", &props_gzip);
+        assert_eq!(location.compression_suffix, Some(".gz".to_string()));
+        assert_eq!(
+            location.to_string(),
+            format!("/test/table/metadata/00000-{}.gz.metadata.json", location.id)
+        );
+
+        // Test with "none" codec (explicitly no compression)
+        let mut props_explicit_none = HashMap::new();
+        props_explicit_none.insert(
+            "write.metadata.compression-codec".to_string(),
+            "none".to_string(),
+        );
+        let location = MetadataLocation::new_with_table("/test/table", &props_explicit_none);
+        assert_eq!(location.compression_suffix, None);
+
+        // Test case insensitivity
+        let mut props_gzip_upper = HashMap::new();
+        props_gzip_upper.insert(
+            "write.metadata.compression-codec".to_string(),
+            "GZIP".to_string(),
+        );
+        let location = MetadataLocation::new_with_table("/test/table", &props_gzip_upper);
+        assert_eq!(location.compression_suffix, Some(".gz".to_string()));
     }
 }
