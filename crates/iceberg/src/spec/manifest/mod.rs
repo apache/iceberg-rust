@@ -783,8 +783,8 @@ mod tests {
             Manifest::parse_avro(fs::read(path).expect("read_file must succeed").as_slice())
                 .unwrap();
 
-        // Compared with original manifest, the lower_bounds and upper_bounds no longer has data for field 3, and
-        // other parts should be same.
+        // Compared with original manifest, the lower_bounds and upper_bounds now PRESERVE data for field 3
+        // as binary (since field 3 is not in the current schema), and other parts should be same.
         // The snapshot id is assigned when the entry is added to the manifest.
         let schema = Arc::new(
             Schema::builder()
@@ -834,10 +834,12 @@ mod tests {
                     lower_bounds: HashMap::from([
                         (1, Datum::long(1)),
                         (2, Datum::int(2)),
+                        (3, Datum::binary(vec![120])), // Field 3 preserved as binary
                     ]),
                     upper_bounds: HashMap::from([
                         (1, Datum::long(1)),
                         (2, Datum::int(2)),
+                        (3, Datum::binary(vec![120])), // Field 3 preserved as binary
                     ]),
                     key_metadata: None,
                     split_offsets: vec![4],
