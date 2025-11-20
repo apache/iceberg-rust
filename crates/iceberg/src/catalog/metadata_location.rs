@@ -319,8 +319,6 @@ mod test {
 
     #[test]
     fn test_metadata_location_new_with_properties() {
-        use std::collections::HashMap;
-
         // Test with no compression
         let props_none = HashMap::new();
         let location = MetadataLocation::new_with_properties("/test/table", &props_none);
@@ -369,8 +367,6 @@ mod test {
 
     #[test]
     fn test_with_next_version_and_properties() {
-        use std::collections::HashMap;
-
         // Start with a location without compression
         let props_none = HashMap::new();
         let location = MetadataLocation::new_with_properties("/test/table", &props_none);
