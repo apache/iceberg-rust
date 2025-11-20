@@ -191,19 +191,28 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        // TODO: the spec states that:
-        //     "The data file's file_path is equal to the delete file's referenced_data_file if it is non-null".
-        //     we're not yet doing that here. The referenced data file's name will also be present in the positional
-        //     delete file's file path column.
+        // Per the Iceberg spec:
+        // "A position delete file is indexed by the `referenced_data_file` field of the manifest entry.
+        // If the field is present, the delete file applies only to the data file with the same `file_path`.
+        // If it's absent, the delete file must be scanned for each data file in the partition."
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
                 // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
                 .filter(|&delete| {
-                    seq_num
+                    let sequence_match = seq_num
                         .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
-                        .unwrap_or_else(|| true)
-                        && data_file.partition_spec_id == delete.partition_spec_id
+                        .unwrap_or_else(|| true);
+
+                    let spec_match = data_file.partition_spec_id == delete.partition_spec_id;
+
+                    // Check referenced_data_file: if set, it must match the data file's path
+                    let referenced_file_match = match delete.manifest_entry.data_file().referenced_data_file() {
+                        Some(referenced_path) => referenced_path == data_file.file_path,
+                        None => true, // If not set, delete applies to all data files in partition
+                    };
+
+                    sequence_match && spec_match && referenced_file_match
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
@@ -440,7 +449,8 @@ mod tests {
             .file_format(DataFileFormat::Parquet)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
-            .referenced_data_file(Some("/some-data-file.parquet".to_string()))
+            // No referenced_data_file - applies to all data files in partition
+            .referenced_data_file(None)
             .partition(partition.clone())
             .partition_spec_id(spec_id)
             .file_size_in_bytes(100)
@@ -480,5 +490,254 @@ mod tests {
             .sequence_number(data_seq_number)
             .data_file(file.clone())
             .build()
+    }
+
+    #[test]
+    fn test_referenced_data_file_matching() {
+        // Test that position deletes with referenced_data_file set only apply to matching data files
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+
+        let data_file_path_1 = "/table/data/file1.parquet";
+        let data_file_path_2 = "/table/data/file2.parquet";
+
+        // Create position delete files with specific referenced_data_file values
+        let pos_delete_for_file1 = DataFileBuilder::default()
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some(data_file_path_1.to_string()))
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        let pos_delete_for_file2 = DataFileBuilder::default()
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some(data_file_path_2.to_string()))
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        // Create position delete file without referenced_data_file (applies to all files in partition)
+        let pos_delete_global_in_partition = DataFileBuilder::default()
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(None) // No referenced_data_file means applies to all
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        let deletes: Vec<ManifestEntry> = vec![
+            build_added_manifest_entry(1, &pos_delete_for_file1),
+            build_added_manifest_entry(1, &pos_delete_for_file2),
+            build_added_manifest_entry(1, &pos_delete_global_in_partition),
+        ];
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: spec_id,
+            })
+            .collect();
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        // Create data file 1
+        let data_file_1 = DataFileBuilder::default()
+            .file_path(data_file_path_1.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::Data)
+            .record_count(100)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(1000)
+            .build()
+            .unwrap();
+
+        // Create data file 2
+        let data_file_2 = DataFileBuilder::default()
+            .file_path(data_file_path_2.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::Data)
+            .record_count(100)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(1000)
+            .build()
+            .unwrap();
+
+        // Test data_file_1: should match pos_delete_for_file1 and pos_delete_global_in_partition
+        let deletes_for_file1 = delete_file_index.get_deletes_for_data_file(&data_file_1, Some(0));
+        assert_eq!(
+            deletes_for_file1.len(),
+            2,
+            "Data file 1 should have 2 matching delete files"
+        );
+
+        let delete_paths_for_file1: Vec<String> = deletes_for_file1
+            .into_iter()
+            .map(|d| d.file_path)
+            .collect();
+        assert!(delete_paths_for_file1.contains(&pos_delete_for_file1.file_path));
+        assert!(delete_paths_for_file1.contains(&pos_delete_global_in_partition.file_path));
+        assert!(!delete_paths_for_file1.contains(&pos_delete_for_file2.file_path));
+
+        // Test data_file_2: should match pos_delete_for_file2 and pos_delete_global_in_partition
+        let deletes_for_file2 = delete_file_index.get_deletes_for_data_file(&data_file_2, Some(0));
+        assert_eq!(
+            deletes_for_file2.len(),
+            2,
+            "Data file 2 should have 2 matching delete files"
+        );
+
+        let delete_paths_for_file2: Vec<String> = deletes_for_file2
+            .into_iter()
+            .map(|d| d.file_path)
+            .collect();
+        assert!(delete_paths_for_file2.contains(&pos_delete_for_file2.file_path));
+        assert!(delete_paths_for_file2.contains(&pos_delete_global_in_partition.file_path));
+        assert!(!delete_paths_for_file2.contains(&pos_delete_for_file1.file_path));
+    }
+
+    #[test]
+    fn test_referenced_data_file_no_match() {
+        // Test that position delete with referenced_data_file doesn't match unrelated data files
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+
+        // Create position delete for a specific file
+        let pos_delete = DataFileBuilder::default()
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some("/table/data/specific-file.parquet".to_string()))
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        let deletes: Vec<ManifestEntry> = vec![build_added_manifest_entry(1, &pos_delete)];
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: spec_id,
+            })
+            .collect();
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        // Create data file with different path
+        let data_file = DataFileBuilder::default()
+            .file_path("/table/data/different-file.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::Data)
+            .record_count(100)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(1000)
+            .build()
+            .unwrap();
+
+        // The delete file should NOT match this data file
+        let deletes = delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+        assert_eq!(
+            deletes.len(),
+            0,
+            "Position delete with different referenced_data_file should not match"
+        );
+    }
+
+    #[test]
+    fn test_referenced_data_file_null_matches_all() {
+        // Test that position delete without referenced_data_file matches all files in partition
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+
+        // Create position delete without referenced_data_file
+        let pos_delete = DataFileBuilder::default()
+            .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(None) // Applies to all files in partition
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        let deletes: Vec<ManifestEntry> = vec![build_added_manifest_entry(1, &pos_delete)];
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: spec_id,
+            })
+            .collect();
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        // Create multiple data files with different paths
+        let data_files = vec![
+            DataFileBuilder::default()
+                .file_path("/table/data/file1.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .content(DataContentType::Data)
+                .record_count(100)
+                .partition(partition.clone())
+                .partition_spec_id(spec_id)
+                .file_size_in_bytes(1000)
+                .build()
+                .unwrap(),
+            DataFileBuilder::default()
+                .file_path("/table/data/file2.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .content(DataContentType::Data)
+                .record_count(100)
+                .partition(partition.clone())
+                .partition_spec_id(spec_id)
+                .file_size_in_bytes(1000)
+                .build()
+                .unwrap(),
+            DataFileBuilder::default()
+                .file_path("/table/data/file3.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .content(DataContentType::Data)
+                .record_count(100)
+                .partition(partition.clone())
+                .partition_spec_id(spec_id)
+                .file_size_in_bytes(1000)
+                .build()
+                .unwrap(),
+        ];
+
+        // All data files should match the delete file
+        for data_file in data_files {
+            let deletes = delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+            assert_eq!(
+                deletes.len(),
+                1,
+                "Position delete without referenced_data_file should match all files in partition"
+            );
+            assert_eq!(deletes[0].file_path, pos_delete.file_path);
+        }
     }
 }
