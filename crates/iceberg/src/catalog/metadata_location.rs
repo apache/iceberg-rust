@@ -35,10 +35,21 @@ pub struct MetadataLocation {
 }
 
 impl MetadataLocation {
+    /// Determines the compression suffix from table properties.
+    fn compression_suffix_from_properties(properties: &HashMap<String, String>) -> Option<String> {
+        properties
+            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            .and_then(|codec| match codec.to_lowercase().as_str() {
+                "gzip" => Some(".gz".to_string()),
+                "none" | "" => None,
+                _ => None,
+            })
+    }
+
     /// Creates a completely new metadata location starting at version 0.
     /// Only used for creating a new table. For updates, see `with_next_version`.
     #[deprecated(
-        since = "0.7.0",
+        since = "0.8.0",
         note = "Use new_with_properties instead to properly handle compression settings"
     )]
     pub fn new_with_table_location(table_location: impl ToString) -> Self {
@@ -57,24 +68,20 @@ impl MetadataLocation {
         table_location: impl ToString,
         properties: &HashMap<String, String>,
     ) -> Self {
-        let compression_suffix = properties
-            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-            .and_then(|codec| match codec.to_lowercase().as_str() {
-                "gzip" => Some(".gz".to_string()),
-                "none" | "" => None,
-                _ => None,
-            });
-
         Self {
             table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
-            compression_suffix,
+            compression_suffix: Self::compression_suffix_from_properties(properties),
         }
     }
 
     /// Creates a new metadata location for an updated metadata file.
     /// Preserves the compression settings from the current location.
+    #[deprecated(
+        since = "0.8.0",
+        note = "Use with_next_version_and_properties instead to properly handle compression settings changes"
+    )]
     pub fn with_next_version(&self) -> Self {
         Self {
             table_location: self.table_location.clone(),
@@ -88,19 +95,11 @@ impl MetadataLocation {
     /// Takes table properties to determine compression settings, which may have changed
     /// from the previous version.
     pub fn with_next_version_and_properties(&self, properties: &HashMap<String, String>) -> Self {
-        let compression_suffix = properties
-            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-            .and_then(|codec| match codec.to_lowercase().as_str() {
-                "gzip" => Some(".gz".to_string()),
-                "none" | "" => None,
-                _ => None,
-            });
-
         Self {
             table_location: self.table_location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
-            compression_suffix,
+            compression_suffix: Self::compression_suffix_from_properties(properties),
         }
     }
 
@@ -298,9 +297,9 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_metadata_location_with_next_version() {
         let test_cases = vec![
-            #[allow(deprecated)]
             MetadataLocation::new_with_table_location("/abc"),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
