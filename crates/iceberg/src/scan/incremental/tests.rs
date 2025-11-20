@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::TableIdent;
 use crate::io::{FileIO, OutputFile};
-use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_UNDERSCORE_POS};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestListWriter,
     ManifestStatus, ManifestWriterBuilder, PartitionSpec, SchemaRef, Struct, TableMetadata,
@@ -2524,6 +2524,243 @@ async fn test_incremental_scan_with_file_column() {
             assert!(
                 file_path.contains("/data/"),
                 "File path should contain /data/: {}",
+                file_path
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_incremental_select_with_pos_column() {
+    use arrow_array::cast::AsArray;
+
+    // Create a fixture with test data
+    let fixture = IncrementalTestFixture::new(vec![
+        Operation::Add(vec![], "empty.parquet".to_string()), // Snapshot 1: empty
+        Operation::Add(
+            vec![
+                (1, "a".to_string()),
+                (2, "b".to_string()),
+                (3, "c".to_string()),
+            ],
+            "data-1.parquet".to_string(),
+        ), // Snapshot 2
+    ])
+    .await;
+
+    // Build an incremental scan with _pos column
+    let scan = fixture
+        .table
+        .incremental_scan(Some(1), Some(2))
+        .select(["n", RESERVED_COL_NAME_UNDERSCORE_POS])
+        .build()
+        .unwrap();
+
+    let stream = scan.to_arrow().await.unwrap();
+    let batches: Vec<_> = stream.try_collect().await.unwrap();
+
+    // Get append batches (we're only appending in this test)
+    let append_batches: Vec<_> = batches
+        .iter()
+        .filter(|(t, _)| *t == crate::arrow::IncrementalBatchType::Append)
+        .map(|(_, b)| b.clone())
+        .collect();
+
+    // Verify we have append batches
+    assert!(!append_batches.is_empty(), "Should have append batches");
+
+    for batch in append_batches {
+        // Should have 2 columns: n and _pos
+        assert_eq!(batch.num_columns(), 2, "Should have n and _pos columns");
+
+        // Verify the n column exists
+        assert!(batch.column_by_name("n").is_some(), "n column should exist");
+
+        // Verify the _pos column exists
+        let pos_col = batch.column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS);
+        assert!(
+            pos_col.is_some(),
+            "_pos column should be present in the batch"
+        );
+
+        // Verify the _pos column has correct data type (Int64 from RowNumber extension)
+        let pos_col = pos_col.unwrap();
+        assert_eq!(
+            pos_col.data_type(),
+            &arrow_schema::DataType::Int64,
+            "_pos column should use Int64 type"
+        );
+
+        // Get the position values from the Int64Array
+        let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
+
+        // Verify first position is 0
+        assert_eq!(pos_array.value(0), 0, "First row should have position 0");
+
+        // Verify positions are sequential
+        for i in 1..pos_array.len() {
+            assert_eq!(
+                pos_array.value(i),
+                i as i64,
+                "Row {} should have position {}",
+                i,
+                i
+            );
+        }
+
+        // Test variant 2: Use with_pos_column() method instead of selecting by name
+        let scan = fixture
+            .table
+            .incremental_scan(Some(1), Some(2))
+            .select(["n"])
+            .with_pos_column()
+            .build()
+            .unwrap();
+
+        let stream = scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+
+        // Get append batches
+        let append_batches: Vec<_> = batches
+            .iter()
+            .filter(|(t, _)| *t == crate::arrow::IncrementalBatchType::Append)
+            .map(|(_, b)| b.clone())
+            .collect();
+
+        // Verify we have append batches
+        assert!(!append_batches.is_empty(), "Should have append batches");
+
+        for batch in append_batches {
+            // Should have 2 columns: n and _pos
+            assert_eq!(
+                batch.num_columns(),
+                2,
+                "Should have n and _pos columns when using with_pos_column()"
+            );
+
+            // Verify the _pos column exists
+            let pos_col = batch.column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS);
+            assert!(
+                pos_col.is_some(),
+                "_pos column should be present when using with_pos_column()"
+            );
+
+            // Verify the _pos column has correct data type
+            let pos_col = pos_col.unwrap();
+            assert_eq!(
+                pos_col.data_type(),
+                &arrow_schema::DataType::Int64,
+                "_pos column should use Int64 type"
+            );
+
+            // Verify positions are sequential
+            let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
+            assert_eq!(pos_array.value(0), 0, "First row should have position 0");
+            for i in 1..pos_array.len() {
+                assert_eq!(
+                    pos_array.value(i),
+                    i as i64,
+                    "Row {} should have position {}",
+                    i,
+                    i
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_incremental_select_with_pos_and_file_columns() {
+    use arrow_array::cast::AsArray;
+
+    // Create a fixture with test data
+    let fixture = IncrementalTestFixture::new(vec![
+        Operation::Add(vec![], "empty.parquet".to_string()), // Snapshot 1: empty
+        Operation::Add(
+            vec![
+                (1, "a".to_string()),
+                (2, "b".to_string()),
+                (3, "c".to_string()),
+            ],
+            "data-1.parquet".to_string(),
+        ), // Snapshot 2
+    ])
+    .await;
+
+    // Build an incremental scan with both _pos and _file columns
+    let scan = fixture
+        .table
+        .incremental_scan(Some(1), Some(2))
+        .select([
+            "n",
+            RESERVED_COL_NAME_FILE,
+            "data",
+            RESERVED_COL_NAME_UNDERSCORE_POS,
+        ])
+        .build()
+        .unwrap();
+
+    let stream = scan.to_arrow().await.unwrap();
+    let batches: Vec<_> = stream.try_collect().await.unwrap();
+
+    // Get append batches
+    let append_batches: Vec<_> = batches
+        .iter()
+        .filter(|(t, _)| *t == crate::arrow::IncrementalBatchType::Append)
+        .map(|(_, b)| b.clone())
+        .collect();
+
+    // Verify we have append batches
+    assert!(!append_batches.is_empty(), "Should have append batches");
+
+    for batch in append_batches {
+        // Should have 4 columns: n, _file, data, _pos
+        assert_eq!(
+            batch.num_columns(),
+            4,
+            "Should have n, _file, data, and _pos columns"
+        );
+
+        // Verify all columns exist
+        assert!(batch.column_by_name("n").is_some());
+        assert!(batch.column_by_name(RESERVED_COL_NAME_FILE).is_some());
+        assert!(batch.column_by_name("data").is_some());
+        assert!(
+            batch
+                .column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS)
+                .is_some()
+        );
+
+        // Verify the _pos column has correct data type
+        let pos_col = batch
+            .column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS)
+            .unwrap();
+        assert_eq!(
+            pos_col.data_type(),
+            &arrow_schema::DataType::Int64,
+            "_pos column should use Int64 type"
+        );
+
+        // Verify positions are sequential starting from 0
+        let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
+        for i in 0..pos_array.len() {
+            assert_eq!(
+                pos_array.value(i),
+                i as i64,
+                "Row {} should have position {}",
+                i,
+                i
+            );
+        }
+
+        // Verify _file column contains a valid file path
+        let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
+        let string_array = file_col.as_string::<i32>();
+        for i in 0..batch.num_rows() {
+            let file_path = string_array.value(i);
+            assert!(
+                file_path.ends_with(".parquet"),
+                "File path should end with .parquet: {}",
                 file_path
             );
         }

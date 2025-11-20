@@ -23,12 +23,14 @@ use arrow_schema::Schema as ArrowSchema;
 use futures::channel::mpsc::channel;
 use futures::stream::select;
 use futures::{Stream, StreamExt, TryStreamExt};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 
 use crate::arrow::reader::process_record_batch_stream;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{ArrowReader, StreamsInto};
 use crate::delete_vector::DeleteVector;
 use crate::io::FileIO;
+use crate::metadata_columns::{RESERVED_FIELD_ID_UNDERSCORE_POS, row_pos_field};
 use crate::runtime::spawn;
 use crate::scan::ArrowRecordBatchStream;
 use crate::scan::incremental::{
@@ -172,11 +174,29 @@ async fn process_incremental_append_task(
     batch_size: Option<usize>,
     file_io: FileIO,
 ) -> Result<ArrowRecordBatchStream> {
+    let mut virtual_columns = Vec::new();
+
+    // Check if _pos column is requested and add it as a virtual column
+    let has_pos_column = task
+        .base
+        .project_field_ids
+        .contains(&RESERVED_FIELD_ID_UNDERSCORE_POS);
+    if has_pos_column {
+        // Add _pos as a virtual column to be produced by the Parquet reader
+        virtual_columns.push(Arc::clone(row_pos_field()));
+    }
+
+    let arrow_reader_options = if !virtual_columns.is_empty() {
+        Some(ArrowReaderOptions::new().with_virtual_columns(virtual_columns.clone())?)
+    } else {
+        None
+    };
+
     let mut record_batch_stream_builder = ArrowReader::create_parquet_record_batch_stream_builder(
         &task.base.data_file_path,
         file_io,
         true,
-        None, // arrow_reader_options
+        arrow_reader_options,
     )
     .await?;
 
@@ -194,13 +214,19 @@ async fn process_incremental_append_task(
     // RecordBatchTransformer performs any transformations required on the RecordBatches
     // that come back from the file, such as type promotion, default column insertion,
     // column re-ordering, and virtual field addition (like _file)
-    let mut record_batch_transformer =
+    let mut record_batch_transformer_builder =
         RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids)
             .with_constant(
                 crate::metadata_columns::RESERVED_FIELD_ID_FILE,
                 crate::spec::PrimitiveLiteral::String(task.base.data_file_path.clone()),
-            )?
-            .build();
+            )?;
+
+    if has_pos_column {
+        record_batch_transformer_builder =
+            record_batch_transformer_builder.with_virtual_field(Arc::clone(row_pos_field()))?;
+    }
+
+    let mut record_batch_transformer = record_batch_transformer_builder.build();
 
     if let Some(batch_size) = batch_size {
         record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);

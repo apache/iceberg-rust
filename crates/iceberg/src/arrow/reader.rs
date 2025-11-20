@@ -57,7 +57,9 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::metadata_columns::{
+    RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_UNDERSCORE_POS, is_metadata_field, row_pos_field,
+};
 use crate::runtime::spawn;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Type};
@@ -246,13 +248,24 @@ impl ArrowReader {
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
+        let mut virtual_columns = Vec::new();
+
+        // Check if _pos column is requested and add it as a virtual column
+        let has_pos_column = task
+            .project_field_ids
+            .contains(&RESERVED_FIELD_ID_UNDERSCORE_POS);
+        if has_pos_column {
+            // Add _pos as a virtual column to be produced by the Parquet reader
+            virtual_columns.push(Arc::clone(row_pos_field()));
+        }
+
         // Migrated tables lack field IDs, requiring us to inspect the schema to choose
         // between field-ID-based or position-based projection
         let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
-            None,
+            Some(ArrowReaderOptions::new().with_virtual_columns(virtual_columns.clone())?),
         )
         .await?;
 
@@ -298,7 +311,9 @@ impl ArrowReader {
                 add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema())
             };
 
-            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+            let options = ArrowReaderOptions::new()
+                .with_schema(arrow_schema)
+                .with_virtual_columns(virtual_columns)?;
 
             Self::create_parquet_record_batch_stream_builder(
                 &task.data_file_path,
@@ -344,6 +359,11 @@ impl ArrowReader {
                     RESERVED_FIELD_ID_FILE,
                     PrimitiveLiteral::String(task.data_file_path.clone()),
                 )?;
+
+        if has_pos_column {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_virtual_field(Arc::clone(row_pos_field()))?;
+        }
 
         if let (Some(partition_spec), Some(partition_data)) =
             (task.partition_spec.clone(), task.partition.clone())

@@ -29,7 +29,8 @@ use crate::arrow::{
 use crate::delete_file_index::DeleteFileIndex;
 use crate::io::FileIO;
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_FILE, get_metadata_field_id, is_metadata_column_name,
+    RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_UNDERSCORE_POS, get_metadata_field_id,
+    is_metadata_column_name,
 };
 use crate::scan::DeleteFileContext;
 use crate::scan::cache::ExpressionEvaluatorCache;
@@ -148,6 +149,48 @@ impl<'a> IncrementalTableScanBuilder<'a> {
 
         // Add _file column
         columns.push(RESERVED_COL_NAME_FILE.to_string());
+
+        self.column_names = Some(columns);
+        self
+    }
+
+    /// Include the _pos metadata column in the incremental scan.
+    ///
+    /// This is a convenience method that adds the _pos column to the current selection.
+    /// If no columns are currently selected (select_all), this will select all columns plus _pos.
+    /// If specific columns are selected, this adds _pos to that selection.
+    ///
+    /// The _pos column contains the row position within the file, produced by the underlying
+    /// Parquet reader as a virtual column.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use iceberg::table::Table;
+    /// # async fn example(table: Table) -> iceberg::Result<()> {
+    /// // Select id, name, and _pos for incremental scan
+    /// let scan = table
+    ///     .incremental_scan(None, None)
+    ///     .select(["id", "name"])
+    ///     .with_pos_column()
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_pos_column(mut self) -> Self {
+        let mut columns = self.column_names.unwrap_or_else(|| {
+            // No explicit selection - get all column names from schema
+            self.table
+                .metadata()
+                .current_schema()
+                .as_struct()
+                .fields()
+                .iter()
+                .map(|f| f.name.clone())
+                .collect()
+        });
+
+        // Add _pos column
+        columns.push(RESERVED_COL_NAME_UNDERSCORE_POS.to_string());
 
         self.column_names = Some(columns);
         self

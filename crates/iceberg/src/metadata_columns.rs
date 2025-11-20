@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
 
 use crate::{Error, ErrorKind, Result};
 
@@ -36,6 +36,12 @@ pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
+
+/// Reserved field ID for the row position (_pos) metadata column
+pub const RESERVED_FIELD_ID_UNDERSCORE_POS: i32 = i32::MAX - 2;
+
+/// Reserved column name for the row position metadata column
+pub const RESERVED_COL_NAME_UNDERSCORE_POS: &str = "_pos";
 
 /// Reserved field ID for the file_path column used in delete file reading (positional deletes)
 pub const RESERVED_FIELD_ID_FILE_PATH: i32 = i32::MAX - 200;
@@ -65,6 +71,27 @@ static FILE_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
 /// A reference to the _file field definition (RunEndEncoded type)
 pub fn file_field() -> &'static Arc<Field> {
     &FILE_FIELD
+}
+
+/// Lazy-initialized Arrow Field definition for the _pos metadata column.
+/// Used for row position within a file.
+static ROW_POS_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
+    Arc::new(
+        Field::new(RESERVED_COL_NAME_UNDERSCORE_POS, DataType::Int64, false)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_UNDERSCORE_POS.to_string(),
+            )]))
+            .with_extension_type(RowNumber),
+    )
+});
+
+/// Returns the Arrow Field definition for the _pos metadata column.
+///
+/// # Returns
+/// A reference to the _pos field definition
+pub fn row_pos_field() -> &'static Arc<Field> {
+    &ROW_POS_FIELD
 }
 
 /// Lazy-initialized Arrow Field definition for the pos metadata column.
@@ -119,6 +146,7 @@ pub fn file_path_field() -> &'static Arc<Field> {
 pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
     match field_id {
         RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_field())),
+        RESERVED_FIELD_ID_UNDERSCORE_POS => Ok(Arc::clone(row_pos_field())),
         RESERVED_FIELD_ID_FILE_PATH => Ok(Arc::clone(file_path_field())),
         RESERVED_FIELD_ID_POS => Ok(Arc::clone(pos_field())),
         _ => Err(Error::new(
@@ -138,6 +166,7 @@ pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
 pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
     match column_name {
         RESERVED_COL_NAME_FILE => Ok(RESERVED_FIELD_ID_FILE),
+        RESERVED_COL_NAME_UNDERSCORE_POS => Ok(RESERVED_FIELD_ID_UNDERSCORE_POS),
         RESERVED_COL_NAME_FILE_PATH => Ok(RESERVED_FIELD_ID_FILE_PATH),
         RESERVED_COL_NAME_POS => Ok(RESERVED_FIELD_ID_POS),
         _ => Err(Error::new(
@@ -157,7 +186,10 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
 pub fn is_metadata_field(field_id: i32) -> bool {
     matches!(
         field_id,
-        RESERVED_FIELD_ID_FILE | RESERVED_FIELD_ID_FILE_PATH | RESERVED_FIELD_ID_POS
+        RESERVED_FIELD_ID_FILE
+            | RESERVED_FIELD_ID_UNDERSCORE_POS
+            | RESERVED_FIELD_ID_FILE_PATH
+            | RESERVED_FIELD_ID_POS
     )
 }
 
