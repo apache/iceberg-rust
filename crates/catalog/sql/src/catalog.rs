@@ -826,7 +826,7 @@ impl Catalog for SqlCatalog {
             .build()?
             .metadata;
         let tbl_metadata_location =
-            MetadataLocation::new_with_properties(location.clone(), &tbl_metadata.properties)
+            MetadataLocation::new_with_properties(location.clone(), tbl_metadata.properties())
                 .to_string();
 
         tbl_metadata

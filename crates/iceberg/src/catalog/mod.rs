@@ -358,7 +358,7 @@ impl TableCommit {
 
         // Bump the version of metadata, using properties from the new metadata
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
-            .with_next_version_and_properties(&new_metadata.properties)
+            .with_next_version_and_properties(new_metadata.properties())
             .to_string();
 
         Ok(table

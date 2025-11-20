@@ -443,7 +443,7 @@ impl Catalog for HmsCatalog {
             .metadata;
 
         let metadata_location =
-            MetadataLocation::new_with_properties(location.clone(), &metadata.properties)
+            MetadataLocation::new_with_properties(location.clone(), metadata.properties())
                 .to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;

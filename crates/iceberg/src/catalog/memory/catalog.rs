@@ -276,7 +276,7 @@ impl Catalog for MemoryCatalog {
             .build()?
             .metadata;
         let metadata_location =
-            MetadataLocation::new_with_properties(location, &metadata.properties).to_string();
+            MetadataLocation::new_with_properties(location, metadata.properties()).to_string();
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
