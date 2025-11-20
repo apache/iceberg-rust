@@ -50,25 +50,13 @@ pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GlueCatalogBuilder {
     name: Option<String>,
     uri: Option<String>,
     catalog_id: Option<String>,
     warehouse: Option<String>,
     props: HashMap<String, String>,
-}
-
-impl Default for GlueCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            name: None,
-            uri: None,
-            catalog_id: None,
-            warehouse: None,
-            props: HashMap::new(),
-        }
-    }
 }
 
 impl CatalogBuilder for GlueCatalogBuilder {

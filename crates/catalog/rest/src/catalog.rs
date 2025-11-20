@@ -56,25 +56,13 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Builder for [`RestCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RestCatalogBuilder {
     name: Option<String>,
     uri: Option<String>,
     warehouse: Option<String>,
     props: HashMap<String, String>,
     client: Option<Client>,
-}
-
-impl Default for RestCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            name: None,
-            uri: None,
-            warehouse: None,
-            props: HashMap::new(),
-            client: None,
-        }
-    }
 }
 
 impl RestCatalogBuilder {

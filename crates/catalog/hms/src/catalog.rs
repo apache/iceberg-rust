@@ -51,25 +51,13 @@ pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
 pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`HmsCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct HmsCatalogBuilder {
     name: Option<String>,
     address: Option<String>,
     thrift_transport: HmsThriftTransport,
     warehouse: Option<String>,
     props: HashMap<String, String>,
-}
-
-impl Default for HmsCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            name: None,
-            address: None,
-            thrift_transport: HmsThriftTransport::default(),
-            warehouse: None,
-            props: HashMap::new(),
-        }
-    }
 }
 
 impl CatalogBuilder for HmsCatalogBuilder {
