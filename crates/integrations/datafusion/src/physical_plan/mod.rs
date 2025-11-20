@@ -21,9 +21,11 @@ pub(crate) mod metadata_scan;
 pub(crate) mod project;
 pub(crate) mod repartition;
 pub(crate) mod scan;
+pub(crate) mod sort;
 pub(crate) mod write;
 
 pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
 
 pub use project::project_with_partition;
 pub use scan::IcebergTableScan;
+pub use sort::sort_by_partition;
