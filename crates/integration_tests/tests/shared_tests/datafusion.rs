@@ -26,7 +26,7 @@ use datafusion::error::DataFusionError;
 use datafusion::prelude::SessionContext;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
-use iceberg_datafusion::IcebergTableProvider;
+use iceberg_datafusion::IcebergStaticTableProvider;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::get_shared_containers;
@@ -47,7 +47,7 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
     let ctx = SessionContext::new();
 
     let table_provider = Arc::new(
-        IcebergTableProvider::try_new_from_table(table)
+        IcebergStaticTableProvider::try_new_from_table(table)
             .await
             .unwrap(),
     );
