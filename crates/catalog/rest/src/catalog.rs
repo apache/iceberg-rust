@@ -57,34 +57,30 @@ const PATH_V1: &str = "v1";
 
 /// Builder for [`RestCatalog`].
 #[derive(Debug)]
-pub struct RestCatalogBuilder(RestCatalogConfig);
+pub struct RestCatalogBuilder {
+    name: Option<String>,
+    uri: Option<String>,
+    warehouse: Option<String>,
+    props: HashMap<String, String>,
+    client: Option<Client>,
+}
 
 impl Default for RestCatalogBuilder {
     fn default() -> Self {
-        Self(RestCatalogConfig {
+        Self {
             name: None,
-            uri: "".to_string(),
+            uri: None,
             warehouse: None,
             props: HashMap::new(),
             client: None,
-        })
+        }
     }
 }
 
 impl RestCatalogBuilder {
-    /// Get a mutable reference to the catalog configuration.
-    pub(crate) fn catalog_config(&mut self) -> &mut RestCatalogConfig {
-        &mut self.0
-    }
-
-    /// Consume the builder and return the catalog configuration.
-    pub(crate) fn into_config(self) -> RestCatalogConfig {
-        self.0
-    }
-
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
-        self.catalog_config().client = Some(client);
+        self.client = Some(client);
         self
     }
 }
@@ -97,49 +93,55 @@ impl CatalogBuilder for RestCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.catalog_config().name = Some(name.into());
+        self.name = Some(name.into());
 
         if props.contains_key(REST_CATALOG_PROP_URI) {
-            self.catalog_config().uri = props
-                .get(REST_CATALOG_PROP_URI)
-                .cloned()
-                .unwrap_or_default();
+            self.uri = props.get(REST_CATALOG_PROP_URI).cloned();
         }
 
         if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.catalog_config().warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
+            self.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned();
         }
 
         // Collect other remaining properties
-        self.catalog_config().props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
             .collect();
 
-        let config = self.into_config();
-        let result = {
-            if config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if config.uri.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog uri is required",
-                ))
-            } else {
-                Ok(RestCatalog::new(config))
-            }
-        };
+        async move {
+            let name = self.name.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
+            })?;
 
-        std::future::ready(result)
+            let uri = self.uri.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog uri is required")
+            })?;
+
+            if uri.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog uri cannot be empty",
+                ));
+            }
+
+            let config = RestCatalogConfig {
+                name: Some(name),
+                uri,
+                warehouse: self.warehouse,
+                props: self.props,
+                client: self.client,
+            };
+
+            Ok(RestCatalog::new(config))
+        }
     }
 }
 
 /// Rest catalog configuration.
 #[derive(Clone, Debug, TypedBuilder)]
 pub(crate) struct RestCatalogConfig {
+    #[allow(dead_code)] // Stored for debugging and potential future use
     #[builder(default, setter(strip_option))]
     name: Option<String>,
 

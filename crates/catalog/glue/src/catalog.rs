@@ -51,29 +51,23 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
 #[derive(Debug)]
-pub struct GlueCatalogBuilder(GlueCatalogConfig);
+pub struct GlueCatalogBuilder {
+    name: Option<String>,
+    uri: Option<String>,
+    catalog_id: Option<String>,
+    warehouse: Option<String>,
+    props: HashMap<String, String>,
+}
 
 impl Default for GlueCatalogBuilder {
     fn default() -> Self {
-        Self(GlueCatalogConfig {
+        Self {
             name: None,
             uri: None,
             catalog_id: None,
-            warehouse: "".to_string(),
+            warehouse: None,
             props: HashMap::new(),
-        })
-    }
-}
-
-impl GlueCatalogBuilder {
-    /// Get a mutable reference to the catalog configuration.
-    pub(crate) fn catalog_config(&mut self) -> &mut GlueCatalogConfig {
-        &mut self.0
-    }
-
-    /// Consume the builder and return the catalog configuration.
-    pub(crate) fn into_config(self) -> GlueCatalogConfig {
-        self.0
+        }
     }
 }
 
@@ -85,25 +79,22 @@ impl CatalogBuilder for GlueCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.catalog_config().name = Some(name.into());
+        self.name = Some(name.into());
 
         if props.contains_key(GLUE_CATALOG_PROP_URI) {
-            self.catalog_config().uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
+            self.uri = props.get(GLUE_CATALOG_PROP_URI).cloned();
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
-            self.catalog_config().catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
+            self.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned();
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
-            self.catalog_config().warehouse = props
-                .get(GLUE_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default();
+            self.warehouse = props.get(GLUE_CATALOG_PROP_WAREHOUSE).cloned();
         }
 
         // Collect other remaining properties
-        self.catalog_config().props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != GLUE_CATALOG_PROP_URI
@@ -112,30 +103,40 @@ impl CatalogBuilder for GlueCatalogBuilder {
             })
             .collect();
 
-        let config = self.into_config();
         async move {
-            if config.name.is_none() {
+            // Catalog name and warehouse are required
+            let name = self.name.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
+            })?;
+            let warehouse = self.warehouse.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
+            })?;
+            
+            if warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Catalog name is required",
+                    "Catalog warehouse cannot be empty",
                 ));
             }
-            if config.warehouse.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ));
-            }
+
+            let config = GlueCatalogConfig {
+                name,
+                uri: self.uri,
+                catalog_id: self.catalog_id,
+                warehouse,
+                props: self.props,
+            };
 
             GlueCatalog::new(config).await
         }
     }
 }
 
-#[derive(Debug)]
 /// Glue Catalog configuration
+#[derive(Debug)]
 pub(crate) struct GlueCatalogConfig {
-    name: Option<String>,
+    #[allow(dead_code)] // can be used for debugging 
+    name: String,
     uri: Option<String>,
     catalog_id: Option<String>,
     warehouse: String,

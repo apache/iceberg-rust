@@ -63,37 +63,31 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 
 /// Builder for [`SqlCatalog`]
 #[derive(Debug)]
-pub struct SqlCatalogBuilder(SqlCatalogConfig);
+pub struct SqlCatalogBuilder {
+    uri: Option<String>,
+    warehouse_location: Option<String>,
+    sql_bind_style: SqlBindStyle,
+    props: HashMap<String, String>,
+}
 
 impl Default for SqlCatalogBuilder {
     fn default() -> Self {
-        Self(SqlCatalogConfig {
-            uri: "".to_string(),
-            name: "".to_string(),
-            warehouse_location: "".to_string(),
+        Self {
+            uri: None,
+            warehouse_location: None,
             sql_bind_style: SqlBindStyle::DollarNumeric,
             props: HashMap::new(),
-        })
+        }
     }
 }
 
 impl SqlCatalogBuilder {
-    /// Get a mutable reference to the catalog configuration.
-    pub(crate) fn catalog_config(&mut self) -> &mut SqlCatalogConfig {
-        &mut self.0
-    }
-
-    /// Consume the builder and return the catalog configuration.
-    pub(crate) fn into_config(self) -> SqlCatalogConfig {
-        self.0
-    }
-
     /// Configure the database URI
     ///
     /// If `SQL_CATALOG_PROP_URI` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn uri(mut self, uri: impl Into<String>) -> Self {
-        self.catalog_config().uri = uri.into();
+        self.uri = Some(uri.into());
         self
     }
 
@@ -102,7 +96,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_WAREHOUSE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
-        self.catalog_config().warehouse_location = location.into();
+        self.warehouse_location = Some(location.into());
         self
     }
 
@@ -111,7 +105,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
-        self.catalog_config().sql_bind_style = sql_bind_style;
+        self.sql_bind_style = sql_bind_style;
         self
     }
 
@@ -121,7 +115,7 @@ impl SqlCatalogBuilder {
     /// those values will take precedence.
     pub fn props(mut self, props: HashMap<String, String>) -> Self {
         for (k, v) in props {
-            self.catalog_config().props.insert(k, v);
+            self.props.insert(k, v);
         }
         self
     }
@@ -133,7 +127,7 @@ impl SqlCatalogBuilder {
     /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
     /// those values will take precedence.
     pub fn prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.catalog_config().props.insert(key.into(), value.into());
+        self.props.insert(key.into(), value.into());
         self
     }
 }
@@ -148,43 +142,38 @@ impl CatalogBuilder for SqlCatalogBuilder {
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let name = name.into();
 
+        // Merge props from load() into builder props
         for (k, v) in props {
-            self.catalog_config().props.insert(k, v);
+            self.props.insert(k, v);
         }
 
-        if let Some(uri) = self.catalog_config().props.remove(SQL_CATALOG_PROP_URI) {
-            self.catalog_config().uri = uri;
+        // Extract special properties from props
+        if let Some(uri) = self.props.remove(SQL_CATALOG_PROP_URI) {
+            self.uri = Some(uri);
         }
-        if let Some(warehouse_location) = self
-            .catalog_config()
-            .props
-            .remove(SQL_CATALOG_PROP_WAREHOUSE)
-        {
-            self.catalog_config().warehouse_location = warehouse_location;
+        if let Some(warehouse_location) = self.props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
+            self.warehouse_location = Some(warehouse_location);
         }
 
         let mut valid_sql_bind_style = true;
-        if let Some(sql_bind_style) = self
-            .catalog_config()
-            .props
-            .remove(SQL_CATALOG_PROP_BIND_STYLE)
-        {
-            if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
-                self.catalog_config().sql_bind_style = sql_bind_style;
+        if let Some(sql_bind_style_str) = self.props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+            if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style_str) {
+                self.sql_bind_style = sql_bind_style;
             } else {
                 valid_sql_bind_style = false;
             }
         }
 
-        let config = self.into_config();
         async move {
             if name.trim().is_empty() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
-                ))
-            } else if !valid_sql_bind_style {
-                Err(Error::new(
+                ));
+            }
+
+            if !valid_sql_bind_style {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "`{}` values are valid only if they're `{}` or `{}`",
@@ -192,10 +181,40 @@ impl CatalogBuilder for SqlCatalogBuilder {
                         SqlBindStyle::DollarNumeric,
                         SqlBindStyle::QMark
                     ),
-                ))
-            } else {
-                SqlCatalog::new(config).await
+                ));
             }
+
+            let uri = self.uri.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog uri is required")
+            })?;
+
+            if uri.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog uri cannot be empty",
+                ));
+            }
+
+            let warehouse_location = self.warehouse_location.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog warehouse location is required")
+            })?;
+
+            if warehouse_location.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse location cannot be empty",
+                ));
+            }
+
+            let config = SqlCatalogConfig {
+                uri,
+                name,
+                warehouse_location,
+                sql_bind_style: self.sql_bind_style,
+                props: self.props,
+            };
+
+            SqlCatalog::new(config).await
         }
     }
 }

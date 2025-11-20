@@ -50,31 +50,25 @@ pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
 /// HMS Catalog warehouse location
 pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
-/// Builder for [`RestCatalog`].
+/// Builder for [`HmsCatalog`].
 #[derive(Debug)]
-pub struct HmsCatalogBuilder(HmsCatalogConfig);
+pub struct HmsCatalogBuilder {
+    name: Option<String>,
+    address: Option<String>,
+    thrift_transport: HmsThriftTransport,
+    warehouse: Option<String>,
+    props: HashMap<String, String>,
+}
 
 impl Default for HmsCatalogBuilder {
     fn default() -> Self {
-        Self(HmsCatalogConfig {
+        Self {
             name: None,
-            address: "".to_string(),
+            address: None,
             thrift_transport: HmsThriftTransport::default(),
-            warehouse: "".to_string(),
+            warehouse: None,
             props: HashMap::new(),
-        })
-    }
-}
-
-impl HmsCatalogBuilder {
-    /// Get a mutable reference to the catalog configuration.
-    pub(crate) fn catalog_config(&mut self) -> &mut HmsCatalogConfig {
-        &mut self.0
-    }
-
-    /// Consume the builder and return the catalog configuration.
-    pub(crate) fn into_config(self) -> HmsCatalogConfig {
-        self.0
+        }
     }
 }
 
@@ -86,15 +80,14 @@ impl CatalogBuilder for HmsCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.catalog_config().name = Some(name.into());
+        self.name = Some(name.into());
 
         if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.catalog_config().address =
-                props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
+            self.address = props.get(HMS_CATALOG_PROP_URI).cloned();
         }
 
         if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
-            self.catalog_config().thrift_transport = match tt.to_lowercase().as_str() {
+            self.thrift_transport = match tt.to_lowercase().as_str() {
                 THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
                 THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
                 _ => HmsThriftTransport::default(),
@@ -102,13 +95,10 @@ impl CatalogBuilder for HmsCatalogBuilder {
         }
 
         if props.contains_key(HMS_CATALOG_PROP_WAREHOUSE) {
-            self.catalog_config().warehouse = props
-                .get(HMS_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default();
+            self.warehouse = props.get(HMS_CATALOG_PROP_WAREHOUSE).cloned();
         }
 
-        self.catalog_config().props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != HMS_CATALOG_PROP_URI
@@ -117,29 +107,44 @@ impl CatalogBuilder for HmsCatalogBuilder {
             })
             .collect();
 
-        let config = self.into_config();
-        let result = {
-            if config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if config.address.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog address is required",
-                ))
-            } else if config.warehouse.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ))
-            } else {
-                HmsCatalog::new(config)
-            }
-        };
+        async move {
+            let name = self.name.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog name is required")
+            })?;
 
-        std::future::ready(result)
+            let address = self.address.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog address is required")
+            })?;
+
+            let warehouse = self.warehouse.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
+            })?;
+
+
+            if address.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog address cannot be empty",
+                ));
+            }
+            
+            if warehouse.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse cannot be empty",
+                ));
+            }
+
+            let config = HmsCatalogConfig {
+                name: Some(name),
+                address,
+                thrift_transport: self.thrift_transport,
+                warehouse,
+                props: self.props,
+            };
+
+            HmsCatalog::new(config)
+        }
     }
 }
 
@@ -157,6 +162,7 @@ pub enum HmsThriftTransport {
 /// Hive metastore Catalog configuration.
 #[derive(Debug)]
 pub(crate) struct HmsCatalogConfig {
+    #[allow(dead_code)] // Stored for debugging and potential future use
     name: Option<String>,
     address: String,
     thrift_transport: HmsThriftTransport,
