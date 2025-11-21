@@ -156,8 +156,6 @@ impl TableProperties {
 
     /// Compression level for Avro files
     pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
-    /// Default Avro compression level (None, uses codec-specific defaults: gzip=9, zstd=1)
-    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: Option<u8> = None;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -246,10 +244,7 @@ mod tests {
             table_properties.avro_compression_codec,
             TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string()
         );
-        assert_eq!(
-            table_properties.avro_compression_level,
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT
-        );
+        assert_eq!(table_properties.avro_compression_level, None);
     }
 
     #[test]
