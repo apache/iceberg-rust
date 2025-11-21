@@ -255,6 +255,39 @@ mod tests {
     }
 
     #[test]
+    fn test_table_properties_compression_case_insensitive() {
+        // Test uppercase
+        let props_upper = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "GZIP".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_upper).unwrap();
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+
+        // Test mixed case
+        let props_mixed = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "GzIp".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_mixed).unwrap();
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+
+        // Test "NONE" should also be case-insensitive
+        let props_none_upper = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "NONE".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_none_upper).unwrap();
+        assert_eq!(table_properties.metadata_compression_codec, None);
+    }
+
+    #[test]
     fn test_table_properties_valid() {
         let props = HashMap::from([
             (
