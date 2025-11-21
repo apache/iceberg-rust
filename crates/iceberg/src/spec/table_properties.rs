@@ -58,7 +58,7 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Compression codec for Avro files (manifests, manifest lists)
     pub avro_compression_codec: String,
-    /// Compression level for Avro files (None uses codec-specific defaults: gzip=9, zstd=1)
+    /// Compression level for Avro files (None uses codec-specific defaults)
     pub avro_compression_level: Option<u8>,
 }
 

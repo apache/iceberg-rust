@@ -27,7 +27,7 @@ use crate::spec::TableProperties;
 pub struct CompressionSettings {
     /// The compression codec name (e.g., "gzip", "zstd", "snappy", "uncompressed")
     pub codec: String,
-    /// The compression level (None uses codec-specific defaults: gzip=9, zstd=1)
+    /// The compression level (None uses codec-specific defaults)
     pub level: Option<u8>,
 }
 
@@ -58,29 +58,23 @@ impl Default for CompressionSettings {
 /// # Arguments
 ///
 /// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "snappy", "uncompressed")
-/// * `level` - The compression level (None uses codec defaults: gzip=9, zstd=1). For gzip:
+/// * `level` - The compression level. For gzip/deflate:
 ///   - 0: NoCompression
 ///   - 1: BestSpeed
 ///   - 9: BestCompression
 ///   - 10: UberCompression
-///   - Other values: DefaultLevel (6)
+///   - 6: DefaultLevel (balanced speed/compression)
+///   - Other values: DefaultLevel
+///   For zstd, level is clamped to valid range (0-22).
+///   When `None`, uses codec-specific defaults.
 ///
 /// # Supported Codecs
 ///
-/// - `gzip`: Uses Deflate compression with specified level (default: 9)
-/// - `zstd`: Uses Zstandard compression (default: 1, level clamped to valid zstd range 0-22)
+/// - `gzip`: Uses Deflate compression with specified level
+/// - `zstd`: Uses Zstandard compression (level clamped to valid zstd range 0-22)
 /// - `snappy`: Uses Snappy compression (level parameter ignored)
 /// - `uncompressed` or `None`: No compression
 /// - Any other value: Defaults to no compression (Codec::Null)
-///
-/// # Compression Levels
-///
-/// The compression level mapping is based on miniz_oxide's CompressionLevel enum:
-/// - Level 0: No compression
-/// - Level 1: Best speed (fastest)
-/// - Level 9: Best compression (slower, better compression)
-/// - Level 10: Uber compression (slowest, best compression)
-/// - Other: Default level (balanced speed/compression)
 pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
     use apache_avro::{DeflateSettings, ZstandardSettings};
 
