@@ -467,7 +467,7 @@ impl Catalog for S3TablesCatalog {
                     .send()
                     .await
                     .map_err(from_aws_sdk_error)?;
-                get_resp.warehouse_location().to_string();
+                get_resp.warehouse_location().to_string()
             }
         };
 
