@@ -24,6 +24,9 @@ use uuid::Uuid;
 use crate::spec::TableProperties;
 use crate::{Error, ErrorKind, Result};
 
+/// The file extension suffix for gzip compressed metadata files
+const GZIP_SUFFIX: &str = ".gz";
+
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
 /// or with compression: `<location>/metadata/<version>-<uuid>.gz.metadata.json`
 #[derive(Clone, Debug, PartialEq)]
@@ -40,7 +43,7 @@ impl MetadataLocation {
         properties
             .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
             .and_then(|codec| match codec.to_lowercase().as_str() {
-                "gzip" => Some(".gz".to_string()),
+                "gzip" => Some(GZIP_SUFFIX.to_string()),
                 "none" | "" => None,
                 _ => None,
             })
@@ -121,8 +124,8 @@ impl MetadataLocation {
         ))?;
 
         // Check for compression suffix (e.g., .gz)
-        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(".gz") {
-            (s, Some(".gz".to_string()))
+        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(GZIP_SUFFIX) {
+            (s, Some(GZIP_SUFFIX.to_string()))
         } else {
             (stripped, None)
         };
