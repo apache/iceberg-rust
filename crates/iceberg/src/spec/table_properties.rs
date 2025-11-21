@@ -191,7 +191,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
             )?,
             metadata_compression_codec: props
                 .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-                .and_then(|v| match v.as_str() {
+                .and_then(|v| match v.to_lowercase().as_str() {
                     "none" | "" => None,
                     codec => Some(codec.to_string()),
                 }),
