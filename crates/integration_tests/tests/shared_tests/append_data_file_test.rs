@@ -19,8 +19,6 @@
 
 use std::sync::Arc;
 
-use iceberg_integration_tests::ContainerRuntime;
-
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
@@ -33,6 +31,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 

@@ -25,6 +25,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use futures::TryStreamExt;
+use iceberg::puffin::DeletionVectorWriter;
+use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
@@ -38,12 +40,9 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
-use iceberg::puffin::DeletionVectorWriter;
-use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
 use iceberg_catalog_rest::RestCatalogBuilder;
-use parquet::file::properties::WriterProperties;
-
 use iceberg_integration_tests::ContainerRuntime;
+use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
 use crate::shared_tests::{random_ns, test_schema};
@@ -163,13 +162,10 @@ async fn test_position_deletes_with_append_action() {
     let mut position_delete_writer = position_delete_writer_builder.build(None).await.unwrap();
 
     // Create position delete batch - Delete row 0 ("foo") and row 2 (null)
-    let delete_batch = RecordBatch::try_new(
-        position_delete_arrow_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![data_file_path, data_file_path])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![0, 2])) as ArrayRef,
-        ],
-    )
+    let delete_batch = RecordBatch::try_new(position_delete_arrow_schema.clone(), vec![
+        Arc::new(StringArray::from(vec![data_file_path, data_file_path])) as ArrayRef,
+        Arc::new(Int64Array::from(vec![0, 2])) as ArrayRef,
+    ])
     .unwrap();
 
     position_delete_writer.write(delete_batch).await.unwrap();
@@ -282,11 +278,9 @@ async fn test_equality_deletes_with_append_action() {
     // Create equality delete writer using field ID 2 (bar column)
     let equality_ids = vec![2i32]; // Field ID for "bar" column
 
-    let equality_delete_config = EqualityDeleteWriterConfig::new(
-        equality_ids,
-        table.metadata().current_schema().clone(),
-    )
-    .unwrap();
+    let equality_delete_config =
+        EqualityDeleteWriterConfig::new(equality_ids, table.metadata().current_schema().clone())
+            .unwrap();
 
     // Use the projected schema from the equality config for the delete file
     let delete_schema: Arc<iceberg::spec::Schema> = Arc::new(
@@ -312,14 +306,11 @@ async fn test_equality_deletes_with_append_action() {
     let mut equality_delete_writer = equality_delete_writer_builder.build(None).await.unwrap();
 
     // Create equality delete batch - Delete row where id=2 (which is "bar")
-    let equality_delete_batch = RecordBatch::try_new(
-        arrow_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("bar")])) as ArrayRef,
-            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
-        ],
-    )
+    let equality_delete_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+        Arc::new(StringArray::from(vec![Some("bar")])) as ArrayRef,
+        Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+        Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+    ])
     .unwrap();
 
     equality_delete_writer
@@ -459,19 +450,13 @@ async fn test_multiple_delete_files() {
         PositionDeleteFileWriterBuilder::new(delete_rolling_writer_builder);
     let mut position_delete_writer = position_delete_writer_builder.build(None).await.unwrap();
 
-    let delete_batch1 = RecordBatch::try_new(
-        position_delete_arrow_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![data_file_path])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![0])) as ArrayRef, // Delete row 0 ("foo")
-        ],
-    )
+    let delete_batch1 = RecordBatch::try_new(position_delete_arrow_schema.clone(), vec![
+        Arc::new(StringArray::from(vec![data_file_path])) as ArrayRef,
+        Arc::new(Int64Array::from(vec![0])) as ArrayRef, // Delete row 0 ("foo")
+    ])
     .unwrap();
 
-    position_delete_writer
-        .write(delete_batch1)
-        .await
-        .unwrap();
+    position_delete_writer.write(delete_batch1).await.unwrap();
     let mut all_delete_files = position_delete_writer.close().await.unwrap();
 
     // Step 3: Create second position delete file to delete row 2 (null)
@@ -495,19 +480,13 @@ async fn test_multiple_delete_files() {
         PositionDeleteFileWriterBuilder::new(delete_rolling_writer_builder2);
     let mut position_delete_writer2 = position_delete_writer_builder2.build(None).await.unwrap();
 
-    let delete_batch2 = RecordBatch::try_new(
-        position_delete_arrow_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![data_file_path])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![2])) as ArrayRef, // Delete row 2 (null)
-        ],
-    )
+    let delete_batch2 = RecordBatch::try_new(position_delete_arrow_schema.clone(), vec![
+        Arc::new(StringArray::from(vec![data_file_path])) as ArrayRef,
+        Arc::new(Int64Array::from(vec![2])) as ArrayRef, // Delete row 2 (null)
+    ])
     .unwrap();
 
-    position_delete_writer2
-        .write(delete_batch2)
-        .await
-        .unwrap();
+    position_delete_writer2.write(delete_batch2).await.unwrap();
     let delete_files2 = position_delete_writer2.close().await.unwrap();
     all_delete_files.extend(delete_files2);
 
@@ -614,8 +593,7 @@ async fn test_deletion_vectors_with_puffin() {
     let data_file_path = data_files[0].file_path().to_string();
 
     // Step 2: Create deletion vector (Puffin format) to delete rows 0 and 2 (foo and null)
-    let deletion_vector =
-        DeletionVectorWriter::create_deletion_vector(vec![0u64, 2u64]).unwrap();
+    let deletion_vector = DeletionVectorWriter::create_deletion_vector(vec![0u64, 2u64]).unwrap();
 
     // Generate a unique path for the Puffin file
     let puffin_path = format!(
@@ -628,7 +606,11 @@ async fn test_deletion_vectors_with_puffin() {
     let dv_writer = DeletionVectorWriter::new(
         table.file_io().clone(),
         table.metadata().current_snapshot().unwrap().snapshot_id(),
-        table.metadata().current_snapshot().unwrap().sequence_number(),
+        table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number(),
     );
 
     let dv_metadata = dv_writer

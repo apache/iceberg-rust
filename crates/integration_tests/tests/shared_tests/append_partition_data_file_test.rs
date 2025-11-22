@@ -17,8 +17,6 @@
 
 //! Integration test for partition data file
 
-use iceberg_integration_tests::ContainerRuntime;
-
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
@@ -37,6 +35,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;

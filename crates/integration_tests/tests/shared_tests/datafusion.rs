@@ -1,5 +1,4 @@
 // Licensed to the Apache Software Foundation (ASF) under one
-use iceberg_integration_tests::ContainerRuntime;
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -15,7 +14,6 @@ use iceberg_integration_tests::ContainerRuntime;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,6 +26,7 @@ use datafusion::prelude::SessionContext;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergTableProvider;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::get_shared_containers;

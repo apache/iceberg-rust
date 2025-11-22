@@ -36,9 +36,8 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
-use parquet::file::properties::WriterProperties;
-
 use iceberg_integration_tests::ContainerRuntime;
+use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
 use crate::shared_tests::{random_ns, test_schema};
@@ -159,10 +158,7 @@ async fn test_row_delta_add_delete_files() {
 
     // Create position delete batch - Delete row 1 (index 1, "bar") and row 3 (index 3, "baz")
     let delete_batch = RecordBatch::try_new(position_delete_arrow_schema.clone(), vec![
-        Arc::new(StringArray::from(vec![
-            data_file_path,
-            data_file_path,
-        ])) as ArrayRef,
+        Arc::new(StringArray::from(vec![data_file_path, data_file_path])) as ArrayRef,
         Arc::new(Int64Array::from(vec![1, 3])) as ArrayRef,
     ])
     .unwrap();

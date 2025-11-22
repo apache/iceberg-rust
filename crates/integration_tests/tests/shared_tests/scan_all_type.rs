@@ -17,8 +17,6 @@
 
 //! Integration tests for rest catalog.
 
-use iceberg_integration_tests::ContainerRuntime;
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,6 +43,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;

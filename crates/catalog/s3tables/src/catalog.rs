@@ -876,11 +876,11 @@ mod tests {
         use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
         use iceberg::transaction::ApplyTransactionAction;
         use iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
+        use iceberg::writer::file_writer::ParquetWriterBuilder;
         use iceberg::writer::file_writer::location_generator::{
             DefaultFileNameGenerator, DefaultLocationGenerator,
         };
         use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-        use iceberg::writer::file_writer::ParquetWriterBuilder;
         use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 
         let catalog = match load_s3tables_catalog_from_env().await {
@@ -891,8 +891,7 @@ mod tests {
 
         // Create a test namespace and table
         let namespace = NamespaceIdent::new("test_s3tables_deletes".to_string());
-        let table_ident =
-            TableIdent::new(namespace.clone(), "test_s3tables_deletes".to_string());
+        let table_ident = TableIdent::new(namespace.clone(), "test_s3tables_deletes".to_string());
 
         // Clean up any existing resources
         catalog.drop_table(&table_ident).await.ok();
@@ -990,10 +989,10 @@ mod tests {
                 data_file.file_path(),
             ]);
             let positions = Int64Array::from(vec![5, 10, 15]);
-            RecordBatch::try_new(
-                pos_delete_schema.clone(),
-                vec![Arc::new(file_paths) as ArrayRef, Arc::new(positions) as ArrayRef],
-            )
+            RecordBatch::try_new(pos_delete_schema.clone(), vec![
+                Arc::new(file_paths) as ArrayRef,
+                Arc::new(positions) as ArrayRef,
+            ])
             .unwrap()
         };
 

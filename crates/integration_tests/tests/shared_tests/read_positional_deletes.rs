@@ -17,11 +17,10 @@
 
 //! Integration tests for rest catalog.
 
-use iceberg_integration_tests::ContainerRuntime;
-
 use futures::TryStreamExt;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 
 use crate::get_shared_containers;
 

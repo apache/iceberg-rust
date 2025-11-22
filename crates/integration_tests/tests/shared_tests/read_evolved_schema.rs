@@ -17,14 +17,13 @@
 
 //! Integration tests for rest catalog.
 
-use iceberg_integration_tests::ContainerRuntime;
-
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use ordered_float::OrderedFloat;
 
 use crate::get_shared_containers;
