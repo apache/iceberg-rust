@@ -255,23 +255,34 @@ impl ManifestWriter {
         Ok(())
     }
 
-    /// Add a new manifest entry. This method will update following status of the entry:
-    /// - Update the entry status to `Added`
+    /// Add a new manifest entry, preserving its status (Added, Deleted, or Existing).
+    ///
+    /// For Added entries, this method will:
     /// - Set the snapshot id to the current snapshot id
     /// - Set the sequence number to `None` if it is invalid(smaller than 0)
     /// - Set the file sequence number to `None`
+    ///
+    /// For Deleted/Existing entries, the caller must provide:
+    /// - Valid sequence numbers
+    /// - Appropriate snapshot_id
+    ///
+    /// The entry's status field is preserved as-is.
     pub(crate) fn add_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
-        if entry.sequence_number().is_some_and(|n| n >= 0) {
-            entry.status = ManifestStatus::Added;
-            entry.snapshot_id = self.snapshot_id;
-            entry.file_sequence_number = None;
-        } else {
-            entry.status = ManifestStatus::Added;
-            entry.snapshot_id = self.snapshot_id;
-            entry.sequence_number = None;
-            entry.file_sequence_number = None;
-        };
+
+        // Only modify metadata for Added entries
+        // For Deleted/Existing entries, preserve all fields as provided by caller
+        if entry.status == ManifestStatus::Added {
+            if entry.sequence_number().is_some_and(|n| n >= 0) {
+                entry.snapshot_id = self.snapshot_id;
+                entry.file_sequence_number = None;
+            } else {
+                entry.snapshot_id = self.snapshot_id;
+                entry.sequence_number = None;
+                entry.file_sequence_number = None;
+            }
+        }
+
         self.add_entry_inner(entry)?;
         Ok(())
     }

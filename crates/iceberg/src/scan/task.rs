@@ -146,6 +146,9 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
             equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
+            referenced_data_file: ctx.manifest_entry.data_file.referenced_data_file.clone(),
+            content_offset: ctx.manifest_entry.data_file.content_offset,
+            content_size_in_bytes: ctx.manifest_entry.data_file.content_size_in_bytes,
         }
     }
 }
@@ -164,4 +167,16 @@ pub struct FileScanTaskDeleteFile {
 
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     pub equality_ids: Option<Vec<i32>>,
+
+    /// Referenced data file for deletion vectors (required for deletion vectors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referenced_data_file: Option<String>,
+
+    /// Content offset in the file for Puffin blobs (required for deletion vectors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_offset: Option<i64>,
+
+    /// Content size in bytes for Puffin blobs (required for deletion vectors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_size_in_bytes: Option<i64>,
 }

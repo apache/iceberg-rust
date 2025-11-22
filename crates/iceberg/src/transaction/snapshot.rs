@@ -36,11 +36,26 @@ const META_ROOT_PATH: &str = "metadata";
 
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
+
+    /// Returns manifest entries for the data manifest.
+    ///
+    /// This includes entries with status=Deleted for removed data files.
+    /// Note: Entries with status=Added are handled separately via SnapshotProducer's added_data_files.
+    #[allow(unused)]
+    fn data_entries(
+        &self,
+        snapshot_produce: &SnapshotProducer,
+    ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
+
+    /// Returns manifest entries for the delete manifest.
+    ///
+    /// This includes both Added and Deleted entries for delete files.
     #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
+
     fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
@@ -97,6 +112,11 @@ impl<'a> SnapshotProducer<'a> {
             added_data_files,
             manifest_counter: (0..),
         }
+    }
+
+    /// Get the snapshot ID for this producer
+    pub(crate) fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
     }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
@@ -248,6 +268,49 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    // Write manifest file for data entries and return the ManifestFile for ManifestList.
+    // This handles entries with status=Deleted for removed data files.
+    async fn write_data_manifest(
+        &mut self,
+        data_entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        if data_entries.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No data entries found when writing data manifest file",
+            ));
+        }
+
+        let mut manifest_writer = self.new_manifest_writer(ManifestContentType::Data)?;
+
+        for entry in data_entries {
+            manifest_writer.add_entry(entry)?;
+        }
+
+        manifest_writer.write_manifest_file().await
+    }
+
+    // Write manifest file for delete entries and return the ManifestFile for ManifestList.
+    async fn write_delete_manifest(
+        &mut self,
+        delete_entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        if delete_entries.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No delete entries found when writing delete manifest file",
+            ));
+        }
+
+        let mut manifest_writer = self.new_manifest_writer(ManifestContentType::Deletes)?;
+
+        for entry in delete_entries {
+            manifest_writer.add_entry(entry)?;
+        }
+
+        manifest_writer.write_manifest_file().await
+    }
+
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
@@ -284,29 +347,46 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
+        // Check if we have data entries and delete entries to process
+        let data_entries = snapshot_produce_operation.data_entries(self).await?;
+        let delete_entries = snapshot_produce_operation.delete_entries(self).await?;
+
         // Assert current snapshot producer contains new content to add to new snapshot.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+            && data_entries.is_empty()
+            && delete_entries.is_empty()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added data files, data entries, delete entries, or snapshot properties found when writing manifest files",
             ));
         }
 
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
         let mut manifest_files = existing_manifests;
 
-        // Process added entries.
+        // Process added data files.
         if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
+        // Process data entries (e.g., removed data files with status=Deleted).
+        if !data_entries.is_empty() {
+            let data_manifest = self.write_data_manifest(data_entries).await?;
+            manifest_files.push(data_manifest);
+        }
+
+        // Process delete entries.
+        if !delete_entries.is_empty() {
+            let delete_manifest = self.write_delete_manifest(delete_entries).await?;
+            manifest_files.push(delete_manifest);
+        }
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)

@@ -35,6 +35,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
@@ -42,12 +43,12 @@ use crate::shared_tests::{random_ns, test_schema};
 
 #[tokio::test]
 async fn test_append_partition_data_file() {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
-    let ns = random_ns().await;
+    let ns = random_ns(ContainerRuntime::Docker).await;
     let schema = test_schema();
 
     let unbound_partition_spec = UnboundPartitionSpec::builder()

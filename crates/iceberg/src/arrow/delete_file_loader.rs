@@ -42,7 +42,7 @@ pub trait DeleteFileLoader {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BasicDeleteFileLoader {
-    file_io: FileIO,
+    pub(crate) file_io: FileIO,
 }
 
 #[allow(unused_variables)]

@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,13 +26,14 @@ use datafusion::prelude::SessionContext;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergTableProvider;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_basic_queries() -> Result<(), DataFusionError> {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await

@@ -95,5 +95,5 @@ pub mod test_utils;
 mod utils;
 pub mod writer;
 
-mod delete_vector;
+pub mod delete_vector;
 pub mod puffin;
