@@ -42,15 +42,16 @@ use crate::{Error, ErrorKind};
 ///
 /// ```rust,no_run
 /// # use iceberg::table::Table;
-/// # use iceberg::transaction::Transaction;
+/// # use iceberg::transaction::{Transaction, ApplyTransactionAction};
 /// # use iceberg::spec::DataFile;
-/// # async fn example(table: Table, delete_files: Vec<DataFile>) -> iceberg::Result<()> {
+/// # use iceberg::Catalog;
+/// # async fn example(table: Table, delete_files: Vec<DataFile>, catalog: &dyn Catalog) -> iceberg::Result<()> {
 /// let tx = Transaction::new(&table);
 /// let action = tx.append_delete_files().add_files(delete_files);
 ///
 /// // Apply to transaction and commit
 /// let tx = action.apply(tx)?;
-/// tx.commit(&table.catalog()).await?;
+/// tx.commit(catalog).await?;
 /// # Ok(())
 /// # }
 /// ```
