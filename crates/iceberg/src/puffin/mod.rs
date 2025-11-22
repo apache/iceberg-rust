@@ -35,10 +35,10 @@ mod writer;
 pub use writer::PuffinWriter;
 
 mod deletion_vector;
-pub use deletion_vector::{deserialize_deletion_vector, serialize_deletion_vector};
-
-mod deletion_vector_writer;
-pub use deletion_vector_writer::{DeletionVectorMetadata, DeletionVectorWriter};
+pub use deletion_vector::{
+    DeletionVectorMetadata, DeletionVectorWriter, deserialize_deletion_vector,
+    serialize_deletion_vector,
+};
 
 #[cfg(test)]
 mod test_utils;

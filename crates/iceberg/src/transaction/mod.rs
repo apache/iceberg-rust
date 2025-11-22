@@ -55,6 +55,7 @@ mod action;
 pub use action::*;
 mod append;
 mod delete;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -73,6 +74,7 @@ use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::delete::AppendDeleteFilesAction;
+use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -149,6 +151,18 @@ impl Transaction {
     /// enabling DELETE and UPDATE operations without rewriting data files.
     pub fn append_delete_files(&self) -> AppendDeleteFilesAction {
         AppendDeleteFilesAction::new()
+    }
+
+    /// Creates a row delta action for atomic row-level changes.
+    ///
+    /// This allows adding and removing both data files and delete files
+    /// in a single atomic transaction, with optional conflict detection for
+    /// serializable isolation.
+    ///
+    /// Use this for UPDATE, MERGE, and DELETE operations that need to both
+    /// add and remove files, or when you need conflict detection guarantees.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new()
     }
 
     /// Creates replace sort order action.

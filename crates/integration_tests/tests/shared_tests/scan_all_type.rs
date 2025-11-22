@@ -17,6 +17,8 @@
 
 //! Integration tests for rest catalog.
 
+use iceberg_integration_tests::ContainerRuntime;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -52,12 +54,12 @@ use crate::shared_tests::random_ns;
 
 #[tokio::test]
 async fn test_scan_all_type() {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
-    let ns = random_ns().await;
+    let ns = random_ns(ContainerRuntime::Docker).await;
 
     let schema = Schema::builder()
         .with_schema_id(1)

@@ -19,6 +19,8 @@
 
 use std::sync::Arc;
 
+use iceberg_integration_tests::ContainerRuntime;
+
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
@@ -39,12 +41,12 @@ use crate::shared_tests::{random_ns, test_schema};
 
 #[tokio::test]
 async fn test_append_data_file() {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
-    let ns = random_ns().await;
+    let ns = random_ns(ContainerRuntime::Docker).await;
     let schema = test_schema();
 
     let table_creation = TableCreation::builder()

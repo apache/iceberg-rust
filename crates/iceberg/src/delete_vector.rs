@@ -92,6 +92,12 @@ impl DeleteVector {
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
+
+    /// Returns true if the deletion vector is empty
+    #[allow(unused)]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 /// Iterator over deleted positions in a deletion vector
@@ -179,9 +185,13 @@ mod tests {
     #[test]
     fn test_insertion_and_iteration() {
         let mut dv = DeleteVector::default();
+        assert!(dv.is_empty());
+        assert_eq!(dv.len(), 0);
+
         assert!(dv.insert(42));
         assert!(dv.insert(100));
         assert!(!dv.insert(42));
+        assert!(!dv.is_empty());
 
         let mut items: Vec<u64> = dv.iter().collect();
         items.sort();

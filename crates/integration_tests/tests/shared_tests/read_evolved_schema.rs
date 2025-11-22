@@ -17,6 +17,8 @@
 
 //! Integration tests for rest catalog.
 
+use iceberg_integration_tests::ContainerRuntime;
+
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
@@ -29,7 +31,7 @@ use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_evolved_schema() {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await

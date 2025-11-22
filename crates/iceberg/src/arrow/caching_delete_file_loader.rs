@@ -969,11 +969,12 @@ mod tests {
     async fn test_load_deletion_vector_from_puffin() {
         use std::collections::HashMap;
 
+        use roaring::RoaringTreemap;
+
         use crate::io::FileIO;
-        use crate::puffin::{Blob, CompressionCodec, PuffinWriter, DELETION_VECTOR_V1};
+        use crate::puffin::{Blob, CompressionCodec, DELETION_VECTOR_V1, PuffinWriter};
         use crate::scan::FileScanTask;
         use crate::spec::{DataFileFormat, Schema};
-        use roaring::RoaringTreemap;
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
@@ -997,13 +998,15 @@ mod tests {
         let dv_bytes = crate::puffin::serialize_deletion_vector(&deletion_vector_treemap).unwrap();
 
         // Create Puffin file with deletion vector blob
-        let puffin_path = format!("{}/deletion-vectors.puffin", table_location.to_str().unwrap());
+        let puffin_path = format!(
+            "{}/deletion-vectors.puffin",
+            table_location.to_str().unwrap()
+        );
         let puffin_output_file = file_io.new_output(&puffin_path).unwrap();
 
-        let mut puffin_writer =
-            PuffinWriter::new(&puffin_output_file, HashMap::new(), false)
-                .await
-                .unwrap();
+        let mut puffin_writer = PuffinWriter::new(&puffin_output_file, HashMap::new(), false)
+            .await
+            .unwrap();
 
         let blob = Blob::builder()
             .r#type(DELETION_VECTOR_V1.to_string())

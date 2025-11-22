@@ -22,7 +22,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataContentType, DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
+use crate::spec::{
+    DataContentType, DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation,
+};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
@@ -44,9 +46,7 @@ use crate::{Error, ErrorKind};
 /// # use iceberg::spec::DataFile;
 /// # async fn example(table: Table, delete_files: Vec<DataFile>) -> iceberg::Result<()> {
 /// let tx = Transaction::new(&table);
-/// let action = tx
-///     .append_delete_files()
-///     .add_files(delete_files);
+/// let action = tx.append_delete_files().add_files(delete_files);
 ///
 /// // Apply to transaction and commit
 /// let tx = action.apply(tx)?;
@@ -94,10 +94,7 @@ impl AppendDeleteFilesAction {
     }
 
     /// Set snapshot summary properties.
-    pub fn set_snapshot_properties(
-        mut self,
-        snapshot_properties: HashMap<String, String>,
-    ) -> Self {
+    pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
         self
     }
@@ -149,7 +146,10 @@ impl TransactionAction for AppendDeleteFilesAction {
         );
 
         snapshot_producer
-            .commit(AppendDeleteOperation::new(self.added_delete_files.clone()), DefaultManifestProcess)
+            .commit(
+                AppendDeleteOperation::new(self.added_delete_files.clone()),
+                DefaultManifestProcess,
+            )
             .await
     }
 }
@@ -169,6 +169,13 @@ impl SnapshotProduceOperation for AppendDeleteOperation {
         // Using Append operation for delete files
         // The manifest content type will distinguish data from deletes
         Operation::Append
+    }
+
+    async fn data_entries(
+        &self,
+        _snapshot_produce: &SnapshotProducer<'_>,
+    ) -> Result<Vec<ManifestEntry>> {
+        Ok(vec![])
     }
 
     async fn delete_entries(
@@ -227,7 +234,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
     };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};

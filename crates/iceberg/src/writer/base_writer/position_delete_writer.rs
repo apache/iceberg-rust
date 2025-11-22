@@ -117,11 +117,11 @@ where
 /// use iceberg::io::FileIOBuilder;
 /// use iceberg::spec::DataFileFormat;
 /// use iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
+/// use iceberg::writer::file_writer::ParquetWriterBuilder;
 /// use iceberg::writer::file_writer::location_generator::{
 ///     DefaultFileNameGenerator, DefaultLocationGenerator,
 /// };
 /// use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-/// use iceberg::writer::file_writer::ParquetWriterBuilder;
 /// use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 /// use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 /// use parquet::file::properties::WriterProperties;
@@ -244,9 +244,7 @@ where
         // Check if all values are identical
         let first_value = file_path_array.value(0);
 
-        let all_same = (1..array_len).all(|i| {
-            file_path_array.value(i) == first_value
-        });
+        let all_same = (1..array_len).all(|i| file_path_array.value(i) == first_value);
 
         if all_same {
             Ok(Some(first_value.to_string()))
@@ -423,22 +421,22 @@ mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use arrow_select::concat::concat_batches;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
+    use crate::ErrorKind;
     use crate::arrow::arrow_schema_to_schema;
     use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{DataContentType, DataFile, DataFileFormat};
     use crate::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder;
+    use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-    use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
-    use crate::ErrorKind;
 
     // Field IDs for position delete files as defined by the Iceberg spec
     const FIELD_ID_POSITION_DELETE_FILE_PATH: i32 = 2147483546;
@@ -803,8 +801,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_referenced_data_file_optimization_multiple_batches_same_file(
-    ) -> Result<(), anyhow::Error> {
+    async fn test_referenced_data_file_optimization_multiple_batches_same_file()
+    -> Result<(), anyhow::Error> {
         // Test that when multiple batches all reference the same data file,
         // the referenced_data_file field is set correctly
         let temp_dir = TempDir::new().unwrap();
@@ -844,15 +842,11 @@ mod tests {
 
         // Write multiple batches, all referencing the same data file
         for i in 0..3 {
-            let file_paths = Arc::new(StringArray::from(vec![
-                target_data_file,
-                target_data_file,
-            ])) as ArrayRef;
-            let positions =
-                Arc::new(Int64Array::from(vec![i * 10, i * 10 + 5])) as ArrayRef;
+            let file_paths =
+                Arc::new(StringArray::from(vec![target_data_file, target_data_file])) as ArrayRef;
+            let positions = Arc::new(Int64Array::from(vec![i * 10, i * 10 + 5])) as ArrayRef;
 
-            let batch =
-                RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
             position_delete_writer.write(batch).await?;
         }
 
@@ -874,8 +868,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_referenced_data_file_optimization_multiple_batches_different_files(
-    ) -> Result<(), anyhow::Error> {
+    async fn test_referenced_data_file_optimization_multiple_batches_different_files()
+    -> Result<(), anyhow::Error> {
         // Test that when multiple batches reference different data files,
         // the referenced_data_file field is NOT set
         let temp_dir = TempDir::new().unwrap();
@@ -912,28 +906,22 @@ mod tests {
                 .await?;
 
         // First batch references file1
-        let batch1 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![
-                    "s3://bucket/table/data/file1.parquet",
-                    "s3://bucket/table/data/file1.parquet",
-                ])) as ArrayRef,
-                Arc::new(Int64Array::from(vec![5, 10])) as ArrayRef,
-            ],
-        )?;
+        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(StringArray::from(vec![
+                "s3://bucket/table/data/file1.parquet",
+                "s3://bucket/table/data/file1.parquet",
+            ])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![5, 10])) as ArrayRef,
+        ])?;
 
         // Second batch references file2
-        let batch2 = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![
-                    "s3://bucket/table/data/file2.parquet",
-                    "s3://bucket/table/data/file2.parquet",
-                ])) as ArrayRef,
-                Arc::new(Int64Array::from(vec![15, 20])) as ArrayRef,
-            ],
-        )?;
+        let batch2 = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(StringArray::from(vec![
+                "s3://bucket/table/data/file2.parquet",
+                "s3://bucket/table/data/file2.parquet",
+            ])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![15, 20])) as ArrayRef,
+        ])?;
 
         position_delete_writer.write(batch1).await?;
         position_delete_writer.write(batch2).await?;
@@ -1010,16 +998,17 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err
-            .message()
-            .contains("file_path column in position delete file must not contain null values"));
+        assert!(
+            err.message()
+                .contains("file_path column in position delete file must not contain null values")
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_referenced_data_file_optimization_with_multiple_output_files(
-    ) -> Result<(), anyhow::Error> {
+    async fn test_referenced_data_file_optimization_with_multiple_output_files()
+    -> Result<(), anyhow::Error> {
         // This test validates the batch_cumulative_start tracking fix.
         // The scenario: write multiple batches that together exceed target file size,
         // causing the RollingFileWriter to create multiple output files.
@@ -1065,16 +1054,13 @@ mod tests {
         // Write multiple batches, each with 100 rows, all referencing the same data file
         for i in 0..10 {
             let file_paths = Arc::new(StringArray::from(
-                (0..100)
-                    .map(|_| target_data_file)
-                    .collect::<Vec<_>>(),
+                (0..100).map(|_| target_data_file).collect::<Vec<_>>(),
             )) as ArrayRef;
             let positions = Arc::new(Int64Array::from(
                 (i * 100..(i + 1) * 100).collect::<Vec<_>>(),
             )) as ArrayRef;
 
-            let batch =
-                RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![file_paths, positions])?;
             position_delete_writer.write(batch).await?;
         }
 
@@ -1101,7 +1087,10 @@ mod tests {
 
         // Verify total row count matches all batches combined
         let total_rows: u64 = result.iter().map(|f| f.record_count).sum();
-        assert_eq!(total_rows, 1000, "Total rows across all files should equal all batches");
+        assert_eq!(
+            total_rows, 1000,
+            "Total rows across all files should equal all batches"
+        );
 
         Ok(())
     }
@@ -1143,27 +1132,21 @@ mod tests {
                 .await?;
 
         // Write an empty batch
-        let empty_batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef,
-                Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef,
-            ],
-        )?;
+        let empty_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef,
+            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef,
+        ])?;
 
         position_delete_writer.write(empty_batch).await?;
 
         // Write a normal batch after the empty one
-        let normal_batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(StringArray::from(vec![
-                    "s3://bucket/file1.parquet",
-                    "s3://bucket/file1.parquet",
-                ])) as ArrayRef,
-                Arc::new(Int64Array::from(vec![5, 10])) as ArrayRef,
-            ],
-        )?;
+        let normal_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(StringArray::from(vec![
+                "s3://bucket/file1.parquet",
+                "s3://bucket/file1.parquet",
+            ])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![5, 10])) as ArrayRef,
+        ])?;
 
         position_delete_writer.write(normal_batch).await?;
         let result = position_delete_writer.close().await?;

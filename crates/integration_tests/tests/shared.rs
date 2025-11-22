@@ -18,14 +18,18 @@
 use std::sync::{Arc, OnceLock};
 
 use ctor::dtor;
-use iceberg_integration_tests::{TestFixture, set_test_fixture};
+use iceberg_integration_tests::{ContainerRuntime, TestFixture, set_test_fixture};
 
 pub mod shared_tests;
 
 static DOCKER_CONTAINERS: OnceLock<Arc<TestFixture>> = OnceLock::new();
 
-pub fn get_shared_containers() -> &'static Arc<TestFixture> {
-    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests")))
+/// Get shared test containers with specified runtime.
+///
+/// Use `ContainerRuntime::Docker` for Docker (uses container IPs directly).
+/// Use `ContainerRuntime::Podman` for Podman in WSL2 (uses localhost with exposed ports).
+pub fn get_shared_containers(runtime: ContainerRuntime) -> &'static Arc<TestFixture> {
+    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests", runtime)))
 }
 
 #[dtor]

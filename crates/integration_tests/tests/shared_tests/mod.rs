@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 
 use crate::get_shared_containers;
 
@@ -27,12 +28,14 @@ mod append_data_file_test;
 mod append_partition_data_file_test;
 mod conflict_commit_test;
 mod datafusion;
+mod delete_files_test;
 mod read_evolved_schema;
 mod read_positional_deletes;
+mod row_delta_test;
 mod scan_all_type;
 
-pub async fn random_ns() -> Namespace {
-    let fixture = get_shared_containers();
+pub async fn random_ns(runtime: ContainerRuntime) -> Namespace {
+    let fixture = get_shared_containers(runtime);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
