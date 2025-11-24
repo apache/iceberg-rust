@@ -24,6 +24,7 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{
     HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
@@ -58,6 +59,17 @@ fn after_all() {
 }
 
 async fn get_catalog() -> HmsCatalog {
+    get_catalog_with_props(HashMap::new()).await
+}
+
+async fn get_catalog_with_optimistic_locking() -> HmsCatalog {
+    use iceberg_catalog_hms::HMS_HIVE_LOCKS_DISABLED;
+    let mut extra_props = HashMap::new();
+    extra_props.insert(HMS_HIVE_LOCKS_DISABLED.to_string(), "true".to_string());
+    get_catalog_with_props(extra_props).await
+}
+
+async fn get_catalog_with_props(extra_props: HashMap<String, String>) -> HmsCatalog {
     set_up();
 
     let (hms_catalog_ip, minio_ip) = {
@@ -81,7 +93,7 @@ async fn get_catalog() -> HmsCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
-    let props = HashMap::from([
+    let mut props = HashMap::from([
         (
             HMS_CATALOG_PROP_URI.to_string(),
             hms_socket_addr.to_string(),
@@ -102,6 +114,9 @@ async fn get_catalog() -> HmsCatalog {
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
+
+    // Merge in extra properties
+    props.extend(extra_props);
 
     // Wait for bucket to actually exist
     let file_io = iceberg::io::FileIO::from_path("s3a://")
@@ -401,6 +416,122 @@ async fn test_drop_namespace() -> Result<()> {
 
     let result = catalog.namespace_exists(ns.name()).await?;
     assert!(!result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_table() -> Result<()> {
+    let catalog = get_catalog().await;
+    let creation = set_table_creation(None, "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("test_update_table".into()));
+    set_test_namespace(&catalog, namespace.name()).await?;
+
+    let expected = catalog.create_table(namespace.name(), creation).await?;
+
+    let table = catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(table.identifier(), expected.identifier());
+    assert_eq!(table.metadata_location(), expected.metadata_location());
+    assert_eq!(table.metadata(), expected.metadata());
+    let original_metadata_location = table.metadata_location();
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_table_properties()
+        .set("test_property".to_string(), "test_value".to_string())
+        .apply(tx)?;
+
+    let updated_table = tx.commit(&catalog).await?;
+
+    assert_eq!(
+        updated_table.metadata().properties().get("test_property"),
+        Some(&"test_value".to_string())
+    );
+    assert_ne!(
+        updated_table.metadata_location(),
+        original_metadata_location,
+        "Metadata location should be updated after commit"
+    );
+
+    let reloaded_table = catalog.load_table(table.identifier()).await?;
+
+    assert_eq!(
+        reloaded_table.metadata().properties().get("test_property"),
+        Some(&"test_value".to_string())
+    );
+    assert_eq!(
+        reloaded_table.metadata_location(),
+        updated_table.metadata_location(),
+        "Reloaded table should have the same metadata location as the updated table"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_table_with_optimistic_locking() -> Result<()> {
+    let catalog = get_catalog_with_optimistic_locking().await;
+    let creation = set_table_creation(None, "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("test_update_table_optimistic".into()));
+    set_test_namespace(&catalog, namespace.name()).await?;
+
+    let expected = catalog.create_table(namespace.name(), creation).await?;
+
+    let table = catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(table.identifier(), expected.identifier());
+    assert_eq!(table.metadata_location(), expected.metadata_location());
+    assert_eq!(table.metadata(), expected.metadata());
+    let original_metadata_location = table.metadata_location();
+
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_table_properties()
+        .set(
+            "test_property_optimistic".to_string(),
+            "test_value_optimistic".to_string(),
+        )
+        .apply(tx)?;
+
+    let updated_table = tx.commit(&catalog).await?;
+
+    assert_eq!(
+        updated_table
+            .metadata()
+            .properties()
+            .get("test_property_optimistic"),
+        Some(&"test_value_optimistic".to_string())
+    );
+
+    assert_ne!(
+        updated_table.metadata_location(),
+        original_metadata_location,
+        "Metadata location should be updated after commit with optimistic locking"
+    );
+
+    let reloaded_table = catalog.load_table(table.identifier()).await?;
+    assert_eq!(
+        reloaded_table
+            .metadata()
+            .properties()
+            .get("test_property_optimistic"),
+        Some(&"test_value_optimistic".to_string())
+    );
+    assert_eq!(
+        reloaded_table.metadata_location(),
+        updated_table.metadata_location(),
+        "Reloaded table should have the same metadata location as the updated table"
+    );
 
     Ok(())
 }

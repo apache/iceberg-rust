@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
 use iceberg::spec::Schema;
+use iceberg::table::Table;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 
@@ -153,6 +154,54 @@ pub(crate) fn convert_to_database(
     }
 
     Ok(db)
+}
+
+pub(crate) fn update_hive_table_from_table(
+    hive_tbl: &hive_metastore::Table,
+    tbl: &Table,
+) -> Result<hive_metastore::Table> {
+    let mut new_tbl = hive_tbl.clone();
+    let metadata = tbl.metadata();
+    let schema = metadata.current_schema();
+
+    let hive_schema = HiveSchemaBuilder::from_iceberg(schema)?.build();
+
+    match new_tbl.sd.as_mut() {
+        Some(sd) => {
+            sd.cols = Some(hive_schema);
+        }
+        None => {
+            // Highly unlikely for a real HMS table, but be defensive
+            new_tbl.sd = Some(StorageDescriptor {
+                cols: Some(hive_schema),
+                ..Default::default()
+            });
+        }
+    }
+
+    let metadata_location = tbl.metadata_location_result()?.to_string();
+
+    let mut params: AHashMap<FastStr, FastStr> = new_tbl.parameters.take().unwrap_or_default();
+    for (k, v) in metadata.properties().iter() {
+        if k == METADATA_LOCATION || k == TABLE_TYPE || k == EXTERNAL {
+            continue;
+        }
+        params.insert(
+            FastStr::from_string(k.to_string()),
+            FastStr::from_string(v.to_string()),
+        );
+    }
+
+    params.insert(FastStr::from(EXTERNAL), FastStr::from("TRUE"));
+    params.insert(FastStr::from(TABLE_TYPE), FastStr::from("ICEBERG"));
+    params.insert(
+        FastStr::from(METADATA_LOCATION),
+        FastStr::from(metadata_location),
+    );
+
+    new_tbl.parameters = Some(params);
+
+    Ok(new_tbl)
 }
 
 pub(crate) fn convert_to_hive_table(
@@ -307,6 +356,26 @@ fn get_current_time() -> Result<i32> {
             "Current time is out of range for i32",
         )
     })
+}
+
+pub(crate) fn create_lock_request(db_name: &str, tbl_name: &str) -> hive_metastore::LockRequest {
+    let component = hive_metastore::LockComponent {
+        r#type: hive_metastore::LockType::EXCLUSIVE,
+        level: hive_metastore::LockLevel::TABLE,
+        dbname: FastStr::from_string(db_name.to_string()),
+        tablename: Some(FastStr::from_string(tbl_name.to_string())),
+        partitionname: None,
+        operation_type: None,
+        is_acid: Some(true),
+        is_dynamic_partition_write: None,
+    };
+    hive_metastore::LockRequest {
+        component: vec![component],
+        txnid: None,
+        user: FastStr::from(whoami::username()),
+        hostname: FastStr::from(whoami::fallible::hostname().unwrap()),
+        agent_info: None,
+    }
 }
 
 #[cfg(test)]
