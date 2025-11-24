@@ -86,6 +86,7 @@ Those traits will be discussed separately outside of this RFC.
 
 2. **Phase 2 – Slim down `crates/iceberg`**
    - Remove direct dependencies on opendal, Tokio, Arrow, and DataFusion from `iceberg`.
+     - notes: removing the arrow entirely could be complex, so we will do this gradually.
    - Move the concrete implementations into new crates (while keeping the same code initially).
 
 3. **Phase 3 – Arrow/execution extraction**
