@@ -53,6 +53,7 @@ linkedbytes = { workspace = true }
 metainfo = { workspace = true }
 motore-macros = { workspace = true }
 volo = { workspace = true }
+whoami = "1.6.1"
 
 [dev-dependencies]
 iceberg-storage-opendal = { workspace = true, features = ["opendal-s3"] }
