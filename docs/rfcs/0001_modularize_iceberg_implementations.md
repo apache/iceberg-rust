@@ -47,83 +47,12 @@ crates/
 
 ### Core Trait Surfaces (within `iceberg`)
 
-#### FileIO
-
-```rust
-pub struct FileMetadata {
-    pub size: u64,
-    ...
-}
-
-pub type FileReader = Box<dyn FileRead>;
-
-#[async_trait::async_trait]
-pub trait FileRead: Send + Sync + 'static {
-    async fn read(&self, range: Range<u64>) -> Result<Bytes>;
-}
-
-pub type FileWriter = Box<dyn FileWrite>;
-
-#[async_trait::async_trait]
-pub trait FileWrite: Send + Unpin + 'static {
-    async fn write(&mut self, bs: Bytes) -> Result<()>;
-    async fn close(&mut self) -> Result<FileMetadata>;
-}
-
-pub type StorageFactory = fn(attrs: HashMap<String, String> -> Result<Arc<dyn Storage>>);
-
-#[async_trait::async_trait]
-pub trait Storage: Clone + Send + Sync {
-    async fn reader(&self, path: &str) -> Result<FileReader>;
-    async fn writer(&self, path: &str) -> Result<FileWriter>;
-    async fn delete(&self, path: &str) -> Result<()>;
-    async fn exists(&self, path: &str) -> Result<bool>;
-
-    ...
-}
-
-pub struct FileIO {
-    registry: DashMap<String, StorageFactory>,
-}
-
-impl FileIO {
-    fn register(scheme: &str, factory: StorageFactory);
-
-    async fn read(path: &str) -> Result<Bytes>;
-    async fn reader(path: &str) -> Result<FileReader>;
-    async fn write(path: &str, bs: Bytes) -> Result<FileMetadata>;
-    async fn writer(path: &str) -> Result<FileWriter>;
-
-    async fn delete(&self, path: &str) -> Result<()>;
-    ...
-}
-```
-
-- `FileRead` / `FileWrite` remain Iceberg-specific traits (range reads, metrics hooks, abort/commit) and live inside `iceberg`.
-- Concrete implementations (opendal, local FS, custom stores) live in companion crates and return trait objects.
-
-#### Runtime
-
-```rust
-pub trait Runtime: Send + Sync + 'static {
-    type JoinHandle<T>: Future<Output = T> + Send + 'static;
-
-    fn spawn<F, T>(&self, fut: F) -> Self::JoinHandle<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static;
-
-    fn sleep(&self, dur: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
-}
-```
-
-- The trait lives in `iceberg`; crates like `iceberg-runtime-tokio` implement it and expose constructors.
-
-#### Catalog / Table / Transaction / Scan
-
-- All existing traits and data structures remain in `crates/iceberg`.
+- `FileIO`
+- `Runtime`
+- `Catalog`
 - `TableScan` continues to emit pure plan descriptors; executors interpret them.
-- `Transaction` uses injected `Runtime` for retry/backoff but otherwise stays unchanged.
+
+Those traits will be discussed separately outside of this RFC.
 
 ### Usage Modes
 
