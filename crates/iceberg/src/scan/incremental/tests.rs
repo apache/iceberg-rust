@@ -2766,3 +2766,58 @@ async fn test_incremental_select_with_pos_and_file_columns() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_incremental_scan_with_no_deletes() {
+    // Test case for the deadlock issue when delete stream is empty
+    // The test should not hang/block indefinitely
+    // It's important to test collecting from the delete stream FIRST
+    // Create a test with MANY append operations and NO delete operations
+    // This stresses the fix by ensuring many append tasks are spawned before
+    // the for_each_concurrent loop completes, which would have caused a deadlock
+    // in the old implementation if we awaited each spawn
+    let mut operations = vec![Operation::Add(vec![], "empty.parquet".to_string())];
+
+    // Add 20 append operations to create many concurrent tasks
+    for i in 0..20 {
+        let start = i * 10 + 1;
+        let end = (i + 1) * 10;
+        let data: Vec<_> = (start..=end).map(|n| (n, format!("data-{}", n))).collect();
+        operations.push(Operation::Add(data, format!("data-{}.parquet", i)));
+    }
+
+    let fixture = IncrementalTestFixture::new(operations).await;
+
+    // Get snapshot IDs - scan from first to last snapshot
+    let mut snapshots = fixture.table.metadata().snapshots().collect::<Vec<_>>();
+    snapshots.sort_by_key(|s| s.snapshot_id());
+    let from_snapshot = snapshots[0].snapshot_id();
+    let to_snapshot = snapshots[snapshots.len() - 1].snapshot_id();
+
+    let table = fixture.table.clone();
+
+    // Create incremental scan from first to last snapshot (only appends, no deletes)
+    // Use concurrency limit of 1 to stress-test the fix with maximum serialization
+    let scan = table
+        .incremental_scan(Some(from_snapshot), Some(to_snapshot))
+        .with_concurrency_limit_data_files(1)
+        .build()
+        .unwrap();
+
+    // Convert to arrow streams (unzipped into separate append and delete streams)
+    let (append_stream, delete_stream) = scan.to_unzipped_arrow().await.unwrap();
+
+    // IMPORTANT: Try to collect from delete stream FIRST (without consuming append stream)
+    // This is the scenario that previously caused a deadlock because the delete stream
+    // starved.
+    let delete_batches: Vec<_> = delete_stream.try_collect().await.unwrap();
+    assert!(delete_batches.is_empty(), "Should have NO delete batches");
+
+    // Now collect from append stream
+    let append_batches: Vec<_> = append_stream.try_collect().await.unwrap();
+    assert!(!append_batches.is_empty(), "Should have append batches");
+
+    // Verify the data we got - just check we have something
+    let total_rows: usize = append_batches.iter().map(|b| b.num_rows()).sum();
+    assert!(total_rows > 0, "Should have gotten some rows from appends");
+}

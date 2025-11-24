@@ -85,11 +85,10 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
             channel::<Result<RecordBatch>>(reader.concurrency_limit_data_files);
 
         let batch_size = reader.batch_size;
-        let concurrency_limit_data_files = reader.concurrency_limit_data_files;
 
         spawn(async move {
             let _ = self
-                .try_for_each_concurrent(concurrency_limit_data_files, |task| {
+                .try_for_each_concurrent(reader.concurrency_limit_data_files, |task| {
                     let file_io = reader.file_io.clone();
                     let appends_tx = appends_tx.clone();
                     let deletes_tx = deletes_tx.clone();
@@ -110,8 +109,7 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                         "failed to read appended record batch",
                                     )
                                     .await;
-                                })
-                                .await
+                                });
                             }
                             IncrementalFileScanTask::Delete(deleted_file_task) => {
                                 spawn(async move {
@@ -131,8 +129,7 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                         "failed to read deleted file record batch",
                                     )
                                     .await;
-                                })
-                                .await
+                                });
                             }
                             IncrementalFileScanTask::PositionalDeletes(
                                 file_path,
@@ -151,11 +148,9 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                         "failed to read deleted record batch",
                                     )
                                     .await;
-                                })
-                                .await
+                                });
                             }
-                        };
-
+                        }
                         Ok(())
                     }
                 })
