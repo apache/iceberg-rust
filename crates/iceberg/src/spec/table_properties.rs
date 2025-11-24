@@ -16,21 +16,28 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::str::FromStr;
+
+use crate::error::{Error, ErrorKind};
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
-fn parse_property<T: std::str::FromStr>(
+fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
-) -> Result<T, anyhow::Error>
+) -> crate::error::Result<T>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
-        value
-            .parse::<T>()
-            .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+        value.parse::<T>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
     })
 }
 
@@ -49,6 +56,10 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub avro_compression_codec: String,
+    /// Compression level for Avro files (None uses codec-specific defaults)
+    pub avro_compression_level: Option<u8>,
 }
 
 impl TableProperties {
@@ -137,11 +148,19 @@ impl TableProperties {
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
+
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
+    /// Default Avro compression codec - gzip
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str = "gzip";
+
+    /// Compression level for Avro files
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     // parse by entry key or use default value
-    type Error = anyhow::Error;
+    type Error = crate::Error;
 
     fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(TableProperties {
@@ -175,6 +194,19 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            avro_compression_codec: parse_property(
+                props,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+            )?,
+            avro_compression_level: {
+                let level = parse_property(
+                    props,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
+                    255u8,
+                )?;
+                if level == 255 { None } else { Some(level) }
+            },
         })
     }
 }
@@ -207,6 +239,29 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+        // Test compression defaults
+        assert_eq!(
+            table_properties.avro_compression_codec,
+            TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string()
+        );
+        assert_eq!(table_properties.avro_compression_level, None);
+    }
+
+    #[test]
+    fn test_table_properties_compression() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
+                "zstd".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+                "3".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_codec, "zstd");
+        assert_eq!(table_properties.avro_compression_level, Some(3));
     }
 
     #[test]
@@ -280,5 +335,35 @@ mod tests {
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
+    }
+
+    #[test]
+    fn test_table_properties_optional_compression_level() {
+        // Test that compression level is None when not specified
+        let props = HashMap::new();
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, None);
+
+        // Test that compression level is Some(value) when specified
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "5".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.avro_compression_level, Some(5));
+
+        // Test that invalid compression level returns error
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+            "invalid".to_string(),
+        )]);
+        let result = TableProperties::try_from(&props);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid value for write.avro.compression-level")
+        );
     }
 }
