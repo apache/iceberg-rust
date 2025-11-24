@@ -32,10 +32,9 @@ crates/
   runtime/
     tokio/               # e.g. `iceberg-runtime-tokio`
     smol/
-  engine/
-    arrow/               # Arrow executor & schema helpers
   catalog/*              # catalog adapters (REST, HMS, Glue, etc.)
   integrations/
+    local/               # local engine for iceberg.
     datafusion/          # combines core + implementations for DF
     cache-moka/
     playground/
@@ -57,18 +56,18 @@ Those traits will be discussed separately outside of this RFC.
 ### Usage Modes
 
 - **Custom stacks**: depend solely on `iceberg` plus self-authored implementations that satisfy the traits.
-- **Pre-built stacks**: depend on crates such as `iceberg-datafusion` that bundle `iceberg` with `iceberg-runtime-tokio`, `iceberg-fileio-opendal`, and `iceberg-engine-arrow` (and expose higher-level APIs).
+- **Pre-built stacks**: depend on crates such as `iceberg-datafusion` that bundle `iceberg` with `iceberg-runtime-tokio`, `iceberg-fileio-opendal` (and expose higher-level APIs).
 - `iceberg` itself does not re-export any of the companion crates; users compose them explicitly.
 
 ## Migration Plan
 
-1. **Phase 1 – Slim down `crates/iceberg`**
-   - Remove direct dependencies on opendal, Tokio, Arrow, and DataFusion from `iceberg`.
-   - Move the concrete implementations into new crates (while keeping the same code initially).
-
-2. **Phase 2 – Stabilize trait surfaces**
+1. **Phase 1 – Stabilize trait surfaces**
    - Finalize dyn-friendly `FileIO`, `FileRead`, `FileWrite`, and `Runtime` traits inside `iceberg`.
    - Provide shims (deprecation warnings) for any APIs that previously returned concrete types (e.g., `InputFile`, `OutputFile`) so downstream integrations can migrate.
+
+2. **Phase 2 – Slim down `crates/iceberg`**
+   - Remove direct dependencies on opendal, Tokio, Arrow, and DataFusion from `iceberg`.
+   - Move the concrete implementations into new crates (while keeping the same code initially).
 
 3. **Phase 3 – Arrow/execution extraction**
    - Relocate `crates/iceberg/src/arrow/*` and related helpers into `crates/engine/arrow`.
