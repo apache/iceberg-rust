@@ -67,7 +67,12 @@ impl CatalogRegistry {
         let catalog = CatalogLoader::from(config.r#type.as_str())
             .load(name.to_string(), config.properties.clone())
             .await
-            .with_context(|| format!("Failed to load catalog '{}' of type '{}'", name, config.r#type))?;
+            .with_context(|| {
+                format!(
+                    "Failed to load catalog '{}' of type '{}'",
+                    name, config.r#type
+                )
+            })?;
 
         self.catalogs.insert(name.to_string(), Arc::clone(&catalog));
         Ok(catalog)
@@ -110,9 +115,7 @@ impl Schedule {
     }
 
     /// Parse catalogs from TOML table
-    async fn parse_catalogs(
-        table: &TomlTable,
-    ) -> anyhow::Result<HashMap<String, CatalogConfig>> {
+    async fn parse_catalogs(table: &TomlTable) -> anyhow::Result<HashMap<String, CatalogConfig>> {
         let catalogs_tbl = match table.get("catalogs") {
             Some(val) => val
                 .as_table()
@@ -226,7 +229,11 @@ impl Schedule {
                     .get(catalog_name)
                     .ok_or_else(|| anyhow!("Catalog '{catalog_name}' not found"))?;
 
-                Some(catalog_registry.get_or_create_catalog(catalog_name, catalog_config).await?)
+                Some(
+                    catalog_registry
+                        .get_or_create_catalog(catalog_name, catalog_config)
+                        .await?,
+                )
             } else {
                 None
             };
@@ -341,14 +348,26 @@ mod tests {
         // Verify memory catalog configuration
         let memory_cfg = &catalogs["memory_catalog"];
         assert_eq!(memory_cfg.r#type, "memory");
-        assert_eq!(memory_cfg.properties.get("warehouse").unwrap(), "memory://test");
+        assert_eq!(
+            memory_cfg.properties.get("warehouse").unwrap(),
+            "memory://test"
+        );
 
         // Verify rest catalog configuration
         let rest_cfg = &catalogs["rest_catalog"];
         assert_eq!(rest_cfg.r#type, "rest");
-        assert_eq!(rest_cfg.properties.get("uri").unwrap(), "http://localhost:8181");
-        assert_eq!(rest_cfg.properties.get("warehouse").unwrap(), "s3://my-bucket/warehouse");
-        assert_eq!(rest_cfg.properties.get("credential").unwrap(), "client_credentials");
+        assert_eq!(
+            rest_cfg.properties.get("uri").unwrap(),
+            "http://localhost:8181"
+        );
+        assert_eq!(
+            rest_cfg.properties.get("warehouse").unwrap(),
+            "s3://my-bucket/warehouse"
+        );
+        assert_eq!(
+            rest_cfg.properties.get("credential").unwrap(),
+            "client_credentials"
+        );
         assert_eq!(rest_cfg.properties.get("token").unwrap(), "xxx");
     }
 
@@ -364,7 +383,6 @@ mod tests {
 
         assert_eq!(catalogs.len(), 0);
     }
-
 
     #[tokio::test]
     async fn test_parse_catalogs_invalid_type() {
@@ -397,7 +415,9 @@ mod tests {
 
         let tbl: TomlTable = toml::from_str(input).unwrap();
         let catalog_configs = Schedule::parse_catalogs(&tbl).await.unwrap();
-        let engines = Schedule::parse_engines(&tbl, &catalog_configs).await.unwrap();
+        let engines = Schedule::parse_engines(&tbl, &catalog_configs)
+            .await
+            .unwrap();
 
         assert_eq!(engines.len(), 2);
         assert!(engines.contains_key("df1"));
@@ -417,7 +437,12 @@ mod tests {
         let result = Schedule::parse_engines(&tbl, &catalog_configs).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Catalog 'nonexistent' not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Catalog 'nonexistent' not found")
+        );
     }
 
     #[tokio::test]
@@ -429,7 +454,9 @@ mod tests {
 
         let tbl: TomlTable = toml::from_str(input).unwrap();
         let catalog_configs = Schedule::parse_catalogs(&tbl).await.unwrap();
-        let engines = Schedule::parse_engines(&tbl, &catalog_configs).await.unwrap();
+        let engines = Schedule::parse_engines(&tbl, &catalog_configs)
+            .await
+            .unwrap();
 
         assert_eq!(engines.len(), 1);
         assert!(engines.contains_key("df"));
@@ -447,7 +474,12 @@ mod tests {
         let result = Schedule::parse_catalogs(&tbl).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse catalog"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse catalog")
+        );
     }
 
     #[tokio::test]
@@ -472,7 +504,9 @@ mod tests {
 
         let tbl: TomlTable = toml::from_str(input).unwrap();
         let catalog_configs = Schedule::parse_catalogs(&tbl).await.unwrap();
-        let engines = Schedule::parse_engines(&tbl, &catalog_configs).await.unwrap();
+        let engines = Schedule::parse_engines(&tbl, &catalog_configs)
+            .await
+            .unwrap();
 
         assert_eq!(engines.len(), 3);
         assert!(engines.contains_key("engine1"));
@@ -498,7 +532,9 @@ mod tests {
 
         let tbl: TomlTable = toml::from_str(input).unwrap();
         let catalog_configs = Schedule::parse_catalogs(&tbl).await.unwrap();
-        let engines = Schedule::parse_engines(&tbl, &catalog_configs).await.unwrap();
+        let engines = Schedule::parse_engines(&tbl, &catalog_configs)
+            .await
+            .unwrap();
 
         assert_eq!(engines.len(), 2);
         assert!(engines.contains_key("with_catalog"));
@@ -521,7 +557,10 @@ mod tests {
         assert_eq!(catalogs.len(), 1);
         let config = &catalogs["complex"];
         assert_eq!(config.r#type, "memory");
-        assert_eq!(config.properties.get("warehouse").unwrap(), "memory://complex");
+        assert_eq!(
+            config.properties.get("warehouse").unwrap(),
+            "memory://complex"
+        );
         assert_eq!(config.properties.get("some_property").unwrap(), "value");
         assert_eq!(config.properties.get("another_property").unwrap(), "42");
     }

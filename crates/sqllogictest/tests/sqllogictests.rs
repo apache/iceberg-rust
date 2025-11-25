@@ -102,7 +102,10 @@ mod tests {
         ));
 
         let result = rt.block_on(run_schedule(schedule_path));
-        assert!(result.is_ok(), "Catalog config schedule should execute successfully");
+        assert!(
+            result.is_ok(),
+            "Catalog config schedule should execute successfully"
+        );
     }
 
     #[tokio::test]
@@ -118,7 +121,10 @@ mod tests {
         ));
 
         let result = rt.block_on(run_schedule(schedule_path));
-        assert!(result.is_ok(), "Shared catalog schedule should execute successfully");
+        assert!(
+            result.is_ok(),
+            "Shared catalog schedule should execute successfully"
+        );
     }
 
     #[tokio::test]
@@ -134,13 +140,19 @@ mod tests {
         ));
 
         let result = rt.block_on(run_schedule(schedule_path));
-        assert!(result.is_ok(), "Error cases schedule should execute successfully");
+        assert!(
+            result.is_ok(),
+            "Error cases schedule should execute successfully"
+        );
     }
 
     #[test]
     fn test_collect_schedule_files() {
         let files = collect_schedule_files().unwrap();
-        assert!(!files.is_empty(), "Should find at least some schedule files");
+        assert!(
+            !files.is_empty(),
+            "Should find at least some schedule files"
+        );
 
         // Verify that the newly created files are included
         let file_names: Vec<String> = files
