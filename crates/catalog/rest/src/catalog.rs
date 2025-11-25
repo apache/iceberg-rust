@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::str::FromStr;
 
@@ -129,7 +130,6 @@ impl CatalogBuilder for RestCatalogBuilder {
 /// Rest catalog configuration.
 #[derive(Clone, Debug, TypedBuilder)]
 pub(crate) struct RestCatalogConfig {
-    #[allow(dead_code)] // Stored for debugging and potential future use
     #[builder(default, setter(strip_option))]
     name: Option<String>,
 
@@ -143,6 +143,16 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+}
+
+impl Display for RestCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "RestCatalogConfig(name={}, uri={})", name, self.uri)
+        } else {
+            write!(f, "RestCatalogConfig(name=<none>, uri={})", self.uri)
+        }
+    }
 }
 
 impl RestCatalogConfig {

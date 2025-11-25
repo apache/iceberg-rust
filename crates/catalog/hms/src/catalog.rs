@@ -123,7 +123,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
             }
 
             let config = HmsCatalogConfig {
-                name: Some(name),
+                name,
                 address,
                 thrift_transport: self.thrift_transport,
                 warehouse,
@@ -149,8 +149,7 @@ pub enum HmsThriftTransport {
 /// Hive metastore Catalog configuration.
 #[derive(Debug)]
 pub(crate) struct HmsCatalogConfig {
-    #[allow(dead_code)] // Stored for debugging and potential future use
-    name: Option<String>,
+    name: String,
     address: String,
     thrift_transport: HmsThriftTransport,
     warehouse: String,

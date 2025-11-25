@@ -18,6 +18,7 @@
 //! This module contains memory catalog implementation.
 
 use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
@@ -39,29 +40,11 @@ pub const MEMORY_CATALOG_WAREHOUSE: &str = "warehouse";
 const LOCATION: &str = "location";
 
 /// Builder for [`MemoryCatalog`].
-#[derive(Debug)]
-pub struct MemoryCatalogBuilder(MemoryCatalogConfig);
-
-impl Default for MemoryCatalogBuilder {
-    fn default() -> Self {
-        Self(MemoryCatalogConfig {
-            name: None,
-            warehouse: "".to_string(),
-            props: HashMap::new(),
-        })
-    }
-}
-
-impl MemoryCatalogBuilder {
-    /// Get a mutable reference to the catalog configuration.
-    pub(crate) fn catalog_config(&mut self) -> &mut MemoryCatalogConfig {
-        &mut self.0
-    }
-
-    /// Consume the builder and return the catalog configuration.
-    pub(crate) fn into_config(self) -> MemoryCatalogConfig {
-        self.0
-    }
+#[derive(Debug, Default)]
+pub struct MemoryCatalogBuilder {
+    name: Option<String>,
+    warehouse: Option<String>,
+    props: HashMap<String, String>,
 }
 
 impl CatalogBuilder for MemoryCatalogBuilder {
@@ -72,47 +55,69 @@ impl CatalogBuilder for MemoryCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.catalog_config().name = Some(name.into());
+        self.name = Some(name.into());
 
         if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.catalog_config().warehouse = props
-                .get(MEMORY_CATALOG_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default()
+            self.warehouse = props.get(MEMORY_CATALOG_WAREHOUSE).cloned();
         }
 
         // Collect other remaining properties
-        self.catalog_config().props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
-        let config = self.into_config();
-        let result = {
-            if config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if config.warehouse.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ))
-            } else {
-                MemoryCatalog::new(config)
-            }
-        };
+        async move {
+            let name = self
+                .name
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog name is required"))?;
 
-        std::future::ready(result)
+            let warehouse = self.warehouse.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
+            })?;
+
+            if warehouse.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse cannot be empty",
+                ));
+            }
+
+            let config = MemoryCatalogConfig {
+                name: Some(name),
+                warehouse,
+                props: self.props,
+            };
+
+            MemoryCatalog::new(config)
+        }
     }
 }
 
+/// Memory catalog configuration.
 #[derive(Clone, Debug)]
 pub(crate) struct MemoryCatalogConfig {
     name: Option<String>,
     warehouse: String,
     props: HashMap<String, String>,
+}
+
+impl Display for MemoryCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(name) = &self.name {
+            write!(
+                f,
+                "MemoryCatalogConfig(name={}, warehouse={})",
+                name, self.warehouse
+            )
+        } else {
+            write!(
+                f,
+                "MemoryCatalogConfig(name=<none>, warehouse={})",
+                self.warehouse
+            )
+        }
+    }
 }
 
 /// Memory catalog implementation.

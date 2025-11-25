@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display, Formatter};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -123,12 +123,21 @@ impl CatalogBuilder for GlueCatalogBuilder {
 /// Glue Catalog configuration
 #[derive(Debug)]
 pub(crate) struct GlueCatalogConfig {
-    #[allow(dead_code)] // can be used for debugging
     name: String,
     uri: Option<String>,
     catalog_id: Option<String>,
     warehouse: String,
     props: HashMap<String, String>,
+}
+
+impl Display for GlueCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GlueCatalogConfig(name={}, warehouse={})",
+            self.name, self.warehouse
+        )
+    }
 }
 
 struct GlueClient(aws_sdk_glue::Client);
