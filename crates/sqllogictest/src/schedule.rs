@@ -51,7 +51,15 @@ impl CatalogRegistry {
             catalogs: HashMap::new(),
         }
     }
+}
 
+impl Default for CatalogRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CatalogRegistry {
     /// Get or create a catalog instance
     pub async fn get_or_create_catalog(
         &mut self,
