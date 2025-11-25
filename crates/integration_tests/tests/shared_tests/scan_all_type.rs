@@ -43,6 +43,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::ContainerRuntime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
@@ -52,12 +53,12 @@ use crate::shared_tests::random_ns;
 
 #[tokio::test]
 async fn test_scan_all_type() {
-    let fixture = get_shared_containers();
+    let fixture = get_shared_containers(ContainerRuntime::Docker);
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
-    let ns = random_ns().await;
+    let ns = random_ns(ContainerRuntime::Docker).await;
 
     let schema = Schema::builder()
         .with_schema_id(1)

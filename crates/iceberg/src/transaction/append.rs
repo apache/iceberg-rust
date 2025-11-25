@@ -113,6 +113,13 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Operation::Append
     }
 
+    async fn data_entries(
+        &self,
+        _snapshot_produce: &SnapshotProducer<'_>,
+    ) -> Result<Vec<ManifestEntry>> {
+        Ok(vec![])
+    }
+
     async fn delete_entries(
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,

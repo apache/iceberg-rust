@@ -37,6 +37,9 @@ iceberg = { workspace = true }
 
 
 [dev-dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
+parquet = { workspace = true }
 tokio = { workspace = true }

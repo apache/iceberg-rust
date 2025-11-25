@@ -866,6 +866,237 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_summary_collector_delete_files() {
+        // Test that delete files (position and equality deletes) are properly tracked
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
+                .unwrap()
+                .with_spec_id(1)
+                .build()
+                .unwrap(),
+        );
+
+        let mut collector = SnapshotSummaryCollector::default();
+        collector.set_partition_summary_limit(10);
+
+        // Add a position delete file
+        let position_delete = DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: "s3://testbucket/deletes/pos-del-1.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::from_iter(vec![]),
+            record_count: 5,
+            file_size_in_bytes: 100,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: None,
+            sort_order_id: Some(0),
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: Some("data/file1.parquet".to_string()),
+            content_offset: None,
+            content_size_in_bytes: None,
+        };
+
+        // Add an equality delete file
+        let equality_delete = DataFile {
+            content: DataContentType::EqualityDeletes,
+            file_path: "s3://testbucket/deletes/eq-del-1.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::from_iter(vec![]),
+            record_count: 3,
+            file_size_in_bytes: 75,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: Some(vec![1, 2]),
+            sort_order_id: Some(0),
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        };
+
+        // Add delete files
+        collector.add_file(&position_delete, schema.clone(), partition_spec.clone());
+        collector.add_file(&equality_delete, schema.clone(), partition_spec.clone());
+
+        let props = collector.build();
+
+        // Verify delete file tracking
+        assert_eq!(
+            props.get(ADDED_DELETE_FILES).unwrap(),
+            "2",
+            "Should track 2 added delete files"
+        );
+        assert_eq!(
+            props.get(ADDED_POSITION_DELETE_FILES).unwrap(),
+            "1",
+            "Should track 1 position delete file"
+        );
+        assert_eq!(
+            props.get(ADDED_EQUALITY_DELETE_FILES).unwrap(),
+            "1",
+            "Should track 1 equality delete file"
+        );
+        assert_eq!(
+            props.get(ADDED_POSITION_DELETES).unwrap(),
+            "5",
+            "Should track 5 position delete records"
+        );
+        assert_eq!(
+            props.get(ADDED_EQUALITY_DELETES).unwrap(),
+            "3",
+            "Should track 3 equality delete records"
+        );
+        assert_eq!(
+            props.get(ADDED_FILE_SIZE).unwrap(),
+            "175",
+            "Should track total size of delete files"
+        );
+
+        // Now remove a position delete file
+        collector.remove_file(&position_delete, schema.clone(), partition_spec.clone());
+
+        let props = collector.build();
+
+        // Verify removed delete file tracking
+        assert_eq!(
+            props.get(REMOVED_DELETE_FILES).unwrap(),
+            "1",
+            "Should track 1 removed delete file"
+        );
+        assert_eq!(
+            props.get(REMOVED_POSITION_DELETE_FILES).unwrap(),
+            "1",
+            "Should track 1 removed position delete file"
+        );
+        assert_eq!(
+            props.get(REMOVED_POSITION_DELETES).unwrap(),
+            "5",
+            "Should track 5 removed position delete records"
+        );
+        assert_eq!(
+            props.get(REMOVED_FILE_SIZE).unwrap(),
+            "100",
+            "Should track size of removed delete files"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_summary_collector_data_file_deletion() {
+        // Test that data file deletions are properly tracked (for compaction scenarios)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
+                .unwrap()
+                .with_spec_id(1)
+                .build()
+                .unwrap(),
+        );
+
+        let mut collector = SnapshotSummaryCollector::default();
+
+        // Add a data file
+        let data_file = DataFile {
+            content: DataContentType::Data,
+            file_path: "s3://testbucket/data/file1.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::from_iter(vec![]),
+            record_count: 100,
+            file_size_in_bytes: 1000,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: None,
+            sort_order_id: Some(0),
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        };
+
+        // Add data file then remove it (simulating compaction)
+        collector.add_file(&data_file, schema.clone(), partition_spec.clone());
+        collector.remove_file(&data_file, schema.clone(), partition_spec.clone());
+
+        let props = collector.build();
+
+        // Verify data file deletion tracking
+        assert_eq!(
+            props.get(ADDED_DATA_FILES).unwrap(),
+            "1",
+            "Should track 1 added data file"
+        );
+        assert_eq!(
+            props.get(DELETED_DATA_FILES).unwrap(),
+            "1",
+            "Should track 1 deleted data file (removed_data_files)"
+        );
+        assert_eq!(
+            props.get(ADDED_RECORDS).unwrap(),
+            "100",
+            "Should track 100 added records"
+        );
+        assert_eq!(
+            props.get(DELETED_RECORDS).unwrap(),
+            "100",
+            "Should track 100 deleted records"
+        );
+    }
+
+    #[test]
     fn test_snapshot_summary_collector_merge() {
         let schema = Arc::new(
             Schema::builder()
