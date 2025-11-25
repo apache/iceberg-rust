@@ -22,8 +22,8 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
-use iceberg::{Catalog, CatalogBuilder};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+use iceberg::{Catalog, CatalogBuilder};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 use toml::Table as TomlTable;
@@ -67,10 +67,7 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
-    pub async fn new(
-        config: TomlTable,
-        catalog: Option<Arc<dyn Catalog>>,
-    ) -> Result<Self> {
+    pub async fn new(config: TomlTable, catalog: Option<Arc<dyn Catalog>>) -> Result<Self> {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
@@ -95,9 +92,7 @@ impl DataFusionEngine {
         })
     }
 
-    async fn create_default_catalog(
-        _: &TomlTable,
-    ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+    async fn create_default_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
         // Create default MemoryCatalog as fallback
         let catalog = MemoryCatalogBuilder::default()
             .load(
