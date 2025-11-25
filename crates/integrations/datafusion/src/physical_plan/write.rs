@@ -270,7 +270,7 @@ impl ExecutionPlan for IcebergWriteExec {
             .table
             .metadata()
             .properties()
-            .get(TableProperties::PROPERTY_WRITE_FANOUT_ENABLED)
+            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
             .map(|value| {
                 value
                     .parse::<bool>()
@@ -284,7 +284,7 @@ impl ExecutionPlan for IcebergWriteExec {
                     .map_err(to_datafusion_error)
             })
             .transpose()?
-            .unwrap_or(TableProperties::PROPERTY_WRITE_FANOUT_ENABLED_DEFAULT);
+            .unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
 
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
