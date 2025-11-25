@@ -92,7 +92,7 @@ The Storage trait defines the interface for all storage operations. This impleme
 #[async_trait]
 pub trait Storage: Debug + Send + Sync {
     // File existence and metadata
-    async fn exists(&self, path: AsRef<str>) -> Result<bool>;
+    async fn exists(&self, path: &str) -> Result<bool>;
     async fn metadata(&self, path: &str) -> Result<FileMetadata>;
 
     // Reading operations
