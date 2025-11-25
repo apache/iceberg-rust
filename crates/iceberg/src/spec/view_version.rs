@@ -334,9 +334,10 @@ mod tests {
                 },
             )])
         );
-        assert_eq!(result.default_namespace.inner(), vec![
-            "default".to_string()
-        ]);
+        assert_eq!(
+            result.default_namespace.inner(),
+            vec!["default".to_string()]
+        );
     }
 
     #[test]

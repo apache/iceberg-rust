@@ -185,7 +185,9 @@ impl Extensions {
 
     /// Fetch an extension.
     pub fn get<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
+    where
+        T: 'static + Send + Sync + Clone,
+    {
         let type_id = TypeId::of::<T>();
         self.0
             .get(&type_id)
@@ -267,7 +269,9 @@ impl FileIOBuilder {
 
     /// Fetch an extension from the file IO builder.
     pub fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
+    where
+        T: 'static + Send + Sync + Clone,
+    {
         self.extensions.get::<T>()
     }
 

@@ -515,9 +515,10 @@ mod tests {
             })?;
 
         // 3. Create mock input execution plan
-        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![
-            batch.clone(),
-        ]));
+        let input_plan = Arc::new(MockExecutionPlan::new(
+            arrow_schema.clone(),
+            vec![batch.clone()],
+        ));
 
         // 4. Create IcebergWriteExec
         let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);

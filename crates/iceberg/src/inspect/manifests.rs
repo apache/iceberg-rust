@@ -198,20 +198,23 @@ impl<'a> ManifestsTable<'a> {
             }
         }
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![
-            Arc::new(content.finish()),
-            Arc::new(path.finish()),
-            Arc::new(length.finish()),
-            Arc::new(partition_spec_id.finish()),
-            Arc::new(added_snapshot_id.finish()),
-            Arc::new(added_data_files_count.finish()),
-            Arc::new(existing_data_files_count.finish()),
-            Arc::new(deleted_data_files_count.finish()),
-            Arc::new(added_delete_files_count.finish()),
-            Arc::new(existing_delete_files_count.finish()),
-            Arc::new(deleted_delete_files_count.finish()),
-            Arc::new(partition_summaries.finish()),
-        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(content.finish()),
+                Arc::new(path.finish()),
+                Arc::new(length.finish()),
+                Arc::new(partition_spec_id.finish()),
+                Arc::new(added_snapshot_id.finish()),
+                Arc::new(added_data_files_count.finish()),
+                Arc::new(existing_data_files_count.finish()),
+                Arc::new(deleted_data_files_count.finish()),
+                Arc::new(added_delete_files_count.finish()),
+                Arc::new(existing_delete_files_count.finish()),
+                Arc::new(deleted_delete_files_count.finish()),
+                Arc::new(partition_summaries.finish()),
+            ],
+        )?;
         Ok(stream::iter(vec![Ok(batch)]).boxed())
     }
 

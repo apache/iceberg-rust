@@ -632,9 +632,10 @@ mod tests {
             Arc::new(arrow_schema::Schema::new(fields))
         };
 
-        let equality_deletes_to_write = RecordBatch::try_new(equality_delete_schema.clone(), vec![
-            col_y, col_z, col_a, col_s,
-        ])
+        let equality_deletes_to_write = RecordBatch::try_new(
+            equality_delete_schema.clone(),
+            vec![col_y, col_z, col_a, col_s],
+        )
         .unwrap();
 
         let path = format!("{}/equality-deletes-1.parquet", &table_location);
@@ -831,12 +832,11 @@ mod tests {
         let file_path_col = Arc::new(StringArray::from_iter_values(&file_path_values));
         let pos_col = Arc::new(Int64Array::from_iter_values(vec![0i64, 1, 2, 3]));
 
-        let positional_deletes_to_write =
-            RecordBatch::try_new(positional_delete_schema.clone(), vec![
-                file_path_col,
-                pos_col,
-            ])
-            .unwrap();
+        let positional_deletes_to_write = RecordBatch::try_new(
+            positional_delete_schema.clone(),
+            vec![file_path_col, pos_col],
+        )
+        .unwrap();
 
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)

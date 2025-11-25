@@ -379,11 +379,14 @@ mod tests {
         let mut task_writer = TaskWriter::try_new(writer_builder, false, schema, partition_spec)?;
 
         // Write data
-        let batch = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-            Arc::new(StringArray::from(vec!["US", "EU", "US"])),
-        ])?;
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+                Arc::new(StringArray::from(vec!["US", "EU", "US"])),
+            ],
+        )?;
 
         task_writer.write(batch).await?;
         let data_files = task_writer.close().await?;
@@ -454,12 +457,15 @@ mod tests {
             Arc::new(partition_values) as ArrayRef,
         )]);
 
-        let batch = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["US", "EU", "US", "EU"])),
-            Arc::new(partition_struct),
-        ])?;
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["US", "EU", "US", "EU"])),
+                Arc::new(partition_struct),
+            ],
+        )?;
 
         task_writer.write(batch).await?;
         let data_files = task_writer.close().await?;
@@ -498,12 +504,15 @@ mod tests {
         )]);
 
         // ClusteredWriter expects data to be pre-sorted by partition
-        let batch = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["ASIA", "ASIA", "EU", "EU"])),
-            Arc::new(partition_struct),
-        ])?;
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["ASIA", "ASIA", "EU", "EU"])),
+                Arc::new(partition_struct),
+            ],
+        )?;
 
         task_writer.write(batch).await?;
         let data_files = task_writer.close().await?;

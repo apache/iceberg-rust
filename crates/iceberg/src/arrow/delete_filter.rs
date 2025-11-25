@@ -281,12 +281,11 @@ pub(crate) mod tests {
             let pos_vals = pos_values.get(n - 1).unwrap();
             let pos_col = Arc::new(Int64Array::from_iter_values(pos_vals.clone()));
 
-            let positional_deletes_to_write =
-                RecordBatch::try_new(positional_delete_schema.clone(), vec![
-                    file_path_col.clone(),
-                    pos_col.clone(),
-                ])
-                .unwrap();
+            let positional_deletes_to_write = RecordBatch::try_new(
+                positional_delete_schema.clone(),
+                vec![file_path_col.clone(), pos_col.clone()],
+            )
+            .unwrap();
 
             let file = File::create(format!(
                 "{}/pos-del-{}.parquet",
