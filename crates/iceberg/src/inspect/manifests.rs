@@ -307,7 +307,7 @@ mod tests {
                 Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
                 Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
                 Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
-                Field { "partition_summaries": List(Struct("contains_null": Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": nullable Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": nullable Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": nullable Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
+                Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
             expect![[r#"
                 content: PrimitiveArray<Int32>
                 [

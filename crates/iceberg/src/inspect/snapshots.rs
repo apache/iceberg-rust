@@ -156,7 +156,7 @@ mod tests {
                 Field { "parent_id": nullable Int64, metadata: {"PARQUET:field_id": "3"} },
                 Field { "operation": nullable Utf8, metadata: {"PARQUET:field_id": "4"} },
                 Field { "manifest_list": nullable Utf8, metadata: {"PARQUET:field_id": "5"} },
-                Field { "summary": nullable Map("key_value": Struct("key": Utf8, metadata: {"PARQUET:field_id": "7"}, "value": nullable Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
+                Field { "summary": nullable Map("key_value": non-null Struct("key": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "value": Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
             expect![[r#"
                 committed_at: PrimitiveArray<Timestamp(µs, "+00:00")>
                 [

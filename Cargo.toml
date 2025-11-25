@@ -46,14 +46,14 @@ rust-version = "1.87"
 anyhow = "1.0.72"
 apache-avro = { version = "0.20", features = ["zstandard"] }
 array-init = "2"
-arrow-arith = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-array = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
-arrow-string = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
+arrow-arith = "57.1"
+arrow-array = "57.1"
+arrow-buffer = "57.1"
+arrow-cast = "57.1"
+arrow-ord = "57.1"
+arrow-schema = "57.1"
+arrow-select = "57.1"
+arrow-string = "57.1"
 as-any = "0.3.2"
 async-trait = "0.1.89"
 aws-config = "1.8.7"
@@ -105,7 +105,7 @@ num-bigint = "0.4.6"
 once_cell = "1.20"
 opendal = "0.54.0"
 ordered-float = "4"
-parquet = { git = "https://github.com/apache/arrow-rs", rev = "fea605cb16f7524cb69a197bfa581a1d4f5fe5d0" }
+parquet = "57.1"
 pilota = "0.11.10"
 port_scanner = "0.1.5"
 pretty_assertions = "1.4"
