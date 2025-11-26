@@ -98,12 +98,10 @@ pub fn row_pos_field() -> &'static Arc<Field> {
 /// Used in positional delete records.
 static POS_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
     Arc::new(
-        Field::new(RESERVED_COL_NAME_POS, DataType::UInt64, false).with_metadata(HashMap::from([
-            (
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                RESERVED_FIELD_ID_POS.to_string(),
-            ),
-        ])),
+        Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            RESERVED_FIELD_ID_POS.to_string(),
+        )])),
     )
 });
 

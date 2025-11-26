@@ -23,9 +23,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar, StringArray,
-};
+use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{
@@ -660,35 +658,6 @@ impl ArrowReader {
         }
 
         Ok(results.into())
-    }
-
-    /// Adds a file_path column to the RecordBatch containing the file path.
-    /// Used for positional delete records to track which file each delete applies to.
-    /// Materializes the file path string for each row (no compression).
-    pub(crate) fn add_file_path_column(batch: RecordBatch, file_path: &str) -> Result<RecordBatch> {
-        let num_rows = batch.num_rows();
-
-        // Create a StringArray with the file path repeated num_rows times
-        let file_array = StringArray::from(vec![file_path; num_rows]);
-
-        // Use the lazy field definition for file_path (from metadata_columns)
-        let file_field = crate::metadata_columns::file_path_field();
-
-        // Add the column using the predefined field (already has metadata)
-        let mut columns = batch.columns().to_vec();
-        columns.push(Arc::new(file_array));
-
-        let mut fields: Vec<_> = batch.schema().fields().iter().cloned().collect();
-        fields.push(Arc::clone(file_field));
-
-        let schema = Arc::new(ArrowSchema::new(fields));
-        RecordBatch::try_new(schema, columns).map_err(|e| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "Failed to add file_path column to RecordBatch",
-            )
-            .with_source(e)
-        })
     }
 
     fn build_field_id_set_and_map(
@@ -2687,148 +2656,6 @@ message schema {
         assert!(col_b.is_null(0));
         assert!(col_b.is_null(1));
         assert!(col_b.is_null(2));
-    }
-
-    #[test]
-    fn test_add_file_path_column_special_characters() {
-        use arrow_array::{Int32Array, RecordBatch};
-        use arrow_schema::{DataType, Field, Schema};
-
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-
-        let id_array = Int32Array::from(vec![42]);
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(id_array)]).unwrap();
-
-        // Test with file path containing special characters (materialized version)
-        let file_path = "/path/with spaces/and-dashes/file_name.parquet";
-        let result = ArrowReader::add_file_path_column(batch, file_path);
-        assert!(result.is_ok());
-
-        let new_batch = result.unwrap();
-        let file_col = new_batch.column(1);
-
-        // Verify the file path is correctly stored as a materialized StringArray
-        let str_arr = file_col.as_string::<i32>();
-        assert_eq!(str_arr.value(0), file_path);
-    }
-
-    #[test]
-    fn test_add_file_path_column() {
-        use arrow_array::{Int32Array, RecordBatch, StringArray};
-        use arrow_schema::{DataType, Field, Schema};
-
-        // Create a simple test batch with 2 columns and 3 rows
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-        ]));
-
-        let id_array = Int32Array::from(vec![1, 2, 3]);
-        let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
-
-        let batch = RecordBatch::try_new(schema.clone(), vec![
-            Arc::new(id_array),
-            Arc::new(name_array),
-        ])
-        .unwrap();
-
-        assert_eq!(batch.num_columns(), 2);
-        assert_eq!(batch.num_rows(), 3);
-
-        // Add file path column with materialization
-        let file_path = "/path/to/data/file.parquet";
-        let result = ArrowReader::add_file_path_column(batch, file_path);
-        assert!(result.is_ok(), "Should successfully add file path column");
-
-        let new_batch = result.unwrap();
-
-        // Verify the new batch has 3 columns
-        assert_eq!(new_batch.num_columns(), 3);
-        assert_eq!(new_batch.num_rows(), 3);
-
-        // Verify schema has the _file column
-        let schema = new_batch.schema();
-        assert_eq!(schema.fields().len(), 3);
-
-        let file_field = schema.field(2);
-        assert_eq!(
-            file_field.name(),
-            crate::metadata_columns::RESERVED_COL_NAME_FILE_PATH
-        );
-        assert!(!file_field.is_nullable());
-
-        // Verify the field has the correct metadata
-        let metadata = file_field.metadata();
-        assert_eq!(
-            metadata.get(PARQUET_FIELD_ID_META_KEY),
-            Some(&crate::metadata_columns::RESERVED_FIELD_ID_FILE_PATH.to_string())
-        );
-
-        // Verify the data type is Utf8 (materialized strings)
-        assert_eq!(file_field.data_type(), &DataType::Utf8);
-
-        // Verify the original columns are intact
-        let id_col = new_batch
-            .column(0)
-            .as_primitive::<arrow_array::types::Int32Type>();
-        assert_eq!(id_col.values(), &[1, 2, 3]);
-
-        let name_col = new_batch.column(1).as_string::<i32>();
-        assert_eq!(name_col.value(0), "Alice");
-        assert_eq!(name_col.value(1), "Bob");
-        assert_eq!(name_col.value(2), "Charlie");
-
-        // Verify the file path column contains the correct value for all rows
-        let file_col = new_batch.column(2).as_string::<i32>();
-        for i in 0..new_batch.num_rows() {
-            assert_eq!(file_col.value(i), file_path);
-        }
-    }
-
-    #[test]
-    fn test_add_file_path_column_empty_batch() {
-        use arrow_array::RecordBatch;
-        use arrow_schema::{DataType, Field, Schema};
-        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-
-        // Create an empty batch
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-
-        let id_array = arrow_array::Int32Array::from(Vec::<i32>::new());
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(id_array)]).unwrap();
-
-        assert_eq!(batch.num_rows(), 0);
-
-        // Add file path column to empty batch (materialized version)
-        let file_path = "/empty/file.parquet";
-        let result = ArrowReader::add_file_path_column(batch, file_path);
-
-        // Should succeed with empty StringArray
-        assert!(result.is_ok());
-        let new_batch = result.unwrap();
-        assert_eq!(new_batch.num_rows(), 0);
-        assert_eq!(new_batch.num_columns(), 2);
-
-        // Verify the _file column exists with correct schema
-        let schema = new_batch.schema();
-        let file_field = schema.field(1);
-        assert_eq!(
-            file_field.name(),
-            crate::metadata_columns::RESERVED_COL_NAME_FILE_PATH
-        );
-
-        // Should use Utf8 (materialized strings)
-        assert_eq!(file_field.data_type(), &DataType::Utf8);
-
-        // Verify metadata with reserved field ID
-        assert_eq!(
-            file_field.metadata().get(PARQUET_FIELD_ID_META_KEY),
-            Some(&crate::metadata_columns::RESERVED_FIELD_ID_FILE_PATH.to_string())
-        );
-
-        // Verify the file path column is empty but properly structured
-        let file_path_column = new_batch.column(1);
-        assert_eq!(file_path_column.len(), 0);
     }
 
     /// Test for bug where position deletes in later row groups are not applied correctly.

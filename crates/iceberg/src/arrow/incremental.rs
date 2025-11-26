@@ -18,7 +18,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow_array::{RecordBatch, UInt64Array};
+use arrow_array::{Int64Array, RecordBatch};
 use arrow_schema::Schema as ArrowSchema;
 use futures::channel::mpsc::channel;
 use futures::stream::select;
@@ -254,35 +254,51 @@ async fn process_incremental_append_task(
     Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
 }
 
+/// Helper function to create a RecordBatch from a chunk of position values.
+/// Creates a batch with file_path column first, then pos column (Int64).
+fn create_delete_batch(
+    schema: &Arc<ArrowSchema>,
+    file_path: &str,
+    chunk: Vec<u64>,
+) -> Result<RecordBatch> {
+    let num_rows = chunk.len();
+
+    // Create file path array (repeated for each row)
+    let file_array = arrow_array::StringArray::from(vec![file_path; num_rows]);
+
+    // Create Int64 array for positions
+    let pos_array = Int64Array::from_iter(chunk.iter().map(|&i| Some(i as i64)));
+
+    RecordBatch::try_new(Arc::clone(schema), vec![
+        Arc::new(file_array),
+        Arc::new(pos_array),
+    ])
+    .map_err(|_| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Failed to create RecordBatch for delete positions",
+        )
+    })
+}
+
 fn process_incremental_delete_task(
     file_path: String,
     delete_vector: DeleteVector,
     batch_size: Option<usize>,
 ) -> Result<ArrowRecordBatchStream> {
-    let schema = Arc::new(ArrowSchema::new(vec![Arc::clone(
-        crate::metadata_columns::pos_field(),
-    )]));
-
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+
+    // Create schema with _file column first, then pos (Int64)
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Arc::clone(crate::metadata_columns::file_path_field()),
+        Arc::clone(crate::metadata_columns::pos_field()),
+    ]));
 
     let treemap = delete_vector.inner;
 
     let stream = futures::stream::iter(treemap)
         .chunks(batch_size)
-        .map(move |chunk| {
-            let array = UInt64Array::from_iter(chunk);
-            RecordBatch::try_new(
-                Arc::clone(&schema), // Cheap Arc clone instead of full schema creation
-                vec![Arc::new(array)],
-            )
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to create RecordBatch for DeleteVector",
-                )
-            })
-            .and_then(|batch| ArrowReader::add_file_path_column(batch, &file_path))
-        });
+        .map(move |chunk| create_delete_batch(&schema, &file_path, chunk));
 
     Ok(Box::pin(stream) as ArrowRecordBatchStream)
 }
@@ -292,29 +308,18 @@ fn process_incremental_deleted_file_task(
     total_records: u64,
     batch_size: Option<usize>,
 ) -> Result<ArrowRecordBatchStream> {
-    let schema = Arc::new(ArrowSchema::new(vec![Arc::clone(
-        crate::metadata_columns::pos_field(),
-    )]));
-
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+
+    // Create schema with _file column first, then pos (Int64)
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Arc::clone(crate::metadata_columns::file_path_field()),
+        Arc::clone(crate::metadata_columns::pos_field()),
+    ]));
 
     // Create a stream of position values from 0 to total_records-1 (0-indexed)
     let stream = futures::stream::iter(0..total_records)
         .chunks(batch_size)
-        .map(move |chunk| {
-            let array = UInt64Array::from_iter(chunk);
-            RecordBatch::try_new(
-                Arc::clone(&schema), // Cheap Arc clone instead of full schema creation
-                vec![Arc::new(array)],
-            )
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to create RecordBatch for deleted file",
-                )
-            })
-            .and_then(|batch| ArrowReader::add_file_path_column(batch, &file_path))
-        });
+        .map(move |chunk| create_delete_batch(&schema, &file_path, chunk));
 
     Ok(Box::pin(stream) as ArrowRecordBatchStream)
 }

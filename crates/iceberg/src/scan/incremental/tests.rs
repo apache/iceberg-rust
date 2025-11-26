@@ -1188,7 +1188,7 @@ impl IncrementalTestFixture {
         from_snapshot_id: i64,
         to_snapshot_id: i64,
         expected_appends: Vec<(i32, &str)>,
-        expected_deletes: Vec<(u64, &str)>,
+        expected_deletes: Vec<(i64, &str)>,
     ) {
         use arrow_array::cast::AsArray;
         use arrow_select::concat::concat_batches;
@@ -1246,15 +1246,16 @@ impl IncrementalTestFixture {
             let delete_batch =
                 concat_batches(&delete_batches[0].schema(), delete_batches.iter()).unwrap();
 
-            let pos_array = delete_batch
-                .column(0)
-                .as_primitive::<arrow_array::types::UInt64Type>();
-
-            // The file path column is a StringArray with materialized values
-            let file_path_column = delete_batch.column(1);
+            // The file path column is first (column 0)
+            let file_path_column = delete_batch.column(0);
             let file_path_array = file_path_column.as_string::<i32>();
 
-            let mut deleted_pairs: Vec<(u64, String)> = (0..delete_batch.num_rows())
+            // The pos column is second (column 1) and is Int64
+            let pos_array = delete_batch
+                .column(1)
+                .as_primitive::<arrow_array::types::Int64Type>();
+
+            let mut deleted_pairs: Vec<(i64, String)> = (0..delete_batch.num_rows())
                 .map(|i| {
                     let pos = pos_array.value(i);
                     let file_path = file_path_array.value(i).to_string();
@@ -1263,7 +1264,7 @@ impl IncrementalTestFixture {
                 .collect();
             deleted_pairs.sort();
 
-            let expected_deletes: Vec<(u64, String)> = expected_deletes
+            let expected_deletes: Vec<(i64, String)> = expected_deletes
                 .into_iter()
                 .map(|(pos, file)| (pos, file.to_string()))
                 .collect();
