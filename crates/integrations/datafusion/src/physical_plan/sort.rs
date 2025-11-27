@@ -42,7 +42,7 @@ use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 /// # Returns
 /// * `Ok(Arc<dyn ExecutionPlan>)` - A SortExec that sorts by partition values
 /// * `Err` - If the partition column is not found
-pub fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn ExecutionPlan>> {
+pub(crate) fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
 
     // Find the partition column in the schema
