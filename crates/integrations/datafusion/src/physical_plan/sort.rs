@@ -42,6 +42,9 @@ use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 /// # Returns
 /// * `Ok(Arc<dyn ExecutionPlan>)` - A SortExec that sorts by partition values
 /// * `Err` - If the partition column is not found
+/// 
+/// TODO remove dead_code mark when integrating with insert_into
+#[allow(dead_code)]
 pub(crate) fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
 
