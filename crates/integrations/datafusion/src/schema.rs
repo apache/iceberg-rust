@@ -28,6 +28,7 @@ use iceberg::inspect::MetadataTableType;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
+use crate::to_datafusion_error;
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
@@ -113,7 +114,10 @@ impl SchemaProvider for IcebergSchemaProvider {
             let metadata_table_type =
                 MetadataTableType::try_from(metadata_table_name).map_err(DataFusionError::Plan)?;
             if let Some(table) = self.tables.get(table_name) {
-                let metadata_table = table.metadata_table(metadata_table_type);
+                let metadata_table = table
+                    .metadata_table(metadata_table_type)
+                    .await
+                    .map_err(to_datafusion_error)?;
                 return Ok(Some(Arc::new(metadata_table)));
             } else {
                 return Ok(None);
