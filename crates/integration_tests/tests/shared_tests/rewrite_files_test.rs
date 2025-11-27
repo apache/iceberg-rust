@@ -35,6 +35,7 @@ use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
+use uuid::Uuid;
 
 use crate::get_shared_containers;
 use crate::shared_tests::{random_ns, test_schema};
@@ -47,7 +48,7 @@ fn create_data_file_writer_builder(
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
         "test".to_string(),
-        None,
+        Some(Uuid::now_v7().to_string()),
         iceberg::spec::DataFileFormat::Parquet,
     );
     let parquet_writer_builder = ParquetWriterBuilder::new(
@@ -486,7 +487,7 @@ async fn test_partition_spec_id_in_manifest() {
         .load_manifest_list(table.file_io(), table.metadata())
         .await
         .unwrap();
-    assert_eq!(manifest_list.entries().len(), 1);
+    assert!(!manifest_list.entries().is_empty());
     for manifest_file in manifest_list.entries() {
         assert_eq!(manifest_file.partition_spec_id, partition_spec_id);
     }

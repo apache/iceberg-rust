@@ -234,11 +234,33 @@ async fn test_append_data_file_target_branch() {
 
     // Test 2: Append to a custom branch
     let branch_name = "test-branch";
+    let second_location_generator =
+        DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let second_file_name_generator = DefaultFileNameGenerator::new(
+        "test".to_string(),
+        Some(uuid::Uuid::now_v7().to_string()),
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let second_parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+    );
+    let second_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+        second_parquet_writer_builder,
+        table.file_io().clone(),
+        second_location_generator,
+        second_file_name_generator,
+    );
+    let second_writer_builder = DataFileWriterBuilder::new(second_rolling_writer);
+    let mut second_writer = second_writer_builder.build(None).await.unwrap();
+    second_writer.write(batch.clone()).await.unwrap();
+    let second_data_file = second_writer.close().await.unwrap();
+
     let tx = Transaction::new(&table);
     let append_action = tx
         .fast_append()
         .set_target_branch(branch_name.to_string())
-        .add_data_files(data_file.clone());
+        .add_data_files(second_data_file.clone());
     let tx = append_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 

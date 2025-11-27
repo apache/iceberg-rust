@@ -3695,7 +3695,6 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "tokio",
- "uuid",
 ]
 
 [[package]]
