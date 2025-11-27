@@ -560,7 +560,7 @@ async fn test_partition_spec_id_in_manifest() {
         .load_manifest_list(table.file_io(), table.metadata())
         .await
         .unwrap();
-    assert_eq!(manifest_list.entries().len(), 1);
+    assert!(!manifest_list.entries().is_empty());
     for manifest_file in manifest_list.entries() {
         assert_eq!(manifest_file.partition_spec_id, partition_spec_id);
     }

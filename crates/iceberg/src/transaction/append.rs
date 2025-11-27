@@ -182,7 +182,11 @@ impl SnapshotProduceOperation for FastAppendOperation {
         &self,
         snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
+        let Some(snapshot) = snapshot_produce
+            .table
+            .metadata()
+            .snapshot_for_ref(snapshot_produce.target_branch())
+        else {
             return Ok(vec![]);
         };
 
