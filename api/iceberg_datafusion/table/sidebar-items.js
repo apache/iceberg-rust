@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["metadata_table","table_provider_factory"],"struct":["IcebergTableProvider"]};
+window.SIDEBAR_ITEMS = {"mod":["metadata_table","table_provider_factory"],"struct":["IcebergStaticTableProvider","IcebergTableProvider"]};
