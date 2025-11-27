@@ -640,9 +640,10 @@ mod tests {
             Arc::new(arrow_schema::Schema::new(fields))
         };
 
-        let equality_deletes_to_write = RecordBatch::try_new(equality_delete_schema.clone(), vec![
-            col_y, col_z, col_a, col_s, col_b,
-        ])
+        let equality_deletes_to_write = RecordBatch::try_new(
+            equality_delete_schema.clone(),
+            vec![col_y, col_z, col_a, col_s, col_b],
+        )
         .unwrap();
 
         let path = format!("{}/equality-deletes-1.parquet", &table_location);
