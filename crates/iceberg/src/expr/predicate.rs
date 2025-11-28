@@ -43,14 +43,18 @@ pub struct LogicalExpression<T, const N: usize> {
 
 impl<T: Serialize, const N: usize> Serialize for LogicalExpression<T, N> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         self.inputs.serialize(serializer)
     }
 }
 
 impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for LogicalExpression<T, N> {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let inputs = Vec::<Box<T>>::deserialize(deserializer)?;
         Ok(LogicalExpression::new(
             array_init::from_iter(inputs.into_iter()).ok_or_else(|| {
@@ -84,7 +88,8 @@ impl<T, const N: usize> LogicalExpression<T, N> {
 }
 
 impl<T: Bind, const N: usize> Bind for LogicalExpression<T, N>
-where T::Bound: Sized
+where
+    T::Bound: Sized,
 {
     type Bound = LogicalExpression<T::Bound, N>;
 

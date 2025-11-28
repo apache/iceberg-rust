@@ -106,7 +106,9 @@ pub(super) mod _serde {
 
 impl Serialize for EncryptedKey {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         let serde_key = _serde::EncryptedKeySerde::from(self);
         serde_key.serialize(serializer)
     }
@@ -114,7 +116,9 @@ impl Serialize for EncryptedKey {
 
 impl<'de> Deserialize<'de> for EncryptedKey {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let serde_key = _serde::EncryptedKeySerde::deserialize(deserializer)?;
 
         Self::try_from(serde_key).map_err(serde::de::Error::custom)

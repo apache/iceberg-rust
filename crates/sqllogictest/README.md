@@ -33,3 +33,67 @@ The tests are run against the following sql engines:
 
 * [Apache datafusion](https://crates.io/crates/datafusion)
 * [Apache spark](https://github.com/apache/spark)
+
+## Catalog Configuration
+
+This crate now supports dynamic catalog configuration in test schedules. You can configure different types of catalogs (memory, rest, glue, sql, etc.) and share them across multiple engines.
+
+### Configuration Format
+
+```toml
+# Define catalogs
+[catalogs.memory_catalog]
+type = "memory"
+warehouse = "memory://warehouse"
+
+[catalogs.rest_catalog]
+type = "rest"
+uri = "http://localhost:8181"
+warehouse = "s3://my-bucket/warehouse"
+credential = "client_credentials"
+token = "xxx"
+
+[catalogs.sql_catalog]
+type = "sql"
+uri = "postgresql://user:pass@localhost/iceberg"
+warehouse = "s3://my-bucket/warehouse"
+sql_bind_style = "DollarNumeric"
+
+# Define engines with optional catalog references
+[engines.datafusion1]
+type = "datafusion"
+catalog = "memory_catalog"  # Reference to a catalog
+
+[engines.datafusion2]
+type = "datafusion"
+catalog = "rest_catalog"    # Multiple engines can share the same catalog
+
+[engines.datafusion3]
+type = "datafusion"
+# No catalog specified - uses default MemoryCatalog
+
+# Define test steps
+[[steps]]
+engine = "datafusion1"
+slt = "path/to/test1.slt"
+
+[[steps]]
+engine = "datafusion2"
+slt = "path/to/test2.slt"
+```
+
+### Supported Catalog Types
+
+- `memory`: In-memory catalog for testing
+- `rest`: REST catalog for integration testing
+- `glue`: AWS Glue catalog
+- `sql`: SQL database catalog
+- `hms`: Hive Metastore catalog
+- `s3tables`: S3 Tables catalog
+
+### Key Features
+
+- **Lazy Loading**: Catalogs are created only when first referenced
+- **Sharing**: Multiple engines can share the same catalog instance
+- **Backward Compatibility**: Existing schedules continue to work without modification
+- **Type Safety**: Catalog configurations are validated at parse time

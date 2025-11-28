@@ -646,7 +646,9 @@ impl Catalog for S3TablesCatalog {
 
 /// Format AWS SDK error into iceberg error
 pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_s3tables::error::SdkError<T>) -> Error
-where T: std::fmt::Debug {
+where
+    T: std::fmt::Debug,
+{
     Error::new(
         ErrorKind::Unexpected,
         format!("Operation failed for hitting aws sdk error: {error:?}"),

@@ -1039,14 +1039,18 @@ impl FromStr for Transform {
 
 impl Serialize for Transform {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(format!("{self}").as_str())
     }
 }
 
 impl<'de> Deserialize<'de> for Transform {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
         s.parse().map_err(<D::Error as serde::de::Error>::custom)
     }

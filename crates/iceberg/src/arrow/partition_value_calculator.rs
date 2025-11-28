@@ -206,10 +206,13 @@ mod tests {
             Field::new("name", DataType::Utf8, false),
         ]));
 
-        let batch = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int32Array::from(vec![10, 20, 30])),
-            Arc::new(StringArray::from(vec!["a", "b", "c"])),
-        ])
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
         .unwrap();
 
         // Calculate partition values

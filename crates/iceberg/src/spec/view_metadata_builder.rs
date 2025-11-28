@@ -891,10 +891,10 @@ mod test {
             .unwrap()
             .metadata;
 
-        assert_eq!(metadata_v3.version_log[1..], vec![
-            log_v2.clone(),
-            log_v3.clone()
-        ]);
+        assert_eq!(
+            metadata_v3.version_log[1..],
+            vec![log_v2.clone(), log_v3.clone()]
+        );
 
         // Re-use Version 1, add a new log entry with a new timestamp
         let metadata_v4 = metadata_v3
@@ -930,9 +930,10 @@ mod test {
             .build()
             .unwrap();
         assert_eq!(build_result.metadata.location, location);
-        assert_eq!(build_result.changes, vec![ViewUpdate::SetLocation {
-            location
-        }]);
+        assert_eq!(
+            build_result.changes,
+            vec![ViewUpdate::SetLocation { location }]
+        );
     }
 
     #[test]
@@ -954,14 +955,17 @@ mod test {
             Some(&"value1".to_string())
         );
         assert_eq!(build_result.metadata.properties.get("key2"), None);
-        assert_eq!(build_result.changes, vec![
-            ViewUpdate::SetProperties {
-                updates: properties
-            },
-            ViewUpdate::RemoveProperties {
-                removals: vec!["key2".to_string(), "key3".to_string()]
-            }
-        ]);
+        assert_eq!(
+            build_result.changes,
+            vec![
+                ViewUpdate::SetProperties {
+                    updates: properties
+                },
+                ViewUpdate::RemoveProperties {
+                    removals: vec!["key2".to_string(), "key3".to_string()]
+                }
+            ]
+        );
     }
 
     #[test]
@@ -974,18 +978,24 @@ mod test {
             .unwrap();
         let build_result = builder.clone().add_schema(schema.clone()).build().unwrap();
         assert_eq!(build_result.metadata.schemas.len(), 2);
-        assert_eq!(build_result.changes, vec![ViewUpdate::AddSchema {
-            schema: schema.clone().with_schema_id(2),
-            last_column_id: Some(0)
-        }]);
+        assert_eq!(
+            build_result.changes,
+            vec![ViewUpdate::AddSchema {
+                schema: schema.clone().with_schema_id(2),
+                last_column_id: Some(0)
+            }]
+        );
 
         // Add schema again - id is reused
         let build_result = builder.clone().add_schema(schema.clone()).build().unwrap();
         assert_eq!(build_result.metadata.schemas.len(), 2);
-        assert_eq!(build_result.changes, vec![ViewUpdate::AddSchema {
-            schema: schema.clone().with_schema_id(2),
-            last_column_id: Some(0)
-        }]);
+        assert_eq!(
+            build_result.changes,
+            vec![ViewUpdate::AddSchema {
+                schema: schema.clone().with_schema_id(2),
+                last_column_id: Some(0)
+            }]
+        );
     }
 
     #[test]
@@ -1024,21 +1034,24 @@ mod test {
             v2.clone().with_version_id(3).with_schema_id(2)
         );
         assert_eq!(build_result.changes.len(), 4);
-        assert_eq!(build_result.changes, vec![
-            ViewUpdate::AddViewVersion {
-                view_version: v1.clone().with_version_id(2).with_schema_id(1)
-            },
-            ViewUpdate::AddSchema {
-                schema: v2_schema.clone().with_schema_id(2),
-                last_column_id: Some(0)
-            },
-            ViewUpdate::AddViewVersion {
-                view_version: v2.clone().with_version_id(3).with_schema_id(-1)
-            },
-            ViewUpdate::SetCurrentViewVersion {
-                view_version_id: -1
-            }
-        ]);
+        assert_eq!(
+            build_result.changes,
+            vec![
+                ViewUpdate::AddViewVersion {
+                    view_version: v1.clone().with_version_id(2).with_schema_id(1)
+                },
+                ViewUpdate::AddSchema {
+                    schema: v2_schema.clone().with_schema_id(2),
+                    last_column_id: Some(0)
+                },
+                ViewUpdate::AddViewVersion {
+                    view_version: v2.clone().with_version_id(3).with_schema_id(-1)
+                },
+                ViewUpdate::SetCurrentViewVersion {
+                    view_version_id: -1
+                }
+            ]
+        );
         assert_eq!(
             build_result
                 .metadata
@@ -1083,21 +1096,24 @@ mod test {
             v2.clone().with_version_id(3).with_schema_id(2)
         );
         assert_eq!(build_result.changes.len(), 4);
-        assert_eq!(build_result.changes, vec![
-            ViewUpdate::AddViewVersion {
-                view_version: v1.clone().with_version_id(2).with_schema_id(1)
-            },
-            ViewUpdate::AddSchema {
-                schema: v2_schema.clone().with_schema_id(2),
-                last_column_id: Some(0)
-            },
-            ViewUpdate::AddViewVersion {
-                view_version: v2.clone().with_version_id(3).with_schema_id(-1)
-            },
-            ViewUpdate::SetCurrentViewVersion {
-                view_version_id: -1
-            }
-        ]);
+        assert_eq!(
+            build_result.changes,
+            vec![
+                ViewUpdate::AddViewVersion {
+                    view_version: v1.clone().with_version_id(2).with_schema_id(1)
+                },
+                ViewUpdate::AddSchema {
+                    schema: v2_schema.clone().with_schema_id(2),
+                    last_column_id: Some(0)
+                },
+                ViewUpdate::AddViewVersion {
+                    view_version: v2.clone().with_version_id(3).with_schema_id(-1)
+                },
+                ViewUpdate::SetCurrentViewVersion {
+                    view_version_id: -1
+                }
+            ]
+        );
         assert_eq!(
             build_result
                 .metadata
@@ -1306,14 +1322,17 @@ mod test {
             .changes;
 
         assert_eq!(changes.len(), 2);
-        assert_eq!(changes, vec![
-            ViewUpdate::AddViewVersion {
-                view_version: v1.clone()
-            },
-            ViewUpdate::AddViewVersion {
-                view_version: v2.clone()
-            }
-        ]);
+        assert_eq!(
+            changes,
+            vec![
+                ViewUpdate::AddViewVersion {
+                    view_version: v1.clone()
+                },
+                ViewUpdate::AddViewVersion {
+                    view_version: v2.clone()
+                }
+            ]
+        );
     }
 
     #[test]

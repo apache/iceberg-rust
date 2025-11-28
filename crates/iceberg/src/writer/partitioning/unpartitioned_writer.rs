@@ -171,14 +171,20 @@ mod tests {
         let mut writer = UnpartitionedWriter::new(writer_builder);
 
         // Write two batches
-        let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-        ])?;
-        let batch2 = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-        ])?;
+        let batch1 = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+            ],
+        )?;
 
         writer.write(batch1).await?;
         writer.write(batch2).await?;

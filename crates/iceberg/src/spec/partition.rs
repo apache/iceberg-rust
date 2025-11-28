@@ -1245,15 +1245,18 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(spec, PartitionSpec {
-            spec_id: 1,
-            fields: vec![PartitionField {
-                source_id: 1,
-                field_id: 1000,
-                name: "id_bucket[16]".to_string(),
-                transform: Transform::Bucket(16),
-            }],
-        });
+        assert_eq!(
+            spec,
+            PartitionSpec {
+                spec_id: 1,
+                fields: vec![PartitionField {
+                    source_id: 1,
+                    field_id: 1000,
+                    name: "id_bucket[16]".to_string(),
+                    transform: Transform::Bucket(16),
+                }],
+            }
+        );
         assert_eq!(
             spec.partition_type(&schema).unwrap(),
             StructType::new(vec![
@@ -1447,15 +1450,18 @@ mod tests {
             .unwrap()
             .build();
 
-        assert_eq!(spec, UnboundPartitionSpec {
-            spec_id: Some(1),
-            fields: vec![UnboundPartitionField {
-                source_id: 1,
-                field_id: None,
-                name: "id_bucket[16]".to_string(),
-                transform: Transform::Bucket(16),
-            }]
-        });
+        assert_eq!(
+            spec,
+            UnboundPartitionSpec {
+                spec_id: Some(1),
+                fields: vec![UnboundPartitionField {
+                    source_id: 1,
+                    field_id: None,
+                    name: "id_bucket[16]".to_string(),
+                    transform: Transform::Bucket(16),
+                }]
+            }
+        );
     }
 
     #[test]

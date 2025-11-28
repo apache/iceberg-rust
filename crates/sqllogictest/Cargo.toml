@@ -32,6 +32,7 @@ datafusion-sqllogictest = { workspace = true }
 enum-ordinalize = { workspace = true }
 env_logger = { workspace = true }
 iceberg = { workspace = true }
+iceberg-catalog-loader = { workspace = true }
 iceberg-datafusion = { workspace = true }
 indicatif = { workspace = true }
 log = { workspace = true }

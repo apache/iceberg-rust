@@ -323,7 +323,9 @@ impl UpdateMetrics {
 }
 
 fn set_if_positive<T>(properties: &mut HashMap<String, String>, value: T, property_name: &str)
-where T: PartialOrd + Default + ToString {
+where
+    T: PartialOrd + Default + ToString,
+{
     if value > T::default() {
         properties.insert(property_name.to_string(), value.to_string());
     }

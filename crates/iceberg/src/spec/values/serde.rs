@@ -69,7 +69,9 @@ pub(crate) mod _serde {
 
     impl Serialize for Record {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             let len = self.required.len() + self.optional.len();
             let mut record = serializer.serialize_struct("", len)?;
             for (k, v) in &self.required {
@@ -90,7 +92,9 @@ pub(crate) mod _serde {
 
     impl Serialize for List {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             let mut seq = serializer.serialize_seq(Some(self.list.len()))?;
             for value in &self.list {
                 if self.required {
@@ -115,7 +119,9 @@ pub(crate) mod _serde {
 
     impl Serialize for StringMap {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             let mut map = serializer.serialize_map(Some(self.raw.len()))?;
             for (k, v) in &self.raw {
                 if self.required {
@@ -137,7 +143,9 @@ pub(crate) mod _serde {
 
     impl<'de> Deserialize<'de> for RawLiteralEnum {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: serde::Deserializer<'de> {
+        where
+            D: serde::Deserializer<'de>,
+        {
             struct RawLiteralVisitor;
             impl<'de> Visitor<'de> for RawLiteralVisitor {
                 type Value = RawLiteralEnum;
@@ -147,58 +155,80 @@ pub(crate) mod _serde {
                 }
 
                 fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Boolean(v))
                 }
 
                 fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Int(v))
                 }
 
                 fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Long(v))
                 }
 
                 /// Used in json
                 fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Long(v as i64))
                 }
 
                 fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Float(v))
                 }
 
                 fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Double(v))
                 }
 
                 fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Bytes(ByteBuf::from(v)))
                 }
 
                 fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_unit<E>(self) -> Result<Self::Value, E>
-                where E: serde::de::Error {
+                where
+                    E: serde::de::Error,
+                {
                     Ok(RawLiteralEnum::Null)
                 }
 
                 fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-                where A: serde::de::MapAccess<'de> {
+                where
+                    A: serde::de::MapAccess<'de>,
+                {
                     let mut required = Vec::new();
                     while let Some(key) = map.next_key::<String>()? {
                         let value = map.next_value::<RawLiteralEnum>()?;
@@ -211,7 +241,9 @@ pub(crate) mod _serde {
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                where A: serde::de::SeqAccess<'de> {
+                where
+                    A: serde::de::SeqAccess<'de>,
+                {
                     let mut list = Vec::new();
                     while let Some(value) = seq.next_element::<RawLiteralEnum>()? {
                         list.push(Some(value));
