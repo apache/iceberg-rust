@@ -2801,7 +2801,7 @@ async fn test_incremental_scan_with_no_deletes() {
     // Use concurrency limit of 1 to stress-test the fix with maximum serialization
     let scan = table
         .incremental_scan(Some(from_snapshot), Some(to_snapshot))
-        .with_concurrency_limit_data_files(1)
+        .with_data_file_concurrency_limit(1)
         .build()
         .unwrap();
 
@@ -2821,4 +2821,87 @@ async fn test_incremental_scan_with_no_deletes() {
     // Verify the data we got - just check we have something
     let total_rows: usize = append_batches.iter().map(|b| b.num_rows()).sum();
     assert!(total_rows > 0, "Should have gotten some rows from appends");
+}
+
+#[tokio::test]
+async fn test_incremental_scan_deadlock_with_deletes_and_appends() {
+    // This test is designed to trigger the deadlock where:
+    // - Manifest fetching sends to both data and delete channels (bounded)
+    // - Delete processing must complete before data processing can start (to build filter)
+    // - But with many entries and small channel capacities, manifest fetching blocks
+    // - Data processing can't drain the data channel because it hasn't started yet
+    // - Deadlock!
+
+    // Snapshot 1: Create table with some rows
+    let snapshot1_data: Vec<_> = (1..=100).map(|n| (n, format!("initial-{}", n))).collect();
+
+    // Snapshot 2: Add more rows
+    let snapshot2_data: Vec<_> = (101..=200).map(|n| (n, format!("second-{}", n))).collect();
+
+    // Snapshot 3: Add even more rows
+    let snapshot3_data: Vec<_> = (201..=300).map(|n| (n, format!("third-{}", n))).collect();
+
+    // Snapshot 4: Positional delete of 2 rows from first file
+    let deletes = [(0, "data-1.parquet"), (1, "data-1.parquet")];
+
+    let fixture = IncrementalTestFixture::new(vec![
+        Operation::Add(snapshot1_data, "data-1.parquet".to_string()),
+        Operation::Add(snapshot2_data, "data-2.parquet".to_string()),
+        Operation::Add(snapshot3_data, "data-3.parquet".to_string()),
+        Operation::Delete(
+            deletes
+                .iter()
+                .map(|(pos, file)| (*pos, file.to_string()))
+                .collect(),
+        ),
+    ])
+    .await;
+
+    // Build incremental scan with None for from and to (scan all changes)
+    // Configure with specific concurrency limits to trigger deadlock
+    let scan = fixture
+        .table
+        .incremental_scan(None, None)
+        .with_manifest_file_concurrency_limit(2)
+        .with_data_file_concurrency_limit(1024)
+        .with_manifest_entry_concurrency_limit(256)
+        .with_batch_size(Some(50))
+        .build()
+        .unwrap();
+
+    // Convert to unzipped streams
+    let (append_stream, delete_stream) = scan.to_unzipped_arrow().await.unwrap();
+
+    // Read deletes first (this is important for triggering the deadlock)
+    eprintln!("Starting to read delete stream...");
+    let delete_batches: Vec<_> = delete_stream.try_collect().await.unwrap();
+    eprintln!(
+        "Finished reading delete stream, got {} batches",
+        delete_batches.len()
+    );
+
+    // Then read appends
+    eprintln!("Starting to read append stream...");
+    let append_batches: Vec<_> = append_stream.try_collect().await.unwrap();
+    eprintln!(
+        "Finished reading append stream, got {} batches",
+        append_batches.len()
+    );
+
+    // Verify we got the expected data
+    assert!(delete_batches.is_empty(), "Should not have delete batches");
+    assert!(!append_batches.is_empty(), "Should have append batches");
+
+    // Count total rows
+    let total_delete_rows: usize = delete_batches.iter().map(|b| b.num_rows()).sum();
+    let total_append_rows: usize = append_batches.iter().map(|b| b.num_rows()).sum();
+
+    eprintln!(
+        "Total delete rows: {}, total append rows: {}",
+        total_delete_rows, total_append_rows
+    );
+
+    // We expect 2 deletes and 300 appends
+    assert_eq!(total_delete_rows, 0, "Should have 0 deleted rows");
+    assert_eq!(total_append_rows, 298, "Should have 298 appended rows");
 }

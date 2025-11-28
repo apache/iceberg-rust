@@ -233,6 +233,12 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Set the concurrency limit for reading manifest files.
+    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_files = limit;
+        self
+    }
+
     /// Sets the manifest entry concurrency limit for this scan
     pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_entries = limit;

@@ -209,20 +209,20 @@ impl<'a> IncrementalTableScanBuilder<'a> {
     }
 
     /// Set the concurrency limit for reading data files.
-    pub fn with_concurrency_limit_data_files(mut self, limit: usize) -> Self {
+    pub fn with_data_file_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_data_files = limit;
         self
     }
 
-    /// Set the concurrency limit for reading manifest entries.
-    pub fn with_concurrency_limit_manifest_entries(mut self, limit: usize) -> Self {
-        self.concurrency_limit_manifest_entries = limit;
+    /// Set the concurrency limit for reading manifest files.
+    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_files = limit;
         self
     }
 
-    /// Set the concurrency limit for reading manifest files.
-    pub fn with_concurrency_limit_manifest_files(mut self, limit: usize) -> Self {
-        self.concurrency_limit_manifest_files = limit;
+    /// Set the concurrency limit for reading manifest entries.
+    pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_entries = limit;
         self
     }
 
@@ -489,8 +489,7 @@ impl IncrementalTableScan {
                     .send(Err(error))
                     .await;
             }
-        })
-        .await;
+        });
 
         // TODO: Streaming this into the delete index seems somewhat redundant, as we
         // could directly stream into the CachingDeleteFileLoader and instantly load the

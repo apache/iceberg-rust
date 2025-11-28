@@ -90,11 +90,10 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
             let _ = self
                 .try_for_each_concurrent(reader.concurrency_limit_data_files, |task| {
                     let file_io = reader.file_io.clone();
-                    let appends_tx = appends_tx.clone();
-                    let deletes_tx = deletes_tx.clone();
-                    async move {
-                        match task {
-                            IncrementalFileScanTask::Append(append_task) => {
+                    match task {
+                        IncrementalFileScanTask::Append(append_task) => {
+                            let appends_tx = appends_tx.clone();
+                            Box::pin(async move {
                                 spawn(async move {
                                     let record_batch_stream = process_incremental_append_task(
                                         append_task,
@@ -110,8 +109,13 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     )
                                     .await;
                                 });
-                            }
-                            IncrementalFileScanTask::Delete(deleted_file_task) => {
+                                Ok(())
+                            })
+                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
+                        }
+                        IncrementalFileScanTask::Delete(deleted_file_task) => {
+                            let deletes_tx = deletes_tx.clone();
+                            Box::pin(async move {
                                 spawn(async move {
                                     let file_path = deleted_file_task.data_file_path().to_string();
                                     let total_records =
@@ -130,11 +134,13 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     )
                                     .await;
                                 });
-                            }
-                            IncrementalFileScanTask::PositionalDeletes(
-                                file_path,
-                                delete_vector,
-                            ) => {
+                                Ok(())
+                            })
+                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
+                        }
+                        IncrementalFileScanTask::PositionalDeletes(file_path, delete_vector) => {
+                            let deletes_tx = deletes_tx.clone();
+                            Box::pin(async move {
                                 spawn(async move {
                                     let record_batch_stream = process_incremental_delete_task(
                                         file_path,
@@ -149,9 +155,10 @@ impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
                                     )
                                     .await;
                                 });
-                            }
+                                Ok(())
+                            })
+                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
                         }
-                        Ok(())
                     }
                 })
                 .await;

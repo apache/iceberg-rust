@@ -67,8 +67,13 @@ impl IncrementalPlanContext {
         // Collect all snapshot IDs (all operation types are supported)
         let snapshot_ids: HashSet<i64> = self.snapshots.iter().map(|s| s.snapshot_id()).collect();
 
-        let (manifest_files, filter_fn) = {
-            let mut manifest_files = HashSet::<ManifestFile>::new();
+        // Separate delete and data manifests to ensure deletes are processed first.
+        // This prevents deadlock by ensuring delete processing completes
+        // (and builds the delete filter) before data manifests are fetched.
+        let (delete_manifests, data_manifests, filter_fn) = {
+            let mut delete_manifests = HashSet::<ManifestFile>::new();
+            let mut data_manifests = HashSet::<ManifestFile>::new();
+
             for snapshot in self.snapshots.iter() {
                 let manifest_list = self
                     .object_cache
@@ -78,9 +83,14 @@ impl IncrementalPlanContext {
                     if !snapshot_ids.contains(&entry.added_snapshot_id) {
                         continue;
                     }
-                    manifest_files.insert(entry.clone());
+                    if entry.content == ManifestContentType::Deletes {
+                        delete_manifests.insert(entry.clone());
+                    } else {
+                        data_manifests.insert(entry.clone());
+                    }
                 }
             }
+
             let filter_fn: Option<Arc<ManifestEntryFilterFn>> =
                 Some(Arc::new(move |entry: &ManifestEntryRef| {
                     entry
@@ -89,11 +99,15 @@ impl IncrementalPlanContext {
                         .unwrap_or(true) // Include entries without `snapshot_id`.
                 }));
 
-            (manifest_files, filter_fn)
+            (delete_manifests, data_manifests, filter_fn)
         };
 
         let mut mfcs = vec![];
-        for manifest_file in &manifest_files {
+        // Process delete manifests first, then data manifests
+        for manifest_file in delete_manifests
+            .into_iter()
+            .chain(data_manifests.into_iter())
+        {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
