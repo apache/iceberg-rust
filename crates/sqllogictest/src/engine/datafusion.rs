@@ -116,7 +116,7 @@ impl DataFusionEngine {
             .create_table(
                 namespace,
                 TableCreation::builder()
-                    .name("test_table".to_string())
+                    .name("test_unpartitioned_table".to_string())
                     .schema(schema)
                     .build(),
             )

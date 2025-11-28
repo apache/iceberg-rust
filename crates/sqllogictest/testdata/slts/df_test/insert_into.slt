@@ -17,30 +17,30 @@
 
 # Verify the table is initially empty
 query IT rowsort
-SELECT * FROM default.default.test_table
+SELECT * FROM default.default.test_unpartitioned_table
 ----
 
 # Insert a single row and verify the count
 query I
-INSERT INTO default.default.test_table VALUES (1, 'Alice')
+INSERT INTO default.default.test_unpartitioned_table VALUES (1, 'Alice')
 ----
 1
 
 # Verify the inserted row
 query IT rowsort
-SELECT * FROM default.default.test_table
+SELECT * FROM default.default.test_unpartitioned_table
 ----
 1 Alice
 
 # Insert multiple rows and verify the count
 query I
-INSERT INTO default.default.test_table VALUES (2, 'Bob'), (3, 'Charlie')
+INSERT INTO default.default.test_unpartitioned_table VALUES (2, 'Bob'), (3, 'Charlie')
 ----
 2
 
 # Verify all rows
 query IT rowsort
-SELECT * FROM default.default.test_table
+SELECT * FROM default.default.test_unpartitioned_table
 ----
 1 Alice
 2 Bob
@@ -48,13 +48,13 @@ SELECT * FROM default.default.test_table
 
 # Insert with NULL value and verify the count
 query I
-INSERT INTO default.default.test_table VALUES (4, NULL)
+INSERT INTO default.default.test_unpartitioned_table VALUES (4, NULL)
 ----
 1
 
 # Verify NULL handling
 query IT rowsort
-SELECT * FROM default.default.test_table
+SELECT * FROM default.default.test_unpartitioned_table
 ----
 1 Alice
 2 Bob
