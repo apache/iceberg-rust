@@ -22,9 +22,9 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
-use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 use toml::Table as TomlTable;
@@ -87,9 +87,7 @@ impl DataFusionEngine {
 
         // Create a test namespace for INSERT INTO tests
         let namespace = NamespaceIdent::new("default".to_string());
-        catalog
-            .create_namespace(&namespace, HashMap::new())
-            .await?;
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
 
         // Create test tables
         Self::create_unpartitioned_table(&catalog, &namespace).await?;
@@ -134,8 +132,7 @@ impl DataFusionEngine {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
-                    .into(),
+                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
