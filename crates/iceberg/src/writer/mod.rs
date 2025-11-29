@@ -148,7 +148,7 @@
 //! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
-//!     async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+//!     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
 //!         Ok(LatencyRecordWriter {
 //!             inner_writer: self.inner_writer_builder.build(partition_key).await?,
 //!         })
