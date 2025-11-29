@@ -47,13 +47,13 @@ where
 #[async_trait::async_trait]
 impl<B, L, F> IcebergWriterBuilder for DataFileWriterBuilder<B, L, F>
 where
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
+    B: FileWriterBuilder + Sync,
+    L: LocationGenerator + Sync,
+    F: FileNameGenerator + Sync,
 {
     type R = DataFileWriter<B, L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DataFileWriter {
             inner: Some(self.inner.clone().build()),
             partition_key,

@@ -117,17 +117,17 @@ impl EqualityDeleteWriterConfig {
 #[async_trait::async_trait]
 impl<B, L, F> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B, L, F>
 where
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
+    B: FileWriterBuilder + Sync,
+    L: LocationGenerator + Sync,
+    F: FileNameGenerator + Sync,
 {
     type R = EqualityDeleteFileWriter<B, L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
             inner: Some(self.inner.clone().build()),
-            projector: self.config.projector,
-            equality_ids: self.config.equality_ids,
+            projector: self.config.projector.clone(),
+            equality_ids: self.config.equality_ids.clone(),
             partition_key,
         })
     }
