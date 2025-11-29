@@ -145,7 +145,7 @@
 //! }
 //!
 //! #[async_trait::async_trait]
-//! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
+//! impl<B: IcebergWriterBuilder + Sync> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
 //!     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
