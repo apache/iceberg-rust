@@ -187,7 +187,7 @@ pub(crate) fn update_hive_table_from_table(
         if k == METADATA_LOCATION || k == TABLE_TYPE || k == EXTERNAL {
             continue;
         }
-        params.insert(k.as_str().clone().into(), v.as_str().clone().into());
+        params.insert(FastStr::from_string(k.to_string()), FastStr::from_string(v.to_string()));
     }
 
     params.insert(FastStr::from(EXTERNAL), FastStr::from("TRUE"));
@@ -357,14 +357,14 @@ fn get_current_time() -> Result<i32> {
 }
 
 pub(crate) fn create_lock_request(
-    tbl_name: &String,
-    db_name: &String,
+    db_name: &str,
+    tbl_name: &str,
 ) -> hive_metastore::LockRequest {
     let component = hive_metastore::LockComponent {
         r#type: hive_metastore::LockType::EXCLUSIVE,
         level: hive_metastore::LockLevel::TABLE,
-        dbname: db_name.clone().into(),
-        tablename: Some(tbl_name.clone().into()),
+        dbname: FastStr::from_string(db_name.to_string()),
+        tablename: Some(FastStr::from_string(tbl_name.to_string())),
         partitionname: None,
         operation_type: None,
         is_acid: Some(true),
@@ -374,7 +374,7 @@ pub(crate) fn create_lock_request(
         component: vec![component],
         txnid: None,
         user: FastStr::from(whoami::username()),
-        hostname: FastStr::from(whoami::fallible::hostname()),
+        hostname: FastStr::from(whoami::fallible::hostname().unwrap()),
         agent_info: None,
     }
 }
