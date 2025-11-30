@@ -245,7 +245,7 @@ struct BytesEntry {
 fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32, Datum>, Error> {
     let mut m = HashMap::with_capacity(v.len());
     for entry in v {
-        // We ignore the entry if the field is not found in the schema, due to schema evolution.
+        // Try to find the field in the schema to get proper type information
         if let Some(field) = schema.field_by_id(entry.key) {
             let data_type = field
                 .field_type
@@ -258,6 +258,10 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
                 })?
                 .clone();
             m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
+        } else {
+            // Field is not in current schema (e.g., dropped field due to schema evolution).
+            // Store the statistic as binary data to preserve it even though we don't know its type.
+            m.insert(entry.key, Datum::binary(entry.value.to_vec()));
         }
     }
     Ok(m)
@@ -320,11 +324,11 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
+    use crate::spec::manifest::_serde::{BytesEntry, I64Entry, parse_bytes_entry, parse_i64_entry};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, NestedField,
-        PrimitiveType, Schema, Struct, StructType, Type, read_data_files_from_avro,
-        write_data_files_to_avro,
+        PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType, Type,
+        read_data_files_from_avro, write_data_files_to_avro,
     };
 
     #[test]
@@ -589,5 +593,51 @@ mod tests {
         assert_eq!(data_file.record_count, 500);
         assert_eq!(data_file.file_size_in_bytes, 2048);
         assert_eq!(data_file.partition_spec_id, 0);
+    }
+
+    #[test]
+    fn test_parse_bytes_entry_preserves_dropped_field_statistics() {
+        use serde_bytes::ByteBuf;
+
+        // Create a schema with only field ID 1
+        let schema = Schema::builder()
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "existing_field",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .unwrap();
+
+        // Create entries for field ID 1 (exists in schema) and field ID 2 (dropped from schema)
+        let entries = vec![
+            BytesEntry {
+                key: 1,
+                value: ByteBuf::from(vec![42, 0, 0, 0]), // int value 42 in little-endian
+            },
+            BytesEntry {
+                key: 2,                                 // This field is not in the schema
+                value: ByteBuf::from(vec![1, 2, 3, 4]), // Some arbitrary bytes
+            },
+        ];
+
+        let result = parse_bytes_entry(entries, &schema).unwrap();
+
+        // Both statistics should be preserved
+        assert_eq!(result.len(), 2, "Both statistics should be preserved");
+
+        // Field 1 should be properly deserialized as Int
+        let datum1 = result.get(&1).expect("Field 1 should exist");
+        assert_eq!(datum1.data_type(), &PrimitiveType::Int);
+        assert_eq!(datum1.to_string(), "42");
+
+        // Field 2 should be preserved as Binary since it's not in the schema
+        let datum2 = result.get(&2).expect("Field 2 should be preserved");
+        assert_eq!(datum2.data_type(), &PrimitiveType::Binary);
+        if let PrimitiveLiteral::Binary(bytes) = datum2.literal() {
+            assert_eq!(bytes, &vec![1, 2, 3, 4]);
+        } else {
+            panic!("Field 2 should be stored as Binary");
+        }
     }
 }
