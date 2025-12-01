@@ -31,13 +31,14 @@ use arrow_schema::{
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema_to_arrow_schema;
-use crate::metadata_columns::get_metadata_field;
+use crate::metadata_columns::{get_metadata_field, metadata_field_primitive_type};
 use crate::spec::{
-    Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
+    Datum, Literal, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema as IcebergSchema,
+    Struct, Transform,
 };
 use crate::{Error, ErrorKind, Result};
 
-/// Build a map of field ID to constant value for identity-partitioned fields.
+/// Build a map of field ID to constant value (as Datum) for identity-partitioned fields.
 ///
 /// Implements Iceberg spec "Column Projection" rule #1: use partition metadata constants
 /// only for identity-transformed fields. Non-identity transforms (bucket, truncate, year, etc.)
@@ -54,7 +55,8 @@ use crate::{Error, ErrorKind, Result};
 fn constants_map(
     partition_spec: &PartitionSpec,
     partition_data: &Struct,
-) -> HashMap<i32, PrimitiveLiteral> {
+    schema: &IcebergSchema,
+) -> Result<HashMap<i32, Datum>> {
     let mut constants = HashMap::new();
 
     for (pos, field) in partition_spec.fields().iter().enumerate() {
@@ -62,12 +64,23 @@ fn constants_map(
         if matches!(field.transform, Transform::Identity) {
             // Get the partition value for this field
             if let Some(Literal::Primitive(value)) = &partition_data[pos] {
-                constants.insert(field.source_id, value.clone());
+                // Get the field from schema to extract its type
+                let iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Field {} not found in schema", field.source_id),
+                ))?;
+
+                // Extract the primitive type from the field
+                if let crate::spec::Type::Primitive(prim_type) = &*iceberg_field.field_type {
+                    // Create a Datum from the primitive type and value
+                    let datum = Datum::new(prim_type.clone(), value.clone());
+                    constants.insert(field.source_id, datum);
+                }
             }
         }
     }
 
-    constants
+    Ok(constants)
 }
 
 /// Indicates how a particular column in a processed RecordBatch should
@@ -153,7 +166,7 @@ enum SchemaComparison {
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    constant_fields: HashMap<i32, (DataType, PrimitiveLiteral)>,
+    constant_fields: HashMap<i32, Datum>,
 }
 
 impl RecordBatchTransformerBuilder {
@@ -173,11 +186,34 @@ impl RecordBatchTransformerBuilder {
     ///
     /// # Arguments
     /// * `field_id` - The field ID to associate with the constant
-    /// * `value` - The constant value for this field
-    pub(crate) fn with_constant(mut self, field_id: i32, value: PrimitiveLiteral) -> Result<Self> {
-        let arrow_type = RecordBatchTransformer::primitive_literal_to_arrow_type(&value)?;
-        self.constant_fields.insert(field_id, (arrow_type, value));
-        Ok(self)
+    /// * `datum` - The constant value (with type) for this field
+    pub(crate) fn with_constant(mut self, field_id: i32, datum: Datum) -> Self {
+        self.constant_fields.insert(field_id, datum);
+        self
+    }
+
+    /// Add a reserved/metadata field with a constant string value.
+    /// This is a convenience method for reserved fields like _file that automatically
+    /// handles type extraction from the field definition.
+    ///
+    /// # Arguments
+    /// * `field_id` - The reserved field ID (e.g., RESERVED_FIELD_ID_FILE)
+    /// * `value` - The constant string value for this field
+    ///
+    /// # Returns
+    /// Self for method chaining, or an error if the field is not a valid metadata field
+    pub(crate) fn with_reserved_field(self, field_id: i32, value: String) -> Result<Self> {
+        // Get the Iceberg field definition
+        let iceberg_field = get_metadata_field(field_id)?;
+
+        // Extract the primitive type from the field
+        let prim_type = metadata_field_primitive_type(&iceberg_field)?;
+
+        // Create a Datum with the extracted type and value
+        let datum = Datum::new(prim_type, PrimitiveLiteral::String(value));
+
+        // Add the constant field
+        Ok(self.with_constant(field_id, datum))
     }
 
     /// Set partition spec and data together for identifying identity-transformed partition columns.
@@ -190,13 +226,13 @@ impl RecordBatchTransformerBuilder {
         partition_spec: Arc<PartitionSpec>,
         partition_data: Struct,
     ) -> Result<Self> {
-        // Compute partition constants for identity-transformed fields
-        let partition_constants = constants_map(&partition_spec, &partition_data);
+        // Compute partition constants for identity-transformed fields (already returns Datum)
+        let partition_constants =
+            constants_map(&partition_spec, &partition_data, &self.snapshot_schema)?;
 
-        // Add partition constants to constant_fields (compute REE types from literals)
-        for (field_id, value) in partition_constants {
-            let arrow_type = RecordBatchTransformer::primitive_literal_to_arrow_type(&value)?;
-            self.constant_fields.insert(field_id, (arrow_type, value));
+        // Add partition constants to constant_fields
+        for (field_id, datum) in partition_constants {
+            self.constant_fields.insert(field_id, datum);
         }
 
         Ok(self)
@@ -246,10 +282,10 @@ impl RecordBatchTransformerBuilder {
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    // Pre-computed constant field information: field_id -> (arrow_type, value)
+    // Pre-computed constant field information: field_id -> Datum
     // Includes both virtual/metadata fields (like _file) and identity-partitioned fields
-    // Avoids type conversions during batch processing
-    constant_fields: HashMap<i32, (DataType, PrimitiveLiteral)>,
+    // Datum holds both the Iceberg type and the value
+    constant_fields: HashMap<i32, Datum>,
 
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
@@ -310,7 +346,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
-        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
+        constant_fields: &HashMap<i32, Datum>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -325,19 +361,28 @@ impl RecordBatchTransformer {
                 if constant_fields.contains_key(field_id) {
                     // For metadata/virtual fields (like _file), get name from metadata_columns
                     // For partition fields, get name from schema (they exist in schema)
-                    if let Ok(field) = get_metadata_field(*field_id) {
-                        // This is a metadata/virtual field - use the predefined field
-                        Ok(field)
+                    if let Ok(iceberg_field) = get_metadata_field(*field_id) {
+                        // This is a metadata/virtual field - convert Iceberg field to Arrow
+                        let arrow_type =
+                            Self::datum_to_arrow_type(constant_fields.get(field_id).unwrap());
+                        let arrow_field =
+                            Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
+                                .with_metadata(HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    iceberg_field.id.to_string(),
+                                )]));
+                        Ok(Arc::new(arrow_field))
                     } else {
                         // This is a partition constant field (exists in schema but uses constant value)
                         let field = &field_id_to_mapped_schema_map
                             .get(field_id)
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                             .0;
-                        let (arrow_type, _) = constant_fields.get(field_id).unwrap();
+                        let datum = constant_fields.get(field_id).unwrap();
+                        let arrow_type = Self::datum_to_arrow_type(datum);
                         // Use the type from constant_fields (REE for constants)
                         let constant_field =
-                            Field::new(field.name(), arrow_type.clone(), field.is_nullable())
+                            Field::new(field.name(), arrow_type, field.is_nullable())
                                 .with_metadata(field.metadata().clone());
                         Ok(Arc::new(constant_field))
                     }
@@ -420,7 +465,7 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
-        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
+        constant_fields: &HashMap<i32, Datum>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
@@ -432,10 +477,11 @@ impl RecordBatchTransformer {
                 // Constant fields always use their pre-computed constant values, regardless of whether
                 // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
                 // is authoritative and should be preferred over file data.
-                if let Some((arrow_type, value)) = constant_fields.get(field_id) {
+                if let Some(datum) = constant_fields.get(field_id) {
+                    let arrow_type = Self::datum_to_arrow_type(datum);
                     return Ok(ColumnSource::Add {
-                        value: Some(value.clone()),
-                        target_type: arrow_type.clone(),
+                        value: Some(datum.literal().clone()),
+                        target_type: arrow_type,
                     });
                 }
 
@@ -791,10 +837,10 @@ impl RecordBatchTransformer {
         }
     }
 
-    /// Converts a PrimitiveLiteral to its corresponding Arrow DataType.
-    /// This is used for constant fields to determine the Arrow type.
+    /// Converts a Datum (Iceberg type + primitive literal) to its corresponding Arrow DataType.
+    /// Uses the PrimitiveType from the Datum to determine the correct Arrow type.
     /// For constant values, we use Run-End Encoding for all types to save memory.
-    fn primitive_literal_to_arrow_type(literal: &PrimitiveLiteral) -> Result<DataType> {
+    fn datum_to_arrow_type(datum: &Datum) -> DataType {
         // Helper to create REE type with the given values type
         // Note: values field is nullable as Arrow expects this when building the
         // final Arrow schema with `RunArray::try_new`.
@@ -804,23 +850,27 @@ impl RecordBatchTransformer {
             DataType::RunEndEncoded(run_ends_field, values_field)
         };
 
-        Ok(match literal {
-            PrimitiveLiteral::Boolean(_) => make_ree(DataType::Boolean),
-            PrimitiveLiteral::Int(_) => make_ree(DataType::Int32),
-            PrimitiveLiteral::Long(_) => make_ree(DataType::Int64),
-            PrimitiveLiteral::Float(_) => make_ree(DataType::Float32),
-            PrimitiveLiteral::Double(_) => make_ree(DataType::Float64),
-            PrimitiveLiteral::String(_) => make_ree(DataType::Utf8),
-            PrimitiveLiteral::Binary(_) => make_ree(DataType::Binary),
-            PrimitiveLiteral::Int128(_) => make_ree(DataType::Decimal128(38, 0)),
-            PrimitiveLiteral::UInt128(_) => make_ree(DataType::Decimal128(38, 0)),
-            PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Cannot create arrow type for AboveMax/BelowMin literal",
-                ));
+        // Match on the PrimitiveType from the Datum to determine the Arrow type
+        match datum.data_type() {
+            PrimitiveType::Boolean => make_ree(DataType::Boolean),
+            PrimitiveType::Int => make_ree(DataType::Int32),
+            PrimitiveType::Long => make_ree(DataType::Int64),
+            PrimitiveType::Float => make_ree(DataType::Float32),
+            PrimitiveType::Double => make_ree(DataType::Float64),
+            PrimitiveType::Date => make_ree(DataType::Date32),
+            PrimitiveType::Time => make_ree(DataType::Int64),
+            PrimitiveType::Timestamp => make_ree(DataType::Int64),
+            PrimitiveType::Timestamptz => make_ree(DataType::Int64),
+            PrimitiveType::TimestampNs => make_ree(DataType::Int64),
+            PrimitiveType::TimestamptzNs => make_ree(DataType::Int64),
+            PrimitiveType::String => make_ree(DataType::Utf8),
+            PrimitiveType::Uuid => make_ree(DataType::Binary),
+            PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
+            PrimitiveType::Binary => make_ree(DataType::Binary),
+            PrimitiveType::Decimal { precision, scale } => {
+                make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
             }
-        })
+        }
     }
 }
 

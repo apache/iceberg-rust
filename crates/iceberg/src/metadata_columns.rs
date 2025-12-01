@@ -22,13 +22,11 @@
 //! during reading. Examples include the _file column (file path) and future
 //! columns like partition values or row numbers.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
 use crate::{Error, ErrorKind, Result};
 
 /// Reserved field ID for the file path (_file) column per Iceberg spec
@@ -37,40 +35,52 @@ pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
-/// Lazy-initialized Arrow Field definition for the _file metadata column.
-/// Uses Run-End Encoding for memory efficiency.
-static FILE_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
-    let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-    let values_field = Arc::new(Field::new("values", DataType::Utf8, true));
-    Arc::new(
-        Field::new(
-            RESERVED_COL_NAME_FILE,
-            DataType::RunEndEncoded(run_ends_field, values_field),
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            RESERVED_FIELD_ID_FILE.to_string(),
-        )])),
-    )
+/// Lazy-initialized Iceberg field definition for the _file metadata column.
+/// This field represents the file path as a required string field.
+static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(NestedField::required(
+        RESERVED_FIELD_ID_FILE,
+        RESERVED_COL_NAME_FILE,
+        Type::Primitive(PrimitiveType::String),
+    ))
 });
 
-/// Returns the Arrow Field definition for the _file metadata column.
+/// Returns the Iceberg field definition for the _file metadata column.
 ///
 /// # Returns
-/// A reference to the _file field definition (RunEndEncoded type)
-pub fn file_field() -> &'static Arc<Field> {
+/// A reference to the _file field definition as an Iceberg NestedField
+pub fn file_field() -> &'static NestedFieldRef {
     &FILE_FIELD
 }
 
-/// Returns the Arrow Field definition for a metadata field ID.
+/// Extracts the primitive type from a metadata field.
+///
+/// # Arguments
+/// * `field` - The metadata field
+///
+/// # Returns
+/// The PrimitiveType of the field, or an error if the field is not a primitive type
+pub fn metadata_field_primitive_type(field: &NestedFieldRef) -> Result<PrimitiveType> {
+    field
+        .field_type
+        .as_primitive_type()
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Metadata field '{}' must be a primitive type", field.name),
+            )
+        })
+}
+
+/// Returns the Iceberg field definition for a metadata field ID.
 ///
 /// # Arguments
 /// * `field_id` - The metadata field ID
 ///
 /// # Returns
-/// The Arrow Field definition for the metadata column, or an error if not a metadata field
-pub fn get_metadata_field(field_id: i32) -> Result<Arc<Field>> {
+/// The Iceberg field definition for the metadata column, or an error if not a metadata field
+pub fn get_metadata_field(field_id: i32) -> Result<NestedFieldRef> {
     match field_id {
         RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_field())),
         _ if is_metadata_field(field_id) => {
