@@ -357,7 +357,7 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field (virtual or partition)
+                // Check if this is a constant field
                 if constant_fields.contains_key(field_id) {
                     // For metadata/virtual fields (like _file), get name from metadata_columns
                     // For partition fields, get name from schema (they exist in schema)
