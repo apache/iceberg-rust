@@ -753,9 +753,9 @@ impl Catalog for HmsCatalog {
             let metadata_location = get_metadata_location(&hive_table.parameters)?;
             let env_context = Self::build_environment_context(&metadata_location);
 
-            let (staged_table, new_hive_table) =
-                self.apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
-                    .await?;
+            let (staged_table, new_hive_table) = self
+                .apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
+                .await?;
 
             self.client
                 .0
@@ -781,9 +781,9 @@ impl Catalog for HmsCatalog {
                 .map(from_thrift_exception)
                 .map_err(from_thrift_error)??;
 
-            let (staged_table, new_hive_table) =
-                self.apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
-                    .await?;
+            let (staged_table, new_hive_table) = self
+                .apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
+                .await?;
 
             self.client
                 .0

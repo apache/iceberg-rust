@@ -24,6 +24,7 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{
     HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
@@ -34,7 +35,6 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 use tracing::info;
-use iceberg::transaction::{Transaction, ApplyTransactionAction};
 
 const HMS_CATALOG_PORT: u16 = 9083;
 const MINIO_PORT: u16 = 9000;
@@ -497,13 +497,19 @@ async fn test_update_table_with_optimistic_locking() -> Result<()> {
     let tx = Transaction::new(&table);
     let tx = tx
         .update_table_properties()
-        .set("test_property_optimistic".to_string(), "test_value_optimistic".to_string())
+        .set(
+            "test_property_optimistic".to_string(),
+            "test_value_optimistic".to_string(),
+        )
         .apply(tx)?;
 
     let updated_table = tx.commit(&catalog).await?;
 
     assert_eq!(
-        updated_table.metadata().properties().get("test_property_optimistic"),
+        updated_table
+            .metadata()
+            .properties()
+            .get("test_property_optimistic"),
         Some(&"test_value_optimistic".to_string())
     );
 
@@ -515,7 +521,10 @@ async fn test_update_table_with_optimistic_locking() -> Result<()> {
 
     let reloaded_table = catalog.load_table(table.identifier()).await?;
     assert_eq!(
-        reloaded_table.metadata().properties().get("test_property_optimistic"),
+        reloaded_table
+            .metadata()
+            .properties()
+            .get("test_property_optimistic"),
         Some(&"test_value_optimistic".to_string())
     );
     assert_eq!(

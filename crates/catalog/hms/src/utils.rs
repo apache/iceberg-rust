@@ -181,13 +181,15 @@ pub(crate) fn update_hive_table_from_table(
 
     let metadata_location = tbl.metadata_location_result()?.to_string();
 
-    let mut params: AHashMap<FastStr, FastStr> =
-        new_tbl.parameters.take().unwrap_or_default();
+    let mut params: AHashMap<FastStr, FastStr> = new_tbl.parameters.take().unwrap_or_default();
     for (k, v) in metadata.properties().iter() {
         if k == METADATA_LOCATION || k == TABLE_TYPE || k == EXTERNAL {
             continue;
         }
-        params.insert(FastStr::from_string(k.to_string()), FastStr::from_string(v.to_string()));
+        params.insert(
+            FastStr::from_string(k.to_string()),
+            FastStr::from_string(v.to_string()),
+        );
     }
 
     params.insert(FastStr::from(EXTERNAL), FastStr::from("TRUE"));
@@ -356,10 +358,7 @@ fn get_current_time() -> Result<i32> {
     })
 }
 
-pub(crate) fn create_lock_request(
-    db_name: &str,
-    tbl_name: &str,
-) -> hive_metastore::LockRequest {
+pub(crate) fn create_lock_request(db_name: &str, tbl_name: &str) -> hive_metastore::LockRequest {
     let component = hive_metastore::LockComponent {
         r#type: hive_metastore::LockType::EXCLUSIVE,
         level: hive_metastore::LockLevel::TABLE,
