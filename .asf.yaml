@@ -43,7 +43,9 @@ github:
         dismiss_stale_reviews: false
 
       required_linear_history: true
-  del_branch_on_merge: true
+  pull_requests:
+    # auto-delete head branches after being merged
+    del_branch_on_merge: true
   features:
     wiki: false
     issues: true
