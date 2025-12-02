@@ -35,14 +35,20 @@ pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
+/// Documentation for the _file metadata column
+pub const RESERVED_COL_DOC_FILE: &str = "Path of the file in which a row is stored";
+
 /// Lazy-initialized Iceberg field definition for the _file metadata column.
 /// This field represents the file path as a required string field.
 static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(NestedField::required(
-        RESERVED_FIELD_ID_FILE,
-        RESERVED_COL_NAME_FILE,
-        Type::Primitive(PrimitiveType::String),
-    ))
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_FILE,
+            RESERVED_COL_NAME_FILE,
+            Type::Primitive(PrimitiveType::String),
+        )
+        .with_doc(RESERVED_COL_DOC_FILE),
+    )
 });
 
 /// Returns the Iceberg field definition for the _file metadata column.
@@ -51,26 +57,6 @@ static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
 /// A reference to the _file field definition as an Iceberg NestedField
 pub fn file_field() -> &'static NestedFieldRef {
     &FILE_FIELD
-}
-
-/// Extracts the primitive type from a metadata field.
-///
-/// # Arguments
-/// * `field` - The metadata field
-///
-/// # Returns
-/// The PrimitiveType of the field, or an error if the field is not a primitive type
-pub fn metadata_field_primitive_type(field: &NestedFieldRef) -> Result<PrimitiveType> {
-    field
-        .field_type
-        .as_primitive_type()
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!("Metadata field '{}' must be a primitive type", field.name),
-            )
-        })
 }
 
 /// Returns the Iceberg field definition for a metadata field ID.
