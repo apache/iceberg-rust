@@ -16,12 +16,13 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::Operator;
 use opendal::services::MemoryConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::io::{
@@ -29,12 +30,38 @@ use crate::io::{
 };
 
 /// Memory storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// Uses lazy initialization - the operator is created on first use and then cached.
+/// This allows the storage to be serialized/deserialized while maintaining state.
+/// The operator field is skipped during serialization and recreated on first use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALMemoryStorage {
-    op: Operator,
+    #[serde(skip, default = "default_op")]
+    op: Arc<Mutex<Option<Operator>>>,
+}
+
+fn default_op() -> Arc<Mutex<Option<Operator>>> {
+    Arc::new(Mutex::new(None))
+}
+
+impl Default for OpenDALMemoryStorage {
+    fn default() -> Self {
+        Self {
+            op: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 impl OpenDALMemoryStorage {
+    /// Get or create the memory operator (lazy initialization)
+    fn get_operator(&self) -> Result<Operator> {
+        let mut guard = self.op.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(Operator::from_config(MemoryConfig::default())?.finish());
+        }
+        Ok(guard.as_ref().unwrap().clone())
+    }
+
     /// Extract relative path from memory:// URLs
     fn extract_relative_path<'a>(&self, path: &'a str) -> &'a str {
         if let Some(stripped) = path.strip_prefix("memory:/") {
@@ -46,28 +73,33 @@ impl OpenDALMemoryStorage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALMemoryStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        Ok(self.op.exists(relative_path).await?)
+        Ok(op.exists(relative_path).await?)
     }
 
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        let meta = self.op.stat(relative_path).await?;
+        let meta = op.stat(relative_path).await?;
         Ok(FileMetadata {
             size: meta.content_length(),
         })
     }
 
     async fn read(&self, path: &str) -> Result<Bytes> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        Ok(self.op.read(relative_path).await?.to_bytes())
+        Ok(op.read(relative_path).await?.to_bytes())
     }
 
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        Ok(Box::new(self.op.reader(relative_path).await?))
+        Ok(Box::new(op.reader(relative_path).await?))
     }
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
@@ -77,23 +109,26 @@ impl Storage for OpenDALMemoryStorage {
     }
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        Ok(Box::new(self.op.writer(relative_path).await?))
+        Ok(Box::new(op.writer(relative_path).await?))
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
-        Ok(self.op.delete(relative_path).await?)
+        Ok(op.delete(relative_path).await?)
     }
 
     async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let op = self.get_operator()?;
         let relative_path = self.extract_relative_path(path);
         let path = if relative_path.ends_with('/') {
             relative_path.to_string()
         } else {
             format!("{relative_path}/")
         };
-        Ok(self.op.remove_all(&path).await?)
+        Ok(op.remove_all(&path).await?)
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
@@ -115,7 +150,30 @@ impl StorageFactory for OpenDALMemoryStorageFactory {
         _props: HashMap<String, String>,
         _extensions: Extensions,
     ) -> Result<Arc<dyn Storage>> {
-        let op = Operator::from_config(MemoryConfig::default())?.finish();
-        Ok(Arc::new(OpenDALMemoryStorage { op }))
+        Ok(Arc::new(OpenDALMemoryStorage::default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::Storage;
+
+    #[test]
+    fn test_memory_storage_serialization() {
+        // Create a memory storage instance using the factory
+        let factory = OpenDALMemoryStorageFactory;
+        let storage = factory
+            .build(HashMap::new(), Extensions::default())
+            .unwrap();
+
+        // Serialize the storage
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        // Deserialize the storage
+        let deserialized: Box<dyn Storage> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALMemoryStorage"));
     }
 }

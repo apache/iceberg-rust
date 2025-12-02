@@ -24,6 +24,7 @@ use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::{
@@ -219,12 +220,16 @@ impl AwsCredentialLoad for CustomAwsCredentialLoader {
 }
 
 /// S3 storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// Stores configuration and creates operators on-demand.
+/// The `customized_credential_load` field is not serialized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALS3Storage {
     /// s3 storage could have `s3://` and `s3a://`.
     /// Storing the scheme string here to return the correct path.
     configured_scheme: String,
     config: Arc<S3Config>,
+    #[serde(skip)]
     customized_credential_load: Option<CustomAwsCredentialLoader>,
 }
 
@@ -261,6 +266,7 @@ impl OpenDALS3Storage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALS3Storage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(path)?;
@@ -350,5 +356,31 @@ impl StorageFactory for OpenDALS3StorageFactory {
             config: Arc::new(config),
             customized_credential_load,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::{STORAGE_LOCATION_SCHEME, Storage};
+
+    #[test]
+    fn test_s3_storage_serialization() {
+        // Create an S3 storage instance using the factory
+        let factory = OpenDALS3StorageFactory;
+        let mut props = HashMap::new();
+        props.insert(S3_REGION.to_string(), "us-east-1".to_string());
+        props.insert(STORAGE_LOCATION_SCHEME.to_string(), "s3".to_string());
+
+        let storage = factory.build(props, Extensions::default()).unwrap();
+
+        // Serialize the storage
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        // Deserialize the storage
+        let deserialized: Box<dyn Storage> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALS3Storage"));
     }
 }

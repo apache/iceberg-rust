@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::Operator;
 use opendal::services::GcsConfig;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::{
@@ -112,7 +113,9 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
 }
 
 /// GCS storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// Stores configuration and creates operators on-demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALGcsStorage {
     config: Arc<GcsConfig>,
 }
@@ -136,6 +139,7 @@ impl OpenDALGcsStorage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALGcsStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(path)?;

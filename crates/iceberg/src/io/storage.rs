@@ -36,6 +36,9 @@ use crate::Result;
 /// This trait defines the interface for all storage backends. Implementations
 /// provide access to different storage systems like S3, GCS, Azure, local filesystem, etc.
 ///
+/// The trait supports serialization via `typetag`, allowing storage instances to be
+/// serialized and deserialized across process boundaries.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -51,6 +54,7 @@ use crate::Result;
 /// }
 /// ```
 #[async_trait]
+#[typetag::serde(tag = "type")]
 pub trait Storage: Debug + Send + Sync {
     /// Check if a file exists at the given path
     async fn exists(&self, path: &str) -> Result<bool>;

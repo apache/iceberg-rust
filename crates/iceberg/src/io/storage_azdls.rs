@@ -132,7 +132,7 @@ pub(crate) fn azdls_create_operator<'a>(
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum AzureStorageScheme {
     Abfs,
     Abfss,
@@ -606,7 +606,9 @@ mod tests {
 }
 
 /// Azure Data Lake Storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// Stores configuration and creates operators on-demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALAzdlsStorage {
     /// Because Azdls accepts multiple possible schemes, we store the full
     /// passed scheme here to later validate schemes passed via paths.
@@ -625,6 +627,7 @@ impl OpenDALAzdlsStorage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALAzdlsStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(path)?;

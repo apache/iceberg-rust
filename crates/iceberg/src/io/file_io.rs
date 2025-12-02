@@ -523,6 +523,7 @@ mod tests {
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
@@ -533,10 +534,15 @@ mod tests {
     use crate::{Error, ErrorKind, Result};
 
     // Test storage implementation that tracks write operations
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestStorage {
+        #[serde(skip, default = "default_written")]
         written: Arc<Mutex<Vec<String>>>,
         received_props: HashMap<String, String>,
+    }
+
+    fn default_written() -> Arc<Mutex<Vec<String>>> {
+        Arc::new(Mutex::new(Vec::new()))
     }
 
     #[allow(dead_code)]
@@ -551,6 +557,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[typetag::serde]
     impl Storage for TestStorage {
         async fn exists(&self, _path: &str) -> Result<bool> {
             Ok(true)

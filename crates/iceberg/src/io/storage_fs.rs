@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::Operator;
 use opendal::services::FsConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::io::{
@@ -37,7 +38,9 @@ pub(crate) fn fs_config_build() -> Result<Operator> {
 }
 
 /// Filesystem storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// This storage is stateless and creates operators on-demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALFsStorage;
 
 impl OpenDALFsStorage {
@@ -52,6 +55,7 @@ impl OpenDALFsStorage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALFsStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let relative_path = self.extract_relative_path(path);
@@ -129,5 +133,29 @@ impl StorageFactory for OpenDALFsStorageFactory {
         _extensions: Extensions,
     ) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDALFsStorage))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::Storage;
+
+    #[test]
+    fn test_fs_storage_serialization() {
+        // Create a filesystem storage instance using the factory
+        let factory = OpenDALFsStorageFactory;
+        let storage = factory
+            .build(HashMap::new(), Extensions::default())
+            .unwrap();
+
+        // Serialize the storage
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        // Deserialize the storage
+        let deserialized: Box<dyn Storage> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALFsStorage"));
     }
 }

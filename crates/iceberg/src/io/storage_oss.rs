@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::{
@@ -72,7 +73,9 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
 }
 
 /// OSS storage implementation using OpenDAL
-#[derive(Debug, Clone)]
+///
+/// Stores configuration and creates operators on-demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenDALOssStorage {
     config: Arc<OssConfig>,
 }
@@ -96,6 +99,7 @@ impl OpenDALOssStorage {
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDALOssStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(path)?;
