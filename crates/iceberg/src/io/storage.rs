@@ -77,8 +77,8 @@ pub trait Storage: Debug + Send + Sync {
     /// Delete a file at the given path
     async fn delete(&self, path: &str) -> Result<()>;
 
-    /// Remove a directory and all its contents recursively
-    async fn remove_dir_all(&self, path: &str) -> Result<()>;
+    /// Delete all files with the given prefix
+    async fn delete_prefix(&self, path: &str) -> Result<()>;
 
     /// Create a new input file for reading
     fn new_input(&self, path: &str) -> Result<InputFile>;

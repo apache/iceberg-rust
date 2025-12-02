@@ -140,7 +140,7 @@ impl Storage for OpenDALOssStorage {
         Ok(op.delete(relative_path).await?)
     }
 
-    async fn remove_dir_all(&self, path: &str) -> Result<()> {
+    async fn delete_prefix(&self, path: &str) -> Result<()> {
         let (op, relative_path) = self.create_operator(path)?;
         let path = if relative_path.ends_with('/') {
             relative_path.to_string()
