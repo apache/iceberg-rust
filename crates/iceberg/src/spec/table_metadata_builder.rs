@@ -572,7 +572,6 @@ impl TableMetadataBuilder {
     pub fn remove_ref(mut self, ref_name: &str) -> Self {
         if ref_name == MAIN_BRANCH {
             self.metadata.current_snapshot_id = None;
-            self.metadata.snapshot_log.clear();
         }
 
         if self.metadata.refs.remove(ref_name).is_some() || ref_name == MAIN_BRANCH {
