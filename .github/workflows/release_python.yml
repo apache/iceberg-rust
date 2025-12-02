@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -128,7 +128,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -185,7 +185,7 @@ jobs:
           path: bindings/python/dist
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
         with:
           skip-existing: true
           packages-dir: bindings/python/dist
+          verbose: true

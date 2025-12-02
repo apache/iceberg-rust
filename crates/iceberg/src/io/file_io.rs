@@ -98,17 +98,6 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
-    #[deprecated(note = "use remove_dir_all instead", since = "0.4.0")]
-    pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.remove_all(relative_path).await?)
-    }
-
-    /// Remove the path and all nested dirs and files recursively.
-    ///
-    /// # Arguments
-    ///
-    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     ///
     /// # Behavior
     ///
@@ -292,7 +281,6 @@ pub struct FileMetadata {
 /// Trait for reading file.
 ///
 /// # TODO
-///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 #[async_trait::async_trait]

@@ -15,16 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod commit;
-pub(crate) mod expr_to_predicate;
-pub(crate) mod metadata_scan;
-pub(crate) mod project;
-pub(crate) mod repartition;
-pub(crate) mod scan;
-pub(crate) mod sort;
-pub(crate) mod write;
+//! This module contains Iceberg value types
 
-pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
+pub(crate) mod datum;
+mod literal;
+mod map;
+mod primitive;
+pub(crate) mod serde;
+mod struct_value;
+mod temporal;
 
-pub use project::project_with_partition;
-pub use scan::IcebergTableScan;
+#[cfg(test)]
+mod tests;
+
+// Re-export all public types
+pub use datum::Datum;
+pub use literal::Literal;
+pub use map::Map;
+pub use primitive::PrimitiveLiteral;
+pub(crate) use serde::_serde::RawLiteral;
+pub use struct_value::Struct;

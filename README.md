@@ -97,6 +97,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 - [Lakekeeper](https://github.com/lakekeeper/lakekeeper/): An Apache-licensed Iceberg REST Catalog with data access controls.
 - [Moonlink](https://github.com/Mooncake-Labs/moonlink): A Rust library that enables sub-second mirroring (CDC) of Postgres tables into Iceberg.
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
+- [Wrappers](https://github.com/supabase/wrappers): Postgres Foreign Data Wrapper development framework in Rust.
 
 ## License
 
