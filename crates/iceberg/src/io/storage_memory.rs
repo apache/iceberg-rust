@@ -25,7 +25,7 @@ use opendal::services::MemoryConfig;
 
 use crate::Result;
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageFactory,
 };
 
 /// Memory storage implementation using OpenDAL
@@ -105,11 +105,11 @@ impl Storage for OpenDALMemoryStorage {
     }
 }
 
-/// Builder for OpenDAL Memory storage
+/// Factory for OpenDAL Memory storage
 #[derive(Debug)]
-pub struct OpenDALMemoryStorageBuilder;
+pub struct OpenDALMemoryStorageFactory;
 
-impl StorageBuilder for OpenDALMemoryStorageBuilder {
+impl StorageFactory for OpenDALMemoryStorageFactory {
     fn build(
         &self,
         _props: HashMap<String, String>,

@@ -70,7 +70,7 @@ mod file_io;
 mod storage;
 
 pub use file_io::*;
-pub use storage::{Storage, StorageBuilder, StorageBuilderRegistry};
+pub use storage::{Storage, StorageFactory, StorageRegistry};
 pub(crate) mod object_cache;
 
 /// Property key used to pass the scheme string from FileIOBuilder to StorageBuilder.

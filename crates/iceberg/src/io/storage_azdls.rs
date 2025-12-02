@@ -28,7 +28,7 @@ use url::Url;
 
 use crate::io::{
     Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
-    Storage, StorageBuilder,
+    Storage, StorageFactory,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -684,11 +684,11 @@ impl Storage for OpenDALAzdlsStorage {
     }
 }
 
-/// Builder for Azure Data Lake Storage
+/// Factory for Azure Data Lake Storage
 #[derive(Debug)]
-pub struct OpenDALAzdlsStorageBuilder;
+pub struct OpenDALAzdlsStorageFactory;
 
-impl StorageBuilder for OpenDALAzdlsStorageBuilder {
+impl StorageFactory for OpenDALAzdlsStorageFactory {
     fn build(
         &self,
         props: HashMap<String, String>,

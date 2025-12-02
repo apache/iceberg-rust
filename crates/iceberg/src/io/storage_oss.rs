@@ -25,7 +25,7 @@ use opendal::{Configurator, Operator};
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -155,11 +155,11 @@ impl Storage for OpenDALOssStorage {
     }
 }
 
-/// Builder for OpenDAL OSS storage
+/// Factory for OpenDAL OSS storage
 #[derive(Debug)]
-pub struct OpenDALOssStorageBuilder;
+pub struct OpenDALOssStorageFactory;
 
-impl StorageBuilder for OpenDALOssStorageBuilder {
+impl StorageFactory for OpenDALOssStorageFactory {
     fn build(
         &self,
         props: HashMap<String, String>,

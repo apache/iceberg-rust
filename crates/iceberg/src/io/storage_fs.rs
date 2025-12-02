@@ -25,7 +25,7 @@ use opendal::services::FsConfig;
 
 use crate::Result;
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageFactory,
 };
 
 /// Build new opendal operator from give path.
@@ -118,11 +118,11 @@ impl Storage for OpenDALFsStorage {
     }
 }
 
-/// Builder for OpenDAL Filesystem storage
+/// Factory for OpenDAL Filesystem storage
 #[derive(Debug)]
-pub struct OpenDALFsStorageBuilder;
+pub struct OpenDALFsStorageFactory;
 
-impl StorageBuilder for OpenDALFsStorageBuilder {
+impl StorageFactory for OpenDALFsStorageFactory {
     fn build(
         &self,
         _props: HashMap<String, String>,

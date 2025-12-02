@@ -83,21 +83,21 @@ pub trait Storage: Debug + Send + Sync {
     fn new_output(&self, path: &str) -> Result<OutputFile>;
 }
 
-/// Common interface for all storage builders.
+/// Common interface for all storage factories.
 ///
-/// Storage builders are responsible for creating storage instances from configuration
+/// Storage factories are responsible for creating storage instances from configuration
 /// properties and extensions. Each storage backend (S3, GCS, etc.) provides its own
-/// builder implementation.
+/// factory implementation.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use iceberg::io::{StorageBuilder, Extensions};
+/// use iceberg::io::{StorageFactory, Extensions};
 /// use std::collections::HashMap;
 ///
-/// struct MyStorageBuilder;
+/// struct MyStorageFactory;
 ///
-/// impl StorageBuilder for MyStorageBuilder {
+/// impl StorageFactory for MyStorageFactory {
 ///     fn build(
 ///         &self,
 ///         props: HashMap<String, String>,
@@ -108,7 +108,7 @@ pub trait Storage: Debug + Send + Sync {
 ///     }
 /// }
 /// ```
-pub trait StorageBuilder: Debug + Send + Sync {
+pub trait StorageFactory: Debug + Send + Sync {
     /// Create a new storage instance with the given properties and extensions.
     ///
     /// # Arguments
@@ -126,114 +126,114 @@ pub trait StorageBuilder: Debug + Send + Sync {
     ) -> Result<Arc<dyn Storage>>;
 }
 
-/// A registry of storage builders.
+/// A registry of storage factories.
 ///
-/// The registry allows you to register custom storage builders for different URI schemes.
-/// By default, it includes builders for all enabled storage features.
+/// The registry allows you to register custom storage factories for different URI schemes.
+/// By default, it includes factories for all enabled storage features.
 ///
 /// # Example
 ///
 /// ```rust
-/// use iceberg::io::StorageBuilderRegistry;
+/// use iceberg::io::StorageRegistry;
 ///
-/// // Create a new registry with default builders
-/// let registry = StorageBuilderRegistry::new();
+/// // Create a new registry with default factories
+/// let registry = StorageRegistry::new();
 ///
 /// // Get supported storage types
 /// let types = registry.supported_types();
 /// println!("Supported storage types: {:?}", types);
 ///
-/// // Get a builder for a specific scheme
+/// // Get a factory for a specific scheme
 /// # #[cfg(feature = "storage-memory")]
 /// # {
-/// let builder = registry.get_builder("memory").unwrap();
+/// let factory = registry.get_factory("memory").unwrap();
 /// # }
 /// ```
 ///
-/// You can also register custom storage builders:
+/// You can also register custom storage factories:
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
-/// use iceberg::io::{StorageBuilderRegistry, StorageBuilder};
+/// use iceberg::io::{StorageRegistry, StorageFactory};
 ///
-/// let mut registry = StorageBuilderRegistry::new();
+/// let mut registry = StorageRegistry::new();
 ///
-/// // Register a custom storage builder
-/// registry.register("custom", Arc::new(MyCustomStorageBuilder));
+/// // Register a custom storage factory
+/// registry.register("custom", Arc::new(MyCustomStorageFactory));
 /// ```
 #[derive(Debug, Clone)]
-pub struct StorageBuilderRegistry {
-    builders: HashMap<String, Arc<dyn StorageBuilder>>,
+pub struct StorageRegistry {
+    factories: HashMap<String, Arc<dyn StorageFactory>>,
 }
 
-impl StorageBuilderRegistry {
-    /// Create a new storage registry with default builders based on enabled features.
+impl StorageRegistry {
+    /// Create a new storage registry with default factories based on enabled features.
     pub fn new() -> Self {
-        let mut builders: HashMap<String, Arc<dyn StorageBuilder>> = HashMap::new();
+        let mut factories: HashMap<String, Arc<dyn StorageFactory>> = HashMap::new();
 
         #[cfg(feature = "storage-memory")]
         {
-            use crate::io::storage_memory::OpenDALMemoryStorageBuilder;
-            let builder = Arc::new(OpenDALMemoryStorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("memory".to_string(), builder);
+            use crate::io::storage_memory::OpenDALMemoryStorageFactory;
+            let factory = Arc::new(OpenDALMemoryStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("memory".to_string(), factory);
         }
 
         #[cfg(feature = "storage-fs")]
         {
-            use crate::io::storage_fs::OpenDALFsStorageBuilder;
-            let builder = Arc::new(OpenDALFsStorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("file".to_string(), builder.clone());
-            builders.insert("".to_string(), builder);
+            use crate::io::storage_fs::OpenDALFsStorageFactory;
+            let factory = Arc::new(OpenDALFsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("file".to_string(), factory.clone());
+            factories.insert("".to_string(), factory);
         }
 
         #[cfg(feature = "storage-s3")]
         {
-            use crate::io::storage_s3::OpenDALS3StorageBuilder;
-            let builder = Arc::new(OpenDALS3StorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("s3".to_string(), builder.clone());
-            builders.insert("s3a".to_string(), builder);
+            use crate::io::storage_s3::OpenDALS3StorageFactory;
+            let factory = Arc::new(OpenDALS3StorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("s3".to_string(), factory.clone());
+            factories.insert("s3a".to_string(), factory);
         }
 
         #[cfg(feature = "storage-gcs")]
         {
-            use crate::io::storage_gcs::OpenDALGcsStorageBuilder;
-            let builder = Arc::new(OpenDALGcsStorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("gs".to_string(), builder.clone());
-            builders.insert("gcs".to_string(), builder);
+            use crate::io::storage_gcs::OpenDALGcsStorageFactory;
+            let factory = Arc::new(OpenDALGcsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("gs".to_string(), factory.clone());
+            factories.insert("gcs".to_string(), factory);
         }
 
         #[cfg(feature = "storage-oss")]
         {
-            use crate::io::storage_oss::OpenDALOssStorageBuilder;
-            let builder = Arc::new(OpenDALOssStorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("oss".to_string(), builder);
+            use crate::io::storage_oss::OpenDALOssStorageFactory;
+            let factory = Arc::new(OpenDALOssStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("oss".to_string(), factory);
         }
 
         #[cfg(feature = "storage-azdls")]
         {
-            use crate::io::storage_azdls::OpenDALAzdlsStorageBuilder;
-            let builder = Arc::new(OpenDALAzdlsStorageBuilder) as Arc<dyn StorageBuilder>;
-            builders.insert("abfs".to_string(), builder.clone());
-            builders.insert("abfss".to_string(), builder.clone());
-            builders.insert("wasb".to_string(), builder.clone());
-            builders.insert("wasbs".to_string(), builder);
+            use crate::io::storage_azdls::OpenDALAzdlsStorageFactory;
+            let factory = Arc::new(OpenDALAzdlsStorageFactory) as Arc<dyn StorageFactory>;
+            factories.insert("abfs".to_string(), factory.clone());
+            factories.insert("abfss".to_string(), factory.clone());
+            factories.insert("wasb".to_string(), factory.clone());
+            factories.insert("wasbs".to_string(), factory);
         }
 
-        Self { builders }
+        Self { factories }
     }
 
-    /// Register a custom storage builder for a given scheme.
-    pub fn register(&mut self, scheme: impl Into<String>, builder: Arc<dyn StorageBuilder>) {
-        self.builders.insert(scheme.into(), builder);
+    /// Register a custom storage factory for a given scheme.
+    pub fn register(&mut self, scheme: impl Into<String>, factory: Arc<dyn StorageFactory>) {
+        self.factories.insert(scheme.into(), factory);
     }
 
-    /// Get a storage builder by scheme.
-    pub fn get_builder(&self, scheme: &str) -> Result<Arc<dyn StorageBuilder>> {
+    /// Get a storage factory by scheme.
+    pub fn get_factory(&self, scheme: &str) -> Result<Arc<dyn StorageFactory>> {
         let key = scheme.trim();
-        self.builders
+        self.factories
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, builder)| builder.clone())
+            .map(|(_, factory)| factory.clone())
             .ok_or_else(|| {
                 use crate::{Error, ErrorKind};
                 Error::new(
@@ -249,11 +249,11 @@ impl StorageBuilderRegistry {
 
     /// Return the list of supported storage types.
     pub fn supported_types(&self) -> Vec<String> {
-        self.builders.keys().cloned().collect()
+        self.factories.keys().cloned().collect()
     }
 }
 
-impl Default for StorageBuilderRegistry {
+impl Default for StorageRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -264,8 +264,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_storage_builder_registry_new() {
-        let registry = StorageBuilderRegistry::new();
+    fn test_storage_registry_new() {
+        let registry = StorageRegistry::new();
         let types = registry.supported_types();
 
         // At least one storage type should be available
@@ -274,34 +274,34 @@ mod tests {
 
     #[test]
     #[cfg(feature = "storage-memory")]
-    fn test_storage_builder_registry_get_builder() {
-        let registry = StorageBuilderRegistry::new();
+    fn test_storage_registry_get_factory() {
+        let registry = StorageRegistry::new();
 
-        // Should be able to get memory storage builder
-        let builder = registry.get_builder("memory");
-        assert!(builder.is_ok());
+        // Should be able to get memory storage factory
+        let factory = registry.get_factory("memory");
+        assert!(factory.is_ok());
 
         // Should be case-insensitive
-        let builder = registry.get_builder("MEMORY");
-        assert!(builder.is_ok());
+        let factory = registry.get_factory("MEMORY");
+        assert!(factory.is_ok());
     }
 
     #[test]
-    fn test_storage_builder_registry_unsupported_type() {
-        let registry = StorageBuilderRegistry::new();
+    fn test_storage_registry_unsupported_type() {
+        let registry = StorageRegistry::new();
 
         // Should return error for unsupported type
-        let result = registry.get_builder("unsupported");
+        let result = registry.get_factory("unsupported");
         assert!(result.is_err());
     }
 
     #[test]
     #[cfg(feature = "storage-memory")]
-    fn test_storage_builder_registry_clone() {
-        let registry = StorageBuilderRegistry::new();
+    fn test_storage_registry_clone() {
+        let registry = StorageRegistry::new();
         let cloned = registry.clone();
 
-        // Both should have the same builders
+        // Both should have the same factories
         assert_eq!(
             registry.supported_types().len(),
             cloned.supported_types().len()

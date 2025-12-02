@@ -26,7 +26,7 @@ use bytes::Bytes;
 use url::Url;
 
 // Re-export traits from storage module
-pub use super::storage::{Storage, StorageBuilder, StorageBuilderRegistry};
+pub use super::storage::{Storage, StorageFactory, StorageRegistry};
 use crate::io::STORAGE_LOCATION_SCHEME;
 use crate::{Error, ErrorKind, Result};
 
@@ -168,18 +168,18 @@ impl Extensions {
 /// # Custom Storage Implementations
 ///
 /// You can use custom storage implementations by creating a custom
-/// [`StorageBuilderRegistry`] and registering your storage builder:
+/// [`StorageRegistry`] and registering your storage factory:
 ///
 /// ```rust,ignore
-/// use iceberg::io::{StorageBuilderRegistry, StorageBuilder, FileIOBuilder};
+/// use iceberg::io::{StorageRegistry, StorageFactory, FileIOBuilder};
 /// use std::sync::Arc;
 ///
-/// // Create your custom storage builder
-/// let my_builder = Arc::new(MyCustomStorageBuilder);
+/// // Create your custom storage factory
+/// let my_factory = Arc::new(MyCustomStorageFactory);
 ///
 /// // Register it with a custom scheme
-/// let mut registry = StorageBuilderRegistry::new();
-/// registry.register("mycustom", my_builder);
+/// let mut registry = StorageRegistry::new();
+/// registry.register("mycustom", my_factory);
 ///
 /// // Use it to build FileIO
 /// let file_io = FileIOBuilder::new("mycustom")
@@ -198,7 +198,7 @@ pub struct FileIOBuilder {
     /// Optional extensions to configure the underlying FileIO behavior.
     extensions: Extensions,
     /// Optional custom registry. If None, a default registry will be created.
-    registry: Option<StorageBuilderRegistry>,
+    registry: Option<StorageRegistry>,
 }
 
 impl FileIOBuilder {
@@ -232,7 +232,7 @@ impl FileIOBuilder {
         String,
         HashMap<String, String>,
         Extensions,
-        Option<StorageBuilderRegistry>,
+        Option<StorageRegistry>,
     ) {
         (
             self.scheme_str.unwrap_or_default(),
@@ -276,7 +276,7 @@ impl FileIOBuilder {
         self.extensions.get::<T>()
     }
 
-    /// Sets a custom storage builder registry.
+    /// Sets a custom storage registry.
     ///
     /// This allows you to register custom storage implementations that can be used
     /// when building the FileIO. If not set, a default registry with built-in
@@ -285,17 +285,17 @@ impl FileIOBuilder {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use iceberg::io::{StorageBuilderRegistry, FileIOBuilder};
+    /// use iceberg::io::{StorageRegistry, FileIOBuilder};
     /// use std::sync::Arc;
     ///
-    /// let mut registry = StorageBuilderRegistry::new();
-    /// registry.register("mycustom", Arc::new(MyCustomStorageBuilder));
+    /// let mut registry = StorageRegistry::new();
+    /// registry.register("mycustom", Arc::new(MyCustomStorageFactory));
     ///
     /// let file_io = FileIOBuilder::new("mycustom")
     ///     .with_registry(registry)
     ///     .build()?;
     /// ```
-    pub fn with_registry(mut self, registry: StorageBuilderRegistry) -> Self {
+    pub fn with_registry(mut self, registry: StorageRegistry) -> Self {
         self.registry = Some(registry);
         self
     }
@@ -308,13 +308,13 @@ impl FileIOBuilder {
         // Use custom registry if provided, otherwise create default
         let registry = self.registry.clone().unwrap_or_default();
 
-        let builder = registry.get_builder(scheme.as_str())?;
+        let factory = registry.get_factory(scheme.as_str())?;
 
         let mut props_with_scheme = self.props.clone();
         props_with_scheme.insert(STORAGE_LOCATION_SCHEME.to_string(), scheme);
 
         // Build storage with props and extensions
-        let storage = builder.build(props_with_scheme, self.extensions.clone())?;
+        let storage = factory.build(props_with_scheme, self.extensions.clone())?;
 
         Ok(FileIO {
             builder: self,
@@ -528,7 +528,7 @@ mod tests {
     use super::{FileIO, FileIOBuilder};
     use crate::io::{
         Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile,
-        STORAGE_LOCATION_SCHEME, Storage, StorageBuilder, StorageBuilderRegistry,
+        STORAGE_LOCATION_SCHEME, Storage, StorageFactory, StorageRegistry,
     };
     use crate::{Error, ErrorKind, Result};
 
@@ -600,14 +600,14 @@ mod tests {
         }
     }
 
-    // Test storage builder
+    // Test storage factory
     #[derive(Debug)]
-    struct TestStorageBuilder {
+    struct TestStorageFactory {
         written: Arc<Mutex<Vec<String>>>,
         received_props: Arc<Mutex<HashMap<String, String>>>,
     }
 
-    impl TestStorageBuilder {
+    impl TestStorageFactory {
         pub fn written(&self) -> MutexGuard<'_, Vec<String>> {
             self.written.lock().unwrap()
         }
@@ -617,7 +617,7 @@ mod tests {
         }
     }
 
-    impl StorageBuilder for TestStorageBuilder {
+    impl StorageFactory for TestStorageFactory {
         fn build(
             &self,
             props: HashMap<String, String>,
@@ -777,13 +777,13 @@ mod tests {
     #[test]
     fn test_custom_registry() {
         // Create a custom registry and register test storage
-        let builder = Arc::new(TestStorageBuilder {
+        let factory = Arc::new(TestStorageFactory {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let mut registry = StorageBuilderRegistry::new();
-        registry.register("test", builder.clone());
+        let mut registry = StorageRegistry::new();
+        registry.register("test", factory.clone());
 
         // Build FileIO with custom storage
         let file_io = FileIOBuilder::new("test")
@@ -799,13 +799,13 @@ mod tests {
     #[tokio::test]
     async fn test_custom_registry_operations() {
         // Create test storage with write tracking
-        let builder = Arc::new(TestStorageBuilder {
+        let factory = Arc::new(TestStorageFactory {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let mut registry = StorageBuilderRegistry::new();
-        registry.register("test", builder.clone());
+        let mut registry = StorageRegistry::new();
+        registry.register("test", factory.clone());
 
         // Build FileIO with test storage
         let file_io = FileIOBuilder::new("test")
@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(metadata.size, 42);
 
         // Verify write was tracked
-        let tracked = builder.written();
+        let tracked = factory.written();
         assert_eq!(tracked.len(), 1);
         assert_eq!(tracked[0], "test://bucket/file.txt");
     }
@@ -833,13 +833,13 @@ mod tests {
     #[test]
     fn test_scheme_and_props_propagation() {
         // Create test storage that captures props
-        let builder = Arc::new(TestStorageBuilder {
+        let factory = Arc::new(TestStorageFactory {
             written: Arc::new(Mutex::new(Vec::new())),
             received_props: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let mut registry = StorageBuilderRegistry::new();
-        registry.register("myscheme", builder.clone());
+        let mut registry = StorageRegistry::new();
+        registry.register("myscheme", factory.clone());
 
         // Build FileIO with custom scheme and additional props
         let file_io = FileIOBuilder::new("myscheme")
@@ -851,8 +851,8 @@ mod tests {
         // Verify the storage was created
         assert!(file_io.new_output("myscheme://test.txt").is_ok());
 
-        // Verify the scheme was propagated to the builder
-        let props = builder.received_props();
+        // Verify the scheme was propagated to the factory
+        let props = factory.received_props();
         assert_eq!(
             props.get(STORAGE_LOCATION_SCHEME),
             Some(&"myscheme".to_string())
@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     fn test_into_parts_includes_registry() {
-        let registry = StorageBuilderRegistry::new();
+        let registry = StorageRegistry::new();
 
         let builder = FileIOBuilder::new("memory")
             .with_prop("key", "value")

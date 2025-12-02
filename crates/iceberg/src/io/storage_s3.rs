@@ -28,7 +28,7 @@ use url::Url;
 
 use crate::io::{
     Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
-    Storage, StorageBuilder, is_truthy,
+    Storage, StorageFactory, is_truthy,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -321,11 +321,11 @@ impl Storage for OpenDALS3Storage {
     }
 }
 
-/// Builder for S3 storage
+/// Factory for S3 storage
 #[derive(Debug)]
-pub struct OpenDALS3StorageBuilder;
+pub struct OpenDALS3StorageFactory;
 
-impl StorageBuilder for OpenDALS3StorageBuilder {
+impl StorageFactory for OpenDALS3StorageFactory {
     fn build(
         &self,
         props: HashMap<String, String>,

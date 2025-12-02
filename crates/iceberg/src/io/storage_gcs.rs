@@ -26,7 +26,7 @@ use opendal::services::GcsConfig;
 use url::Url;
 
 use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageBuilder,
+    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageFactory,
     is_truthy,
 };
 use crate::{Error, ErrorKind, Result};
@@ -195,11 +195,11 @@ impl Storage for OpenDALGcsStorage {
     }
 }
 
-/// Builder for OpenDAL GCS storage
+/// Factory for OpenDAL GCS storage
 #[derive(Debug)]
-pub struct OpenDALGcsStorageBuilder;
+pub struct OpenDALGcsStorageFactory;
 
-impl StorageBuilder for OpenDALGcsStorageBuilder {
+impl StorageFactory for OpenDALGcsStorageFactory {
     fn build(
         &self,
         props: HashMap<String, String>,
