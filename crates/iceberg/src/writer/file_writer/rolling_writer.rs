@@ -192,7 +192,6 @@ where
             // initialize inner writer
             self.inner = Some(
                 self.inner_builder
-                    .clone()
                     .build(self.new_output_file(partition_key)?)
                     .await?,
             );
@@ -206,7 +205,6 @@ where
                 // start a new writer
                 self.inner = Some(
                     self.inner_builder
-                        .clone()
                         .build(self.new_output_file(partition_key)?)
                         .await?,
                 );
