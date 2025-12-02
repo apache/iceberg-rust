@@ -688,9 +688,10 @@ impl Storage for OpenDALAzdlsStorage {
 }
 
 /// Factory for Azure Data Lake Storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALAzdlsStorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALAzdlsStorageFactory {
     fn build(
         &self,

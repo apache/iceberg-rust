@@ -93,14 +93,19 @@ pub trait Storage: Debug + Send + Sync {
 /// properties and extensions. Each storage backend (S3, GCS, etc.) provides its own
 /// factory implementation.
 ///
+/// The trait supports serialization via `typetag`, allowing factory instances to be
+/// serialized and deserialized across process boundaries.
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// use iceberg::io::{StorageFactory, Extensions};
 /// use std::collections::HashMap;
 ///
+/// #[derive(Debug, Serialize, Deserialize)]
 /// struct MyStorageFactory;
 ///
+/// #[typetag::serde]
 /// impl StorageFactory for MyStorageFactory {
 ///     fn build(
 ///         &self,
@@ -112,6 +117,7 @@ pub trait Storage: Debug + Send + Sync {
 ///     }
 /// }
 /// ```
+#[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {
     /// Create a new storage instance with the given properties and extensions.
     ///

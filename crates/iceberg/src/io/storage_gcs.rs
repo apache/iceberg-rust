@@ -200,9 +200,10 @@ impl Storage for OpenDALGcsStorage {
 }
 
 /// Factory for OpenDAL GCS storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALGcsStorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALGcsStorageFactory {
     fn build(
         &self,

@@ -160,9 +160,10 @@ impl Storage for OpenDALOssStorage {
 }
 
 /// Factory for OpenDAL OSS storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALOssStorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALOssStorageFactory {
     fn build(
         &self,

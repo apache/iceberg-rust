@@ -141,9 +141,10 @@ impl Storage for OpenDALMemoryStorage {
 }
 
 /// Factory for OpenDAL Memory storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALMemoryStorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALMemoryStorageFactory {
     fn build(
         &self,
@@ -175,5 +176,53 @@ mod tests {
 
         // Verify the type is correct
         assert!(format!("{:?}", deserialized).contains("OpenDALMemoryStorage"));
+    }
+
+    #[test]
+    fn test_memory_factory_serialization() {
+        use crate::io::StorageFactory;
+
+        // Create a factory instance
+        let factory: Box<dyn StorageFactory> = Box::new(OpenDALMemoryStorageFactory);
+
+        // Serialize the factory
+        let serialized = serde_json::to_string(&factory).unwrap();
+
+        // Deserialize the factory
+        let deserialized: Box<dyn StorageFactory> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALMemoryStorageFactory"));
+    }
+
+    #[test]
+    fn test_memory_factory_to_storage_serialization() {
+        use crate::io::{Extensions, StorageFactory};
+
+        // Create a factory and build storage
+        let factory = OpenDALMemoryStorageFactory;
+        let storage = factory
+            .build(HashMap::new(), Extensions::default())
+            .unwrap();
+
+        // Serialize the storage
+        let storage_json = serde_json::to_string(&storage).unwrap();
+
+        // Deserialize the storage
+        let deserialized_storage: Box<dyn Storage> = serde_json::from_str(&storage_json).unwrap();
+
+        // Verify storage type
+        assert!(format!("{:?}", deserialized_storage).contains("OpenDALMemoryStorage"));
+
+        // Serialize the factory
+        let factory_boxed: Box<dyn StorageFactory> = Box::new(factory);
+        let factory_json = serde_json::to_string(&factory_boxed).unwrap();
+
+        // Deserialize the factory
+        let deserialized_factory: Box<dyn StorageFactory> =
+            serde_json::from_str(&factory_json).unwrap();
+
+        // Verify factory type
+        assert!(format!("{:?}", deserialized_factory).contains("OpenDALMemoryStorageFactory"));
     }
 }

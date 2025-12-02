@@ -607,10 +607,16 @@ mod tests {
         }
     }
 
+    fn default_received_props() -> Arc<Mutex<HashMap<String, String>>> {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
     // Test storage factory
-    #[derive(Debug)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct TestStorageFactory {
+        #[serde(skip, default = "default_written")]
         written: Arc<Mutex<Vec<String>>>,
+        #[serde(skip, default = "default_received_props")]
         received_props: Arc<Mutex<HashMap<String, String>>>,
     }
 
@@ -624,6 +630,7 @@ mod tests {
         }
     }
 
+    #[typetag::serde]
     impl StorageFactory for TestStorageFactory {
         fn build(
             &self,

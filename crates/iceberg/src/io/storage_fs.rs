@@ -123,9 +123,10 @@ impl Storage for OpenDALFsStorage {
 }
 
 /// Factory for OpenDAL Filesystem storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALFsStorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALFsStorageFactory {
     fn build(
         &self,
@@ -157,5 +158,22 @@ mod tests {
 
         // Verify the type is correct
         assert!(format!("{:?}", deserialized).contains("OpenDALFsStorage"));
+    }
+
+    #[test]
+    fn test_fs_factory_serialization() {
+        use crate::io::StorageFactory;
+
+        // Create a factory instance
+        let factory: Box<dyn StorageFactory> = Box::new(OpenDALFsStorageFactory);
+
+        // Serialize the factory
+        let serialized = serde_json::to_string(&factory).unwrap();
+
+        // Deserialize the factory
+        let deserialized: Box<dyn StorageFactory> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALFsStorageFactory"));
     }
 }

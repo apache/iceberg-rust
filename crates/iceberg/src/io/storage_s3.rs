@@ -328,9 +328,10 @@ impl Storage for OpenDALS3Storage {
 }
 
 /// Factory for S3 storage
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDALS3StorageFactory;
 
+#[typetag::serde]
 impl StorageFactory for OpenDALS3StorageFactory {
     fn build(
         &self,
@@ -382,5 +383,22 @@ mod tests {
 
         // Verify the type is correct
         assert!(format!("{:?}", deserialized).contains("OpenDALS3Storage"));
+    }
+
+    #[test]
+    fn test_s3_factory_serialization() {
+        use crate::io::StorageFactory;
+
+        // Create a factory instance
+        let factory: Box<dyn StorageFactory> = Box::new(OpenDALS3StorageFactory);
+
+        // Serialize the factory
+        let serialized = serde_json::to_string(&factory).unwrap();
+
+        // Deserialize the factory
+        let deserialized: Box<dyn StorageFactory> = serde_json::from_str(&serialized).unwrap();
+
+        // Verify the type is correct
+        assert!(format!("{:?}", deserialized).contains("OpenDALS3StorageFactory"));
     }
 }
