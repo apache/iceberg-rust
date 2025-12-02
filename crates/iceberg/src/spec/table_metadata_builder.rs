@@ -2237,6 +2237,70 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_main_ref_keeps_snapshot_log() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::from_iter(vec![
+                    (
+                        "spark.app.id".to_string(),
+                        "local-1662532784305".to_string(),
+                    ),
+                    ("added-data-files".to_string(), "4".to_string()),
+                    ("added-records".to_string(), "4".to_string()),
+                    ("added-files-size".to_string(), "6001".to_string()),
+                ]),
+            })
+            .build();
+
+        let result = builder
+            .add_snapshot(snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: Some(10),
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Verify snapshot log was created
+        assert_eq!(result.metadata.snapshot_log.len(), 1);
+        assert_eq!(result.metadata.snapshot_log[0].snapshot_id, 1);
+        assert_eq!(result.metadata.current_snapshot_id, Some(1));
+
+        // Remove the main ref
+        let result_after_remove = result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .remove_ref(MAIN_BRANCH)
+            .build()
+            .unwrap();
+
+        // Verify snapshot log is kept even after removing main ref
+        assert_eq!(result_after_remove.metadata.snapshot_log.len(), 1);
+        assert_eq!(result_after_remove.metadata.snapshot_log[0].snapshot_id, 1);
+        assert_eq!(result_after_remove.metadata.current_snapshot_id, None);
+        assert_eq!(result_after_remove.changes.len(), 1);
+        assert_eq!(result_after_remove.changes[0], TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string()
+        });
+    }
+
+    #[test]
     fn test_set_branch_snapshot_creates_branch_if_not_exists() {
         let builder = builder_without_changes(FormatVersion::V2);
 
