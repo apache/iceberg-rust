@@ -278,8 +278,14 @@ impl ArrowReader {
         // that come back from the file, such as type promotion, default column insertion,
         // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
-            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
-                .with_reserved_field(RESERVED_FIELD_ID_FILE, task.data_file_path.clone())?;
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        // Add the _file metadata column if it's in the projected fields
+        if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
+            let file_datum = Datum::string(task.data_file_path.clone());
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
 
         if let (Some(partition_spec), Some(partition_data)) =
             (task.partition_spec.clone(), task.partition.clone())

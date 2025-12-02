@@ -30,11 +30,10 @@ use arrow_schema::{
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema_to_arrow_schema;
-use crate::metadata_columns::{get_metadata_field, metadata_field_primitive_type};
+use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema};
+use crate::metadata_columns::get_metadata_field;
 use crate::spec::{
-    Datum, Literal, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema as IcebergSchema,
-    Struct, Transform,
+    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -62,19 +61,46 @@ fn constants_map(
     for (pos, field) in partition_spec.fields().iter().enumerate() {
         // Only identity transforms should use constant values from partition metadata
         if matches!(field.transform, Transform::Identity) {
-            // Get the partition value for this field
-            if let Some(Literal::Primitive(value)) = &partition_data[pos] {
-                // Get the field from schema to extract its type
-                let iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    format!("Field {} not found in schema", field.source_id),
-                ))?;
+            // Get the field from schema to extract its type
+            let iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("Field {} not found in schema", field.source_id),
+            ))?;
 
-                // Extract the primitive type from the field
-                if let crate::spec::Type::Primitive(prim_type) = &*iceberg_field.field_type {
+            // Ensure the field type is primitive
+            let prim_type = match &*iceberg_field.field_type {
+                crate::spec::Type::Primitive(prim_type) => prim_type,
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Partition field {} has non-primitive type {:?}",
+                            field.source_id, iceberg_field.field_type
+                        ),
+                    ));
+                }
+            };
+
+            // Get the partition value for this field
+            // Handle both None (null) and Some(Literal::Primitive) cases
+            match &partition_data[pos] {
+                None => {
+                    // Null partition values are skipped - they cannot be represented as a constant Datum
+                    // The field will be read from the data file instead (or produce null from missing data)
+                }
+                Some(Literal::Primitive(value)) => {
                     // Create a Datum from the primitive type and value
                     let datum = Datum::new(prim_type.clone(), value.clone());
                     constants.insert(field.source_id, datum);
+                }
+                Some(literal) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Partition field {} has non-primitive value: {:?}",
+                            field.source_id, literal
+                        ),
+                    ));
                 }
             }
         }
@@ -190,30 +216,6 @@ impl RecordBatchTransformerBuilder {
     pub(crate) fn with_constant(mut self, field_id: i32, datum: Datum) -> Self {
         self.constant_fields.insert(field_id, datum);
         self
-    }
-
-    /// Add a reserved/metadata field with a constant string value.
-    /// This is a convenience method for reserved fields like _file that automatically
-    /// handles type extraction from the field definition.
-    ///
-    /// # Arguments
-    /// * `field_id` - The reserved field ID (e.g., RESERVED_FIELD_ID_FILE)
-    /// * `value` - The constant string value for this field
-    ///
-    /// # Returns
-    /// Self for method chaining, or an error if the field is not a valid metadata field
-    pub(crate) fn with_reserved_field(self, field_id: i32, value: String) -> Result<Self> {
-        // Get the Iceberg field definition
-        let iceberg_field = get_metadata_field(field_id)?;
-
-        // Extract the primitive type from the field
-        let prim_type = metadata_field_primitive_type(&iceberg_field)?;
-
-        // Create a Datum with the extracted type and value
-        let datum = Datum::new(prim_type, PrimitiveLiteral::String(value));
-
-        // Add the constant field
-        Ok(self.with_constant(field_id, datum))
     }
 
     /// Set partition spec and data together for identifying identity-transformed partition columns.
@@ -364,7 +366,7 @@ impl RecordBatchTransformer {
                     if let Ok(iceberg_field) = get_metadata_field(*field_id) {
                         // This is a metadata/virtual field - convert Iceberg field to Arrow
                         let arrow_type =
-                            Self::datum_to_arrow_type(constant_fields.get(field_id).unwrap());
+                            datum_to_arrow_type_with_ree(constant_fields.get(field_id).unwrap());
                         let arrow_field =
                             Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
                                 .with_metadata(HashMap::from([(
@@ -379,7 +381,7 @@ impl RecordBatchTransformer {
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                             .0;
                         let datum = constant_fields.get(field_id).unwrap();
-                        let arrow_type = Self::datum_to_arrow_type(datum);
+                        let arrow_type = datum_to_arrow_type_with_ree(datum);
                         // Use the type from constant_fields (REE for constants)
                         let constant_field =
                             Field::new(field.name(), arrow_type, field.is_nullable())
@@ -478,7 +480,7 @@ impl RecordBatchTransformer {
                 // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
                 // is authoritative and should be preferred over file data.
                 if let Some(datum) = constant_fields.get(field_id) {
-                    let arrow_type = Self::datum_to_arrow_type(datum);
+                    let arrow_type = datum_to_arrow_type_with_ree(datum);
                     return Ok(ColumnSource::Add {
                         value: Some(datum.literal().clone()),
                         target_type: arrow_type,
@@ -834,42 +836,6 @@ impl RecordBatchTransformer {
                     ));
                 }
             })
-        }
-    }
-
-    /// Converts a Datum (Iceberg type + primitive literal) to its corresponding Arrow DataType.
-    /// Uses the PrimitiveType from the Datum to determine the correct Arrow type.
-    /// For constant values, we use Run-End Encoding for all types to save memory.
-    fn datum_to_arrow_type(datum: &Datum) -> DataType {
-        // Helper to create REE type with the given values type
-        // Note: values field is nullable as Arrow expects this when building the
-        // final Arrow schema with `RunArray::try_new`.
-        let make_ree = |values_type: DataType| -> DataType {
-            let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-            let values_field = Arc::new(Field::new("values", values_type, true));
-            DataType::RunEndEncoded(run_ends_field, values_field)
-        };
-
-        // Match on the PrimitiveType from the Datum to determine the Arrow type
-        match datum.data_type() {
-            PrimitiveType::Boolean => make_ree(DataType::Boolean),
-            PrimitiveType::Int => make_ree(DataType::Int32),
-            PrimitiveType::Long => make_ree(DataType::Int64),
-            PrimitiveType::Float => make_ree(DataType::Float32),
-            PrimitiveType::Double => make_ree(DataType::Float64),
-            PrimitiveType::Date => make_ree(DataType::Date32),
-            PrimitiveType::Time => make_ree(DataType::Int64),
-            PrimitiveType::Timestamp => make_ree(DataType::Int64),
-            PrimitiveType::Timestamptz => make_ree(DataType::Int64),
-            PrimitiveType::TimestampNs => make_ree(DataType::Int64),
-            PrimitiveType::TimestamptzNs => make_ree(DataType::Int64),
-            PrimitiveType::String => make_ree(DataType::Utf8),
-            PrimitiveType::Uuid => make_ree(DataType::Binary),
-            PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
-            PrimitiveType::Binary => make_ree(DataType::Binary),
-            PrimitiveType::Decimal { precision, scale } => {
-                make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
-            }
         }
     }
 }
