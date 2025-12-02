@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::services::AzdlsConfig;
 use opendal::{Configurator, Operator};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::{
