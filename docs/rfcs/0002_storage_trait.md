@@ -52,8 +52,8 @@ The new architecture uses trait-based abstractions with a registry pattern and s
 │  ┌───────────────────────────────────────────────┐  │
 │  │         Storage Trait & Registry              │  │
 │  │  - pub trait Storage                          │  │
-│  │  - pub trait StorageBuilder                   │  │
-│  │  - pub struct StorageBuilderRegistry          │  │
+│  │  - pub trait StorageFactory                   │  │
+│  │  - pub struct StorageRegistry                 │  │
 │  │  - pub struct InputFile                       │  │
 │  │  - pub struct OutputFile                      │  │
 │  └───────────────────────────────────────────────┘  │
@@ -68,17 +68,17 @@ The new architecture uses trait-based abstractions with a registry pattern and s
 │ ┌────────────────┐ │  │  │ ┌───────────────┐ │  │ ┌───────────┐ │
 │ │ opendal-s3     │ │  │  │ │ objstore-s3   │ │  │ │  custom   │ │
 │ │ impl Storage   │ │  │  │ │ impl Storage  │ │  │ │  storage  │ │
-│ │ impl Builder   │ │  │  │ │ impl Builder  │ │  │ │impl traits│ │
+│ │ impl Factory   │ │  │  │ │ impl Factory  │ │  │ │impl traits│ │
 │ └────────────────┘ │  │  │ └───────────────┘ │  │ └───────────┘ │
 │ ┌────────────────┐ │  │  │ ┌───────────────┐ │  └───────────────┘
 │ │ opendal-fs     │ │  │  │ │ objstore-gcs  │ │
 │ │ impl Storage   │ │  │  │ │ impl Storage  │ │
-│ │ impl Builder   │ │  │  │ │ impl Builder  │ │
+│ │ impl Factory   │ │  │  │ │ impl Factory  │ │
 │ └────────────────┘ │  │  │ └───────────────┘ │
 │ ┌────────────────┐ │  │  │ ┌───────────────┐ │
 │ │ opendal-gcs    │ │  │  │ │ objstore-azure│ │
 │ │ impl Storage   │ │  │  │ │ impl Storage  │ │
-│ │ impl Builder   │ │  │  │ │ impl Builder  │ │
+│ │ impl Factory   │ │  │  │ │ impl Factory  │ │
 │ └────────────────┘ │  │  │ └───────────────┘ │
 │ ... (oss, azure,   │  │  └───────────────────┘
 │      memory)       │  │
@@ -105,7 +105,7 @@ pub trait Storage: Debug + Send + Sync {
 
     // Deletion operations
     async fn delete(&self, path: &str) -> Result<()>;
-    async fn remove_dir_all(&self, path: &str) -> Result<()>;
+    async fn delete_prefix(&self, path: &str) -> Result<()>;
 
     // File object creation
     fn new_input(&self, path: &str) -> Result<InputFile>;
@@ -153,13 +153,13 @@ Benefits of this approach:
 - Clear delegation pattern
 - Sufficient flexibility for most use cases
 
-## StorageBuilder and Registry
+## StorageFactory and Registry
 
-### StorageBuilder Trait
-The `StorageBuilder` trait defines how storage backends are constructed:
+### StorageFactory Trait
+The `StorageFactory` trait defines how storage backends are constructed:
 
 ```rust
-pub trait StorageBuilder: Debug + Send + Sync {
+pub trait StorageFactory: Debug + Send + Sync {
     fn build(
         &self,
         props: HashMap<String, String>,
@@ -170,24 +170,24 @@ pub trait StorageBuilder: Debug + Send + Sync {
 
 Key design decisions:
 
-- Uses `&self` instead of `self` - builders are reusable
+- Uses `&self` instead of `self` - factories are reusable
 - No associated type - returns `Arc<dyn Storage>` directly
 - `Send + Sync` for thread safety
 
-### StorageBuilderRegistry
-The registry manages storage builders and provides lookup by scheme:
+### StorageRegistry
+The registry manages storage factories and provides lookup by scheme:
 
 ```rust
 #[derive(Debug, Clone)]
-pub struct StorageBuilderRegistry {
-    builders: HashMap<String, Arc<dyn StorageBuilder>>,
+pub struct StorageRegistry {
+    factories: HashMap<String, Arc<dyn StorageFactory>>,
 }
 
-impl StorageBuilderRegistry {
+impl StorageRegistry {
     pub fn new() -> Self { /* ... */ }
-    pub fn register(&mut self, scheme: impl Into<String>, builder: Arc<dyn StorageBuilder>);
-    pub fn get_builder(&self, scheme: &str) -> Result<Arc<dyn StorageBuilder>>;
-    pub fn supported_types(&self) -> Vec<String>;
+    pub fn register(&mut self, scheme: impl Into<String>, factory: Arc<dyn StorageFactory>);
+    pub fn get_factory(&self, scheme: &str) -> Result<Arc<dyn StorageFactory>>;
+    pub fn supported_types(&self) -> impl Iterator<Item = &str>;
 }
 ```
 
@@ -209,26 +209,27 @@ let file_io = FileIOBuilder::new("s3")
     .build()?;
 
 // Custom storage registration
-use iceberg::io::{StorageBuilderRegistry, StorageBuilder};
+use iceberg::io::{StorageRegistry, StorageFactory};
 
-let mut registry = StorageBuilderRegistry::new();
-registry.register("custom", Arc::new(MyCustomStorageBuilder));
+let mut registry = StorageRegistry::new();
+registry.register("custom", Arc::new(MyCustomStorageFactory));
 
 // Check supported types
-println!("Supported: {:?}", registry.supported_types());
+let supported: Vec<_> = registry.supported_types().collect();
+println!("Supported: {:?}", supported);
 ```
 
 ## Storage Implementations
 Each storage backend has its own implementation:
 
-| Storage | File | Struct | Builder | Schemes |
+| Storage | File | Struct | Factory | Schemes |
 |---------|------|--------|---------|---------|
-| S3 | `storage_s3.rs` | `OpenDALS3Storage` | `OpenDALS3StorageBuilder` | `s3`, `s3a` |
-| GCS | `storage_gcs.rs` | `OpenDALGcsStorage` | `OpenDALGcsStorageBuilder` | `gs`, `gcs` |
-| OSS | `storage_oss.rs` | `OpenDALOssStorage` | `OpenDALOssStorageBuilder` | `oss` |
-| Azure | `storage_azdls.rs` | `OpenDALAzdlsStorage` | `OpenDALAzdlsStorageBuilder` | `abfs`, `abfss`, `wasb`, `wasbs` |
-| Filesystem | `storage_fs.rs` | `OpenDALFsStorage` | `OpenDALFsStorageBuilder` | `file`, `""` |
-| Memory | `storage_memory.rs` | `OpenDALMemoryStorage` | `OpenDALMemoryStorageBuilder` | `memory` |
+| S3 | `storage_s3.rs` | `OpenDALS3Storage` | `OpenDALS3StorageFactory` | `s3`, `s3a` |
+| GCS | `storage_gcs.rs` | `OpenDALGcsStorage` | `OpenDALGcsStorageFactory` | `gs`, `gcs` |
+| OSS | `storage_oss.rs` | `OpenDALOssStorage` | `OpenDALOssStorageFactory` | `oss` |
+| Azure | `storage_azdls.rs` | `OpenDALAzdlsStorage` | `OpenDALAzdlsStorageFactory` | `abfs`, `abfss`, `wasb`, `wasbs` |
+| Filesystem | `storage_fs.rs` | `OpenDALFsStorage` | `OpenDALFsStorageFactory` | `file`, `""` |
+| Memory | `storage_memory.rs` | `OpenDALMemoryStorage` | `OpenDALMemoryStorageFactory` | `memory` |
 
 ### Implementation Pattern
 Each storage follows this consistent pattern:
@@ -256,12 +257,12 @@ impl Storage for OpenDALXxxStorage {
     // ... implement all 10 methods
 }
 
-// 4. Builder struct
+// 4. Factory struct
 #[derive(Debug)]
-pub struct OpenDALXxxStorageBuilder;
+pub struct OpenDALXxxStorageFactory;
 
-// 5. Builder trait implementation
-impl StorageBuilder for OpenDALXxxStorageBuilder {
+// 5. Factory trait implementation
+impl StorageFactory for OpenDALXxxStorageFactory {
     fn build(&self, props, extensions) -> Result<Arc<dyn Storage>> {
         // Parse configuration and create storage
     }
@@ -277,13 +278,13 @@ FileIOBuilder::new("s3")
     ↓
 FileIOBuilder::build()
     ↓
-StorageBuilderRegistry::new()
+StorageRegistry::new()
     ↓
-registry.get_builder("s3")
+registry.get_factory("s3")
     ↓
-OpenDALS3StorageBuilder
+OpenDALS3StorageFactory
     ↓
-builder.build(props, extensions)
+factory.build(props, extensions)
     ↓
 OpenDALS3Storage (implements Storage)
     ↓
@@ -299,7 +300,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use iceberg::io::{
-    Storage, StorageBuilder, Extensions, FileMetadata, 
+    Storage, StorageFactory, Extensions, FileMetadata, 
     FileRead, FileWrite, InputFile, OutputFile
 };
 
@@ -320,12 +321,12 @@ impl Storage for MyCustomStorage {
     // ... implement all 10 methods
 }
 
-// 3. Define your builder
+// 3. Define your factory
 #[derive(Debug)]
-struct MyCustomStorageBuilder;
+struct MyCustomStorageFactory;
 
-// 4. Implement StorageBuilder
-impl StorageBuilder for MyCustomStorageBuilder {
+// 4. Implement StorageFactory
+impl StorageFactory for MyCustomStorageFactory {
     fn build(
         &self,
         props: HashMap<String, String>,
@@ -337,17 +338,143 @@ impl StorageBuilder for MyCustomStorageBuilder {
 
 }
 
-// 5. Register your builder
-let mut registry = StorageBuilderRegistry::new();
-registry.register("custom", Arc::new(MyCustomStorageBuilder));
+// 5. Register your factory
+let mut registry = StorageRegistry::new();
+registry.register("custom", Arc::new(MyCustomStorageFactory));
 ```
+
+## Open Questions
+
+These design decisions need to be resolved during implementation:
+
+### 1. Storage Granularity (Phase 1)
+
+**Question:** Should we have a general `Storage` implementation that works with multiple schemes, or specific implementations per scheme?
+
+**Option A: General Storage (e.g., `OpenDALStorage`)**
+- Single implementation handles all schemes (s3, gcs, fs, etc.)
+- Scheme detection happens at runtime
+- Simpler codebase with less duplication
+
+```rust
+#[derive(Debug, Clone)]
+pub struct OpenDALStorage {
+    operator: Operator,
+    scheme: String,
+}
+```
+
+**Option B: Scheme-Specific Storage (e.g., `OpenDALS3Storage`, `OpenDALGcsStorage`)**
+- Each storage backend has its own implementation
+- Type-safe configuration per backend
+- Better compile-time guarantees
+- More explicit and easier to optimize per backend
+
+```rust
+#[derive(Debug, Clone)]
+pub struct OpenDALS3Storage {
+    config: Arc<S3Config>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenDALGcsStorage {
+    config: Arc<GcsConfig>,
+}
+```
+
+**Current Implementation:** The RFC describes Option B (scheme-specific)
+
+### 2. Registry Location (Phase 1)
+
+**Question:** Where should the `StorageRegistry` live?
+
+This question depends on the answer to Question 1:
+
+**If Option A (General Storage):**
+- Do we even need a registry? A single `OpenDALStorage` could handle all schemes internally
+- Registration should happen when the crate is loaded and a registry will not be necessary
+
+**If Option B (Scheme-Specific Storage):**
+- **Option 2a: Global Static Registry** - Single process-wide registry with lazy initialization
+  - Pros: Simple to use, no need to pass registry around
+  - Cons: Global state, harder to test, potential initialization ordering issues
+  
+- **Option 2b: Catalog-Owned Registry** - Each catalog instance owns its registry
+  - Pros: Better encapsulation, easier testing, no global state
+  - Cons: More complex API, need to pass registry through layers
+
+### 3. Error Handling Strategy (Phase 2)
+
+**Question:** How should storage errors be represented?
+
+**Option A: Enum-Based Errors**
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("File not found: {path}")]
+    NotFound { path: String },
+    
+    #[error("Permission denied: {path}")]
+    PermissionDenied { path: String },
+    
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Backend error: {0}")]
+    Backend(Box<dyn std::error::Error + Send + Sync>),
+}
+```
+- Pros: Type-safe, pattern matching, clear error categories
+- Cons: Need to map all backend errors to enum variants
+
+**Option B: Trait-Based Errors with Into/From**
+```rust
+pub trait StorageError: std::error::Error + Send + Sync + 'static {
+    fn is_not_found(&self) -> bool;
+    fn is_permission_denied(&self) -> bool;
+}
+
+// Each backend implements its own error type
+impl StorageError for OpenDALError { /* ... */ }
+impl StorageError for ObjectStoreError { /* ... */ }
+```
+- Pros: Flexible, preserves original error information, easier for backends
+- Cons: Less type-safe, harder to handle errors uniformly
+
+**Option C: Hybrid Approach**
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("File not found: {path}")]
+    NotFound { path: String },
+    
+    #[error(transparent)]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+```
+- Pros: Common errors are typed, uncommon errors are wrapped
+- Cons: Some loss of type information for wrapped errors
+
+**Recommendation:** Option C (Hybrid) provides a good balance, with common errors like `NotFound` being strongly typed while allowing backends to preserve their specific error details.
 
 ## Implementation Plan
 
 - **Phase 1 (Initial Implementation):**
   - Define core traits (Storage, optionally InputFile/OutputFile)
-  - Implement StorageBuilder + StorageLoader
+  - Implement StorageFactory + StorageRegistry
   - Refactor OpenDAL to use traits
-- **Phase 2:** Split storage backends into separate crates (crates/storage/opendal)
-- **Phase 3:** Replace FileIO with StorageBuilderRegistry in Catalog structs
-- **Phase 4:** Add object_store + other backends
+  - **Resolve:** Question 1 (Storage granularity) and Question 2 (Registry location)
+  - **Decision needed:** Choose between general vs. scheme-specific storage implementations
+  
+- **Phase 2 (Stabilize Storage Trait):**
+  - Move concrete storage implementations to a separate crate `iceberg-storage`
+  - Add new API: `delete_iter` to provide batch delete operations
+  - Remove `FileIOBuilder` and `Extensions` - serializable custom Storage implementations should handle their use cases
+  - **Resolve:** Question 3 (Error handling strategy)
+  - **Decision needed:** Define `StorageError` type and conversion strategy if needed
+  - Stabilize the Storage trait API for long-term compatibility
+  
+- **Phase 3:** Add object_store + other backends
+  - Implement `object_store`-based storage backends in separate crates
+  - Validate error handling works across different backend implementations
+  - Ensure the stabilized Storage trait works well with alternative implementations
