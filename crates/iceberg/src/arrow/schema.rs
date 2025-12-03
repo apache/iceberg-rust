@@ -1037,7 +1037,7 @@ impl TryFrom<&crate::spec::Schema> for ArrowSchema {
 /// let ree_type = datum_to_arrow_type_with_ree(&datum);
 /// // Returns: RunEndEncoded(Int32, Utf8)
 /// ```
-pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
+pub(crate) fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
     // Helper to create REE type with the given values type.
     // Note: values field is nullable as Arrow expects this when building the
     // final Arrow schema with `RunArray::try_new`.
