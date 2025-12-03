@@ -198,6 +198,74 @@ Features:
 - Case-insensitive scheme lookup
 - Thread-safe and cloneable
 
+### Serialization with typetag
+
+To enable serialization of `Storage` and `StorageFactory` trait objects, we use the `typetag` crate. This allows dynamic trait objects to be serialized and deserialized, which is essential for:
+
+- Persisting storage configurations
+- Sending storage instances across process boundaries
+- Supporting custom storage implementations in distributed systems
+
+The traits are annotated with `#[typetag::serde]`:
+
+```rust
+#[async_trait]
+#[typetag::serde(tag = "type")]
+pub trait Storage: Debug + Send + Sync {
+    // ... trait methods
+}
+
+#[typetag::serde(tag = "type")]
+pub trait StorageFactory: Debug + Send + Sync {
+    fn build(
+        &self,
+        props: HashMap<String, String>,
+        extensions: Extensions,
+    ) -> Result<Arc<dyn Storage>>;
+}
+```
+
+Each implementation must also use the `#[typetag::serde]` attribute:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenDALS3Storage {
+    config: Arc<S3Config>,
+}
+
+#[async_trait]
+#[typetag::serde]
+impl Storage for OpenDALS3Storage {
+    // ... implementation
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OpenDALS3StorageFactory;
+
+#[typetag::serde]
+impl StorageFactory for OpenDALS3StorageFactory {
+    // ... implementation
+}
+```
+
+Benefits:
+
+- **Type-safe serialization** - Each implementation is tagged with its type name
+- **Extensibility** - Custom implementations can be serialized without modifying core code
+- **Cross-language support** - Serialized format is JSON-compatible
+- **Replaces FileIOBuilder/Extensions** - Serializable storage implementations eliminate the need for separate builder patterns
+
+Example usage:
+
+```rust
+// Serialize a storage instance
+let storage: Arc<dyn Storage> = Arc::new(OpenDALS3Storage::new(config));
+let json = serde_json::to_string(&storage)?;
+
+// Deserialize back to trait object
+let storage: Arc<dyn Storage> = serde_json::from_str(&json)?;
+```
+
 ## Example Usage
 
 ```rust
@@ -409,19 +477,15 @@ This question depends on the answer to Question 1:
 
 **Option A: Enum-Based Errors**
 ```rust
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    #[error("File not found: {path}")]
-    NotFound { path: String },
-    
-    #[error("Permission denied: {path}")]
-    PermissionDenied { path: String },
-    
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    
-    #[error("Backend error: {0}")]
-    Backend(Box<dyn std::error::Error + Send + Sync>),
+pub enum IoErrorKind {
+    FileNotFound,
+    CredentialExpired,
+}
+
+pub enum ErrorKind {
+     // Existing variants
+    ...
+    Io(IoErrorKind)
 }
 ```
 - Pros: Type-safe, pattern matching, clear error categories
