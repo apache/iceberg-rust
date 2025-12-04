@@ -78,11 +78,11 @@ impl ParquetWriterBuilder {
 impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
+    async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
-            writer_properties: self.props,
+            writer_properties: self.props.clone(),
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
