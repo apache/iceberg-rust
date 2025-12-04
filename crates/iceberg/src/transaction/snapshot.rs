@@ -90,26 +90,26 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile> {
-        manifests
+    ) -> Result<Vec<ManifestFile>> {
+        Ok(manifests)
     }
 }
 
 pub(crate) trait ManifestProcess: Send + Sync {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile>;
+    ) -> Result<Vec<ManifestFile>>;
 }
 
 pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
-    snapshot_id: i64,
+    pub(crate) snapshot_id: i64,
     commit_uuid: Uuid,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
@@ -223,7 +223,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -336,20 +339,24 @@ impl<'a> SnapshotProducer<'a> {
             ));
         }
 
-        let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
-        let mut manifest_files = existing_manifests;
-
-        // Process added entries.
+        // # NOTE
+        // The order of manifest files is matter:
+        // [added_manifest, ... ]
+        // # TODO
+        // Should we use type safe way to guarantee this order?
+        let mut manifest_files = vec![];
         if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
         }
+        manifest_files.extend(snapshot_produce_operation.existing_manifest(self).await?);
 
         // # TODO
         // Support process delete entries.
 
-        let manifest_files = manifest_process.process_manifests(self, manifest_files);
-        Ok(manifest_files)
+        manifest_process
+            .process_manifests(self, manifest_files)
+            .await
     }
 
     // Returns a `Summary` of the current snapshot
