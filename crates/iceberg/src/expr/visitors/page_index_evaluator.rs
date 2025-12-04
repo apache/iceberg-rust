@@ -830,25 +830,25 @@ mod tests {
         }
         string_vals.push(Some("BISON".to_string()));
 
-        batches.push(RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
                 Arc::new(Float32Array::from(float_vals)),
                 Arc::new(StringArray::from(string_vals)),
-            ],
-        ).unwrap());
+            ])
+            .unwrap(),
+        );
 
         // Batch 2: 1024 rows - all DEER
         let float_vals: Vec<Option<f32>> = vec![None; 1024];
         let string_vals = vec![Some("DEER".to_string()); 1024];
 
-        batches.push(RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
                 Arc::new(Float32Array::from(float_vals)),
                 Arc::new(StringArray::from(string_vals)),
-            ],
-        ).unwrap());
+            ])
+            .unwrap(),
+        );
 
         // Batch 3: 1024 rows - float 0-10
         let mut float_vals = vec![];
@@ -862,13 +862,13 @@ mod tests {
             string_vals.push(Some("HIPPO".to_string()));
         }
 
-        batches.push(RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
                 Arc::new(Float32Array::from(float_vals)),
                 Arc::new(StringArray::from(string_vals)),
-            ],
-        ).unwrap());
+            ])
+            .unwrap(),
+        );
 
         // Batch 4: 1024 rows - float 10-20
         let mut float_vals = vec![None];
@@ -877,13 +877,13 @@ mod tests {
         }
         let string_vals = vec![Some("HIPPO".to_string()); 1024];
 
-        batches.push(RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
                 Arc::new(Float32Array::from(float_vals)),
                 Arc::new(StringArray::from(string_vals)),
-            ],
-        ).unwrap());
+            ])
+            .unwrap(),
+        );
 
         // Write rows one at a time to give the writer a chance to split into pages
         for batch in &batches {
@@ -1238,10 +1238,7 @@ mod tests {
         )?;
 
         // Page 0 has "BEAR" and "BISON" (starts with B), rest don't
-        let expected = vec![
-            RowSelector::select(1024),
-            RowSelector::skip(3072),
-        ];
+        let expected = vec![RowSelector::select(1024), RowSelector::skip(3072)];
 
         assert_eq!(result, expected);
 

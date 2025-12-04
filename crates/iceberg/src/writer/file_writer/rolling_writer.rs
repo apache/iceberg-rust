@@ -203,13 +203,12 @@ where
             // close the current writer, roll to a new file
             self.data_file_builders.extend(inner.close().await?);
 
-                // start a new writer
-                self.inner = Some(
-                    self.inner_builder
-                        .build(self.new_output_file(partition_key)?)
-                        .await?,
-                );
-            }
+            // start a new writer
+            self.inner = Some(
+                self.inner_builder
+                    .build(self.new_output_file(partition_key)?)
+                    .await?,
+            );
         }
 
         // write the input
