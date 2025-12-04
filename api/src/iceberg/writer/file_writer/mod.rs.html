@@ -36,11 +36,11 @@
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">type </span>DefaultOutput = Vec&lt;DataFileBuilder&gt;;
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="doccomment">/// File writer builder trait.
-<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub trait </span>FileWriterBuilder&lt;O = DefaultOutput&gt;: Send + Clone + <span class="lifetime">'static </span>{
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub trait </span>FileWriterBuilder&lt;O = DefaultOutput&gt;: Clone + Send + Sync + <span class="lifetime">'static </span>{
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// The associated file writer type.
 <a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">type </span>R: FileWriter&lt;O&gt;;
 <a href=#42 id=42 data-nosnippet>42</a>    <span class="doccomment">/// Build file writer.
-<a href=#43 id=43 data-nosnippet>43</a>    </span><span class="kw">fn </span>build(<span class="self">self</span>, output_file: OutputFile) -&gt; <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;&gt; + Send;
+<a href=#43 id=43 data-nosnippet>43</a>    </span><span class="kw">fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>, output_file: OutputFile) -&gt; <span class="kw">impl </span>Future&lt;Output = <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;&gt; + Send;
 <a href=#44 id=44 data-nosnippet>44</a>}
 <a href=#45 id=45 data-nosnippet>45</a>
 <a href=#46 id=46 data-nosnippet>46</a><span class="doccomment">/// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)

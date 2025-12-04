@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, PartitionKey, TableMetadata};
 <a href=#25 id=25 data-nosnippet>25</a>
 <a href=#26 id=26 data-nosnippet>26</a><span class="doccomment">/// `LocationGenerator` used to generate the location of data file.
-<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">pub trait </span>LocationGenerator: Clone + Send + <span class="lifetime">'static </span>{
+<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">pub trait </span>LocationGenerator: Clone + Send + Sync + <span class="lifetime">'static </span>{
 <a href=#28 id=28 data-nosnippet>28</a>    <span class="doccomment">/// Generate an absolute path for the given file name that includes the partition path.
 <a href=#29 id=29 data-nosnippet>29</a>    ///
 <a href=#30 id=30 data-nosnippet>30</a>    /// # Arguments
@@ -94,7 +94,7 @@
 <a href=#94 id=94 data-nosnippet>94</a>}
 <a href=#95 id=95 data-nosnippet>95</a>
 <a href=#96 id=96 data-nosnippet>96</a><span class="doccomment">/// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
-<a href=#97 id=97 data-nosnippet>97</a></span><span class="kw">pub trait </span>FileNameGenerator: Clone + Send + <span class="lifetime">'static </span>{
+<a href=#97 id=97 data-nosnippet>97</a></span><span class="kw">pub trait </span>FileNameGenerator: Clone + Send + Sync + <span class="lifetime">'static </span>{
 <a href=#98 id=98 data-nosnippet>98</a>    <span class="doccomment">/// Generate a file name.
 <a href=#99 id=99 data-nosnippet>99</a>    </span><span class="kw">fn </span>generate_file_name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
 <a href=#100 id=100 data-nosnippet>100</a>}

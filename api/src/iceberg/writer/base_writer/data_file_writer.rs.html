@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="doccomment">/// Builder for `DataFileWriter`.
-<a href=#30 id=30 data-nosnippet>30</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#30 id=30 data-nosnippet>30</a></span><span class="attr">#[derive(Debug)]
 <a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub struct </span>DataFileWriterBuilder&lt;B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator&gt; {
 <a href=#32 id=32 data-nosnippet>32</a>    inner: RollingFileWriterBuilder&lt;B, L, F&gt;,
 <a href=#33 id=33 data-nosnippet>33</a>}
@@ -53,9 +53,9 @@
 <a href=#53 id=53 data-nosnippet>53</a>{
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">type </span>R = DataFileWriter&lt;B, L, F&gt;;
 <a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">async fn </span>build(<span class="self">self</span>, partition_key: <span class="prelude-ty">Option</span>&lt;PartitionKey&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">async fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>, partition_key: <span class="prelude-ty">Option</span>&lt;PartitionKey&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
 <a href=#57 id=57 data-nosnippet>57</a>        <span class="prelude-val">Ok</span>(DataFileWriter {
-<a href=#58 id=58 data-nosnippet>58</a>            inner: <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.clone().build()),
+<a href=#58 id=58 data-nosnippet>58</a>            inner: <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.build()),
 <a href=#59 id=59 data-nosnippet>59</a>            partition_key,
 <a href=#60 id=60 data-nosnippet>60</a>        })
 <a href=#61 id=61 data-nosnippet>61</a>    }

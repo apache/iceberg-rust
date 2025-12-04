@@ -103,15 +103,15 @@
 <a href=#103 id=103 data-nosnippet>103</a>    }
 <a href=#104 id=104 data-nosnippet>104</a>
 <a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// Build a new [`RollingFileWriter`].
-<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; RollingFileWriter&lt;B, L, F&gt; {
+<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">pub fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RollingFileWriter&lt;B, L, F&gt; {
 <a href=#107 id=107 data-nosnippet>107</a>        RollingFileWriter {
 <a href=#108 id=108 data-nosnippet>108</a>            inner: <span class="prelude-val">None</span>,
-<a href=#109 id=109 data-nosnippet>109</a>            inner_builder: <span class="self">self</span>.inner_builder,
+<a href=#109 id=109 data-nosnippet>109</a>            inner_builder: <span class="self">self</span>.inner_builder.clone(),
 <a href=#110 id=110 data-nosnippet>110</a>            target_file_size: <span class="self">self</span>.target_file_size,
 <a href=#111 id=111 data-nosnippet>111</a>            data_file_builders: <span class="macro">vec!</span>[],
-<a href=#112 id=112 data-nosnippet>112</a>            file_io: <span class="self">self</span>.file_io,
-<a href=#113 id=113 data-nosnippet>113</a>            location_generator: <span class="self">self</span>.location_generator,
-<a href=#114 id=114 data-nosnippet>114</a>            file_name_generator: <span class="self">self</span>.file_name_generator,
+<a href=#112 id=112 data-nosnippet>112</a>            file_io: <span class="self">self</span>.file_io.clone(),
+<a href=#113 id=113 data-nosnippet>113</a>            location_generator: <span class="self">self</span>.location_generator.clone(),
+<a href=#114 id=114 data-nosnippet>114</a>            file_name_generator: <span class="self">self</span>.file_name_generator.clone(),
 <a href=#115 id=115 data-nosnippet>115</a>        }
 <a href=#116 id=116 data-nosnippet>116</a>    }
 <a href=#117 id=117 data-nosnippet>117</a>}
@@ -192,253 +192,251 @@
 <a href=#192 id=192 data-nosnippet>192</a>            <span class="comment">// initialize inner writer
 <a href=#193 id=193 data-nosnippet>193</a>            </span><span class="self">self</span>.inner = <span class="prelude-val">Some</span>(
 <a href=#194 id=194 data-nosnippet>194</a>                <span class="self">self</span>.inner_builder
-<a href=#195 id=195 data-nosnippet>195</a>                    .clone()
-<a href=#196 id=196 data-nosnippet>196</a>                    .build(<span class="self">self</span>.new_output_file(partition_key)<span class="question-mark">?</span>)
-<a href=#197 id=197 data-nosnippet>197</a>                    .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#198 id=198 data-nosnippet>198</a>            );
-<a href=#199 id=199 data-nosnippet>199</a>        }
-<a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">if </span><span class="self">self</span>.should_roll() {
-<a href=#202 id=202 data-nosnippet>202</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = <span class="self">self</span>.inner.take() {
-<a href=#203 id=203 data-nosnippet>203</a>                <span class="comment">// close the current writer, roll to a new file
-<a href=#204 id=204 data-nosnippet>204</a>                </span><span class="self">self</span>.data_file_builders.extend(inner.close().<span class="kw">await</span><span class="question-mark">?</span>);
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a>                <span class="comment">// start a new writer
-<a href=#207 id=207 data-nosnippet>207</a>                </span><span class="self">self</span>.inner = <span class="prelude-val">Some</span>(
-<a href=#208 id=208 data-nosnippet>208</a>                    <span class="self">self</span>.inner_builder
-<a href=#209 id=209 data-nosnippet>209</a>                        .clone()
-<a href=#210 id=210 data-nosnippet>210</a>                        .build(<span class="self">self</span>.new_output_file(partition_key)<span class="question-mark">?</span>)
-<a href=#211 id=211 data-nosnippet>211</a>                        .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#212 id=212 data-nosnippet>212</a>                );
-<a href=#213 id=213 data-nosnippet>213</a>            }
-<a href=#214 id=214 data-nosnippet>214</a>        }
-<a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="comment">// write the input
-<a href=#217 id=217 data-nosnippet>217</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(writer) = <span class="self">self</span>.inner.as_mut() {
-<a href=#218 id=218 data-nosnippet>218</a>            <span class="prelude-val">Ok</span>(writer.write(input).<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#219 id=219 data-nosnippet>219</a>        } <span class="kw">else </span>{
-<a href=#220 id=220 data-nosnippet>220</a>            <span class="prelude-val">Err</span>(Error::new(
-<a href=#221 id=221 data-nosnippet>221</a>                ErrorKind::Unexpected,
-<a href=#222 id=222 data-nosnippet>222</a>                <span class="string">"Writer is not initialized!"</span>,
-<a href=#223 id=223 data-nosnippet>223</a>            ))
-<a href=#224 id=224 data-nosnippet>224</a>        }
-<a href=#225 id=225 data-nosnippet>225</a>    }
-<a href=#226 id=226 data-nosnippet>226</a>
-<a href=#227 id=227 data-nosnippet>227</a>    <span class="doccomment">/// Closes the writer and returns all data file builders.
+<a href=#195 id=195 data-nosnippet>195</a>                    .build(<span class="self">self</span>.new_output_file(partition_key)<span class="question-mark">?</span>)
+<a href=#196 id=196 data-nosnippet>196</a>                    .<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#197 id=197 data-nosnippet>197</a>            );
+<a href=#198 id=198 data-nosnippet>198</a>        }
+<a href=#199 id=199 data-nosnippet>199</a>
+<a href=#200 id=200 data-nosnippet>200</a>        <span class="kw">if </span><span class="self">self</span>.should_roll() {
+<a href=#201 id=201 data-nosnippet>201</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = <span class="self">self</span>.inner.take() {
+<a href=#202 id=202 data-nosnippet>202</a>                <span class="comment">// close the current writer, roll to a new file
+<a href=#203 id=203 data-nosnippet>203</a>                </span><span class="self">self</span>.data_file_builders.extend(inner.close().<span class="kw">await</span><span class="question-mark">?</span>);
+<a href=#204 id=204 data-nosnippet>204</a>
+<a href=#205 id=205 data-nosnippet>205</a>                <span class="comment">// start a new writer
+<a href=#206 id=206 data-nosnippet>206</a>                </span><span class="self">self</span>.inner = <span class="prelude-val">Some</span>(
+<a href=#207 id=207 data-nosnippet>207</a>                    <span class="self">self</span>.inner_builder
+<a href=#208 id=208 data-nosnippet>208</a>                        .build(<span class="self">self</span>.new_output_file(partition_key)<span class="question-mark">?</span>)
+<a href=#209 id=209 data-nosnippet>209</a>                        .<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#210 id=210 data-nosnippet>210</a>                );
+<a href=#211 id=211 data-nosnippet>211</a>            }
+<a href=#212 id=212 data-nosnippet>212</a>        }
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a>        <span class="comment">// write the input
+<a href=#215 id=215 data-nosnippet>215</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(writer) = <span class="self">self</span>.inner.as_mut() {
+<a href=#216 id=216 data-nosnippet>216</a>            <span class="prelude-val">Ok</span>(writer.write(input).<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#217 id=217 data-nosnippet>217</a>        } <span class="kw">else </span>{
+<a href=#218 id=218 data-nosnippet>218</a>            <span class="prelude-val">Err</span>(Error::new(
+<a href=#219 id=219 data-nosnippet>219</a>                ErrorKind::Unexpected,
+<a href=#220 id=220 data-nosnippet>220</a>                <span class="string">"Writer is not initialized!"</span>,
+<a href=#221 id=221 data-nosnippet>221</a>            ))
+<a href=#222 id=222 data-nosnippet>222</a>        }
+<a href=#223 id=223 data-nosnippet>223</a>    }
+<a href=#224 id=224 data-nosnippet>224</a>
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Closes the writer and returns all data file builders.
+<a href=#226 id=226 data-nosnippet>226</a>    ///
+<a href=#227 id=227 data-nosnippet>227</a>    /// # Returns
 <a href=#228 id=228 data-nosnippet>228</a>    ///
-<a href=#229 id=229 data-nosnippet>229</a>    /// # Returns
-<a href=#230 id=230 data-nosnippet>230</a>    ///
-<a href=#231 id=231 data-nosnippet>231</a>    /// A `Result` containing a vector of `DataFileBuilder` instances representing
-<a href=#232 id=232 data-nosnippet>232</a>    /// all files that were written, including any that were created due to rollover
-<a href=#233 id=233 data-nosnippet>233</a>    </span><span class="kw">pub async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFileBuilder&gt;&gt; {
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="comment">// close the current writer and merge the output
-<a href=#235 id=235 data-nosnippet>235</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(current_writer) = <span class="self">self</span>.inner {
-<a href=#236 id=236 data-nosnippet>236</a>            <span class="self">self</span>.data_file_builders
-<a href=#237 id=237 data-nosnippet>237</a>                .extend(current_writer.close().<span class="kw">await</span><span class="question-mark">?</span>);
-<a href=#238 id=238 data-nosnippet>238</a>        }
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.data_file_builders)
-<a href=#241 id=241 data-nosnippet>241</a>    }
-<a href=#242 id=242 data-nosnippet>242</a>}
-<a href=#243 id=243 data-nosnippet>243</a>
-<a href=#244 id=244 data-nosnippet>244</a><span class="kw">impl</span>&lt;B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator&gt; CurrentFileStatus
-<a href=#245 id=245 data-nosnippet>245</a>    <span class="kw">for </span>RollingFileWriter&lt;B, L, F&gt;
-<a href=#246 id=246 data-nosnippet>246</a>{
-<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">fn </span>current_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#248 id=248 data-nosnippet>248</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_file_path()
-<a href=#249 id=249 data-nosnippet>249</a>    }
-<a href=#250 id=250 data-nosnippet>250</a>
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">fn </span>current_row_num(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#252 id=252 data-nosnippet>252</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_row_num()
-<a href=#253 id=253 data-nosnippet>253</a>    }
-<a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">fn </span>current_written_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_written_size()
-<a href=#257 id=257 data-nosnippet>257</a>    }
-<a href=#258 id=258 data-nosnippet>258</a>}
-<a href=#259 id=259 data-nosnippet>259</a>
-<a href=#260 id=260 data-nosnippet>260</a><span class="attr">#[cfg(test)]
-<a href=#261 id=261 data-nosnippet>261</a></span><span class="kw">mod </span>tests {
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">use </span>std::collections::HashMap;
-<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">use </span>std::sync::Arc;
-<a href=#264 id=264 data-nosnippet>264</a>
-<a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, StringArray};
-<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">use </span>arrow_schema::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
-<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-<a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">use </span>parquet::file::properties::WriterProperties;
-<a href=#269 id=269 data-nosnippet>269</a>    <span class="kw">use </span>rand::prelude::IteratorRandom;
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">use </span>tempfile::TempDir;
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::{
-<a href=#278 id=278 data-nosnippet>278</a>        DefaultFileNameGenerator, DefaultLocationGenerator,
-<a href=#279 id=279 data-nosnippet>279</a>    };
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::tests::check_parquet_data_file;
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
-<a href=#282 id=282 data-nosnippet>282</a>
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">fn </span>make_test_schema() -&gt; <span class="prelude-ty">Result</span>&lt;Schema&gt; {
-<a href=#284 id=284 data-nosnippet>284</a>        Schema::builder()
-<a href=#285 id=285 data-nosnippet>285</a>            .with_schema_id(<span class="number">1</span>)
-<a href=#286 id=286 data-nosnippet>286</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#287 id=287 data-nosnippet>287</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#288 id=288 data-nosnippet>288</a>                NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#289 id=289 data-nosnippet>289</a>            ])
-<a href=#290 id=290 data-nosnippet>290</a>            .build()
-<a href=#291 id=291 data-nosnippet>291</a>    }
-<a href=#292 id=292 data-nosnippet>292</a>
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">fn </span>make_test_arrow_schema() -&gt; ArrowSchema {
-<a href=#294 id=294 data-nosnippet>294</a>        ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#295 id=295 data-nosnippet>295</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
-<a href=#296 id=296 data-nosnippet>296</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#297 id=297 data-nosnippet>297</a>                <span class="number">1</span>.to_string(),
-<a href=#298 id=298 data-nosnippet>298</a>            )])),
-<a href=#299 id=299 data-nosnippet>299</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
-<a href=#300 id=300 data-nosnippet>300</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#301 id=301 data-nosnippet>301</a>                <span class="number">2</span>.to_string(),
-<a href=#302 id=302 data-nosnippet>302</a>            )])),
-<a href=#303 id=303 data-nosnippet>303</a>        ])
-<a href=#304 id=304 data-nosnippet>304</a>    }
-<a href=#305 id=305 data-nosnippet>305</a>
-<a href=#306 id=306 data-nosnippet>306</a>    <span class="attr">#[tokio::test]
-<a href=#307 id=307 data-nosnippet>307</a>    </span><span class="kw">async fn </span>test_rolling_writer_basic() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
-<a href=#311 id=311 data-nosnippet>311</a>            temp_dir.path().to_str().unwrap().to_string(),
-<a href=#312 id=312 data-nosnippet>312</a>        );
-<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span>file_name_gen =
-<a href=#314 id=314 data-nosnippet>314</a>            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
-<a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="comment">// Create schema
-<a href=#317 id=317 data-nosnippet>317</a>        </span><span class="kw">let </span>schema = make_test_schema()<span class="question-mark">?</span>;
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="comment">// Create writer builders
-<a href=#320 id=320 data-nosnippet>320</a>        </span><span class="kw">let </span>parquet_writer_builder =
-<a href=#321 id=321 data-nosnippet>321</a>            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="comment">// Set a large target size so no rolling occurs
-<a href=#324 id=324 data-nosnippet>324</a>        </span><span class="kw">let </span>rolling_file_writer_builder = RollingFileWriterBuilder::new(
-<a href=#325 id=325 data-nosnippet>325</a>            parquet_writer_builder,
-<a href=#326 id=326 data-nosnippet>326</a>            <span class="number">1024 </span>* <span class="number">1024</span>,
-<a href=#327 id=327 data-nosnippet>327</a>            file_io.clone(),
-<a href=#328 id=328 data-nosnippet>328</a>            location_gen,
-<a href=#329 id=329 data-nosnippet>329</a>            file_name_gen,
-<a href=#330 id=330 data-nosnippet>330</a>        );
+<a href=#229 id=229 data-nosnippet>229</a>    /// A `Result` containing a vector of `DataFileBuilder` instances representing
+<a href=#230 id=230 data-nosnippet>230</a>    /// all files that were written, including any that were created due to rollover
+<a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">pub async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFileBuilder&gt;&gt; {
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="comment">// close the current writer and merge the output
+<a href=#233 id=233 data-nosnippet>233</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(current_writer) = <span class="self">self</span>.inner {
+<a href=#234 id=234 data-nosnippet>234</a>            <span class="self">self</span>.data_file_builders
+<a href=#235 id=235 data-nosnippet>235</a>                .extend(current_writer.close().<span class="kw">await</span><span class="question-mark">?</span>);
+<a href=#236 id=236 data-nosnippet>236</a>        }
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.data_file_builders)
+<a href=#239 id=239 data-nosnippet>239</a>    }
+<a href=#240 id=240 data-nosnippet>240</a>}
+<a href=#241 id=241 data-nosnippet>241</a>
+<a href=#242 id=242 data-nosnippet>242</a><span class="kw">impl</span>&lt;B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator&gt; CurrentFileStatus
+<a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">for </span>RollingFileWriter&lt;B, L, F&gt;
+<a href=#244 id=244 data-nosnippet>244</a>{
+<a href=#245 id=245 data-nosnippet>245</a>    <span class="kw">fn </span>current_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_file_path()
+<a href=#247 id=247 data-nosnippet>247</a>    }
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">fn </span>current_row_num(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#250 id=250 data-nosnippet>250</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_row_num()
+<a href=#251 id=251 data-nosnippet>251</a>    }
+<a href=#252 id=252 data-nosnippet>252</a>
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">fn </span>current_written_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="self">self</span>.inner.as_ref().unwrap().current_written_size()
+<a href=#255 id=255 data-nosnippet>255</a>    }
+<a href=#256 id=256 data-nosnippet>256</a>}
+<a href=#257 id=257 data-nosnippet>257</a>
+<a href=#258 id=258 data-nosnippet>258</a><span class="attr">#[cfg(test)]
+<a href=#259 id=259 data-nosnippet>259</a></span><span class="kw">mod </span>tests {
+<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">use </span>std::collections::HashMap;
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">use </span>std::sync::Arc;
+<a href=#262 id=262 data-nosnippet>262</a>
+<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, StringArray};
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">use </span>arrow_schema::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">use </span>parquet::file::properties::WriterProperties;
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">use </span>rand::prelude::IteratorRandom;
+<a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
+<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::{
+<a href=#276 id=276 data-nosnippet>276</a>        DefaultFileNameGenerator, DefaultLocationGenerator,
+<a href=#277 id=277 data-nosnippet>277</a>    };
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::tests::check_parquet_data_file;
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
+<a href=#280 id=280 data-nosnippet>280</a>
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">fn </span>make_test_schema() -&gt; <span class="prelude-ty">Result</span>&lt;Schema&gt; {
+<a href=#282 id=282 data-nosnippet>282</a>        Schema::builder()
+<a href=#283 id=283 data-nosnippet>283</a>            .with_schema_id(<span class="number">1</span>)
+<a href=#284 id=284 data-nosnippet>284</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#285 id=285 data-nosnippet>285</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#286 id=286 data-nosnippet>286</a>                NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#287 id=287 data-nosnippet>287</a>            ])
+<a href=#288 id=288 data-nosnippet>288</a>            .build()
+<a href=#289 id=289 data-nosnippet>289</a>    }
+<a href=#290 id=290 data-nosnippet>290</a>
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">fn </span>make_test_arrow_schema() -&gt; ArrowSchema {
+<a href=#292 id=292 data-nosnippet>292</a>        ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#293 id=293 data-nosnippet>293</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+<a href=#294 id=294 data-nosnippet>294</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#295 id=295 data-nosnippet>295</a>                <span class="number">1</span>.to_string(),
+<a href=#296 id=296 data-nosnippet>296</a>            )])),
+<a href=#297 id=297 data-nosnippet>297</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+<a href=#298 id=298 data-nosnippet>298</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#299 id=299 data-nosnippet>299</a>                <span class="number">2</span>.to_string(),
+<a href=#300 id=300 data-nosnippet>300</a>            )])),
+<a href=#301 id=301 data-nosnippet>301</a>        ])
+<a href=#302 id=302 data-nosnippet>302</a>    }
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>    <span class="attr">#[tokio::test]
+<a href=#305 id=305 data-nosnippet>305</a>    </span><span class="kw">async fn </span>test_rolling_writer_basic() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
+<a href=#309 id=309 data-nosnippet>309</a>            temp_dir.path().to_str().unwrap().to_string(),
+<a href=#310 id=310 data-nosnippet>310</a>        );
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>file_name_gen =
+<a href=#312 id=312 data-nosnippet>312</a>            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="comment">// Create schema
+<a href=#315 id=315 data-nosnippet>315</a>        </span><span class="kw">let </span>schema = make_test_schema()<span class="question-mark">?</span>;
+<a href=#316 id=316 data-nosnippet>316</a>
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="comment">// Create writer builders
+<a href=#318 id=318 data-nosnippet>318</a>        </span><span class="kw">let </span>parquet_writer_builder =
+<a href=#319 id=319 data-nosnippet>319</a>            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="comment">// Set a large target size so no rolling occurs
+<a href=#322 id=322 data-nosnippet>322</a>        </span><span class="kw">let </span>rolling_file_writer_builder = RollingFileWriterBuilder::new(
+<a href=#323 id=323 data-nosnippet>323</a>            parquet_writer_builder,
+<a href=#324 id=324 data-nosnippet>324</a>            <span class="number">1024 </span>* <span class="number">1024</span>,
+<a href=#325 id=325 data-nosnippet>325</a>            file_io.clone(),
+<a href=#326 id=326 data-nosnippet>326</a>            location_gen,
+<a href=#327 id=327 data-nosnippet>327</a>            file_name_gen,
+<a href=#328 id=328 data-nosnippet>328</a>        );
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
 <a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
-<a href=#333 id=333 data-nosnippet>333</a>
-<a href=#334 id=334 data-nosnippet>334</a>        <span class="comment">// Create writer
-<a href=#335 id=335 data-nosnippet>335</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>writer = data_file_writer_builder.build(<span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#336 id=336 data-nosnippet>336</a>
-<a href=#337 id=337 data-nosnippet>337</a>        <span class="comment">// Create test data
-<a href=#338 id=338 data-nosnippet>338</a>        </span><span class="kw">let </span>arrow_schema = make_test_arrow_schema();
-<a href=#339 id=339 data-nosnippet>339</a>
-<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(arrow_schema), <span class="macro">vec!</span>[
-<a href=#341 id=341 data-nosnippet>341</a>            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
-<a href=#342 id=342 data-nosnippet>342</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>])),
-<a href=#343 id=343 data-nosnippet>343</a>        ])<span class="question-mark">?</span>;
-<a href=#344 id=344 data-nosnippet>344</a>
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="comment">// Write data
-<a href=#346 id=346 data-nosnippet>346</a>        </span>writer.write(batch.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#347 id=347 data-nosnippet>347</a>
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="comment">// Close writer and get data files
-<a href=#349 id=349 data-nosnippet>349</a>        </span><span class="kw">let </span>data_files = writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#350 id=350 data-nosnippet>350</a>
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="comment">// Verify only one file was created
-<a href=#352 id=352 data-nosnippet>352</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#353 id=353 data-nosnippet>353</a>            data_files.len(),
-<a href=#354 id=354 data-nosnippet>354</a>            <span class="number">1</span>,
-<a href=#355 id=355 data-nosnippet>355</a>            <span class="string">"Expected only one data file to be created"
-<a href=#356 id=356 data-nosnippet>356</a>        </span>);
-<a href=#357 id=357 data-nosnippet>357</a>
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="comment">// Verify file content
-<a href=#359 id=359 data-nosnippet>359</a>        </span>check_parquet_data_file(<span class="kw-2">&amp;</span>file_io, <span class="kw-2">&amp;</span>data_files[<span class="number">0</span>], <span class="kw-2">&amp;</span>batch).<span class="kw">await</span>;
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="prelude-val">Ok</span>(())
-<a href=#362 id=362 data-nosnippet>362</a>    }
-<a href=#363 id=363 data-nosnippet>363</a>
-<a href=#364 id=364 data-nosnippet>364</a>    <span class="attr">#[tokio::test]
-<a href=#365 id=365 data-nosnippet>365</a>    </span><span class="kw">async fn </span>test_rolling_writer_with_rolling() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
-<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
-<a href=#369 id=369 data-nosnippet>369</a>            temp_dir.path().to_str().unwrap().to_string(),
-<a href=#370 id=370 data-nosnippet>370</a>        );
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>file_name_gen =
-<a href=#372 id=372 data-nosnippet>372</a>            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
-<a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a>        <span class="comment">// Create schema
-<a href=#375 id=375 data-nosnippet>375</a>        </span><span class="kw">let </span>schema = make_test_schema()<span class="question-mark">?</span>;
-<a href=#376 id=376 data-nosnippet>376</a>
-<a href=#377 id=377 data-nosnippet>377</a>        <span class="comment">// Create writer builders
-<a href=#378 id=378 data-nosnippet>378</a>        </span><span class="kw">let </span>parquet_writer_builder =
-<a href=#379 id=379 data-nosnippet>379</a>            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
-<a href=#380 id=380 data-nosnippet>380</a>
-<a href=#381 id=381 data-nosnippet>381</a>        <span class="comment">// Set a very small target size to trigger rolling
-<a href=#382 id=382 data-nosnippet>382</a>        </span><span class="kw">let </span>rolling_writer_builder = RollingFileWriterBuilder::new(
-<a href=#383 id=383 data-nosnippet>383</a>            parquet_writer_builder,
-<a href=#384 id=384 data-nosnippet>384</a>            <span class="number">1024</span>,
-<a href=#385 id=385 data-nosnippet>385</a>            file_io,
-<a href=#386 id=386 data-nosnippet>386</a>            location_gen,
-<a href=#387 id=387 data-nosnippet>387</a>            file_name_gen,
-<a href=#388 id=388 data-nosnippet>388</a>        );
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="comment">// Create writer
+<a href=#333 id=333 data-nosnippet>333</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>writer = data_file_writer_builder.build(<span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#334 id=334 data-nosnippet>334</a>
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="comment">// Create test data
+<a href=#336 id=336 data-nosnippet>336</a>        </span><span class="kw">let </span>arrow_schema = make_test_arrow_schema();
+<a href=#337 id=337 data-nosnippet>337</a>
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(arrow_schema), <span class="macro">vec!</span>[
+<a href=#339 id=339 data-nosnippet>339</a>            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
+<a href=#340 id=340 data-nosnippet>340</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>])),
+<a href=#341 id=341 data-nosnippet>341</a>        ])<span class="question-mark">?</span>;
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="comment">// Write data
+<a href=#344 id=344 data-nosnippet>344</a>        </span>writer.write(batch.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a>        <span class="comment">// Close writer and get data files
+<a href=#347 id=347 data-nosnippet>347</a>        </span><span class="kw">let </span>data_files = writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#348 id=348 data-nosnippet>348</a>
+<a href=#349 id=349 data-nosnippet>349</a>        <span class="comment">// Verify only one file was created
+<a href=#350 id=350 data-nosnippet>350</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#351 id=351 data-nosnippet>351</a>            data_files.len(),
+<a href=#352 id=352 data-nosnippet>352</a>            <span class="number">1</span>,
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="string">"Expected only one data file to be created"
+<a href=#354 id=354 data-nosnippet>354</a>        </span>);
+<a href=#355 id=355 data-nosnippet>355</a>
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="comment">// Verify file content
+<a href=#357 id=357 data-nosnippet>357</a>        </span>check_parquet_data_file(<span class="kw-2">&amp;</span>file_io, <span class="kw-2">&amp;</span>data_files[<span class="number">0</span>], <span class="kw-2">&amp;</span>batch).<span class="kw">await</span>;
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="prelude-val">Ok</span>(())
+<a href=#360 id=360 data-nosnippet>360</a>    }
+<a href=#361 id=361 data-nosnippet>361</a>
+<a href=#362 id=362 data-nosnippet>362</a>    <span class="attr">#[tokio::test]
+<a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">async fn </span>test_rolling_writer_with_rolling() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
+<a href=#367 id=367 data-nosnippet>367</a>            temp_dir.path().to_str().unwrap().to_string(),
+<a href=#368 id=368 data-nosnippet>368</a>        );
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>file_name_gen =
+<a href=#370 id=370 data-nosnippet>370</a>            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>        <span class="comment">// Create schema
+<a href=#373 id=373 data-nosnippet>373</a>        </span><span class="kw">let </span>schema = make_test_schema()<span class="question-mark">?</span>;
+<a href=#374 id=374 data-nosnippet>374</a>
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="comment">// Create writer builders
+<a href=#376 id=376 data-nosnippet>376</a>        </span><span class="kw">let </span>parquet_writer_builder =
+<a href=#377 id=377 data-nosnippet>377</a>            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>        <span class="comment">// Set a very small target size to trigger rolling
+<a href=#380 id=380 data-nosnippet>380</a>        </span><span class="kw">let </span>rolling_writer_builder = RollingFileWriterBuilder::new(
+<a href=#381 id=381 data-nosnippet>381</a>            parquet_writer_builder,
+<a href=#382 id=382 data-nosnippet>382</a>            <span class="number">1024</span>,
+<a href=#383 id=383 data-nosnippet>383</a>            file_io,
+<a href=#384 id=384 data-nosnippet>384</a>            location_gen,
+<a href=#385 id=385 data-nosnippet>385</a>            file_name_gen,
+<a href=#386 id=386 data-nosnippet>386</a>        );
+<a href=#387 id=387 data-nosnippet>387</a>
+<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 <a href=#389 id=389 data-nosnippet>389</a>
-<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a>        <span class="comment">// Create writer
-<a href=#393 id=393 data-nosnippet>393</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>writer = data_file_writer_builder.build(<span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#394 id=394 data-nosnippet>394</a>
-<a href=#395 id=395 data-nosnippet>395</a>        <span class="comment">// Create test data
-<a href=#396 id=396 data-nosnippet>396</a>        </span><span class="kw">let </span>arrow_schema = make_test_arrow_schema();
-<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>arrow_schema_ref = Arc::new(arrow_schema.clone());
-<a href=#398 id=398 data-nosnippet>398</a>
-<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">let </span>names = <span class="macro">vec!</span>[
-<a href=#400 id=400 data-nosnippet>400</a>            <span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>, <span class="string">"Dave"</span>, <span class="string">"Eve"</span>, <span class="string">"Frank"</span>, <span class="string">"Grace"</span>, <span class="string">"Heidi"</span>, <span class="string">"Ivan"</span>, <span class="string">"Judy"</span>,
-<a href=#401 id=401 data-nosnippet>401</a>            <span class="string">"Kelly"</span>, <span class="string">"Larry"</span>, <span class="string">"Mallory"</span>, <span class="string">"Shawn"</span>,
-<a href=#402 id=402 data-nosnippet>402</a>        ];
-<a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::thread_rng();
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>batch_num = <span class="number">10</span>;
-<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">let </span>batch_rows = <span class="number">100</span>;
-<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span>expected_rows = batch_num * batch_rows;
-<a href=#408 id=408 data-nosnippet>408</a>
-<a href=#409 id=409 data-nosnippet>409</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..batch_num {
-<a href=#410 id=410 data-nosnippet>410</a>            <span class="kw">let </span>int_values: Vec&lt;i32&gt; = (<span class="number">0</span>..batch_rows).map(|row| i * batch_rows + row).collect();
-<a href=#411 id=411 data-nosnippet>411</a>            <span class="kw">let </span>str_values: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = (<span class="number">0</span>..batch_rows)
-<a href=#412 id=412 data-nosnippet>412</a>                .map(|<span class="kw">_</span>| <span class="kw-2">*</span>names.iter().choose(<span class="kw-2">&amp;mut </span>rng).unwrap())
-<a href=#413 id=413 data-nosnippet>413</a>                .collect();
-<a href=#414 id=414 data-nosnippet>414</a>
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="kw">let </span>int_array = Arc::new(Int32Array::from(int_values)) <span class="kw">as </span>ArrayRef;
-<a href=#416 id=416 data-nosnippet>416</a>            <span class="kw">let </span>str_array = Arc::new(StringArray::from(str_values)) <span class="kw">as </span>ArrayRef;
-<a href=#417 id=417 data-nosnippet>417</a>
-<a href=#418 id=418 data-nosnippet>418</a>            <span class="kw">let </span>batch =
-<a href=#419 id=419 data-nosnippet>419</a>                RecordBatch::try_new(Arc::clone(<span class="kw-2">&amp;</span>arrow_schema_ref), <span class="macro">vec!</span>[int_array, str_array])
-<a href=#420 id=420 data-nosnippet>420</a>                    .expect(<span class="string">"Failed to create RecordBatch"</span>);
-<a href=#421 id=421 data-nosnippet>421</a>
-<a href=#422 id=422 data-nosnippet>422</a>            writer.write(batch).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#423 id=423 data-nosnippet>423</a>        }
-<a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="comment">// Close writer and get data files
-<a href=#426 id=426 data-nosnippet>426</a>        </span><span class="kw">let </span>data_files = writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="comment">// Verify multiple files were created (at least 4)
-<a href=#429 id=429 data-nosnippet>429</a>        </span><span class="macro">assert!</span>(
-<a href=#430 id=430 data-nosnippet>430</a>            data_files.len() &gt; <span class="number">4</span>,
-<a href=#431 id=431 data-nosnippet>431</a>            <span class="string">"Expected at least 4 data files to be created, but got {}"</span>,
-<a href=#432 id=432 data-nosnippet>432</a>            data_files.len()
-<a href=#433 id=433 data-nosnippet>433</a>        );
-<a href=#434 id=434 data-nosnippet>434</a>
-<a href=#435 id=435 data-nosnippet>435</a>        <span class="comment">// Verify total record count across all files
-<a href=#436 id=436 data-nosnippet>436</a>        </span><span class="kw">let </span>total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
-<a href=#437 id=437 data-nosnippet>437</a>        <span class="macro">assert_eq!</span>(
-<a href=#438 id=438 data-nosnippet>438</a>            total_records, expected_rows <span class="kw">as </span>u64,
-<a href=#439 id=439 data-nosnippet>439</a>            <span class="string">"Expected {expected_rows} total records across all files"
-<a href=#440 id=440 data-nosnippet>440</a>        </span>);
-<a href=#441 id=441 data-nosnippet>441</a>
-<a href=#442 id=442 data-nosnippet>442</a>        <span class="prelude-val">Ok</span>(())
-<a href=#443 id=443 data-nosnippet>443</a>    }
-<a href=#444 id=444 data-nosnippet>444</a>}</code></pre></div></section></main></body></html>
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="comment">// Create writer
+<a href=#391 id=391 data-nosnippet>391</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>writer = data_file_writer_builder.build(<span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a>        <span class="comment">// Create test data
+<a href=#394 id=394 data-nosnippet>394</a>        </span><span class="kw">let </span>arrow_schema = make_test_arrow_schema();
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">let </span>arrow_schema_ref = Arc::new(arrow_schema.clone());
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>names = <span class="macro">vec!</span>[
+<a href=#398 id=398 data-nosnippet>398</a>            <span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>, <span class="string">"Dave"</span>, <span class="string">"Eve"</span>, <span class="string">"Frank"</span>, <span class="string">"Grace"</span>, <span class="string">"Heidi"</span>, <span class="string">"Ivan"</span>, <span class="string">"Judy"</span>,
+<a href=#399 id=399 data-nosnippet>399</a>            <span class="string">"Kelly"</span>, <span class="string">"Larry"</span>, <span class="string">"Mallory"</span>, <span class="string">"Shawn"</span>,
+<a href=#400 id=400 data-nosnippet>400</a>        ];
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::thread_rng();
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="kw">let </span>batch_num = <span class="number">10</span>;
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span>batch_rows = <span class="number">100</span>;
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>expected_rows = batch_num * batch_rows;
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..batch_num {
+<a href=#408 id=408 data-nosnippet>408</a>            <span class="kw">let </span>int_values: Vec&lt;i32&gt; = (<span class="number">0</span>..batch_rows).map(|row| i * batch_rows + row).collect();
+<a href=#409 id=409 data-nosnippet>409</a>            <span class="kw">let </span>str_values: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = (<span class="number">0</span>..batch_rows)
+<a href=#410 id=410 data-nosnippet>410</a>                .map(|<span class="kw">_</span>| <span class="kw-2">*</span>names.iter().choose(<span class="kw-2">&amp;mut </span>rng).unwrap())
+<a href=#411 id=411 data-nosnippet>411</a>                .collect();
+<a href=#412 id=412 data-nosnippet>412</a>
+<a href=#413 id=413 data-nosnippet>413</a>            <span class="kw">let </span>int_array = Arc::new(Int32Array::from(int_values)) <span class="kw">as </span>ArrayRef;
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">let </span>str_array = Arc::new(StringArray::from(str_values)) <span class="kw">as </span>ArrayRef;
+<a href=#415 id=415 data-nosnippet>415</a>
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="kw">let </span>batch =
+<a href=#417 id=417 data-nosnippet>417</a>                RecordBatch::try_new(Arc::clone(<span class="kw-2">&amp;</span>arrow_schema_ref), <span class="macro">vec!</span>[int_array, str_array])
+<a href=#418 id=418 data-nosnippet>418</a>                    .expect(<span class="string">"Failed to create RecordBatch"</span>);
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a>            writer.write(batch).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#421 id=421 data-nosnippet>421</a>        }
+<a href=#422 id=422 data-nosnippet>422</a>
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="comment">// Close writer and get data files
+<a href=#424 id=424 data-nosnippet>424</a>        </span><span class="kw">let </span>data_files = writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="comment">// Verify multiple files were created (at least 4)
+<a href=#427 id=427 data-nosnippet>427</a>        </span><span class="macro">assert!</span>(
+<a href=#428 id=428 data-nosnippet>428</a>            data_files.len() &gt; <span class="number">4</span>,
+<a href=#429 id=429 data-nosnippet>429</a>            <span class="string">"Expected at least 4 data files to be created, but got {}"</span>,
+<a href=#430 id=430 data-nosnippet>430</a>            data_files.len()
+<a href=#431 id=431 data-nosnippet>431</a>        );
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a>        <span class="comment">// Verify total record count across all files
+<a href=#434 id=434 data-nosnippet>434</a>        </span><span class="kw">let </span>total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
+<a href=#435 id=435 data-nosnippet>435</a>        <span class="macro">assert_eq!</span>(
+<a href=#436 id=436 data-nosnippet>436</a>            total_records, expected_rows <span class="kw">as </span>u64,
+<a href=#437 id=437 data-nosnippet>437</a>            <span class="string">"Expected {expected_rows} total records across all files"
+<a href=#438 id=438 data-nosnippet>438</a>        </span>);
+<a href=#439 id=439 data-nosnippet>439</a>
+<a href=#440 id=440 data-nosnippet>440</a>        <span class="prelude-val">Ok</span>(())
+<a href=#441 id=441 data-nosnippet>441</a>    }
+<a href=#442 id=442 data-nosnippet>442</a>}</code></pre></div></section></main></body></html>
