@@ -352,7 +352,7 @@ async fn test_metadata_table() -> Result<()> {
             Field { "parent_id": nullable Int64, metadata: {"PARQUET:field_id": "3"} },
             Field { "operation": nullable Utf8, metadata: {"PARQUET:field_id": "4"} },
             Field { "manifest_list": nullable Utf8, metadata: {"PARQUET:field_id": "5"} },
-            Field { "summary": nullable Map("key_value": Struct("key": Utf8, metadata: {"PARQUET:field_id": "7"}, "value": nullable Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
+            Field { "summary": nullable Map("key_value": non-null Struct("key": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "value": Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
         expect![[r#"
             committed_at: PrimitiveArray<Timestamp(µs, "+00:00")>
             [
@@ -397,7 +397,7 @@ async fn test_metadata_table() -> Result<()> {
             Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
             Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
             Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
-            Field { "partition_summaries": List(Struct("contains_null": Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": nullable Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": nullable Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": nullable Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
+            Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
         expect![[r#"
             content: PrimitiveArray<Int32>
             [
@@ -660,7 +660,7 @@ async fn test_insert_into_nested() -> Result<()> {
         expect![[r#"
             Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
             Field { "name": Utf8, metadata: {"PARQUET:field_id": "2"} },
-            Field { "profile": nullable Struct("address": nullable Struct("street": Utf8, metadata: {"PARQUET:field_id": "6"}, "city": Utf8, metadata: {"PARQUET:field_id": "7"}, "zip": Int32, metadata: {"PARQUET:field_id": "8"}), metadata: {"PARQUET:field_id": "4"}, "contact": nullable Struct("email": nullable Utf8, metadata: {"PARQUET:field_id": "9"}, "phone": nullable Utf8, metadata: {"PARQUET:field_id": "10"}), metadata: {"PARQUET:field_id": "5"}), metadata: {"PARQUET:field_id": "3"} }"#]],
+            Field { "profile": nullable Struct("address": Struct("street": non-null Utf8, metadata: {"PARQUET:field_id": "6"}, "city": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "zip": non-null Int32, metadata: {"PARQUET:field_id": "8"}), metadata: {"PARQUET:field_id": "4"}, "contact": Struct("email": Utf8, metadata: {"PARQUET:field_id": "9"}, "phone": Utf8, metadata: {"PARQUET:field_id": "10"}), metadata: {"PARQUET:field_id": "5"}), metadata: {"PARQUET:field_id": "3"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
@@ -884,9 +884,9 @@ async fn test_insert_into_partitioned() -> Result<()> {
     check_record_batches(
         batches,
         expect![[r#"
-            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "category", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }"#]],
+            Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "category": Utf8, metadata: {"PARQUET:field_id": "2"} },
+            Field { "value": Utf8, metadata: {"PARQUET:field_id": "3"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
