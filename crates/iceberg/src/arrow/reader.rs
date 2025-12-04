@@ -3975,7 +3975,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/data.parquet", table_location),
+                data_file_path: format!("{table_location}/data.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],

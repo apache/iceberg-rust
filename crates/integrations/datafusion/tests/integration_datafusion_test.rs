@@ -923,25 +923,22 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let file_io = table.file_io();
 
     // List files under each expected partition path
-    let electronics_path = format!("{}/data/category=electronics", table_location);
-    let books_path = format!("{}/data/category=books", table_location);
-    let clothing_path = format!("{}/data/category=clothing", table_location);
+    let electronics_path = format!("{table_location}/data/category=electronics");
+    let books_path = format!("{table_location}/data/category=books");
+    let clothing_path = format!("{table_location}/data/category=clothing");
 
     // Verify partition directories exist and contain data files
     assert!(
         file_io.exists(&electronics_path).await?,
-        "Expected partition directory: {}",
-        electronics_path
+        "Expected partition directory: {electronics_path}"
     );
     assert!(
         file_io.exists(&books_path).await?,
-        "Expected partition directory: {}",
-        books_path
+        "Expected partition directory: {books_path}"
     );
     assert!(
         file_io.exists(&clothing_path).await?,
-        "Expected partition directory: {}",
-        clothing_path
+        "Expected partition directory: {clothing_path}"
     );
 
     Ok(())
