@@ -28,9 +28,6 @@ keywords = ["iceberg"]
 license = { workspace = true }
 repository = { workspace = true }
 
-[lints]
-workspace = true
-
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
