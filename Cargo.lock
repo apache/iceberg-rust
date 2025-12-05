@@ -3648,6 +3648,7 @@ name = "iceberg-catalog-rest"
 version = "0.7.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "ctor",
  "http 1.4.0",
