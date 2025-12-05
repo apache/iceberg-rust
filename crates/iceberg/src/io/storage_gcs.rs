@@ -71,20 +71,20 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.disable_config_load = true;
     }
 
-    if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS) {
-        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
-            cfg.allow_anonymous = true;
-        }
+    if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS)
+        && is_truthy(allow_anonymous.to_lowercase().as_str())
+    {
+        cfg.allow_anonymous = true;
     }
-    if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA) {
-        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
-            cfg.disable_vm_metadata = true;
-        }
+    if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA)
+        && is_truthy(disable_ec2_metadata.to_lowercase().as_str())
+    {
+        cfg.disable_vm_metadata = true;
     };
-    if let Some(disable_config_load) = m.remove(GCS_DISABLE_CONFIG_LOAD) {
-        if is_truthy(disable_config_load.to_lowercase().as_str()) {
-            cfg.disable_config_load = true;
-        }
+    if let Some(disable_config_load) = m.remove(GCS_DISABLE_CONFIG_LOAD)
+        && is_truthy(disable_config_load.to_lowercase().as_str())
+    {
+        cfg.disable_config_load = true;
     };
 
     Ok(cfg)
@@ -96,7 +96,7 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid gcs url: {}, bucket is required", path),
+            format!("Invalid gcs url: {path}, bucket is required"),
         )
     })?;
 

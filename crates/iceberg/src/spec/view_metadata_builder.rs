@@ -478,10 +478,10 @@ impl ViewMetadataBuilder {
         // as it might panic if the metadata is invalid.
         self.metadata.validate()?;
 
-        if let Some(previous) = self.previous_view_version.take() {
-            if !allow_replace_drop_dialects(&self.metadata.properties) {
-                require_no_dialect_dropped(&previous, self.metadata.current_version())?;
-            }
+        if let Some(previous) = self.previous_view_version.take()
+            && !allow_replace_drop_dialects(&self.metadata.properties)
+        {
+            require_no_dialect_dropped(&previous, self.metadata.current_version())?;
         }
 
         let _expired_versions = self.expire_versions();
