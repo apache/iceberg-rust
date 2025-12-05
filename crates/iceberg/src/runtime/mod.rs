@@ -17,11 +17,6 @@
 
 // This module contains the async runtime abstraction for iceberg.
 
-// The crate currently mandates Tokio as the runtime. Failing early keeps build errors clear
-// when users try to disable the default runtime.
-#[cfg(not(feature = "tokio"))]
-compile_error!("feature \"tokio\" is required for async runtime");
-
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
