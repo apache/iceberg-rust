@@ -547,16 +547,16 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                     return Ok(false);
                 }
 
-                if let Some(min) = min {
-                    if min.gt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(min) = min
+                    && min.gt(datum)
+                {
+                    return Ok(false);
                 }
 
-                if let Some(max) = max {
-                    if max.lt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(max) = max
+                    && max.lt(datum)
+                {
+                    return Ok(false);
                 }
 
                 Ok(true)

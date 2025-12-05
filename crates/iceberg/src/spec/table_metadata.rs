@@ -390,18 +390,18 @@ impl TableMetadata {
     }
 
     fn construct_refs(&mut self) {
-        if let Some(current_snapshot_id) = self.current_snapshot_id {
-            if !self.refs.contains_key(MAIN_BRANCH) {
-                self.refs
-                    .insert(MAIN_BRANCH.to_string(), SnapshotReference {
-                        snapshot_id: current_snapshot_id,
-                        retention: SnapshotRetention::Branch {
-                            min_snapshots_to_keep: None,
-                            max_snapshot_age_ms: None,
-                            max_ref_age_ms: None,
-                        },
-                    });
-            }
+        if let Some(current_snapshot_id) = self.current_snapshot_id
+            && !self.refs.contains_key(MAIN_BRANCH)
+        {
+            self.refs
+                .insert(MAIN_BRANCH.to_string(), SnapshotReference {
+                    snapshot_id: current_snapshot_id,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                });
         }
     }
 
@@ -572,17 +572,17 @@ impl TableMetadata {
 
         let main_ref = self.refs.get(MAIN_BRANCH);
         if self.current_snapshot_id.is_some() {
-            if let Some(main_ref) = main_ref {
-                if main_ref.snapshot_id != self.current_snapshot_id.unwrap_or_default() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Current snapshot id does not match main branch ({:?} != {:?})",
-                            self.current_snapshot_id.unwrap_or_default(),
-                            main_ref.snapshot_id
-                        ),
-                    ));
-                }
+            if let Some(main_ref) = main_ref
+                && main_ref.snapshot_id != self.current_snapshot_id.unwrap_or_default()
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Current snapshot id does not match main branch ({:?} != {:?})",
+                        self.current_snapshot_id.unwrap_or_default(),
+                        main_ref.snapshot_id
+                    ),
+                ));
             }
         } else if main_ref.is_some() {
             return Err(Error::new(
@@ -606,22 +606,21 @@ impl TableMetadata {
             ));
         }
 
-        if self.format_version >= FormatVersion::V2 {
-            if let Some(snapshot) = self
+        if self.format_version >= FormatVersion::V2
+            && let Some(snapshot) = self
                 .snapshots
                 .values()
                 .find(|snapshot| snapshot.sequence_number() > self.last_sequence_number)
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid snapshot with id {} and sequence number {} greater than last sequence number {}",
-                        snapshot.snapshot_id(),
-                        snapshot.sequence_number(),
-                        self.last_sequence_number
-                    ),
-                ));
-            }
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid snapshot with id {} and sequence number {} greater than last sequence number {}",
+                    snapshot.snapshot_id(),
+                    snapshot.sequence_number(),
+                    self.last_sequence_number
+                ),
+            ));
         }
 
         Ok(())

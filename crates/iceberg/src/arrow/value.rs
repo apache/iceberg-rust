@@ -258,15 +258,15 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                             "The partner is not a decimal128 array",
                         )
                     })?;
-                if let DataType::Decimal128(arrow_precision, arrow_scale) = array.data_type() {
-                    if *arrow_precision as u32 != *precision || *arrow_scale as u32 != *scale {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
-                            ),
-                        ));
-                    }
+                if let DataType::Decimal128(arrow_precision, arrow_scale) = array.data_type()
+                    && (*arrow_precision as u32 != *precision || *arrow_scale as u32 != *scale)
+                {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
+                        ),
+                    ));
                 }
                 Ok(array.iter().map(|v| v.map(Literal::decimal)).collect())
             }
@@ -348,10 +348,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 } else if let Some(array) = partner.as_any().downcast_ref::<StringArray>() {
                     Ok(array.iter().map(|v| v.map(Literal::string)).collect())
                 } else {
-                    return Err(Error::new(
+                    Err(Error::new(
                         ErrorKind::DataInvalid,
                         "The partner is not a string array",
-                    ));
+                    ))
                 }
             }
             PrimitiveType::Uuid => {
@@ -415,10 +415,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         .map(|v| v.map(|v| Literal::binary(v.to_vec())))
                         .collect())
                 } else {
-                    return Err(Error::new(
+                    Err(Error::new(
                         ErrorKind::DataInvalid,
                         "The partner is not a binary array",
-                    ));
+                    ))
                 }
             }
         }

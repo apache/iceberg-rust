@@ -379,7 +379,7 @@ mod tests {
 
         let table_creation = TableCreation::builder()
             .name("test_table".to_string())
-            .location(format!("{}/test_table", warehouse_path))
+            .location(format!("{warehouse_path}/test_table"))
             .schema(schema)
             .properties(HashMap::new())
             .build();
