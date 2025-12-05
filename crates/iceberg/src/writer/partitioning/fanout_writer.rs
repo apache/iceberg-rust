@@ -73,7 +73,6 @@ where
         if !self.partition_writers.contains_key(partition_key.data()) {
             let writer = self
                 .inner_builder
-                .clone()
                 .build(Some(partition_key.clone()))
                 .await?;
             self.partition_writers

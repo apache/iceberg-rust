@@ -75,7 +75,7 @@ where
     pub async fn write(&mut self, input: I) -> Result<()> {
         // Lazily create writer on first write
         if self.writer.is_none() {
-            self.writer = Some(self.inner_builder.clone().build(None).await?);
+            self.writer = Some(self.inner_builder.build(None).await?);
         }
 
         // Write directly to inner writer
