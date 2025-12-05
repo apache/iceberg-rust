@@ -66,6 +66,10 @@
 extern crate derive_builder;
 extern crate core;
 
+// Tokio runtime is mandatory for now; surface a clear build error if disabled.
+#[cfg(not(feature = "tokio"))]
+compile_error!("feature \"tokio\" must be enabled for iceberg runtime support");
+
 mod error;
 pub use error::{Error, ErrorKind, Result};
 
