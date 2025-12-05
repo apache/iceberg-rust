@@ -121,14 +121,17 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![
-            Arc::new(committed_at.finish()),
-            Arc::new(snapshot_id.finish()),
-            Arc::new(parent_id.finish()),
-            Arc::new(operation.finish()),
-            Arc::new(manifest_list.finish()),
-            Arc::new(summary.finish()),
-        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(committed_at.finish()),
+                Arc::new(snapshot_id.finish()),
+                Arc::new(parent_id.finish()),
+                Arc::new(operation.finish()),
+                Arc::new(manifest_list.finish()),
+                Arc::new(summary.finish()),
+            ],
+        )?;
 
         Ok(stream::iter(vec![Ok(batch)]).boxed())
     }

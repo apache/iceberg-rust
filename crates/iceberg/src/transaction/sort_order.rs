@@ -156,17 +156,20 @@ mod tests {
             .downcast_ref::<ReplaceSortOrderAction>()
             .unwrap();
 
-        assert_eq!(replace_sort_order.pending_sort_fields, vec![
-            PendingSortField {
-                name: String::from("x"),
-                direction: SortDirection::Ascending,
-                null_order: NullOrder::First,
-            },
-            PendingSortField {
-                name: String::from("y"),
-                direction: SortDirection::Descending,
-                null_order: NullOrder::Last,
-            }
-        ]);
+        assert_eq!(
+            replace_sort_order.pending_sort_fields,
+            vec![
+                PendingSortField {
+                    name: String::from("x"),
+                    direction: SortDirection::Ascending,
+                    null_order: NullOrder::First,
+                },
+                PendingSortField {
+                    name: String::from("y"),
+                    direction: SortDirection::Descending,
+                    null_order: NullOrder::Last,
+                }
+            ]
+        );
     }
 }

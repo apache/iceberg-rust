@@ -201,17 +201,23 @@ mod tests {
             )])),
         ]);
 
-        let batch1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch1 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
-        let batch2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch2 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
         // Write data to the same partition
         writer.write(partition_key.clone(), batch1).await?;
@@ -317,29 +323,41 @@ mod tests {
         ]);
 
         // Create batches for different partitions
-        let batch_us1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch_us1 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
-        let batch_eu1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["EU", "EU"])),
-        ])?;
+        let batch_eu1 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["EU", "EU"])),
+            ],
+        )?;
 
-        let batch_us2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![5])),
-            Arc::new(StringArray::from(vec!["Eve"])),
-            Arc::new(StringArray::from(vec!["US"])),
-        ])?;
+        let batch_us2 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![5])),
+                Arc::new(StringArray::from(vec!["Eve"])),
+                Arc::new(StringArray::from(vec!["US"])),
+            ],
+        )?;
 
-        let batch_asia1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![6, 7])),
-            Arc::new(StringArray::from(vec!["Frank", "Grace"])),
-            Arc::new(StringArray::from(vec!["ASIA", "ASIA"])),
-        ])?;
+        let batch_asia1 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![6, 7])),
+                Arc::new(StringArray::from(vec!["Frank", "Grace"])),
+                Arc::new(StringArray::from(vec!["ASIA", "ASIA"])),
+            ],
+        )?;
 
         // Write data in mixed partition order to demonstrate fanout capability
         // This is the key difference from ClusteredWriter - we can write to any partition at any time

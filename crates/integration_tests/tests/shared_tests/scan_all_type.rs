@@ -291,25 +291,28 @@ async fn test_scan_all_type() {
         MapArray::new(field, offsets, entries, nulls, ordered)
     };
 
-    let batch = RecordBatch::try_new(schema.clone(), vec![
-        Arc::new(col1) as ArrayRef,
-        Arc::new(col2) as ArrayRef,
-        Arc::new(col3) as ArrayRef,
-        Arc::new(col4) as ArrayRef,
-        Arc::new(col5) as ArrayRef,
-        Arc::new(col6) as ArrayRef,
-        Arc::new(col7) as ArrayRef,
-        Arc::new(col8) as ArrayRef,
-        Arc::new(col9) as ArrayRef,
-        Arc::new(col10) as ArrayRef,
-        Arc::new(col11) as ArrayRef,
-        Arc::new(col12) as ArrayRef,
-        Arc::new(col13) as ArrayRef,
-        Arc::new(col14) as ArrayRef,
-        Arc::new(col15) as ArrayRef,
-        Arc::new(col16) as ArrayRef,
-        Arc::new(col17) as ArrayRef,
-    ])
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(col1) as ArrayRef,
+            Arc::new(col2) as ArrayRef,
+            Arc::new(col3) as ArrayRef,
+            Arc::new(col4) as ArrayRef,
+            Arc::new(col5) as ArrayRef,
+            Arc::new(col6) as ArrayRef,
+            Arc::new(col7) as ArrayRef,
+            Arc::new(col8) as ArrayRef,
+            Arc::new(col9) as ArrayRef,
+            Arc::new(col10) as ArrayRef,
+            Arc::new(col11) as ArrayRef,
+            Arc::new(col12) as ArrayRef,
+            Arc::new(col13) as ArrayRef,
+            Arc::new(col14) as ArrayRef,
+            Arc::new(col15) as ArrayRef,
+            Arc::new(col16) as ArrayRef,
+            Arc::new(col17) as ArrayRef,
+        ],
+    )
     .unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();

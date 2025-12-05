@@ -85,3 +85,84 @@ pub(crate) async fn run_schedule(schedule_file: PathBuf) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+
+    #[tokio::test]
+    async fn test_catalog_config_schedule_execution() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let schedule_path = PathBuf::from(format!(
+            "{}/testdata/schedules/catalog_config.toml",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+
+        let result = rt.block_on(run_schedule(schedule_path));
+        assert!(
+            result.is_ok(),
+            "Catalog config schedule should execute successfully"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shared_catalog_schedule_execution() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let schedule_path = PathBuf::from(format!(
+            "{}/testdata/schedules/shared_catalog.toml",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+
+        let result = rt.block_on(run_schedule(schedule_path));
+        assert!(
+            result.is_ok(),
+            "Shared catalog schedule should execute successfully"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_cases_schedule_execution() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let schedule_path = PathBuf::from(format!(
+            "{}/testdata/schedules/error_cases.toml",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+
+        let result = rt.block_on(run_schedule(schedule_path));
+        assert!(
+            result.is_ok(),
+            "Error cases schedule should execute successfully"
+        );
+    }
+
+    #[test]
+    fn test_collect_schedule_files() {
+        let files = collect_schedule_files().unwrap();
+        assert!(
+            !files.is_empty(),
+            "Should find at least some schedule files"
+        );
+
+        // Verify that the newly created files are included
+        let file_names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str())
+            .map(|s| s.to_string())
+            .collect();
+
+        assert!(file_names.contains(&"catalog_config.toml".to_string()));
+        assert!(file_names.contains(&"shared_catalog.toml".to_string()));
+        assert!(file_names.contains(&"error_cases.toml".to_string()));
+    }
+}

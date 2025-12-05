@@ -392,15 +392,17 @@ impl TableMetadata {
     fn construct_refs(&mut self) {
         if let Some(current_snapshot_id) = self.current_snapshot_id {
             if !self.refs.contains_key(MAIN_BRANCH) {
-                self.refs
-                    .insert(MAIN_BRANCH.to_string(), SnapshotReference {
+                self.refs.insert(
+                    MAIN_BRANCH.to_string(),
+                    SnapshotReference {
                         snapshot_id: current_snapshot_id,
                         retention: SnapshotRetention::Branch {
                             min_snapshots_to_keep: None,
                             max_snapshot_age_ms: None,
                             max_ref_age_ms: None,
                         },
-                    });
+                    },
+                );
             }
         }
     }
@@ -830,7 +832,9 @@ pub(super) mod _serde {
 
     impl Serialize for TableMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             // we must do a clone here
             let table_metadata_enum: TableMetadataEnum =
                 self.clone().try_into().map_err(serde::ser::Error::custom)?;
@@ -841,14 +845,18 @@ pub(super) mod _serde {
 
     impl<const V: u8> Serialize for VersionNumber<V> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             serializer.serialize_u8(V)
         }
     }
 
     impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: serde::Deserializer<'de> {
+        where
+            D: serde::Deserializer<'de>,
+        {
             let value = u8::deserialize(deserializer)?;
             if value == V {
                 Ok(VersionNumber::<V>)
@@ -971,14 +979,17 @@ pub(super) mod _serde {
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
                     if let Some(snapshot_id) = current_snapshot_id {
-                        HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
-                            snapshot_id,
-                            retention: SnapshotRetention::Branch {
-                                min_snapshots_to_keep: None,
-                                max_snapshot_age_ms: None,
-                                max_ref_age_ms: None,
+                        HashMap::from_iter(vec![(
+                            MAIN_BRANCH.to_string(),
+                            SnapshotReference {
+                                snapshot_id,
+                                retention: SnapshotRetention::Branch {
+                                    min_snapshots_to_keep: None,
+                                    max_snapshot_age_ms: None,
+                                    max_ref_age_ms: None,
+                                },
                             },
-                        })])
+                        )])
                     } else {
                         HashMap::new()
                     }
@@ -1084,14 +1095,17 @@ pub(super) mod _serde {
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
                     if let Some(snapshot_id) = current_snapshot_id {
-                        HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
-                            snapshot_id,
-                            retention: SnapshotRetention::Branch {
-                                min_snapshots_to_keep: None,
-                                max_snapshot_age_ms: None,
-                                max_ref_age_ms: None,
+                        HashMap::from_iter(vec![(
+                            MAIN_BRANCH.to_string(),
+                            SnapshotReference {
+                                snapshot_id,
+                                retention: SnapshotRetention::Branch {
+                                    min_snapshots_to_keep: None,
+                                    max_snapshot_age_ms: None,
+                                    max_ref_age_ms: None,
+                                },
                             },
-                        })])
+                        )])
                     } else {
                         HashMap::new()
                     }
@@ -1240,14 +1254,17 @@ pub(super) mod _serde {
                     .default_sort_order_id
                     .unwrap_or(SortOrder::UNSORTED_ORDER_ID),
                 refs: if let Some(snapshot_id) = current_snapshot_id {
-                    HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
-                        snapshot_id,
-                        retention: SnapshotRetention::Branch {
-                            min_snapshots_to_keep: None,
-                            max_snapshot_age_ms: None,
-                            max_ref_age_ms: None,
+                    HashMap::from_iter(vec![(
+                        MAIN_BRANCH.to_string(),
+                        SnapshotReference {
+                            snapshot_id,
+                            retention: SnapshotRetention::Branch {
+                                min_snapshots_to_keep: None,
+                                max_snapshot_age_ms: None,
+                                max_ref_age_ms: None,
+                            },
                         },
-                    })])
+                    )])
                 } else {
                     HashMap::new()
                 },
@@ -2665,29 +2682,35 @@ mod tests {
             properties: HashMap::new(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
-            statistics: HashMap::from_iter(vec![(3055729675574597004, StatisticsFile {
-                snapshot_id: 3055729675574597004,
-                statistics_path: "s3://a/b/stats.puffin".to_string(),
-                file_size_in_bytes: 413,
-                file_footer_size_in_bytes: 42,
-                key_metadata: None,
-                blob_metadata: vec![BlobMetadata {
+            statistics: HashMap::from_iter(vec![(
+                3055729675574597004,
+                StatisticsFile {
                     snapshot_id: 3055729675574597004,
-                    sequence_number: 1,
-                    fields: vec![1],
-                    r#type: "ndv".to_string(),
-                    properties: HashMap::new(),
-                }],
-            })]),
-            partition_statistics: HashMap::new(),
-            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
-                snapshot_id: 3055729675574597004,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+                    statistics_path: "s3://a/b/stats.puffin".to_string(),
+                    file_size_in_bytes: 413,
+                    file_footer_size_in_bytes: 42,
+                    key_metadata: None,
+                    blob_metadata: vec![BlobMetadata {
+                        snapshot_id: 3055729675574597004,
+                        sequence_number: 1,
+                        fields: vec![1],
+                        r#type: "ndv".to_string(),
+                        properties: HashMap::new(),
+                    }],
                 },
-            })]),
+            )]),
+            partition_statistics: HashMap::new(),
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: 3055729675574597004,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )]),
             encryption_keys: HashMap::new(),
             next_row_id: INITIAL_ROW_ID,
         };
@@ -2816,14 +2839,17 @@ mod tests {
                     file_size_in_bytes: 43,
                 },
             )]),
-            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
-                snapshot_id: 3055729675574597004,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: 3055729675574597004,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })]),
+            )]),
             encryption_keys: HashMap::new(),
             next_row_id: INITIAL_ROW_ID,
         };
@@ -3066,14 +3092,17 @@ mod tests {
                 },
             ],
             metadata_log: Vec::new(),
-            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
-                snapshot_id: 3055729675574597004,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: 3055729675574597004,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })]),
+            )]),
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),

@@ -225,17 +225,23 @@ mod tests {
             )])),
         ]);
 
-        let batch1 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch1 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
-        let batch2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch2 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
         // Write data to the same partition (this should work)
         writer.write(partition_key.clone(), batch1).await?;
@@ -344,23 +350,32 @@ mod tests {
         ]);
 
         // Create batches for different partitions (in sorted order)
-        let batch_asia = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["ASIA", "ASIA"])),
-        ])?;
+        let batch_asia = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(StringArray::from(vec!["ASIA", "ASIA"])),
+            ],
+        )?;
 
-        let batch_eu = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["EU", "EU"])),
-        ])?;
+        let batch_eu = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["EU", "EU"])),
+            ],
+        )?;
 
-        let batch_us = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![5, 6])),
-            Arc::new(StringArray::from(vec!["Eve", "Frank"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch_us = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![5, 6])),
+                Arc::new(StringArray::from(vec!["Eve", "Frank"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
         // Write data in sorted partition order (this should work)
         writer.write(partition_key_asia.clone(), batch_asia).await?;
@@ -477,23 +492,32 @@ mod tests {
         ]);
 
         // Create batches for different partitions
-        let batch_us = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["US", "US"])),
-        ])?;
+        let batch_us = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(StringArray::from(vec!["US", "US"])),
+            ],
+        )?;
 
-        let batch_eu = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
-            Arc::new(StringArray::from(vec!["EU", "EU"])),
-        ])?;
+        let batch_eu = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["Charlie", "Dave"])),
+                Arc::new(StringArray::from(vec!["EU", "EU"])),
+            ],
+        )?;
 
-        let batch_us2 = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![5])),
-            Arc::new(StringArray::from(vec!["Eve"])),
-            Arc::new(StringArray::from(vec!["US"])),
-        ])?;
+        let batch_us2 = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![5])),
+                Arc::new(StringArray::from(vec!["Eve"])),
+                Arc::new(StringArray::from(vec!["US"])),
+            ],
+        )?;
 
         // Write data to US partition first
         writer.write(partition_key_us.clone(), batch_us).await?;

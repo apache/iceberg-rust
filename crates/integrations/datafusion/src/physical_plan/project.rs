@@ -271,12 +271,15 @@ mod tests {
             Field::new("data", DataType::Utf8, false),
         ]));
 
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-            Arc::new(Int32Array::from(vec![10, 20, 30])),
-            Arc::new(datafusion::arrow::array::StringArray::from(vec![
-                "a", "b", "c",
-            ])),
-        ])
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+                Arc::new(datafusion::arrow::array::StringArray::from(vec![
+                    "a", "b", "c",
+                ])),
+            ],
+        )
         .unwrap();
 
         let partition_spec = Arc::new(partition_spec);
@@ -357,10 +360,13 @@ mod tests {
             ),
         ]);
 
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(struct_array),
-        ])
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(struct_array),
+            ],
+        )
         .unwrap();
 
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
