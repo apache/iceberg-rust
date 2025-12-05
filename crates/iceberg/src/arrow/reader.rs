@@ -54,6 +54,7 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -250,12 +251,20 @@ impl ArrowReader {
             initial_stream_builder
         };
 
+        // Filter out metadata fields for Parquet projection (they don't exist in files)
+        let project_field_ids_without_metadata: Vec<i32> = task
+            .project_field_ids
+            .iter()
+            .filter(|&&id| !is_metadata_field(id))
+            .copied()
+            .collect();
+
         // Create projection mask based on field IDs
         // - If file has embedded IDs: field-ID-based projection (missing_field_ids=false)
         // - If name mapping applied: field-ID-based projection (missing_field_ids=true but IDs now match)
         // - If fallback IDs: position-based projection (missing_field_ids=true)
         let projection_mask = Self::get_arrow_projection_mask(
-            &task.project_field_ids,
+            &project_field_ids_without_metadata,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
@@ -266,16 +275,23 @@ impl ArrowReader {
             record_batch_stream_builder.with_projection(projection_mask.clone());
 
         // RecordBatchTransformer performs any transformations required on the RecordBatches
-        // that come back from the file, such as type promotion, default column insertion
-        // and column re-ordering.
+        // that come back from the file, such as type promotion, default column insertion,
+        // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
             RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        // Add the _file metadata column if it's in the projected fields
+        if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
+            let file_datum = Datum::string(task.data_file_path.clone());
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
 
         if let (Some(partition_spec), Some(partition_data)) =
             (task.partition_spec.clone(), task.partition.clone())
         {
             record_batch_transformer_builder =
-                record_batch_transformer_builder.with_partition(partition_spec, partition_data);
+                record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();
@@ -416,7 +432,10 @@ impl ArrowReader {
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Ok(batch) => {
+                        // Process the record batch (type promotion, column reordering, virtual fields, etc.)
+                        record_batch_transformer.process_record_batch(batch)
+                    }
                     Err(err) => Err(err.into()),
                 });
 
