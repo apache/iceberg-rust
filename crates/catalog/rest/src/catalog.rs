@@ -498,7 +498,7 @@ impl Catalog for RestCatalog {
             .request(Method::POST, context.config.namespaces_endpoint())
             .json(&CreateNamespaceRequest {
                 namespace: namespace.clone(),
-                properties: properties,
+                properties,
             })
             .build()?;
 
