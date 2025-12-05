@@ -137,19 +137,17 @@ pub enum Transform {
 impl Transform {
     /// Returns a human-readable String representation of a transformed value.
     pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
-        if let Some(value) = value {
-            if let Some(value) = value.as_primitive_literal() {
-                let field_type = field_type.as_primitive_type().unwrap();
-                let datum = Datum::new(field_type.clone(), value);
-                match self {
-                    Self::Identity => datum.to_human_string(),
-                    Self::Void => "null".to_string(),
-                    _ => {
-                        todo!()
-                    }
-                }
-            } else {
-                "null".to_string()
+        let Some(value) = value else {
+            return "null".to_string();
+        };
+
+        if let Some(value) = value.as_primitive_literal() {
+            let field_type = field_type.as_primitive_type().unwrap();
+            let datum = Datum::new(field_type.clone(), value);
+
+            match self {
+                Self::Void => "null".to_string(),
+                _ => datum.to_human_string(),
             }
         } else {
             "null".to_string()
@@ -896,7 +894,7 @@ impl Transform {
         ) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Expected a numeric literal, got: {:?}", boundary),
+                format!("Expected a numeric literal, got: {boundary:?}"),
             ));
         }
 

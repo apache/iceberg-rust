@@ -35,12 +35,8 @@ use datafusion::physical_plan::{
     execute_input_stream,
 };
 use futures::StreamExt;
-use iceberg::arrow::{FieldMatchMode, schema_to_arrow_schema};
-use iceberg::spec::{
-    DataFileFormat, PROPERTY_DEFAULT_FILE_FORMAT, PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
-    PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES, PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-    serialize_data_file_to_json,
-};
+use iceberg::arrow::FieldMatchMode;
+use iceberg::spec::{DataFileFormat, TableProperties, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -48,12 +44,12 @@ use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Error, ErrorKind};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
+use crate::task_writer::TaskWriter;
 use crate::to_datafusion_error;
 
 /// An execution plan node that writes data to an Iceberg table.
@@ -100,7 +96,10 @@ impl IcebergWriteExec {
         let files_array = Arc::new(StringArray::from(data_files)) as ArrayRef;
 
         RecordBatch::try_new(Self::make_result_schema(), vec![files_array]).map_err(|e| {
-            DataFusionError::ArrowError(e, Some("Failed to make result batch".to_string()))
+            DataFusionError::ArrowError(
+                Box::new(e),
+                Some("Failed to make result batch".to_string()),
+            )
         })
     }
 
@@ -142,6 +141,16 @@ impl ExecutionPlan for IcebergWriteExec {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    /// Prevents the introduction of additional `RepartitionExec` and processing input in parallel.
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // Maintains ordering in the sense that the written file will reflect the ordering of the input.
+        vec![true; self.children().len()]
     }
 
     fn properties(&self) -> &PlanProperties {
@@ -196,19 +205,6 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        if !self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .is_unpartitioned()
-        {
-            // TODO add support for partitioned tables
-            return Err(DataFusionError::NotImplemented(
-                "IcebergWriteExec does not support partitioned tables yet".to_string(),
-            ));
-        }
-
-        let spec_id = self.table.metadata().default_partition_spec_id();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
@@ -217,17 +213,14 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table
                 .metadata()
                 .properties()
-                .get(PROPERTY_DEFAULT_FILE_FORMAT)
-                .unwrap_or(&PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
+                .get(TableProperties::PROPERTY_DEFAULT_FILE_FORMAT)
+                .unwrap_or(&TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
         )
         .map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!(
-                    "File format {} is not supported for insert_into yet!",
-                    file_format
-                ),
+                format!("File format {file_format} is not supported for insert_into yet!"),
             )));
         }
 
@@ -235,19 +228,13 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
-            None,
             FieldMatchMode::Name,
-            self.table.file_io().clone(),
-            DefaultLocationGenerator::new(self.table.metadata().clone())
-                .map_err(to_datafusion_error)?,
-            // todo filename prefix/suffix should be configurable
-            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format),
         );
         let target_file_size = match self
             .table
             .metadata()
             .properties()
-            .get(PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
+            .get(TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
         {
             Some(value_str) => value_str
                 .parse::<usize>()
@@ -259,37 +246,60 @@ impl ExecutionPlan for IcebergWriteExec {
                     .with_source(e)
                 })
                 .map_err(to_datafusion_error)?,
-            None => PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            None => TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         };
-        let rolling_writer_builder =
-            RollingFileWriterBuilder::new(parquet_file_writer_builder, target_file_size);
-        let data_file_writer_builder =
-            DataFileWriterBuilder::new(rolling_writer_builder, None, spec_id);
+
+        let file_io = self.table.file_io().clone();
+        // todo location_gen and file_name_gen should be configurable
+        let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
+            .map_err(to_datafusion_error)?;
+        // todo filename prefix/suffix should be configurable
+        let file_name_generator =
+            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), None, file_format);
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_file_writer_builder,
+            target_file_size,
+            file_io,
+            location_generator,
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+
+        // Create TaskWriter
+        // TODO: Make fanout_enabled configurable via table properties
+        let fanout_enabled = true;
+        let schema = self.table.metadata().current_schema().clone();
+        let partition_spec = self.table.metadata().default_partition_spec().clone();
+        let task_writer = TaskWriter::try_new(
+            data_file_writer_builder,
+            fanout_enabled,
+            schema.clone(),
+            partition_spec,
+        )
+        .map_err(to_datafusion_error)?;
 
         // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
-            Arc::new(
-                schema_to_arrow_schema(self.table.metadata().current_schema())
-                    .map_err(to_datafusion_error)?,
-            ),
+            self.input.schema(), // input schema may have projected column `_partition`
             partition,
             Arc::clone(&context),
         )?;
 
         // Create write stream
         let stream = futures::stream::once(async move {
-            let mut writer = data_file_writer_builder
-                .build()
-                .await
-                .map_err(to_datafusion_error)?;
+            let mut task_writer = task_writer;
             let mut input_stream = data;
 
             while let Some(batch) = input_stream.next().await {
-                writer.write(batch?).await.map_err(to_datafusion_error)?;
+                let batch = batch?;
+                task_writer
+                    .write(batch)
+                    .await
+                    .map_err(to_datafusion_error)?;
             }
 
-            let data_files = writer.close().await.map_err(to_datafusion_error)?;
+            let data_files = task_writer.close().await.map_err(to_datafusion_error)?;
 
             // Convert builders to data files and then to JSON strings
             let data_files_strs: Vec<String> = data_files
@@ -500,7 +510,7 @@ mod tests {
             .map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    format!("Failed to create record batch: {}", e),
+                    format!("Failed to create record batch: {e}"),
                 )
             })?;
 
@@ -517,7 +527,7 @@ mod tests {
         let stream = write_exec.execute(0, task_ctx).map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
-                format!("Failed to execute plan: {}", e),
+                format!("Failed to execute plan: {e}"),
             )
         })?;
 
@@ -526,7 +536,7 @@ mod tests {
         let mut stream = stream;
         while let Some(batch) = stream.next().await {
             results.push(batch.map_err(|e| {
-                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {}", e))
+                Error::new(ErrorKind::Unexpected, format!("Failed to get batch: {e}"))
             })?);
         }
 

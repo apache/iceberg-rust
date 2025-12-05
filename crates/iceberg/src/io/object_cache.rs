@@ -113,7 +113,7 @@ impl ObjectCache {
             CachedItem::Manifest(arc_manifest) => Ok(arc_manifest),
             _ => Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("cached object for key '{:?}' is not a Manifest", key),
+                format!("cached object for key '{key:?}' is not a Manifest"),
             )),
         }
     }
@@ -157,7 +157,7 @@ impl ObjectCache {
             CachedItem::ManifestList(arc_manifest_list) => Ok(arc_manifest_list),
             _ => Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("cached object for path '{:?}' is not a manifest list", key),
+                format!("cached object for path '{key:?}' is not a manifest list"),
             )),
         }
     }
@@ -185,8 +185,9 @@ impl ObjectCache {
 mod tests {
     use std::fs;
 
+    use minijinja::value::Value;
+    use minijinja::{AutoEscape, Environment, context};
     use tempfile::TempDir;
-    use tera::{Context, Tera};
     use uuid::Uuid;
 
     use super::*;
@@ -197,6 +198,12 @@ mod tests {
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     use crate::table::Table;
+
+    fn render_template(template: &str, ctx: Value) -> String {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::None);
+        env.render_str(template, ctx).unwrap()
+    }
 
     struct TableTestFixture {
         table_location: String,
@@ -222,13 +229,12 @@ mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let mut context = Context::new();
-                context.insert("table_location", &table_location);
-                context.insert("manifest_list_1_location", &manifest_list1_location);
-                context.insert("manifest_list_2_location", &manifest_list2_location);
-                context.insert("table_metadata_1_location", &table_metadata1_location);
-
-                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 

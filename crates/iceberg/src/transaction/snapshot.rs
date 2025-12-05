@@ -24,10 +24,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
-    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType,
-    Summary, update_snapshot_summaries,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -35,13 +34,53 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
+/// A trait that defines how different table operations produce new snapshots.
+///
+/// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
+/// based on the type of operation being performed (e.g., `Append`, `Overwrite`, `Delete`, etc.).
+/// Each operation type implements this trait to specify:
+/// - Which operation type to record in the snapshot summary
+/// - Which existing manifest files should be included in the new snapshot
+/// - Which manifest entries should be marked as deleted
+///
+/// # When it accomplishes
+///
+/// This trait is used during the snapshot creation process in [`SnapshotProducer::commit()`]:
+///
+/// 1. **Operation Type Recording**: The `operation()` method determines which operation type
+///    (e.g., `Operation::Append`, `Operation::Overwrite`) is recorded in the snapshot summary.
+///    This metadata helps track what kind of change was made to the table.
+///
+/// 2. **Manifest File Selection**: The `existing_manifest()` method determines which existing
+///    manifest files from the current snapshot should be carried forward to the new snapshot.
+///    For example:
+///    - An `Append` operation typically includes all existing manifests plus new ones
+///    - An `Overwrite` operation might exclude manifests for partitions being overwritten
+///
+/// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
+///    operations to specify which manifest entries should be marked as deleted.
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
+    /// Returns the operation type that will be recorded in the snapshot summary.
+    ///
+    /// This determines what kind of operation is being performed (e.g., `Append`, `Overwrite`),
+    /// which is stored in the snapshot metadata for tracking and auditing purposes.
     fn operation(&self) -> Operation;
+
+    /// Returns manifest entries that should be marked as deleted in the new snapshot.
     #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
+
+    /// Returns existing manifest files that should be included in the new snapshot.
+    ///
+    /// This method determines which manifest files from the current snapshot should be
+    /// carried forward to the new snapshot. The selection depends on the operation type:
+    ///
+    /// - **Append operations**: Typically include all existing manifests
+    /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
+    /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
@@ -100,8 +139,8 @@ impl<'a> SnapshotProducer<'a> {
         }
     }
 
-    pub(crate) fn validate_added_data_files(&self, added_data_files: &[DataFile]) -> Result<()> {
-        for data_file in added_data_files {
+    pub(crate) fn validate_added_data_files(&self) -> Result<()> {
+        for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -124,11 +163,9 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    pub(crate) async fn validate_duplicate_files(
-        &self,
-        added_data_files: &[DataFile],
-    ) -> Result<()> {
-        let new_files: HashSet<&str> = added_data_files
+    pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
+        let new_files: HashSet<&str> = self
+            .added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
             .collect();
@@ -207,13 +244,16 @@ impl<'a> SnapshotProducer<'a> {
                 .as_ref()
                 .clone(),
         );
-        if self.table.metadata().format_version() == FormatVersion::V1 {
-            Ok(builder.build_v1())
-        } else {
-            match content {
+        match self.table.metadata().format_version() {
+            FormatVersion::V1 => Ok(builder.build_v1()),
+            FormatVersion::V2 => match content {
                 ManifestContentType::Data => Ok(builder.build_v2_data()),
                 ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
-            }
+            },
+            FormatVersion::V3 => match content {
+                ManifestContentType::Data => Ok(builder.build_v3_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v3_deletes()),
+            },
         }
     }
 
@@ -322,15 +362,15 @@ impl<'a> SnapshotProducer<'a> {
 
         let partition_summary_limit = if let Some(limit) = table_metadata
             .properties()
-            .get(PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
+            .get(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
         {
             if let Ok(limit) = limit.parse::<u64>() {
                 limit
             } else {
-                PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
             }
         } else {
-            PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+            TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
         };
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
@@ -381,17 +421,9 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
-            .await?;
-        let next_seq_num = self.table.metadata().next_sequence_number();
-
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
         let manifest_list_path = self.generate_manifest_list_file_path(0);
-
+        let next_seq_num = self.table.metadata().next_sequence_number();
+        let first_row_id = self.table.metadata().next_row_id();
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
@@ -408,8 +440,30 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
+            FormatVersion::V3 => ManifestListWriter::v3(
+                self.table
+                    .file_io()
+                    .new_output(manifest_list_path.clone())?,
+                self.snapshot_id,
+                self.table.metadata().current_snapshot_id(),
+                next_seq_num,
+                Some(first_row_id),
+            ),
         };
+
+        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
+        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // being generated.
+        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
+
+        let new_manifests = self
+            .manifest_file(&snapshot_produce_operation, &process)
+            .await?;
+
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
+        let writer_next_row_id = manifest_list_writer.next_row_id();
         manifest_list_writer.close().await?;
 
         let commit_ts = chrono::Utc::now().timestamp_millis();
@@ -420,8 +474,16 @@ impl<'a> SnapshotProducer<'a> {
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.table.metadata().current_schema_id())
-            .with_timestamp_ms(commit_ts)
-            .build();
+            .with_timestamp_ms(commit_ts);
+
+        let new_snapshot = if let Some(writer_next_row_id) = writer_next_row_id {
+            let assigned_rows = writer_next_row_id - self.table.metadata().next_row_id();
+            new_snapshot
+                .with_row_range(first_row_id, assigned_rows)
+                .build()
+        } else {
+            new_snapshot.build()
+        };
 
         let updates = vec![
             TableUpdate::AddSnapshot {

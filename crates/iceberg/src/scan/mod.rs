@@ -202,7 +202,7 @@ impl<'a> TableScanBuilder<'a> {
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Snapshot with id {} not found", snapshot_id),
+                        format!("Snapshot with id {snapshot_id} not found"),
                     )
                 })?
                 .clone(),
@@ -232,10 +232,7 @@ impl<'a> TableScanBuilder<'a> {
                 if schema.field_by_name(column_name).is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "Column {} not found in table. Schema: {}",
-                            column_name, schema
-                        ),
+                        format!("Column {column_name} not found in table. Schema: {schema}"),
                     ));
                 }
             }
@@ -255,10 +252,7 @@ impl<'a> TableScanBuilder<'a> {
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "Column {} not found in table. Schema: {}",
-                        column_name, schema
-                    ),
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
                 )
             })?;
 
@@ -269,8 +263,7 @@ impl<'a> TableScanBuilder<'a> {
                     Error::new(
                         ErrorKind::FeatureUnsupported,
                         format!(
-                            "Column {} is not a direct child of schema but a nested field, which is not supported now. Schema: {}",
-                            column_name, schema
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
                         ),
                     )
                 })?;
@@ -580,11 +573,12 @@ pub mod tests {
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
     use futures::{TryStreamExt, stream};
+    use minijinja::value::Value;
+    use minijinja::{AutoEscape, Environment, context};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
-    use tera::{Context, Tera};
     use uuid::Uuid;
 
     use crate::TableIdent;
@@ -598,6 +592,12 @@ pub mod tests {
         PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
+
+    fn render_template(template: &str, ctx: Value) -> String {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::None);
+        env.render_str(template, ctx).unwrap()
+    }
 
     pub struct TableTestFixture {
         pub table_location: String,
@@ -624,13 +624,12 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let mut context = Context::new();
-                context.insert("table_location", &table_location);
-                context.insert("manifest_list_1_location", &manifest_list1_location);
-                context.insert("manifest_list_2_location", &manifest_list2_location);
-                context.insert("table_metadata_1_location", &table_metadata1_location);
-
-                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -665,11 +664,10 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let mut context = Context::new();
-                context.insert("table_location", &table_location);
-                context.insert("table_metadata_1_location", &table_metadata1_location);
-
-                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -705,13 +703,12 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let mut context = Context::new();
-                context.insert("table_location", &table_location);
-                context.insert("manifest_list_1_location", &manifest_list1_location);
-                context.insert("manifest_list_2_location", &manifest_list2_location);
-                context.insert("table_metadata_1_location", &table_metadata1_location);
-
-                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -1914,6 +1911,9 @@ pub mod tests {
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
             deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
             limit: None,
         };
         test_fn(task);
@@ -1929,6 +1929,9 @@ pub mod tests {
             record_count: None,
             data_file_format: DataFileFormat::Avro,
             deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
             limit: None,
         };
         test_fn(task);

@@ -24,7 +24,7 @@ use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::scan::TableScanBuilder;
-use crate::spec::{TableMetadata, TableMetadataRef};
+use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -235,6 +235,11 @@ impl Table {
         self.readonly
     }
 
+    /// Returns the current schema as a shared reference.
+    pub fn current_schema_ref(&self) -> SchemaRef {
+        self.metadata.current_schema().clone()
+    }
+
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
         ArrowReaderBuilder::new(self.file_io.clone())
@@ -292,9 +297,7 @@ impl StaticTable {
         table_ident: TableIdent,
         file_io: FileIO,
     ) -> Result<Self> {
-        let metadata_file = file_io.new_input(metadata_location)?;
-        let metadata_file_content = metadata_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_file_content)?;
+        let metadata = TableMetadata::read_from(&file_io, metadata_location).await?;
 
         let table = Table::builder()
             .metadata(metadata)

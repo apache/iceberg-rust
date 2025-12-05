@@ -150,17 +150,14 @@ impl<'a> PageIndexEvaluator<'a> {
         let Some(field) = self.snapshot_schema.field_by_id(field_id) else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("Field with id {} missing from snapshot schema", field_id),
+                format!("Field with id {field_id} missing from snapshot schema"),
             ));
         };
 
         let Some(field_type) = field.field_type.as_primitive_type() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!(
-                    "Field with id {} not convertible to primitive type",
-                    field_id
-                ),
+                format!("Field with id {field_id} not convertible to primitive type"),
             ));
         };
 
@@ -180,7 +177,7 @@ impl<'a> PageIndexEvaluator<'a> {
                         // if we have a column index, we should always have an offset index.
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            format!("Missing offset index for field id {}", field_id),
+                            format!("Missing offset index for field id {field_id}"),
                         ));
                     };
 

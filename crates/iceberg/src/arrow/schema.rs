@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
-    BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array, FixedSizeBinaryArray,
-    Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
+    BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
@@ -678,6 +678,9 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Arc::new(StringArray::new_scalar(value.as_str())))
         }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(value)) => {
+            Ok(Arc::new(BinaryArray::new_scalar(value.as_slice())))
+        }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
             Ok(Arc::new(Date32Array::new_scalar(*value)))
         }
@@ -701,10 +704,7 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
 
         (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            format!(
-                "Converting datum from type {:?} to arrow not supported yet.",
-                primitive_type
-            ),
+            format!("Converting datum from type {primitive_type:?} to arrow not supported yet."),
         )),
     }
 }
@@ -789,7 +789,7 @@ pub(crate) fn get_parquet_stat_min_as_datum(
                 PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {:?}", bytes),
+                        format!("Can't convert bytes to i128: {bytes:?}"),
                     )
                 })?),
             ))
@@ -936,7 +936,7 @@ pub(crate) fn get_parquet_stat_max_as_datum(
                 PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {:?}", bytes),
+                        format!("Can't convert bytes to i128: {bytes:?}"),
                     )
                 })?),
             ))
@@ -1745,9 +1745,7 @@ mod tests {
 
             assert!(
                 matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
-                "Expected {:?} to map to {:?}",
-                arrow_type,
-                expected_iceberg_type
+                "Expected {arrow_type:?} to map to {expected_iceberg_type:?}"
             );
         }
 
@@ -1818,6 +1816,14 @@ mod tests {
             let array = array.as_any().downcast_ref::<StringArray>().unwrap();
             assert!(is_scalar);
             assert_eq!(array.value(0), "abc");
+        }
+        {
+            let datum = Datum::binary(vec![1, 2, 3, 4]);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), &[1, 2, 3, 4]);
         }
         {
             let datum = Datum::date(42);

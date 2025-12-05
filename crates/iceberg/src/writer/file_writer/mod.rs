@@ -27,6 +27,8 @@ use crate::spec::DataFileBuilder;
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
 
+use crate::io::OutputFile;
+
 pub mod location_generator;
 /// Module providing writers that can automatically roll over to new files based on size thresholds.
 pub mod rolling_writer;
@@ -34,11 +36,11 @@ pub mod rolling_writer;
 type DefaultOutput = Vec<DataFileBuilder>;
 
 /// File writer builder trait.
-pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
+pub trait FileWriterBuilder<O = DefaultOutput>: Clone + Send + Sync + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
     /// Build file writer.
-    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
+    fn build(&self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)

@@ -68,10 +68,12 @@ impl DeleteFilter {
     pub(crate) fn try_start_eq_del_load(&self, file_path: &str) -> Option<Arc<Notify>> {
         let mut state = self.state.write().unwrap();
 
-        if !state.equality_deletes.contains_key(file_path) {
+        // Skip if already loaded/loading - another task owns it
+        if state.equality_deletes.contains_key(file_path) {
             return None;
         }
 
+        // Mark as loading to prevent duplicate work
         let notifier = Arc::new(Notify::new());
         state
             .equality_deletes
@@ -339,6 +341,9 @@ pub(crate) mod tests {
                 project_field_ids: vec![],
                 predicate: None,
                 deletes: vec![pos_del_1, pos_del_2.clone()],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
                 limit: None,
             },
             FileScanTask {
@@ -351,6 +356,9 @@ pub(crate) mod tests {
                 project_field_ids: vec![],
                 predicate: None,
                 deletes: vec![pos_del_3],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
                 limit: None,
             },
         ];

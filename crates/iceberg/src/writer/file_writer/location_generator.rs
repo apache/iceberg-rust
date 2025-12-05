@@ -24,7 +24,7 @@ use crate::Result;
 use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
-pub trait LocationGenerator: Clone + Send + 'static {
+pub trait LocationGenerator: Clone + Send + Sync + 'static {
     /// Generate an absolute path for the given file name that includes the partition path.
     ///
     /// # Arguments
@@ -63,7 +63,7 @@ impl DefaultLocationGenerator {
         let data_location = if let Some(data_location) = configured_data_location {
             data_location.clone()
         } else {
-            format!("{}{}", table_location, DEFAULT_DATA_DIR)
+            format!("{table_location}{DEFAULT_DATA_DIR}")
         };
         Ok(Self { data_location })
     }
@@ -94,7 +94,7 @@ impl LocationGenerator for DefaultLocationGenerator {
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
-pub trait FileNameGenerator: Clone + Send + 'static {
+pub trait FileNameGenerator: Clone + Send + Sync + 'static {
     /// Generate a file name.
     fn generate_file_name(&self) -> String;
 }
@@ -114,7 +114,7 @@ impl DefaultFileNameGenerator {
     /// Create a new `FileNameGenerator`.
     pub fn new(prefix: String, suffix: Option<String>, format: DataFileFormat) -> Self {
         let suffix = if let Some(suffix) = suffix {
-            format!("-{}", suffix)
+            format!("-{suffix}")
         } else {
             "".to_string()
         };
@@ -183,6 +183,7 @@ pub(crate) mod test {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: 0,
         };
 
         let file_name_generator = super::DefaultFileNameGenerator::new(
@@ -297,6 +298,7 @@ pub(crate) mod test {
             statistics: HashMap::new(),
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
+            next_row_id: 0,
         };
 
         // Test with DefaultLocationGenerator
