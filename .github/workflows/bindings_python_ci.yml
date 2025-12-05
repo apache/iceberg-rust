@@ -44,7 +44,7 @@ jobs:
   check-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Check format
         working-directory: "bindings/python"
         run: cargo fmt --all -- --check
@@ -55,7 +55,7 @@ jobs:
   check-python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"
@@ -81,7 +81,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: 3.12
