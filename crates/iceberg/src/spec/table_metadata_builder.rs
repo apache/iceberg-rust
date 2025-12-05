@@ -2295,9 +2295,12 @@ mod tests {
         assert_eq!(result_after_remove.metadata.snapshot_log[0].snapshot_id, 1);
         assert_eq!(result_after_remove.metadata.current_snapshot_id, None);
         assert_eq!(result_after_remove.changes.len(), 1);
-        assert_eq!(result_after_remove.changes[0], TableUpdate::RemoveSnapshotRef {
-            ref_name: MAIN_BRANCH.to_string()
-        });
+        assert_eq!(
+            result_after_remove.changes[0],
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string()
+            }
+        );
     }
 
     #[test]
