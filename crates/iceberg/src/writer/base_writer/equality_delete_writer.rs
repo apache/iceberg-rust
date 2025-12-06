@@ -293,15 +293,15 @@ mod test {
             assert_eq!(*data_file.null_value_counts.get(id).unwrap(), expect);
         }
 
-        assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
-        data_file
+        let split_offsets = data_file
             .split_offsets
-            .iter()
-            .enumerate()
-            .for_each(|(i, &v)| {
-                let expect = metadata.row_groups()[i].file_offset().unwrap();
-                assert_eq!(v, expect);
-            });
+            .as_ref()
+            .expect("split_offsets should be set");
+        assert_eq!(split_offsets.len(), metadata.num_row_groups());
+        split_offsets.iter().enumerate().for_each(|(i, &v)| {
+            let expect = metadata.row_groups()[i].file_offset().unwrap();
+            assert_eq!(v, expect);
+        });
     }
 
     #[tokio::test]

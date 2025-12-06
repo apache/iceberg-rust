@@ -438,13 +438,13 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
-            .split_offsets(
+            .split_offsets(Some(
                 metadata
                     .row_groups()
                     .iter()
                     .filter_map(|group| group.file_offset())
                     .collect(),
-            );
+            ));
 
         Ok(builder)
     }
