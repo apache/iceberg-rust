@@ -143,8 +143,8 @@ impl PyDataFile {
     }
 
     #[getter]
-    fn split_offsets(&self) -> &[i64] {
-        self.inner.split_offsets()
+    fn split_offsets(&self) -> Option<Vec<i64>> {
+        self.inner.split_offsets().map(|s| s.to_vec())
     }
 
     #[getter]
