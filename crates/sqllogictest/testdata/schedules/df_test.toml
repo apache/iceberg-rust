@@ -21,3 +21,7 @@ df = { type = "datafusion" }
 [[steps]]
 engine = "df"
 slt = "df_test/show_tables.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/insert_into.slt"

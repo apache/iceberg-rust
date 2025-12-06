@@ -25,6 +25,12 @@ datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
+default default test_partitioned_table BASE TABLE
+default default test_partitioned_table$manifests BASE TABLE
+default default test_partitioned_table$snapshots BASE TABLE
+default default test_unpartitioned_table BASE TABLE
+default default test_unpartitioned_table$manifests BASE TABLE
+default default test_unpartitioned_table$snapshots BASE TABLE
 default information_schema columns VIEW
 default information_schema df_settings VIEW
 default information_schema parameters VIEW
