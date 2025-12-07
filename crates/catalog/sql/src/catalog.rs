@@ -2338,4 +2338,56 @@ mod tests {
         assert_eq!(table.identifier(), expected_table.identifier());
         assert_eq!(table.metadata_location(), Some(metadata_location.as_str()));
     }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        // Create a test namespace and table
+        let namespace_ident = NamespaceIdent::new("ns1".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
+        create_table(&catalog, &table_ident).await;
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+
+        // Store the original metadata location for comparison
+        let original_metadata_location = table.metadata_location().unwrap().to_string();
+
+        // Create a transaction to update the table
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test_property".to_string(), "test_value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        // Commit the transaction to the catalog
+        let updated_table = tx.commit(&catalog).await.unwrap();
+
+        // Verify the update was successful
+        assert_eq!(
+            updated_table.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+        // Verify the metadata location has been updated
+        assert_ne!(
+            updated_table.metadata_location().unwrap(),
+            original_metadata_location.as_str()
+        );
+
+        // Load the table again from the catalog to verify changes were persisted
+        let reloaded = catalog.load_table(&table_ident).await.unwrap();
+        
+        // Verify the reloaded table matches the updated table
+        assert_eq!(
+            reloaded.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+        assert_eq!(
+            reloaded.metadata_location(),
+            updated_table.metadata_location()
+        );
+    }
 }
