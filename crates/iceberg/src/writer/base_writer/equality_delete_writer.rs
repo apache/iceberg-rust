@@ -683,9 +683,13 @@ mod test {
             Some(b""),
             Some(b"zzzz"),
         ])) as ArrayRef;
-        let to_write = RecordBatch::try_new(delete_arrow_schema.clone(), vec![
-            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
-        ])
+        let to_write = RecordBatch::try_new(
+            delete_arrow_schema.clone(),
+            vec![
+                col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12,
+                col13,
+            ],
+        )
         .unwrap();
         equality_delete_writer.write(to_write.clone()).await?;
         let res = equality_delete_writer.close().await?;
@@ -794,13 +798,15 @@ mod test {
 
         // check
         let to_write_projected = projector.project_batch(to_write)?;
-        let expect_batch =
-            RecordBatch::try_new(equality_config.projected_arrow_schema_ref().clone(), vec![
+        let expect_batch = RecordBatch::try_new(
+            equality_config.projected_arrow_schema_ref().clone(),
+            vec![
                 Arc::new(Int32Array::from(vec![None, Some(2), Some(3)])) as ArrayRef,
                 Arc::new(Int32Array::from(vec![Some(1), None, None])) as ArrayRef,
                 Arc::new(Int32Array::from(vec![None, None, None])) as ArrayRef,
-            ])
-            .unwrap();
+            ],
+        )
+        .unwrap();
         assert_eq!(to_write_projected, expect_batch);
         Ok(())
     }

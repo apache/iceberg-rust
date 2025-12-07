@@ -270,10 +270,10 @@ mod tests {
         let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
         let id_array = Int32Array::from(vec![1, 2, 1, 3, 2, 3, 1]);
         let data_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g"]);
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-            Arc::new(id_array),
-            Arc::new(data_array),
-        ])
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(id_array), Arc::new(data_array)],
+        )
         .expect("Failed to create RecordBatch");
 
         let mut partitioned_batches = partition_splitter
@@ -296,10 +296,10 @@ mod tests {
             // check the first partition
             let expected_id_array = Int32Array::from(vec![1, 1, 1]);
             let expected_data_array = StringArray::from(vec!["a", "c", "g"]);
-            let expected_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-                Arc::new(expected_id_array),
-                Arc::new(expected_data_array),
-            ])
+            let expected_batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![Arc::new(expected_id_array), Arc::new(expected_data_array)],
+            )
             .expect("Failed to create expected RecordBatch");
             assert_eq!(partitioned_batches[0].1, expected_batch);
         }
@@ -307,10 +307,10 @@ mod tests {
             // check the second partition
             let expected_id_array = Int32Array::from(vec![2, 2]);
             let expected_data_array = StringArray::from(vec!["b", "e"]);
-            let expected_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-                Arc::new(expected_id_array),
-                Arc::new(expected_data_array),
-            ])
+            let expected_batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![Arc::new(expected_id_array), Arc::new(expected_data_array)],
+            )
             .expect("Failed to create expected RecordBatch");
             assert_eq!(partitioned_batches[1].1, expected_batch);
         }
@@ -318,10 +318,10 @@ mod tests {
             // check the third partition
             let expected_id_array = Int32Array::from(vec![3, 3]);
             let expected_data_array = StringArray::from(vec!["d", "f"]);
-            let expected_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
-                Arc::new(expected_id_array),
-                Arc::new(expected_data_array),
-            ])
+            let expected_batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![Arc::new(expected_id_array), Arc::new(expected_data_array)],
+            )
             .expect("Failed to create expected RecordBatch");
             assert_eq!(partitioned_batches[2].1, expected_batch);
         }
@@ -331,11 +331,14 @@ mod tests {
             .map(|(partition_key, _)| partition_key.data().clone())
             .collect::<Vec<_>>();
         // check partition value is struct(1), struct(2), struct(3)
-        assert_eq!(partition_values, vec![
-            Struct::from_iter(vec![Some(Literal::int(1))]),
-            Struct::from_iter(vec![Some(Literal::int(2))]),
-            Struct::from_iter(vec![Some(Literal::int(3))]),
-        ]);
+        assert_eq!(
+            partition_values,
+            vec![
+                Struct::from_iter(vec![Some(Literal::int(1))]),
+                Struct::from_iter(vec![Some(Literal::int(2))]),
+                Struct::from_iter(vec![Some(Literal::int(3))]),
+            ]
+        );
     }
 
     #[test]
@@ -411,11 +414,14 @@ mod tests {
             Arc::new(partition_values) as ArrayRef,
         )]);
 
-        let batch = RecordBatch::try_new(input_schema.clone(), vec![
-            Arc::new(id_array),
-            Arc::new(data_array),
-            Arc::new(partition_struct),
-        ])
+        let batch = RecordBatch::try_new(
+            input_schema.clone(),
+            vec![
+                Arc::new(id_array),
+                Arc::new(data_array),
+                Arc::new(partition_struct),
+            ],
+        )
         .expect("Failed to create RecordBatch");
 
         // Split using the pre-computed partition column

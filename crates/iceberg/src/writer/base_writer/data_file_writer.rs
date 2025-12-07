@@ -202,10 +202,13 @@ mod test {
                 4.to_string(),
             )])),
         ]);
-        let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+            ],
+        )?;
         data_file_writer.write(batch).await?;
 
         let data_files = data_file_writer.close().await.unwrap();
@@ -287,10 +290,13 @@ mod test {
                 6.to_string(),
             )])),
         ]);
-        let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+            ],
+        )?;
         data_file_writer.write(batch).await?;
 
         let data_files = data_file_writer.close().await.unwrap();

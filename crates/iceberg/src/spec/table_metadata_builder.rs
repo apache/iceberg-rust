@@ -1685,40 +1685,43 @@ mod tests {
         .unwrap()
         .changes;
 
-        pretty_assertions::assert_eq!(changes, vec![
-            TableUpdate::SetLocation {
-                location: TEST_LOCATION.to_string()
-            },
-            TableUpdate::AddSchema { schema: schema() },
-            TableUpdate::SetCurrentSchema { schema_id: -1 },
-            TableUpdate::AddSpec {
-                // Because this is a new tables, field-ids are assigned
-                // partition_spec() has None set for field-id
-                spec: PartitionSpec::builder(schema())
-                    .with_spec_id(0)
-                    .add_unbound_field(UnboundPartitionField {
-                        name: "y".to_string(),
-                        transform: Transform::Identity,
-                        source_id: 2,
-                        field_id: Some(1000)
-                    })
-                    .unwrap()
-                    .build()
-                    .unwrap()
-                    .into_unbound(),
-            },
-            TableUpdate::SetDefaultSpec { spec_id: -1 },
-            TableUpdate::AddSortOrder {
-                sort_order: sort_order(),
-            },
-            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
-            TableUpdate::SetProperties {
-                updates: HashMap::from_iter(vec![(
-                    "property 1".to_string(),
-                    "value 1".to_string()
-                )]),
-            }
-        ]);
+        pretty_assertions::assert_eq!(
+            changes,
+            vec![
+                TableUpdate::SetLocation {
+                    location: TEST_LOCATION.to_string()
+                },
+                TableUpdate::AddSchema { schema: schema() },
+                TableUpdate::SetCurrentSchema { schema_id: -1 },
+                TableUpdate::AddSpec {
+                    // Because this is a new tables, field-ids are assigned
+                    // partition_spec() has None set for field-id
+                    spec: PartitionSpec::builder(schema())
+                        .with_spec_id(0)
+                        .add_unbound_field(UnboundPartitionField {
+                            name: "y".to_string(),
+                            transform: Transform::Identity,
+                            source_id: 2,
+                            field_id: Some(1000)
+                        })
+                        .unwrap()
+                        .build()
+                        .unwrap()
+                        .into_unbound(),
+                },
+                TableUpdate::SetDefaultSpec { spec_id: -1 },
+                TableUpdate::AddSortOrder {
+                    sort_order: sort_order(),
+                },
+                TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
+                TableUpdate::SetProperties {
+                    updates: HashMap::from_iter(vec![(
+                        "property 1".to_string(),
+                        "value 1".to_string()
+                    )]),
+                }
+            ]
+        );
     }
 
     #[test]
@@ -1737,29 +1740,32 @@ mod tests {
         .unwrap()
         .changes;
 
-        pretty_assertions::assert_eq!(changes, vec![
-            TableUpdate::SetLocation {
-                location: TEST_LOCATION.to_string()
-            },
-            TableUpdate::AddSchema {
-                schema: Schema::builder().build().unwrap(),
-            },
-            TableUpdate::SetCurrentSchema { schema_id: -1 },
-            TableUpdate::AddSpec {
-                // Because this is a new tables, field-ids are assigned
-                // partition_spec() has None set for field-id
-                spec: PartitionSpec::builder(schema)
-                    .with_spec_id(0)
-                    .build()
-                    .unwrap()
-                    .into_unbound(),
-            },
-            TableUpdate::SetDefaultSpec { spec_id: -1 },
-            TableUpdate::AddSortOrder {
-                sort_order: SortOrder::unsorted_order(),
-            },
-            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
-        ]);
+        pretty_assertions::assert_eq!(
+            changes,
+            vec![
+                TableUpdate::SetLocation {
+                    location: TEST_LOCATION.to_string()
+                },
+                TableUpdate::AddSchema {
+                    schema: Schema::builder().build().unwrap(),
+                },
+                TableUpdate::SetCurrentSchema { schema_id: -1 },
+                TableUpdate::AddSpec {
+                    // Because this is a new tables, field-ids are assigned
+                    // partition_spec() has None set for field-id
+                    spec: PartitionSpec::builder(schema)
+                        .with_spec_id(0)
+                        .build()
+                        .unwrap()
+                        .into_unbound(),
+                },
+                TableUpdate::SetDefaultSpec { spec_id: -1 },
+                TableUpdate::AddSortOrder {
+                    sort_order: SortOrder::unsorted_order(),
+                },
+                TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
+            ]
+        );
     }
 
     #[test]
@@ -1821,9 +1827,12 @@ mod tests {
         );
         assert_eq!(build_result.metadata.default_spec.spec_id(), 0);
         assert_eq!(build_result.metadata.last_partition_id, 1001);
-        pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSpec {
-            spec: expected_change
-        });
+        pretty_assertions::assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddSpec {
+                spec: expected_change
+            }
+        );
 
         // Remove the spec
         let build_result = build_result
@@ -1873,13 +1882,16 @@ mod tests {
 
         assert_eq!(build_result.changes.len(), 2);
         assert_eq!(build_result.metadata.default_spec, Arc::new(expected_spec));
-        assert_eq!(build_result.changes, vec![
-            TableUpdate::AddSpec {
-                // Should contain the actual ID that was used
-                spec: added_spec.with_spec_id(1)
-            },
-            TableUpdate::SetDefaultSpec { spec_id: -1 }
-        ]);
+        assert_eq!(
+            build_result.changes,
+            vec![
+                TableUpdate::AddSpec {
+                    // Should contain the actual ID that was used
+                    spec: added_spec.with_spec_id(1)
+                },
+                TableUpdate::SetDefaultSpec { spec_id: -1 }
+            ]
+        );
     }
 
     #[test]
@@ -1896,12 +1908,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(build_result.changes.len(), 2);
-        assert_eq!(build_result.changes[0], TableUpdate::AddSpec {
-            spec: unbound_spec.clone()
-        });
-        assert_eq!(build_result.changes[1], TableUpdate::SetDefaultSpec {
-            spec_id: -1
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddSpec {
+                spec: unbound_spec.clone()
+            }
+        );
+        assert_eq!(
+            build_result.changes[1],
+            TableUpdate::SetDefaultSpec { spec_id: -1 }
+        );
         assert_eq!(
             build_result.metadata.default_spec,
             Arc::new(
@@ -1923,9 +1939,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(build_result.changes.len(), 1);
-        assert_eq!(build_result.changes[0], TableUpdate::SetDefaultSpec {
-            spec_id: 0
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::SetDefaultSpec { spec_id: 0 }
+        );
         assert_eq!(
             build_result.metadata.default_spec,
             Arc::new(
@@ -1965,9 +1982,12 @@ mod tests {
             build_result.metadata.sort_order_by_id(2),
             Some(&Arc::new(expected_sort_order.clone()))
         );
-        pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSortOrder {
-            sort_order: expected_sort_order
-        });
+        pretty_assertions::assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddSortOrder {
+                sort_order: expected_sort_order
+            }
+        );
     }
 
     #[test]
@@ -1997,12 +2017,16 @@ mod tests {
             build_result.metadata.schema_by_id(1),
             Some(&Arc::new(added_schema.clone()))
         );
-        pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSchema {
-            schema: added_schema
-        });
-        assert_eq!(build_result.changes[1], TableUpdate::SetCurrentSchema {
-            schema_id: -1
-        });
+        pretty_assertions::assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddSchema {
+                schema: added_schema
+            }
+        );
+        assert_eq!(
+            build_result.changes[1],
+            TableUpdate::SetCurrentSchema { schema_id: -1 }
+        );
     }
 
     #[test]
@@ -2029,9 +2053,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(build_result.changes.len(), 2);
-        assert_eq!(build_result.changes[1], TableUpdate::SetCurrentSchema {
-            schema_id: -1
-        });
+        assert_eq!(
+            build_result.changes[1],
+            TableUpdate::SetCurrentSchema { schema_id: -1 }
+        );
     }
 
     #[test]
@@ -2132,28 +2157,34 @@ mod tests {
         assert!(
             builder
                 .clone()
-                .set_ref(MAIN_BRANCH, SnapshotReference {
-                    snapshot_id: 10,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: Some(10),
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                })
+                .set_ref(
+                    MAIN_BRANCH,
+                    SnapshotReference {
+                        snapshot_id: 10,
+                        retention: SnapshotRetention::Branch {
+                            min_snapshots_to_keep: Some(10),
+                            max_snapshot_age_ms: None,
+                            max_ref_age_ms: None,
+                        },
+                    }
+                )
                 .unwrap_err()
                 .to_string()
                 .contains("Cannot set 'main' to unknown snapshot: '10'")
         );
 
         let build_result = builder
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 1,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference {
+                    snapshot_id: 1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2162,10 +2193,13 @@ mod tests {
             build_result.metadata.snapshot_by_id(1),
             Some(&Arc::new(snapshot.clone()))
         );
-        assert_eq!(build_result.metadata.snapshot_log, vec![SnapshotLog {
-            snapshot_id: 1,
-            timestamp_ms: snapshot.timestamp_ms()
-        }])
+        assert_eq!(
+            build_result.metadata.snapshot_log,
+            vec![SnapshotLog {
+                snapshot_id: 1,
+                timestamp_ms: snapshot.timestamp_ms()
+            }]
+        )
     }
 
     #[test]
@@ -2215,24 +2249,30 @@ mod tests {
         let result = builder
             .add_snapshot(snapshot_1)
             .unwrap()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 1,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference {
+                    snapshot_id: 1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })
+            )
             .unwrap()
             .set_branch_snapshot(snapshot_2.clone(), MAIN_BRANCH)
             .unwrap()
             .build()
             .unwrap();
 
-        assert_eq!(result.metadata.snapshot_log, vec![SnapshotLog {
-            snapshot_id: 2,
-            timestamp_ms: snapshot_2.timestamp_ms()
-        }]);
+        assert_eq!(
+            result.metadata.snapshot_log,
+            vec![SnapshotLog {
+                snapshot_id: 2,
+                timestamp_ms: snapshot_2.timestamp_ms()
+            }]
+        );
         assert_eq!(result.metadata.current_snapshot().unwrap().snapshot_id(), 2);
     }
 
@@ -2339,13 +2379,16 @@ mod tests {
             build_result.metadata.refs.get("new_branch"),
             Some(&reference)
         );
-        assert_eq!(build_result.changes, vec![
-            TableUpdate::AddSnapshot { snapshot },
-            TableUpdate::SetSnapshotRef {
-                ref_name: "new_branch".to_string(),
-                reference
-            }
-        ]);
+        assert_eq!(
+            build_result.changes,
+            vec![
+                TableUpdate::AddSnapshot { snapshot },
+                TableUpdate::SetSnapshotRef {
+                    ref_name: "new_branch".to_string(),
+                    reference
+                }
+            ]
+        );
     }
 
     #[test]
@@ -2488,14 +2531,17 @@ mod tests {
         let builder = builder
             .add_snapshot(snapshot.clone())
             .unwrap()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: 1,
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: Some(10),
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference {
+                    snapshot_id: 1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: Some(10),
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })
+            )
             .unwrap();
 
         let snapshot = Snapshot::builder()
@@ -2551,9 +2597,12 @@ mod tests {
             build_result.metadata.statistics,
             HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
         );
-        assert_eq!(build_result.changes, vec![TableUpdate::SetStatistics {
-            statistics: statistics.clone()
-        }]);
+        assert_eq!(
+            build_result.changes,
+            vec![TableUpdate::SetStatistics {
+                statistics: statistics.clone()
+            }]
+        );
 
         // Remove
         let builder = build_result.metadata.into_builder(None);
@@ -2563,9 +2612,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(build_result.metadata.statistics.len(), 0);
-        assert_eq!(build_result.changes, vec![TableUpdate::RemoveStatistics {
-            snapshot_id: statistics.snapshot_id
-        }]);
+        assert_eq!(
+            build_result.changes,
+            vec![TableUpdate::RemoveStatistics {
+                snapshot_id: statistics.snapshot_id
+            }]
+        );
 
         // Remove again yields no changes
         let builder = build_result.metadata.into_builder(None);
@@ -2595,11 +2647,12 @@ mod tests {
             build_result.metadata.partition_statistics,
             HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
         );
-        assert_eq!(build_result.changes, vec![
-            TableUpdate::SetPartitionStatistics {
+        assert_eq!(
+            build_result.changes,
+            vec![TableUpdate::SetPartitionStatistics {
                 partition_statistics: statistics.clone()
-            }
-        ]);
+            }]
+        );
 
         // Remove
         let builder = build_result.metadata.into_builder(None);
@@ -2608,11 +2661,12 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(build_result.metadata.partition_statistics.len(), 0);
-        assert_eq!(build_result.changes, vec![
-            TableUpdate::RemovePartitionStatistics {
+        assert_eq!(
+            build_result.changes,
+            vec![TableUpdate::RemovePartitionStatistics {
                 snapshot_id: statistics.snapshot_id
-            }
-        ]);
+            }]
+        );
 
         // Remove again yields no changes
         let builder = build_result.metadata.into_builder(None);
@@ -3312,14 +3366,17 @@ mod tests {
             .into_builder(None)
             .add_snapshot(main_snapshot.clone())
             .unwrap()
-            .set_ref(MAIN_BRANCH, SnapshotReference {
-                snapshot_id: main_snapshot.snapshot_id(),
-                retention: SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference {
+                    snapshot_id: main_snapshot.snapshot_id(),
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
                 },
-            })
+            )
             .unwrap()
             .build()
             .unwrap()
@@ -3401,9 +3458,12 @@ mod tests {
             build_result.metadata.encryption_key("key-1"),
             Some(&encryption_key_1)
         );
-        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
-            encryption_key: encryption_key_1.clone()
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddEncryptionKey {
+                encryption_key: encryption_key_1.clone()
+            }
+        );
 
         // Add second encryption key
         let build_result = build_result
@@ -3425,9 +3485,12 @@ mod tests {
             build_result.metadata.encryption_key("key-2"),
             Some(&encryption_key_2)
         );
-        assert_eq!(build_result.changes[0], TableUpdate::AddEncryptionKey {
-            encryption_key: encryption_key_2.clone()
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::AddEncryptionKey {
+                encryption_key: encryption_key_2.clone()
+            }
+        );
 
         // Try to add duplicate key - should not create a change
         let build_result = build_result
@@ -3459,9 +3522,12 @@ mod tests {
             build_result.metadata.encryption_key("key-2"),
             Some(&encryption_key_2)
         );
-        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
-            key_id: "key-1".to_string()
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::RemoveEncryptionKey {
+                key_id: "key-1".to_string()
+            }
+        );
 
         // Try to remove non-existent key - should not create a change
         let build_result = build_result
@@ -3497,9 +3563,12 @@ mod tests {
         assert_eq!(build_result.changes.len(), 1);
         assert_eq!(build_result.metadata.encryption_keys.len(), 0);
         assert_eq!(build_result.metadata.encryption_key("key-2"), None);
-        assert_eq!(build_result.changes[0], TableUpdate::RemoveEncryptionKey {
-            key_id: "key-2".to_string()
-        });
+        assert_eq!(
+            build_result.changes[0],
+            TableUpdate::RemoveEncryptionKey {
+                key_id: "key-2".to_string()
+            }
+        );
 
         // Verify empty encryption_keys_iter()
         let keys = build_result.metadata.encryption_keys_iter();

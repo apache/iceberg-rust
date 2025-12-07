@@ -118,11 +118,14 @@ async fn test_append_partition_data_file() {
         Some(first_partition_id_value),
     ]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false)]);
-    let batch = RecordBatch::try_new(schema.clone(), vec![
-        Arc::new(col1) as ArrayRef,
-        Arc::new(col2) as ArrayRef,
-        Arc::new(col3) as ArrayRef,
-    ])
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(col1) as ArrayRef,
+            Arc::new(col2) as ArrayRef,
+            Arc::new(col3) as ArrayRef,
+        ],
+    )
     .unwrap();
 
     data_file_writer_valid.write(batch.clone()).await.unwrap();

@@ -68,7 +68,9 @@ pub trait ApplyTransactionAction {
 
 impl<T: TransactionAction + 'static> ApplyTransactionAction for T {
     fn apply(self, mut tx: Transaction) -> Result<Transaction>
-    where Self: Sized {
+    where
+        Self: Sized,
+    {
         tx.actions.push(Arc::new(self));
         Ok(tx)
     }
@@ -144,12 +146,18 @@ mod tests {
         let updates = action_commit.take_updates();
         let requirements = action_commit.take_requirements();
 
-        assert_eq!(updates[0], TableUpdate::SetLocation {
-            location: String::from("s3://bucket/prefix/table/")
-        });
-        assert_eq!(requirements[0], TableRequirement::UuidMatch {
-            uuid: Uuid::from_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap()
-        });
+        assert_eq!(
+            updates[0],
+            TableUpdate::SetLocation {
+                location: String::from("s3://bucket/prefix/table/")
+            }
+        );
+        assert_eq!(
+            requirements[0],
+            TableRequirement::UuidMatch {
+                uuid: Uuid::from_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap()
+            }
+        );
     }
 
     #[test]

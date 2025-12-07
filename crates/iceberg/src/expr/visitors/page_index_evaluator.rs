@@ -1403,15 +1403,18 @@ mod tests {
             PageLocation::new(4048, 48, 4048),
         ];
 
-        Ok((vec![idx_float, idx_string], vec![
-            OffsetIndexMetaData {
-                page_locations: page_locs_float,
-                unencoded_byte_array_data_bytes: None,
-            },
-            OffsetIndexMetaData {
-                page_locations: page_locs_string,
-                unencoded_byte_array_data_bytes: None,
-            },
-        ]))
+        Ok((
+            vec![idx_float, idx_string],
+            vec![
+                OffsetIndexMetaData {
+                    page_locations: page_locs_float,
+                    unencoded_byte_array_data_bytes: None,
+                },
+                OffsetIndexMetaData {
+                    page_locations: page_locs_string,
+                    unencoded_byte_array_data_bytes: None,
+                },
+            ],
+        ))
     }
 }

@@ -614,12 +614,15 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    manifest_list_1_location => &manifest_list1_location,
-                    manifest_list_2_location => &manifest_list2_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
+                let metadata_json = render_template(
+                    &template_json_str,
+                    context! {
+                        table_location => &table_location,
+                        manifest_list_1_location => &manifest_list1_location,
+                        manifest_list_2_location => &manifest_list2_location,
+                        table_metadata_1_location => &table_metadata1_location,
+                    },
+                );
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -654,10 +657,13 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
+                let metadata_json = render_template(
+                    &template_json_str,
+                    context! {
+                        table_location => &table_location,
+                        table_metadata_1_location => &table_metadata1_location,
+                    },
+                );
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -693,12 +699,15 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    manifest_list_1_location => &manifest_list1_location,
-                    manifest_list_2_location => &manifest_list2_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
+                let metadata_json = render_template(
+                    &template_json_str,
+                    context! {
+                        table_location => &table_location,
+                        manifest_list_1_location => &manifest_list1_location,
+                        manifest_list_2_location => &manifest_list2_location,
+                        table_metadata_1_location => &table_metadata1_location,
+                    },
+                );
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
@@ -924,9 +933,10 @@ pub mod tests {
             let values: BooleanArray = values.into();
             let col8 = Arc::new(values) as ArrayRef;
 
-            let to_write = RecordBatch::try_new(schema.clone(), vec![
-                col1, col2, col3, col4, col5, col6, col7, col8,
-            ])
+            let to_write = RecordBatch::try_new(
+                schema.clone(),
+                vec![col1, col2, col3, col4, col5, col6, col7, col8],
+            )
             .unwrap();
 
             // Write the Parquet files
@@ -1135,9 +1145,10 @@ pub mod tests {
             let values: BooleanArray = values.into();
             let col8 = Arc::new(values) as ArrayRef;
 
-            let to_write = RecordBatch::try_new(schema.clone(), vec![
-                col1, col2, col3, col4, col5, col6, col7, col8,
-            ])
+            let to_write = RecordBatch::try_new(
+                schema.clone(),
+                vec![col1, col2, col3, col4, col5, col6, col7, col8],
+            )
             .unwrap();
 
             // Write the Parquet files

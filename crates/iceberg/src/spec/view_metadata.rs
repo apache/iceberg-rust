@@ -276,7 +276,9 @@ pub(super) mod _serde {
 
     impl Serialize for ViewMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             // we must do a clone here
             let metadata_enum: ViewMetadataEnum =
                 self.clone().try_into().map_err(serde::ser::Error::custom)?;

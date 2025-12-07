@@ -50,3 +50,9 @@ impl From<std::io::Error> for Error {
         Self(value.into())
     }
 }
+
+impl From<iceberg::Error> for Error {
+    fn from(value: iceberg::Error) -> Self {
+        Self(value.into())
+    }
+}

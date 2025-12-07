@@ -571,10 +571,13 @@ mod tests {
 
         let batches: Vec<RecordBatch> = (1..4)
             .map(|idx| {
-                RecordBatch::try_new(arrow_schema.clone(), vec![
-                    Arc::new(Int32Array::from(vec![idx])) as ArrayRef,
-                    Arc::new(StringArray::from(vec![format!("Name{idx}")])) as ArrayRef,
-                ])
+                RecordBatch::try_new(
+                    arrow_schema.clone(),
+                    vec![
+                        Arc::new(Int32Array::from(vec![idx])) as ArrayRef,
+                        Arc::new(StringArray::from(vec![format!("Name{idx}")])) as ArrayRef,
+                    ],
+                )
             })
             .collect::<Result<_, _>>()?;
 

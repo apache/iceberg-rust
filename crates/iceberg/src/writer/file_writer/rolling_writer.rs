@@ -335,10 +335,13 @@ mod tests {
         // Create test data
         let arrow_schema = make_test_arrow_schema();
 
-        let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
-        ])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+            ],
+        )?;
 
         // Write data
         writer.write(batch.clone()).await?;
