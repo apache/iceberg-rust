@@ -2379,7 +2379,7 @@ mod tests {
 
         // Load the table again from the catalog to verify changes were persisted
         let reloaded = catalog.load_table(&table_ident).await.unwrap();
-        
+
         // Verify the reloaded table matches the updated table
         assert_eq!(
             reloaded.metadata().properties().get("test_property"),
