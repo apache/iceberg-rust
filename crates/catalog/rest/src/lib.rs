@@ -53,6 +53,7 @@
 
 mod catalog;
 mod client;
-pub mod types;
+mod types;
 
 pub use catalog::*;
+pub use types::*;
