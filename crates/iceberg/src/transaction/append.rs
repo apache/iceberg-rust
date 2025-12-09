@@ -37,6 +37,8 @@ pub struct FastAppendAction {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    // Optional tag name to create atomically with the snapshot.
+    tag_ref: Option<String>,
 }
 
 impl FastAppendAction {
@@ -47,6 +49,7 @@ impl FastAppendAction {
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
+            tag_ref: None,
         }
     }
 
@@ -79,6 +82,12 @@ impl FastAppendAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    /// Set a tag name to be created atomically with the snapshot.
+    pub fn with_tag(mut self, tag_name: impl Into<String>) -> Self {
+        self.tag_ref = Some(tag_name.into());
+        self
+    }
 }
 
 #[async_trait]
@@ -90,6 +99,7 @@ impl TransactionAction for FastAppendAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            self.tag_ref.clone(),
         );
 
         // validate added files
@@ -332,5 +342,66 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_with_tag() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/tagged.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![data_file])
+            .with_tag("v1.0.0");
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        // Should have 3 updates: AddSnapshot, SetSnapshotRef (main), SetSnapshotRef (tag)
+        assert_eq!(updates.len(), 3);
+
+        // First update: AddSnapshot
+        let snapshot_id = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot.snapshot_id()
+        } else {
+            panic!("Expected AddSnapshot as first update");
+        };
+
+        // Second update: SetSnapshotRef for main branch
+        if let TableUpdate::SetSnapshotRef {
+            ref_name,
+            reference,
+        } = &updates[1]
+        {
+            assert_eq!(ref_name, MAIN_BRANCH);
+            assert_eq!(reference.snapshot_id, snapshot_id);
+            assert!(reference.is_branch());
+        } else {
+            panic!("Expected SetSnapshotRef for main branch as second update");
+        }
+
+        // Third update: SetSnapshotRef for tag
+        if let TableUpdate::SetSnapshotRef {
+            ref_name,
+            reference,
+        } = &updates[2]
+        {
+            assert_eq!(ref_name, "v1.0.0");
+            assert_eq!(reference.snapshot_id, snapshot_id);
+            assert!(!reference.is_branch()); // Should be a tag, not a branch
+        } else {
+            panic!("Expected SetSnapshotRef for tag as third update");
+        }
     }
 }
