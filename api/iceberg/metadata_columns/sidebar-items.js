@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["RESERVED_COL_DOC_FILE","RESERVED_COL_NAME_FILE","RESERVED_FIELD_ID_FILE"],"fn":["file_field","get_metadata_field","get_metadata_field_id","is_metadata_column_name","is_metadata_field"]};
