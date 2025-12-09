@@ -582,7 +582,7 @@ impl RecordBatchTransformer {
                 let this_field_id = field_id_str.parse().map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {}", e),
+                        format!("field id not parseable as an i32: {e}"),
                     )
                 })?;
 

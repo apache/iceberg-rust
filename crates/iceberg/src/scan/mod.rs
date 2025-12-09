@@ -1872,8 +1872,7 @@ pub mod tests {
         let file_path = string_values.value(0);
         assert!(
             file_path.ends_with(".parquet"),
-            "File path should end with .parquet, got: {}",
-            file_path
+            "File path should end with .parquet, got: {file_path}"
         );
     }
 
@@ -1981,8 +1980,7 @@ pub mod tests {
         for path in &file_paths {
             assert!(
                 path.ends_with(".parquet"),
-                "All file paths should end with .parquet, got: {}",
-                path
+                "All file paths should end with .parquet, got: {path}"
             );
         }
     }

@@ -74,14 +74,13 @@ pub fn get_metadata_field(field_id: i32) -> Result<NestedFieldRef> {
             Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "Metadata field ID {} recognized but field definition not implemented",
-                    field_id
+                    "Metadata field ID {field_id} recognized but field definition not implemented"
                 ),
             ))
         }
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Field ID {} is not a metadata field", field_id),
+            format!("Field ID {field_id} is not a metadata field"),
         )),
     }
 }
