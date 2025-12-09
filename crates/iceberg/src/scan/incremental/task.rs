@@ -111,8 +111,21 @@ impl DeletedFileScanTask {
     }
 }
 
-/// The stream of incremental file scan tasks.
-pub type IncrementalFileScanTaskStream = BoxStream<'static, Result<IncrementalFileScanTask>>;
+/// The streams of appended and deleted file scan tasks.
+pub type IncrementalFileScanTaskStreams = (
+    BoxStream<'static, Result<AppendedFileScanTask>>,
+    BoxStream<'static, Result<DeleteScanTask>>,
+);
+
+/// A delete scan task, which can be a deleted data file or positional deletes.
+#[derive(Debug, Clone)]
+pub enum DeleteScanTask {
+    /// A deleted data file.
+    DeletedFile(DeletedFileScanTask),
+    /// Positional deletes (deleted records of a data file). First argument is the file path,
+    /// second the delete vector.
+    PositionalDeletes(String, DeleteVector),
+}
 
 /// An incremental file scan task, which can be an appended data file, deleted data file,
 /// or positional deletes.

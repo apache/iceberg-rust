@@ -34,7 +34,7 @@ use crate::metadata_columns::{RESERVED_FIELD_ID_UNDERSCORE_POS, row_pos_field};
 use crate::runtime::spawn;
 use crate::scan::ArrowRecordBatchStream;
 use crate::scan::incremental::{
-    AppendedFileScanTask, IncrementalFileScanTask, IncrementalFileScanTaskStream,
+    AppendedFileScanTask, DeleteScanTask, IncrementalFileScanTaskStreams,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -56,120 +56,6 @@ pub type CombinedIncrementalBatchRecordStream =
 
 /// Stream type for obtaining a separate stream of appended and deleted record batches.
 pub type UnzippedIncrementalBatchRecordStream = (ArrowRecordBatchStream, ArrowRecordBatchStream);
-
-impl StreamsInto<ArrowReader, CombinedIncrementalBatchRecordStream>
-    for IncrementalFileScanTaskStream
-{
-    /// Takes a stream of `IncrementalFileScanTasks` and reads all the files. Returns a
-    /// stream of Arrow `RecordBatch`es containing the data from the files.
-    fn stream(self, reader: ArrowReader) -> Result<CombinedIncrementalBatchRecordStream> {
-        let (appends, deletes) =
-            StreamsInto::<ArrowReader, UnzippedIncrementalBatchRecordStream>::stream(self, reader)?;
-
-        let left = appends.map(|res| res.map(|batch| (IncrementalBatchType::Append, batch)));
-        let right = deletes.map(|res| res.map(|batch| (IncrementalBatchType::Delete, batch)));
-
-        Ok(Box::pin(select(left, right)) as CombinedIncrementalBatchRecordStream)
-    }
-}
-
-impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
-    for IncrementalFileScanTaskStream
-{
-    /// Takes a stream of `IncrementalFileScanTasks` and reads all the files. Returns two
-    /// separate streams of Arrow `RecordBatch`es containing appended data and deleted records.
-    fn stream(self, reader: ArrowReader) -> Result<UnzippedIncrementalBatchRecordStream> {
-        let (appends_tx, appends_rx) =
-            channel::<Result<RecordBatch>>(reader.concurrency_limit_data_files);
-        let (deletes_tx, deletes_rx) =
-            channel::<Result<RecordBatch>>(reader.concurrency_limit_data_files);
-
-        let batch_size = reader.batch_size;
-
-        spawn(async move {
-            let _ = self
-                .try_for_each_concurrent(reader.concurrency_limit_data_files, |task| {
-                    let file_io = reader.file_io.clone();
-                    match task {
-                        IncrementalFileScanTask::Append(append_task) => {
-                            let appends_tx = appends_tx.clone();
-                            Box::pin(async move {
-                                spawn(async move {
-                                    let record_batch_stream = process_incremental_append_task(
-                                        append_task,
-                                        batch_size,
-                                        file_io,
-                                    )
-                                    .await;
-
-                                    process_record_batch_stream(
-                                        record_batch_stream,
-                                        appends_tx,
-                                        "failed to read appended record batch",
-                                    )
-                                    .await;
-                                });
-                                Ok(())
-                            })
-                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
-                        }
-                        IncrementalFileScanTask::Delete(deleted_file_task) => {
-                            let deletes_tx = deletes_tx.clone();
-                            Box::pin(async move {
-                                spawn(async move {
-                                    let file_path = deleted_file_task.data_file_path().to_string();
-                                    let total_records =
-                                        deleted_file_task.base.record_count.unwrap_or(0);
-
-                                    let record_batch_stream = process_incremental_deleted_file_task(
-                                        file_path,
-                                        total_records,
-                                        batch_size,
-                                    );
-
-                                    process_record_batch_stream(
-                                        record_batch_stream,
-                                        deletes_tx,
-                                        "failed to read deleted file record batch",
-                                    )
-                                    .await;
-                                });
-                                Ok(())
-                            })
-                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
-                        }
-                        IncrementalFileScanTask::PositionalDeletes(file_path, delete_vector) => {
-                            let deletes_tx = deletes_tx.clone();
-                            Box::pin(async move {
-                                spawn(async move {
-                                    let record_batch_stream = process_incremental_delete_task(
-                                        file_path,
-                                        delete_vector,
-                                        batch_size,
-                                    );
-
-                                    process_record_batch_stream(
-                                        record_batch_stream,
-                                        deletes_tx,
-                                        "failed to read deleted record batch",
-                                    )
-                                    .await;
-                                });
-                                Ok(())
-                            })
-                                as Pin<Box<dyn futures::Future<Output = Result<()>> + Send>>
-                        }
-                    }
-                })
-                .await;
-        });
-
-        Ok((
-            Box::pin(appends_rx) as ArrowRecordBatchStream,
-            Box::pin(deletes_rx) as ArrowRecordBatchStream,
-        ))
-    }
-}
 
 async fn process_incremental_append_task(
     task: AppendedFileScanTask,
@@ -329,4 +215,118 @@ fn process_incremental_deleted_file_task(
         .map(move |chunk| create_delete_batch(&schema, &file_path, chunk));
 
     Ok(Box::pin(stream) as ArrowRecordBatchStream)
+}
+
+impl StreamsInto<ArrowReader, CombinedIncrementalBatchRecordStream>
+    for IncrementalFileScanTaskStreams
+{
+    /// Takes separate streams of appended and deleted file scan tasks and reads all the files.
+    /// Returns a combined stream of Arrow `RecordBatch`es containing the data from the files.
+    fn stream(self, reader: ArrowReader) -> Result<CombinedIncrementalBatchRecordStream> {
+        let (appends, deletes) =
+            StreamsInto::<ArrowReader, UnzippedIncrementalBatchRecordStream>::stream(self, reader)?;
+
+        let left = appends.map(|res| res.map(|batch| (IncrementalBatchType::Append, batch)));
+        let right = deletes.map(|res| res.map(|batch| (IncrementalBatchType::Delete, batch)));
+
+        Ok(Box::pin(select(left, right)) as CombinedIncrementalBatchRecordStream)
+    }
+}
+
+impl StreamsInto<ArrowReader, UnzippedIncrementalBatchRecordStream>
+    for IncrementalFileScanTaskStreams
+{
+    /// Takes separate streams of appended and deleted file scan tasks and reads all the files.
+    /// Returns two separate streams of Arrow `RecordBatch`es containing appended data and deleted records.
+    fn stream(self, reader: ArrowReader) -> Result<UnzippedIncrementalBatchRecordStream> {
+        let (appends_tx, appends_rx) =
+            channel::<Result<RecordBatch>>(reader.concurrency_limit_data_files);
+        let (deletes_tx, deletes_rx) =
+            channel::<Result<RecordBatch>>(reader.concurrency_limit_data_files);
+
+        let batch_size = reader.batch_size;
+
+        let (append_stream, delete_stream) = self;
+
+        // Process append tasks
+        let file_io = reader.file_io.clone();
+        spawn(async move {
+            let _ = append_stream
+                .try_for_each_concurrent(reader.concurrency_limit_data_files, |append_task| {
+                    let file_io = file_io.clone();
+                    let appends_tx = appends_tx.clone();
+                    async move {
+                        spawn(async move {
+                            let record_batch_stream =
+                                process_incremental_append_task(append_task, batch_size, file_io)
+                                    .await;
+
+                            process_record_batch_stream(
+                                record_batch_stream,
+                                appends_tx,
+                                "failed to read appended record batch",
+                            )
+                            .await;
+                        });
+                        Ok(())
+                    }
+                })
+                .await;
+        });
+
+        // Process delete tasks
+        spawn(async move {
+            let _ = delete_stream
+                .try_for_each_concurrent(reader.concurrency_limit_data_files, |delete_task| {
+                    let deletes_tx = deletes_tx.clone();
+                    async move {
+                        match delete_task {
+                            DeleteScanTask::DeletedFile(deleted_file_task) => {
+                                spawn(async move {
+                                    let file_path = deleted_file_task.data_file_path().to_string();
+                                    let total_records =
+                                        deleted_file_task.base.record_count.unwrap_or(0);
+
+                                    let record_batch_stream = process_incremental_deleted_file_task(
+                                        file_path,
+                                        total_records,
+                                        batch_size,
+                                    );
+
+                                    process_record_batch_stream(
+                                        record_batch_stream,
+                                        deletes_tx,
+                                        "failed to read deleted file record batch",
+                                    )
+                                    .await;
+                                });
+                            }
+                            DeleteScanTask::PositionalDeletes(file_path, delete_vector) => {
+                                spawn(async move {
+                                    let record_batch_stream = process_incremental_delete_task(
+                                        file_path,
+                                        delete_vector,
+                                        batch_size,
+                                    );
+
+                                    process_record_batch_stream(
+                                        record_batch_stream,
+                                        deletes_tx,
+                                        "failed to read deleted record batch",
+                                    )
+                                    .await;
+                                });
+                            }
+                        }
+                        Ok(())
+                    }
+                })
+                .await;
+        });
+
+        Ok((
+            Box::pin(appends_rx) as ArrowRecordBatchStream,
+            Box::pin(deletes_rx) as ArrowRecordBatchStream,
+        ))
+    }
 }

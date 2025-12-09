@@ -426,7 +426,8 @@ impl IncrementalTableScan {
     }
 
     /// Plans the files to be read in this incremental table scan.
-    pub async fn plan_files(&self) -> Result<IncrementalFileScanTaskStream> {
+    /// Returns separate streams for appended and deleted records.
+    pub async fn plan_files(&self) -> Result<IncrementalFileScanTaskStreams> {
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
@@ -584,21 +585,22 @@ impl IncrementalTableScan {
             }
         }
 
-        // Build final task list with net changes
+        // Build final task lists with net changes
         // We filter out tasks for files that appear in both sets (cancelled out)
-        let mut final_tasks: Vec<IncrementalFileScanTask> = Vec::new();
+        let mut final_append_tasks: Vec<AppendedFileScanTask> = Vec::new();
+        let mut final_delete_tasks: Vec<DeleteScanTask> = Vec::new();
 
         // Add net append tasks (only files not in deleted_files)
         for append_task in append_tasks {
             if !deleted_files.contains(append_task.data_file_path()) {
-                final_tasks.push(IncrementalFileScanTask::Append(append_task));
+                final_append_tasks.push(append_task);
             }
         }
 
         // Add net delete tasks (only files not in appended_files)
         for delete_task in delete_tasks {
             if !appended_files.contains(delete_task.data_file_path()) {
-                final_tasks.push(IncrementalFileScanTask::Delete(delete_task));
+                final_delete_tasks.push(DeleteScanTask::DeletedFile(delete_task));
             }
         }
 
@@ -641,14 +643,13 @@ impl IncrementalTableScan {
                         .with_source(e)
                 })?;
 
-            let positional_delete_task =
-                IncrementalFileScanTask::PositionalDeletes(path, delete_vector_inner);
-            final_tasks.push(positional_delete_task);
+            final_delete_tasks.push(DeleteScanTask::PositionalDeletes(path, delete_vector_inner));
         }
 
-        // We actually would not need a stream here, but we can keep it compatible with
-        // other scan types.
-        Ok(futures::stream::iter(final_tasks).map(Ok).boxed())
+        let append_stream = futures::stream::iter(final_append_tasks).map(Ok).boxed();
+        let delete_stream = futures::stream::iter(final_delete_tasks).map(Ok).boxed();
+
+        Ok((append_stream, delete_stream))
     }
 
     /// Returns an [`CombinedIncrementalBatchRecordStream`] for this incremental table scan.
