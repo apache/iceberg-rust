@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef};
 use uuid::Uuid;
 
 use super::get_field_id;
 use crate::spec::{
-    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveType,
+    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
     SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
     visit_type_with_partner,
 };
@@ -615,6 +618,217 @@ pub fn arrow_primitive_to_literal(
         &mut ArrowArrayToIcebergStructConverter,
         &ArrowArrayAccessor::new(),
     )
+}
+
+/// Create a single-element array from a primitive literal.
+///
+/// This is used for creating constant arrays (Run-End Encoded arrays) where we need
+/// a single value that represents all rows.
+pub(crate) fn create_primitive_array_single_element(
+    data_type: &DataType,
+    prim_lit: &Option<PrimitiveLiteral>,
+) -> Result<ArrayRef> {
+    match (data_type, prim_lit) {
+        (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
+            Ok(Arc::new(BooleanArray::from(vec![*v])))
+        }
+        (DataType::Boolean, None) => Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))),
+        (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
+            Ok(Arc::new(Int32Array::from(vec![*v])))
+        }
+        (DataType::Int32, None) => Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None]))),
+        (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
+            Ok(Arc::new(Date32Array::from(vec![*v])))
+        }
+        (DataType::Date32, None) => Ok(Arc::new(Date32Array::from(vec![Option::<i32>::None]))),
+        (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
+            Ok(Arc::new(Int64Array::from(vec![*v])))
+        }
+        (DataType::Int64, None) => Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None]))),
+        (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
+            Ok(Arc::new(Float32Array::from(vec![v.0])))
+        }
+        (DataType::Float32, None) => Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None]))),
+        (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
+            Ok(Arc::new(Float64Array::from(vec![v.0])))
+        }
+        (DataType::Float64, None) => Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None]))),
+        (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
+            Ok(Arc::new(StringArray::from(vec![v.as_str()])))
+        }
+        (DataType::Utf8, None) => Ok(Arc::new(StringArray::from(vec![Option::<&str>::None]))),
+        (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
+            Ok(Arc::new(BinaryArray::from_vec(vec![v.as_slice()])))
+        }
+        (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
+            Option::<&[u8]>::None,
+        ]))),
+        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(v))) => {
+            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![{ *v }])))
+        }
+        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(v))) => {
+            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![
+                *v as i128,
+            ])))
+        }
+        (DataType::Decimal128(_, _), None) => {
+            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![
+                Option::<i128>::None,
+            ])))
+        }
+        (DataType::Struct(fields), None) => {
+            // Create a single-element StructArray with nulls
+            let null_arrays: Vec<ArrayRef> = fields
+                .iter()
+                .map(|f| {
+                    // Recursively create null arrays for struct fields
+                    // For primitive fields in structs, use simple null arrays (not REE within struct)
+                    match f.data_type() {
+                        DataType::Boolean => {
+                            Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
+                                as ArrayRef)
+                        }
+                        DataType::Int32 | DataType::Date32 => {
+                            Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef)
+                        }
+                        DataType::Int64 => {
+                            Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef)
+                        }
+                        DataType::Float32 => {
+                            Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None])) as ArrayRef)
+                        }
+                        DataType::Float64 => {
+                            Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None])) as ArrayRef)
+                        }
+                        DataType::Utf8 => {
+                            Ok(Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef)
+                        }
+                        DataType::Binary => {
+                            Ok(
+                                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
+                                    as ArrayRef,
+                            )
+                        }
+                        _ => Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Unsupported struct field type: {:?}", f.data_type()),
+                        )),
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(arrow_array::StructArray::new(
+                fields.clone(),
+                null_arrays,
+                Some(arrow_buffer::NullBuffer::new_null(1)),
+            )))
+        }
+        _ => Err(Error::new(
+            ErrorKind::Unexpected,
+            format!(
+                "Unsupported constant type combination: {:?} with {:?}",
+                data_type, prim_lit
+            ),
+        )),
+    }
+}
+
+/// Create a repeated array from a primitive literal for a given number of rows.
+///
+/// This is used for creating non-constant arrays where we need the same value
+/// repeated for each row.
+pub(crate) fn create_primitive_array_repeated(
+    data_type: &DataType,
+    prim_lit: &Option<PrimitiveLiteral>,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    Ok(match (data_type, prim_lit) {
+        (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
+            Arc::new(BooleanArray::from(vec![*value; num_rows]))
+        }
+        (DataType::Boolean, None) => {
+            let vals: Vec<Option<bool>> = vec![None; num_rows];
+            Arc::new(BooleanArray::from(vals))
+        }
+        (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Int32Array::from(vec![*value; num_rows]))
+        }
+        (DataType::Int32, None) => {
+            let vals: Vec<Option<i32>> = vec![None; num_rows];
+            Arc::new(Int32Array::from(vals))
+        }
+        (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Date32Array::from(vec![*value; num_rows]))
+        }
+        (DataType::Date32, None) => {
+            let vals: Vec<Option<i32>> = vec![None; num_rows];
+            Arc::new(Date32Array::from(vals))
+        }
+        (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
+            Arc::new(Int64Array::from(vec![*value; num_rows]))
+        }
+        (DataType::Int64, None) => {
+            let vals: Vec<Option<i64>> = vec![None; num_rows];
+            Arc::new(Int64Array::from(vals))
+        }
+        (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
+            Arc::new(Float32Array::from(vec![value.0; num_rows]))
+        }
+        (DataType::Float32, None) => {
+            let vals: Vec<Option<f32>> = vec![None; num_rows];
+            Arc::new(Float32Array::from(vals))
+        }
+        (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
+            Arc::new(Float64Array::from(vec![value.0; num_rows]))
+        }
+        (DataType::Float64, None) => {
+            let vals: Vec<Option<f64>> = vec![None; num_rows];
+            Arc::new(Float64Array::from(vals))
+        }
+        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
+            Arc::new(StringArray::from(vec![value.clone(); num_rows]))
+        }
+        (DataType::Utf8, None) => {
+            let vals: Vec<Option<String>> = vec![None; num_rows];
+            Arc::new(StringArray::from(vals))
+        }
+        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
+            Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
+        }
+        (DataType::Binary, None) => {
+            let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
+            Arc::new(BinaryArray::from_opt_vec(vals))
+        }
+        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
+            Arc::new(Decimal128Array::from(vec![*value; num_rows]))
+        }
+        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(value))) => {
+            Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
+        }
+        (DataType::Decimal128(_, _), None) => {
+            let vals: Vec<Option<i128>> = vec![None; num_rows];
+            Arc::new(Decimal128Array::from(vals))
+        }
+        (DataType::Struct(fields), None) => {
+            // Create a StructArray filled with nulls
+            let null_arrays: Vec<ArrayRef> = fields
+                .iter()
+                .map(|field| create_primitive_array_repeated(field.data_type(), &None, num_rows))
+                .collect::<Result<Vec<_>>>()?;
+
+            Arc::new(StructArray::new(
+                fields.clone(),
+                null_arrays,
+                Some(NullBuffer::new_null(num_rows)),
+            ))
+        }
+        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+        (dt, _) => {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!("unexpected target column type {}", dt),
+            ));
+        }
+    })
 }
 
 #[cfg(test)]
