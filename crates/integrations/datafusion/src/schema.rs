@@ -16,20 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
-use iceberg::arrow::arrow_type_to_type;
+use iceberg::arrow::arrow_schema_to_schema_with_assigned_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::runtime::spawn_blocking;
-use iceberg::spec::{NestedField, Schema as IcebergSchema};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
-use tokio::sync::RwLock;
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -42,38 +39,13 @@ pub(crate) struct IcebergSchemaProvider {
     catalog: Arc<dyn Catalog>,
     /// The namespace this schema represents
     namespace: NamespaceIdent,
-    /// A `HashMap` where keys are table names
+    /// A concurrent map where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
-    tables: Arc<RwLock<HashMap<String, Arc<IcebergTableProvider>>>>,
+    tables: Arc<DashMap<String, Arc<IcebergTableProvider>>>,
 }
 
 impl IcebergSchemaProvider {
-    /// Convert an Arrow schema to an Iceberg schema, assigning field IDs automatically.
-    /// 
-    /// This is needed because DataFusion's CREATE TABLE doesn't include field IDs in the
-    /// Arrow schema metadata, but Iceberg requires them. We assign sequential IDs starting from 1.
-    fn arrow_schema_to_iceberg_schema(
-        arrow_schema: &datafusion::arrow::datatypes::Schema,
-    ) -> Result<IcebergSchema> {
-        let mut field_id = 1;
-        let mut fields = Vec::new();
-
-        for field in arrow_schema.fields() {
-            // Use iceberg's arrow_type_to_type for conversion
-            let iceberg_type = arrow_type_to_type(field.data_type())?;
-            let nested_field = if field.is_nullable() {
-                NestedField::optional(field_id, field.name(), iceberg_type)
-            } else {
-                NestedField::required(field_id, field.name(), iceberg_type)
-            };
-            fields.push(nested_field.into());
-            field_id += 1;
-        }
-
-        IcebergSchema::builder().with_fields(fields).build()
-    }
-
     /// Asynchronously tries to construct a new [`IcebergSchemaProvider`]
     /// using the given client to fetch and initialize table providers for
     /// the provided namespace in the Iceberg [`Catalog`].
@@ -104,16 +76,15 @@ impl IcebergSchemaProvider {
         )
         .await?;
 
-        let tables: HashMap<String, Arc<IcebergTableProvider>> = table_names
-            .into_iter()
-            .zip(providers.into_iter())
-            .map(|(name, provider)| (name, Arc::new(provider)))
-            .collect();
+        let tables = DashMap::new();
+        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
+            tables.insert(name, Arc::new(provider));
+        }
 
         Ok(IcebergSchemaProvider {
             catalog: client,
             namespace,
-            tables: Arc::new(RwLock::new(tables)),
+            tables: Arc::new(tables),
         })
     }
 }
@@ -125,45 +96,35 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        // Try to get a read lock without blocking
-        // If we can't get it immediately, return empty list
-        // This is a limitation of the sync API
-        match self.tables.try_read() {
-            Ok(tables) => tables
-                .keys()
-                .flat_map(|table_name| {
-                    [table_name.clone()]
-                        .into_iter()
-                        .chain(MetadataTableType::all_types().map(|metadata_table_name| {
-                            format!("{}${}", table_name.clone(), metadata_table_name.as_str())
-                        }))
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        self.tables
+            .iter()
+            .flat_map(|entry| {
+                let table_name = entry.key().clone();
+                [table_name.clone()]
+                    .into_iter()
+                    .chain(
+                        MetadataTableType::all_types().map(move |metadata_table_name| {
+                            format!("{}${}", table_name, metadata_table_name.as_str())
+                        }),
+                    )
+            })
+            .collect()
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        // Try to get a read lock without blocking
-        match self.tables.try_read() {
-            Ok(tables) => {
-                if let Some((table_name, metadata_table_name)) = name.split_once('$') {
-                    tables.contains_key(table_name)
-                        && MetadataTableType::try_from(metadata_table_name).is_ok()
-                } else {
-                    tables.contains_key(name)
-                }
-            }
-            Err(_) => false,
+        if let Some((table_name, metadata_table_name)) = name.split_once('$') {
+            self.tables.contains_key(table_name)
+                && MetadataTableType::try_from(metadata_table_name).is_ok()
+        } else {
+            self.tables.contains_key(name)
         }
     }
 
     async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
-        let tables = self.tables.read().await;
         if let Some((table_name, metadata_table_name)) = name.split_once('$') {
             let metadata_table_type =
                 MetadataTableType::try_from(metadata_table_name).map_err(DataFusionError::Plan)?;
-            if let Some(table) = tables.get(table_name) {
+            if let Some(table) = self.tables.get(table_name) {
                 let metadata_table = table
                     .metadata_table(metadata_table_type)
                     .await
@@ -174,10 +135,10 @@ impl SchemaProvider for IcebergSchemaProvider {
             }
         }
 
-        Ok(tables
+        Ok(self
+            .tables
             .get(name)
-            .cloned()
-            .map(|t| t as Arc<dyn TableProvider>))
+            .map(|entry| entry.value().clone() as Arc<dyn TableProvider>))
     }
 
     fn register_table(
@@ -186,9 +147,9 @@ impl SchemaProvider for IcebergSchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> DFResult<Option<Arc<dyn TableProvider>>> {
         // Convert DataFusion schema to Iceberg schema
-        // DataFusion schemas don't have field IDs, so we need to build the schema manually
+        // DataFusion schemas don't have field IDs, so we use the function that assigns them automatically
         let df_schema = table.schema();
-        let iceberg_schema = Self::arrow_schema_to_iceberg_schema(df_schema.as_ref())
+        let iceberg_schema = arrow_schema_to_schema_with_assigned_ids(df_schema.as_ref())
             .map_err(to_datafusion_error)?;
 
         // Create the table in the Iceberg catalog
@@ -202,10 +163,9 @@ impl SchemaProvider for IcebergSchemaProvider {
         let tables = self.tables.clone();
         let name_clone = name.clone();
 
-        // Use iceberg's spawn_blocking to handle the async work on a blocking thread pool
-        // This avoids the "cannot block within async runtime" error and works with both
-        // tokio and smol runtimes
-        let result = spawn_blocking(move || {
+        // Use tokio's spawn_blocking to handle the async work on a blocking thread pool
+        // This avoids the "cannot block within async runtime" error
+        let result = tokio::task::spawn_blocking(move || {
             // Create a new runtime handle to execute the async work
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async move {
@@ -224,8 +184,7 @@ impl SchemaProvider for IcebergSchemaProvider {
                 .map_err(to_datafusion_error)?;
 
                 // Store the new table provider
-                let mut tables_guard = tables.write().await;
-                let old_table = tables_guard.insert(name_clone, Arc::new(table_provider));
+                let old_table = tables.insert(name_clone, Arc::new(table_provider));
 
                 Ok(old_table.map(|t| t as Arc<dyn TableProvider>))
             })
@@ -234,6 +193,7 @@ impl SchemaProvider for IcebergSchemaProvider {
         // Block on the spawned task to get the result
         // This is safe because spawn_blocking moves the blocking to a dedicated thread pool
         futures::executor::block_on(result)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e)))?
     }
 
     fn deregister_table(&self, _name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {

@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow_schema::{DataType, Fields, Schema as ArrowSchema, TimeUnit};
 
 use super::get_field_doc;
 use crate::error::Result;
@@ -229,6 +229,8 @@ fn arrow_type_to_primitive_or_placeholder(ty: &DataType) -> Result<Type> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::Field;
+
     use super::*;
     use crate::arrow::DEFAULT_MAP_FIELD_NAME;
 

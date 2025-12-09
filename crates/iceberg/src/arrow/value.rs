@@ -27,7 +27,7 @@ use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef};
 use uuid::Uuid;
 
-use super::get_field_id_from_metadata;
+use super::get_field_id;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
     SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
@@ -450,7 +450,7 @@ impl FieldMatchMode {
     /// Determines if an Arrow field matches an Iceberg field based on the matching mode.
     pub fn match_field(&self, arrow_field: &FieldRef, iceberg_field: &NestedField) -> bool {
         match self {
-            FieldMatchMode::Id => get_field_id_from_metadata(arrow_field)
+            FieldMatchMode::Id => get_field_id(arrow_field)
                 .map(|id| id == iceberg_field.id)
                 .unwrap_or(false),
             FieldMatchMode::Name => arrow_field.name() == &iceberg_field.name,

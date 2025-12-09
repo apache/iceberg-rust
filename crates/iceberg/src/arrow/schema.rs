@@ -241,7 +241,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -258,7 +258,7 @@ pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     ))
 }
 
-pub(super) fn get_field_doc(field: &Field) -> Option<String> {
+fn get_field_doc(field: &Field) -> Option<String> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
         return Some(value.clone());
     }
@@ -269,7 +269,7 @@ struct ArrowSchemaConverter;
 
 impl ArrowSchemaConverter {
     fn new() -> Self {
-        Self
+        Self {}
     }
 
     fn convert_fields(fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
@@ -277,7 +277,7 @@ impl ArrowSchemaConverter {
         for i in 0..fields.len() {
             let field = &fields[i];
             let field_type = &field_results[i];
-            let id = get_field_id_from_metadata(field)?;
+            let id = get_field_id(field)?;
             let doc = get_field_doc(field);
             let nested_field = NestedField {
                 id,
@@ -322,7 +322,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
-        let id = get_field_id_from_metadata(element_field)?;
+        let id = get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
             NestedField::list_element(id, value.clone(), !element_field.is_nullable());
@@ -347,7 +347,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     let key_field = &fields[0];
                     let value_field = &fields[1];
 
-                    let key_id = get_field_id_from_metadata(key_field)?;
+                    let key_id = get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
                     let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
                     if let Some(doc) = key_doc {
@@ -355,7 +355,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     }
                     let key_field = Arc::new(key_field);
 
-                    let value_id = get_field_id_from_metadata(value_field)?;
+                    let value_id = get_field_id(value_field)?;
                     let value_doc = get_field_doc(value_field);
                     let mut value_field = NestedField::map_value_element(
                         value_id,
