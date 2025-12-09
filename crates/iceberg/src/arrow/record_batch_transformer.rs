@@ -83,6 +83,7 @@ fn constants_map(
             // Handle both None (null) and Some(Literal::Primitive) cases
             match &partition_data[pos] {
                 None => {
+                    // TODO: Add support for null datum values.
                     return Err(Error::new(
                         ErrorKind::Unexpected,
                         format!(
