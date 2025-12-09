@@ -71,12 +71,12 @@ impl<'a> MetadataTable<'a> {
     }
 
     /// Get the snapshots table.
-    pub fn snapshots(&self) -> SnapshotsTable {
+    pub fn snapshots(&self) -> SnapshotsTable<'_> {
         SnapshotsTable::new(self.0)
     }
 
     /// Get the manifests table.
-    pub fn manifests(&self) -> ManifestsTable {
+    pub fn manifests(&self) -> ManifestsTable<'_> {
         ManifestsTable::new(self.0)
     }
 }

@@ -53,8 +53,7 @@ pub(crate) fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<d
         .column_with_name(PROJECTED_PARTITION_VALUE_COLUMN)
         .ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "Partition column '{}' not found in schema. Ensure the plan has been extended with partition values using project_with_partition.",
-                PROJECTED_PARTITION_VALUE_COLUMN
+                "Partition column '{PROJECTED_PARTITION_VALUE_COLUMN}' not found in schema. Ensure the plan has been extended with partition values using project_with_partition."
             ))
         })?;
 
