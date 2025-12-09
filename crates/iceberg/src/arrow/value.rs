@@ -724,10 +724,7 @@ pub(crate) fn create_primitive_array_single_element(
         }
         _ => Err(Error::new(
             ErrorKind::Unexpected,
-            format!(
-                "Unsupported constant type combination: {:?} with {:?}",
-                data_type, prim_lit
-            ),
+            format!("Unsupported constant type combination: {data_type:?} with {prim_lit:?}"),
         )),
     }
 }
@@ -825,7 +822,7 @@ pub(crate) fn create_primitive_array_repeated(
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {}", dt),
+                format!("unexpected target column type {dt}"),
             ));
         }
     })
