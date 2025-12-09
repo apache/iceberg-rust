@@ -42,6 +42,7 @@ jobs:
           - "crates/catalog/glue"
           - "crates/catalog/hms"
           - "crates/catalog/rest"
+          - "crates/catalog/s3tables"
           - "crates/catalog/sql"
           - "crates/integrations/datafusion"
     steps:
