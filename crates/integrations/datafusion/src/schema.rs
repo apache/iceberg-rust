@@ -192,8 +192,9 @@ impl SchemaProvider for IcebergSchemaProvider {
 
         // Block on the spawned task to get the result
         // This is safe because spawn_blocking moves the blocking to a dedicated thread pool
-        futures::executor::block_on(result)
-            .map_err(|e| DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e)))?
+        futures::executor::block_on(result).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e))
+        })?
     }
 
     fn deregister_table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
@@ -212,8 +213,7 @@ impl SchemaProvider for IcebergSchemaProvider {
         let result = tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async move {
-                let table_ident =
-                    iceberg::TableIdent::new(namespace.clone(), name.clone());
+                let table_ident = iceberg::TableIdent::new(namespace.clone(), name.clone());
 
                 // Drop the table from the Iceberg catalog
                 catalog
