@@ -276,13 +276,13 @@ impl<'a> SnapshotProducer<'a> {
                     "Partition field should only be primitive type.",
                 )
             })?;
-            if let Some(value) = value {
-                if !field.compatible(&value.as_primitive_literal().unwrap()) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Partition value is not compatible partition type",
-                    ));
-                }
+            if let Some(value) = value
+                && !field.compatible(&value.as_primitive_literal().unwrap())
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Partition value is not compatible partition type",
+                ));
             }
         }
         Ok(())

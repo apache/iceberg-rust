@@ -133,25 +133,24 @@ impl RecordBatchProjector {
     {
         for (pos, field) in fields.iter().enumerate() {
             let id = field_id_fetch_func(field)?;
-            if let Some(id) = id {
-                if target_field_id == id {
-                    index_vec.push(pos);
-                    return Ok(Some(field.clone()));
-                }
+            if let Some(id) = id
+                && target_field_id == id
+            {
+                index_vec.push(pos);
+                return Ok(Some(field.clone()));
             }
-            if let DataType::Struct(inner) = field.data_type() {
-                if searchable_field_func(field) {
-                    if let Some(res) = Self::fetch_field_index(
-                        inner,
-                        index_vec,
-                        target_field_id,
-                        field_id_fetch_func,
-                        searchable_field_func,
-                    )? {
-                        index_vec.push(pos);
-                        return Ok(Some(res));
-                    }
-                }
+            if let DataType::Struct(inner) = field.data_type()
+                && searchable_field_func(field)
+                && let Some(res) = Self::fetch_field_index(
+                    inner,
+                    index_vec,
+                    target_field_id,
+                    field_id_fetch_func,
+                    searchable_field_func,
+                )?
+            {
+                index_vec.push(pos);
+                return Ok(Some(res));
             }
         }
         Ok(None)
