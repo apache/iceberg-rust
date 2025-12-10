@@ -83,14 +83,10 @@ fn constants_map(
             // Handle both None (null) and Some(Literal::Primitive) cases
             match &partition_data[pos] {
                 None => {
-                    // TODO (https://github.com/apache/iceberg-rust/issues/1914): Add support for null datum values.
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "Partition field {} has null value for identity transform",
-                            field.source_id
-                        ),
-                    ));
+                    // Skip null partition values - they will be resolved as null per Iceberg spec rule #4.
+                    // When a partition value is null, we don't add it to the constants map,
+                    // allowing downstream column resolution to handle it correctly.
+                    continue;
                 }
                 Some(Literal::Primitive(value)) => {
                     // Create a Datum from the primitive type and value
