@@ -18,18 +18,21 @@
 [engines]
 df = { type = "datafusion" }
 
-[[steps]]
-engine = "df"
-slt = "df_test/show_tables.slt"
-
+# Step 1: Create tables first
 [[steps]]
 engine = "df"
 slt = "df_test/create_table.slt"
 
+# Step 2: Verify tables exist
+[[steps]]
+engine = "df"
+slt = "df_test/show_tables.slt"
+
+# Step 3: Insert data and verify (covers both unpartitioned and partitioned tables)
 [[steps]]
 engine = "df"
 slt = "df_test/insert_into.slt"
 
-[[steps]]
-engine = "df"
-slt = "df_test/partitioned_table.slt"
+# Note: CREATE EXTERNAL TABLE tests are in:
+# crates/integrations/datafusion/src/table/table_provider_factory.rs
+# They require absolute paths which sqllogictest doesn't support variable substitution for.

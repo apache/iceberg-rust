@@ -258,7 +258,7 @@ pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     ))
 }
 
-fn get_field_doc(field: &Field) -> Option<String> {
+pub(super) fn get_field_doc(field: &Field) -> Option<String> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
         return Some(value.clone());
     }
