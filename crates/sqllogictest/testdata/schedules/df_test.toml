@@ -33,6 +33,11 @@ slt = "df_test/show_tables.slt"
 engine = "df"
 slt = "df_test/insert_into.slt"
 
+# Step 4: Test DROP TABLE
+[[steps]]
+engine = "df"
+slt = "df_test/drop_table.slt"
+
 # Note: CREATE EXTERNAL TABLE tests are in:
 # crates/integrations/datafusion/src/table/table_provider_factory.rs
 # They require absolute paths which sqllogictest doesn't support variable substitution for.

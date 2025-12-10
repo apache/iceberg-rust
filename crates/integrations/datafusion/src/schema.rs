@@ -196,9 +196,39 @@ impl SchemaProvider for IcebergSchemaProvider {
             .map_err(|e| DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e)))?
     }
 
-    fn deregister_table(&self, _name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
-        Err(DataFusionError::NotImplemented(
-            "deregister_table is not supported".to_string(),
-        ))
+    fn deregister_table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Don't allow dropping metadata tables directly
+        if name.contains('$') {
+            return Err(DataFusionError::Plan(
+                "Cannot drop metadata tables directly. Drop the parent table instead.".to_string(),
+            ));
+        }
+
+        let catalog = self.catalog.clone();
+        let namespace = self.namespace.clone();
+        let tables = self.tables.clone();
+        let name = name.to_string();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                let table_ident =
+                    iceberg::TableIdent::new(namespace.clone(), name.clone());
+
+                // Drop the table from the Iceberg catalog
+                catalog
+                    .drop_table(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?;
+
+                // Remove from local cache and return the old provider
+                let old_table = tables.remove(&name);
+                Ok(old_table.map(|(_, provider)| provider as Arc<dyn TableProvider>))
+            })
+        });
+
+        futures::executor::block_on(result).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to drop Iceberg table: {}", e))
+        })?
     }
 }
