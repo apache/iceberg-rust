@@ -21,6 +21,7 @@ homepage = { workspace = true }
 name = "iceberg-catalog-s3tables"
 rust-version = { workspace = true }
 version = { workspace = true }
+readme = "README.md"
 
 categories = ["database"]
 description = "Apache Iceberg Rust S3Tables Catalog"
