@@ -296,18 +296,18 @@
 <a href=#296 id=296 data-nosnippet>296</a>        check_record_batches(
 <a href=#297 id=297 data-nosnippet>297</a>            record_batch.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>.unwrap(),
 <a href=#298 id=298 data-nosnippet>298</a>            <span class="macro">expect!</span>[[<span class="string">r#"
-<a href=#299 id=299 data-nosnippet>299</a>                Field { name: "content", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "14"} },
-<a href=#300 id=300 data-nosnippet>300</a>                Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-<a href=#301 id=301 data-nosnippet>301</a>                Field { name: "length", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-<a href=#302 id=302 data-nosnippet>302</a>                Field { name: "partition_spec_id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
-<a href=#303 id=303 data-nosnippet>303</a>                Field { name: "added_snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
-<a href=#304 id=304 data-nosnippet>304</a>                Field { name: "added_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
-<a href=#305 id=305 data-nosnippet>305</a>                Field { name: "existing_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} },
-<a href=#306 id=306 data-nosnippet>306</a>                Field { name: "deleted_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} },
-<a href=#307 id=307 data-nosnippet>307</a>                Field { name: "added_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "15"} },
-<a href=#308 id=308 data-nosnippet>308</a>                Field { name: "existing_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "16"} },
-<a href=#309 id=309 data-nosnippet>309</a>                Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "17"} },
-<a href=#310 id=310 data-nosnippet>310</a>                Field { name: "partition_summaries", data_type: List(Field { name: "item", data_type: Struct([Field { name: "contains_null", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }, Field { name: "contains_nan", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "11"} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "12"} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "13"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }"#</span>]],
+<a href=#299 id=299 data-nosnippet>299</a>                Field { "content": Int32, metadata: {"PARQUET:field_id": "14"} },
+<a href=#300 id=300 data-nosnippet>300</a>                Field { "path": Utf8, metadata: {"PARQUET:field_id": "1"} },
+<a href=#301 id=301 data-nosnippet>301</a>                Field { "length": Int64, metadata: {"PARQUET:field_id": "2"} },
+<a href=#302 id=302 data-nosnippet>302</a>                Field { "partition_spec_id": Int32, metadata: {"PARQUET:field_id": "3"} },
+<a href=#303 id=303 data-nosnippet>303</a>                Field { "added_snapshot_id": Int64, metadata: {"PARQUET:field_id": "4"} },
+<a href=#304 id=304 data-nosnippet>304</a>                Field { "added_data_files_count": Int32, metadata: {"PARQUET:field_id": "5"} },
+<a href=#305 id=305 data-nosnippet>305</a>                Field { "existing_data_files_count": Int32, metadata: {"PARQUET:field_id": "6"} },
+<a href=#306 id=306 data-nosnippet>306</a>                Field { "deleted_data_files_count": Int32, metadata: {"PARQUET:field_id": "7"} },
+<a href=#307 id=307 data-nosnippet>307</a>                Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
+<a href=#308 id=308 data-nosnippet>308</a>                Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
+<a href=#309 id=309 data-nosnippet>309</a>                Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
+<a href=#310 id=310 data-nosnippet>310</a>                Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#</span>]],
 <a href=#311 id=311 data-nosnippet>311</a>            <span class="macro">expect!</span>[[<span class="string">r#"
 <a href=#312 id=312 data-nosnippet>312</a>                content: PrimitiveArray&lt;Int32&gt;
 <a href=#313 id=313 data-nosnippet>313</a>                [

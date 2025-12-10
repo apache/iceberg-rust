@@ -151,14 +151,14 @@
 <a href=#151 id=151 data-nosnippet>151</a>        check_record_batches(
 <a href=#152 id=152 data-nosnippet>152</a>            batch_stream.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>.unwrap(),
 <a href=#153 id=153 data-nosnippet>153</a>            <span class="macro">expect!</span>[[<span class="string">r#"
-<a href=#154 id=154 data-nosnippet>154</a>                Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-<a href=#155 id=155 data-nosnippet>155</a>                Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-<a href=#156 id=156 data-nosnippet>156</a>                Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
-<a href=#157 id=157 data-nosnippet>157</a>                Field { name: "operation", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
-<a href=#158 id=158 data-nosnippet>158</a>                Field { name: "manifest_list", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
-<a href=#159 id=159 data-nosnippet>159</a>                Field { name: "summary", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#</span>]],
+<a href=#154 id=154 data-nosnippet>154</a>                Field { "committed_at": Timestamp(µs, "+00:00"), metadata: {"PARQUET:field_id": "1"} },
+<a href=#155 id=155 data-nosnippet>155</a>                Field { "snapshot_id": Int64, metadata: {"PARQUET:field_id": "2"} },
+<a href=#156 id=156 data-nosnippet>156</a>                Field { "parent_id": nullable Int64, metadata: {"PARQUET:field_id": "3"} },
+<a href=#157 id=157 data-nosnippet>157</a>                Field { "operation": nullable Utf8, metadata: {"PARQUET:field_id": "4"} },
+<a href=#158 id=158 data-nosnippet>158</a>                Field { "manifest_list": nullable Utf8, metadata: {"PARQUET:field_id": "5"} },
+<a href=#159 id=159 data-nosnippet>159</a>                Field { "summary": nullable Map("key_value": non-null Struct("key": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "value": Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#</span>]],
 <a href=#160 id=160 data-nosnippet>160</a>            <span class="macro">expect!</span>[[<span class="string">r#"
-<a href=#161 id=161 data-nosnippet>161</a>                committed_at: PrimitiveArray&lt;Timestamp(Microsecond, Some("+00:00"))&gt;
+<a href=#161 id=161 data-nosnippet>161</a>                committed_at: PrimitiveArray&lt;Timestamp(µs, "+00:00")&gt;
 <a href=#162 id=162 data-nosnippet>162</a>                [
 <a href=#163 id=163 data-nosnippet>163</a>                  2018-01-04T21:22:35.770+00:00,
 <a href=#164 id=164 data-nosnippet>164</a>                  2019-04-12T20:29:15.770+00:00,
