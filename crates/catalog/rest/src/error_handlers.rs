@@ -31,15 +31,12 @@ use reqwest::StatusCode;
 use crate::types::ErrorResponse;
 
 /// Trait for handling REST API error responses and converting to semantic errors.
-///
-/// Error handlers process HTTP error responses and map them to appropriate
-/// `iceberg::Error` instances with correct error kinds and context.
 pub trait ErrorHandler: Send + Sync {
     /// Process an error response and convert to iceberg::Error.
     fn handle(&self, code: StatusCode, response: &ErrorResponse) -> Error;
 }
 
-/// Default error handler for common HTTP status codes per REST spec.
+/// Default error handler for common HTTP error responses.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultErrorHandler;
 
