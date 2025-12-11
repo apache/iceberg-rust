@@ -25,9 +25,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use url::Url;
 
-// Re-export traits from storage module
-pub use super::storage::{Storage, StorageFactory, StorageRegistry};
-use crate::io::STORAGE_LOCATION_SCHEME;
+pub use super::storage::{OpenDALStorage, Storage};
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -39,18 +37,17 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// Supported storages:
 ///
-/// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
-/// |--------------------|-------------------|----------------------------------| ------------------------------|
-/// | Local file system  | `storage-fs`      | `file`                           | `file://path/to/file`         |
-/// | Memory             | `storage-memory`  | `memory`                         | `memory://path/to/file`       |
-/// | S3                 | `storage-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
-/// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
-/// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
-/// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+/// | Storage            | Feature Flag      | Schemes                          |
+/// |--------------------|-------------------|----------------------------------|
+/// | Local file system  | `storage-fs`      | `file://path/to/file`            |
+/// | Memory             | `storage-memory`  | `memory://path/to/file`          |
+/// | S3                 | `storage-s3`      | `s3://<bucket>/path/to/file`     |
+/// | GCS                | `storage-gcs`     | `gs://<bucket>/path/to/file`     |
+/// | OSS                | `storage-oss`     | `oss://<bucket>/path/to/file`    |
+/// | Azure Datalake     | `storage-azdls`   | `abfs[s]://...` or `wasb[s]://...` |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
-
     inner: Arc<dyn Storage>,
 }
 
@@ -164,29 +161,6 @@ impl Extensions {
 }
 
 /// Builder for [`FileIO`].
-///
-/// # Custom Storage Implementations
-///
-/// You can use custom storage implementations by creating a custom
-/// [`StorageRegistry`] and registering your storage factory:
-///
-/// ```rust,ignore
-/// use iceberg::io::{StorageRegistry, StorageFactory, FileIOBuilder};
-/// use std::sync::Arc;
-///
-/// // Create your custom storage factory
-/// let my_factory = Arc::new(MyCustomStorageFactory);
-///
-/// // Register it with a custom scheme
-/// let mut registry = StorageRegistry::new();
-/// registry.register("mycustom", my_factory);
-///
-/// // Use it to build FileIO
-/// let file_io = FileIOBuilder::new("mycustom")
-///     .with_prop("key", "value")
-///     .with_registry(registry)
-///     .build()?;
-/// ```
 #[derive(Clone, Debug)]
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
@@ -197,8 +171,6 @@ pub struct FileIOBuilder {
     props: HashMap<String, String>,
     /// Optional extensions to configure the underlying FileIO behavior.
     extensions: Extensions,
-    /// Optional custom registry. If None, a default registry will be created.
-    registry: Option<StorageRegistry>,
 }
 
 impl FileIOBuilder {
@@ -209,7 +181,6 @@ impl FileIOBuilder {
             scheme_str: Some(scheme_str.to_string()),
             props: HashMap::default(),
             extensions: Extensions::default(),
-            registry: None,
         }
     }
 
@@ -219,26 +190,17 @@ impl FileIOBuilder {
             scheme_str: None,
             props: HashMap::default(),
             extensions: Extensions::default(),
-            registry: None,
         }
     }
 
     /// Fetch the scheme string.
     ///
     /// The scheme_str will be empty if it's None.
-    pub fn into_parts(
-        self,
-    ) -> (
-        String,
-        HashMap<String, String>,
-        Extensions,
-        Option<StorageRegistry>,
-    ) {
+    pub fn into_parts(self) -> (String, HashMap<String, String>, Extensions) {
         (
             self.scheme_str.unwrap_or_default(),
             self.props,
             self.extensions,
-            self.registry,
         )
     }
 
@@ -276,49 +238,13 @@ impl FileIOBuilder {
         self.extensions.get::<T>()
     }
 
-    /// Sets a custom storage registry.
-    ///
-    /// This allows you to register custom storage implementations that can be used
-    /// when building the FileIO. If not set, a default registry with built-in
-    /// storage types will be used.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use iceberg::io::{StorageRegistry, FileIOBuilder};
-    /// use std::sync::Arc;
-    ///
-    /// let mut registry = StorageRegistry::new();
-    /// registry.register("mycustom", Arc::new(MyCustomStorageFactory));
-    ///
-    /// let file_io = FileIOBuilder::new("mycustom")
-    ///     .with_registry(registry)
-    ///     .build()?;
-    /// ```
-    pub fn with_registry(mut self, registry: StorageRegistry) -> Self {
-        self.registry = Some(registry);
-        self
-    }
-
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        // Use the scheme to determine the storage type
-        let scheme = self.scheme_str.clone().unwrap_or_default();
-
-        // Use custom registry if provided, otherwise create default
-        let registry = self.registry.clone().unwrap_or_default();
-
-        let factory = registry.get_factory(scheme.as_str())?;
-
-        let mut props_with_scheme = self.props.clone();
-        props_with_scheme.insert(STORAGE_LOCATION_SCHEME.to_string(), scheme);
-
-        // Build storage with props and extensions
-        let storage = factory.build(props_with_scheme, self.extensions.clone())?;
+        let storage = OpenDALStorage::build(self.clone())?;
 
         Ok(FileIO {
             builder: self,
-            inner: storage,
+            inner: Arc::new(storage),
         })
     }
 }
@@ -513,137 +439,15 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
-    use std::sync::{Arc, Mutex, MutexGuard};
 
-    use async_trait::async_trait;
-    use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
-    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::{
-        Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile,
-        STORAGE_LOCATION_SCHEME, Storage, StorageFactory, StorageRegistry,
-    };
-    use crate::{Error, ErrorKind, Result};
-
-    // Test storage implementation that tracks write operations
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct TestStorage {
-        #[serde(skip, default = "default_written")]
-        written: Arc<Mutex<Vec<String>>>,
-        received_props: HashMap<String, String>,
-    }
-
-    fn default_written() -> Arc<Mutex<Vec<String>>> {
-        Arc::new(Mutex::new(Vec::new()))
-    }
-
-    #[allow(dead_code)]
-    impl TestStorage {
-        pub fn written(&self) -> MutexGuard<'_, Vec<String>> {
-            self.written.lock().unwrap()
-        }
-
-        pub fn received_props(&self) -> &HashMap<String, String> {
-            &self.received_props
-        }
-    }
-
-    #[async_trait]
-    #[typetag::serde]
-    impl Storage for TestStorage {
-        async fn exists(&self, _path: &str) -> Result<bool> {
-            Ok(true)
-        }
-
-        async fn metadata(&self, _path: &str) -> Result<FileMetadata> {
-            Ok(FileMetadata { size: 42 })
-        }
-
-        async fn read(&self, _path: &str) -> Result<Bytes> {
-            Ok(Bytes::from("test data"))
-        }
-
-        async fn reader(&self, _path: &str) -> Result<Box<dyn FileRead>> {
-            Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "TestStorage does not support reader",
-            ))
-        }
-
-        async fn write(&self, path: &str, _bs: Bytes) -> Result<()> {
-            self.written.lock().unwrap().push(path.to_string());
-            Ok(())
-        }
-
-        async fn writer(&self, _path: &str) -> Result<Box<dyn FileWrite>> {
-            Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "TestStorage does not support writer",
-            ))
-        }
-
-        async fn delete(&self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn delete_prefix(&self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        fn new_input(&self, path: &str) -> Result<InputFile> {
-            Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
-        }
-
-        fn new_output(&self, path: &str) -> Result<OutputFile> {
-            Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
-        }
-    }
-
-    fn default_received_props() -> Arc<Mutex<HashMap<String, String>>> {
-        Arc::new(Mutex::new(HashMap::new()))
-    }
-
-    // Test storage factory
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TestStorageFactory {
-        #[serde(skip, default = "default_written")]
-        written: Arc<Mutex<Vec<String>>>,
-        #[serde(skip, default = "default_received_props")]
-        received_props: Arc<Mutex<HashMap<String, String>>>,
-    }
-
-    impl TestStorageFactory {
-        pub fn written(&self) -> MutexGuard<'_, Vec<String>> {
-            self.written.lock().unwrap()
-        }
-
-        pub fn received_props(&self) -> MutexGuard<'_, HashMap<String, String>> {
-            self.received_props.lock().unwrap()
-        }
-    }
-
-    #[typetag::serde]
-    impl StorageFactory for TestStorageFactory {
-        fn build(
-            &self,
-            props: HashMap<String, String>,
-            _extensions: Extensions,
-        ) -> Result<Arc<dyn Storage>> {
-            *self.received_props.lock().unwrap() = props.clone();
-            Ok(Arc::new(TestStorage {
-                written: self.written.clone(),
-                received_props: props,
-            }))
-        }
-    }
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
@@ -676,7 +480,6 @@ mod tests {
         let input_file = file_io.new_input(&full_path).unwrap();
 
         assert!(input_file.exists().await.unwrap());
-        // Remove heading slash
         assert_eq!(&full_path, input_file.location());
         let read_content = read_from_file(full_path).await;
 
@@ -782,122 +585,9 @@ mod tests {
         assert!(io.exists(&path.clone()).await.unwrap());
         let input_file = io.new_input(&path).unwrap();
         let content = input_file.read().await.unwrap();
-        assert_eq!(content, Bytes::from("test"));
+        assert_eq!(content, bytes::Bytes::from("test"));
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
-    }
-
-    #[test]
-    fn test_custom_registry() {
-        // Create a custom registry and register test storage
-        let factory = Arc::new(TestStorageFactory {
-            written: Arc::new(Mutex::new(Vec::new())),
-            received_props: Arc::new(Mutex::new(HashMap::new())),
-        });
-
-        let mut registry = StorageRegistry::new();
-        registry.register("test", factory.clone());
-
-        // Build FileIO with custom storage
-        let file_io = FileIOBuilder::new("test")
-            .with_registry(registry)
-            .build()
-            .unwrap();
-
-        // Verify we can create files with the custom storage
-        assert!(file_io.new_output("test://test.txt").is_ok());
-        assert!(file_io.new_input("test://test.txt").is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_custom_registry_operations() {
-        // Create test storage with write tracking
-        let factory = Arc::new(TestStorageFactory {
-            written: Arc::new(Mutex::new(Vec::new())),
-            received_props: Arc::new(Mutex::new(HashMap::new())),
-        });
-
-        let mut registry = StorageRegistry::new();
-        registry.register("test", factory.clone());
-
-        // Build FileIO with test storage
-        let file_io = FileIOBuilder::new("test")
-            .with_registry(registry)
-            .build()
-            .unwrap();
-
-        // Perform operations
-        let output = file_io.new_output("test://bucket/file.txt").unwrap();
-        output.write(Bytes::from("test")).await.unwrap();
-
-        let input = file_io.new_input("test://bucket/file.txt").unwrap();
-        let data = input.read().await.unwrap();
-        assert_eq!(data, Bytes::from("test data"));
-
-        let metadata = input.metadata().await.unwrap();
-        assert_eq!(metadata.size, 42);
-
-        // Verify write was tracked
-        let tracked = factory.written();
-        assert_eq!(tracked.len(), 1);
-        assert_eq!(tracked[0], "test://bucket/file.txt");
-    }
-
-    #[test]
-    fn test_scheme_and_props_propagation() {
-        // Create test storage that captures props
-        let factory = Arc::new(TestStorageFactory {
-            written: Arc::new(Mutex::new(Vec::new())),
-            received_props: Arc::new(Mutex::new(HashMap::new())),
-        });
-
-        let mut registry = StorageRegistry::new();
-        registry.register("myscheme", factory.clone());
-
-        // Build FileIO with custom scheme and additional props
-        let file_io = FileIOBuilder::new("myscheme")
-            .with_prop("custom.prop", "custom_value")
-            .with_registry(registry)
-            .build()
-            .unwrap();
-
-        // Verify the storage was created
-        assert!(file_io.new_output("myscheme://test.txt").is_ok());
-
-        // Verify the scheme was propagated to the factory
-        let props = factory.received_props();
-        assert_eq!(
-            props.get(STORAGE_LOCATION_SCHEME),
-            Some(&"myscheme".to_string())
-        );
-        // Verify custom props were also passed
-        assert_eq!(props.get("custom.prop"), Some(&"custom_value".to_string()));
-    }
-
-    #[test]
-    fn test_into_parts_includes_registry() {
-        let registry = StorageRegistry::new();
-
-        let builder = FileIOBuilder::new("memory")
-            .with_prop("key", "value")
-            .with_registry(registry.clone());
-
-        let (scheme, props, _extensions, returned_registry) = builder.into_parts();
-
-        assert_eq!(scheme, "memory");
-        assert_eq!(props.get("key"), Some(&"value".to_string()));
-        assert!(returned_registry.is_some());
-    }
-
-    #[test]
-    fn test_into_parts_without_registry() {
-        let builder = FileIOBuilder::new("memory").with_prop("key", "value");
-
-        let (scheme, props, _extensions, returned_registry) = builder.into_parts();
-
-        assert_eq!(scheme, "memory");
-        assert_eq!(props.get("key"), Some(&"value".to_string()));
-        assert!(returned_registry.is_none());
     }
 }

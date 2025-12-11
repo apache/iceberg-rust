@@ -18,19 +18,11 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
 
-use async_trait::async_trait;
-use bytes::Bytes;
+use opendal::Configurator;
 use opendal::services::AzdlsConfig;
-use opendal::{Configurator, Operator};
-use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::io::{
-    Extensions, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, STORAGE_LOCATION_SCHEME,
-    Storage, StorageFactory,
-};
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
 /// A connection string.
@@ -128,21 +120,27 @@ pub(crate) fn azdls_create_operator<'a>(
     Ok((op, relative_path))
 }
 
+/// Azure Storage scheme variants.
+///
 /// Note that `abf[s]` and `wasb[s]` variants have different implications:
 /// - `abfs[s]` is used to refer to files in ADLS Gen2, backed by blob storage;
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum AzureStorageScheme {
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AzureStorageScheme {
+    /// Azure Blob File System (unencrypted)
     Abfs,
+    /// Azure Blob File System (encrypted/secure)
     Abfss,
+    /// Windows Azure Storage Blob (unencrypted)
     Wasb,
+    /// Windows Azure Storage Blob (encrypted/secure)
     Wasbs,
 }
 
 impl AzureStorageScheme {
-    // Returns the respective encrypted or plain-text HTTP scheme.
+    /// Returns the respective encrypted or plain-text HTTP scheme.
     pub fn as_http_scheme(&self) -> &str {
         match self {
             AzureStorageScheme::Abfs | AzureStorageScheme::Wasb => "http",
@@ -603,117 +601,5 @@ mod tests {
             let endpoint = path.as_endpoint();
             assert_eq!(endpoint, expected, "Test case: {name}");
         }
-    }
-}
-
-/// Azure Data Lake Storage implementation using OpenDAL
-///
-/// Stores configuration and creates operators on-demand.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenDALAzdlsStorage {
-    /// Because Azdls accepts multiple possible schemes, we store the full
-    /// passed scheme here to later validate schemes passed via paths.
-    configured_scheme: AzureStorageScheme,
-    config: Arc<AzdlsConfig>,
-}
-
-impl OpenDALAzdlsStorage {
-    /// Creates operator from path.
-    fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
-        let (op, relative_path) =
-            azdls_create_operator(path, &self.config, &self.configured_scheme)?;
-        let op = op.layer(opendal::layers::RetryLayer::new());
-        Ok((op, relative_path))
-    }
-}
-
-#[async_trait]
-#[typetag::serde]
-impl Storage for OpenDALAzdlsStorage {
-    async fn exists(&self, path: &str) -> Result<bool> {
-        let (op, relative_path) = self.create_operator(path)?;
-        Ok(op.exists(relative_path).await?)
-    }
-
-    async fn metadata(&self, path: &str) -> Result<FileMetadata> {
-        let (op, relative_path) = self.create_operator(path)?;
-        let meta = op.stat(relative_path).await?;
-        Ok(FileMetadata {
-            size: meta.content_length(),
-        })
-    }
-
-    async fn read(&self, path: &str) -> Result<Bytes> {
-        let (op, relative_path) = self.create_operator(path)?;
-        Ok(op.read(relative_path).await?.to_bytes())
-    }
-
-    async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
-        let (op, relative_path) = self.create_operator(path)?;
-        Ok(Box::new(op.reader(relative_path).await?))
-    }
-
-    async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
-        let mut writer = self.writer(path).await?;
-        writer.write(bs).await?;
-        writer.close().await
-    }
-
-    async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
-        let (op, relative_path) = self.create_operator(path)?;
-        Ok(Box::new(op.writer(relative_path).await?))
-    }
-
-    async fn delete(&self, path: &str) -> Result<()> {
-        let (op, relative_path) = self.create_operator(path)?;
-        Ok(op.delete(relative_path).await?)
-    }
-
-    async fn delete_prefix(&self, path: &str) -> Result<()> {
-        let (op, relative_path) = self.create_operator(path)?;
-        let path = if relative_path.ends_with('/') {
-            relative_path.to_string()
-        } else {
-            format!("{relative_path}/")
-        };
-        Ok(op.remove_all(&path).await?)
-    }
-
-    fn new_input(&self, path: &str) -> Result<InputFile> {
-        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-
-    fn new_output(&self, path: &str) -> Result<OutputFile> {
-        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-}
-
-/// Factory for Azure Data Lake Storage
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OpenDALAzdlsStorageFactory;
-
-#[typetag::serde]
-impl StorageFactory for OpenDALAzdlsStorageFactory {
-    fn build(
-        &self,
-        props: HashMap<String, String>,
-        _extensions: Extensions,
-    ) -> Result<Arc<dyn Storage>> {
-        // Get the scheme string from the props or use default
-        let scheme_str = props
-            .get(STORAGE_LOCATION_SCHEME)
-            .cloned()
-            .unwrap_or_else(|| "abfs".to_string());
-
-        // Parse the scheme
-        let scheme = scheme_str.parse::<AzureStorageScheme>()?;
-
-        // Parse Azdls config from props
-        let config = azdls_config_parse(props)?;
-
-        Ok(Arc::new(OpenDALAzdlsStorage {
-            configured_scheme: scheme,
-            config: Arc::new(config),
-        }))
     }
 }
