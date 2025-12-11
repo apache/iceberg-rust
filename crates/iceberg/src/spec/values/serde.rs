@@ -18,6 +18,8 @@
 //\! Serialization and deserialization support for Iceberg values
 
 pub(crate) mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -668,26 +670,61 @@ pub(crate) mod _serde {
                     }
                     _ => Err(invalid_err("list")),
                 },
-                RawLiteralEnum::Record(Record {
-                    required,
-                    optional: _,
-                }) => match ty {
+                RawLiteralEnum::Record(Record { required, optional }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<Option<Literal>> = required
-                            .into_iter()
-                            .map(|(field_name, value)| {
-                                let field = struct_ty
-                                    .field_by_name(field_name.as_str())
-                                    .ok_or_else(|| {
-                                        invalid_err_with_reason(
+                        let mut value_by_name = HashMap::new();
+
+                        for (field_name, value) in required.into_iter() {
+                            let field = struct_ty
+                                .field_by_name(field_name.as_str())
+                                .ok_or_else(|| {
+                                    invalid_err_with_reason(
+                                        "record",
+                                        &format!("field {} is not exist", &field_name),
+                                    )
+                                })?;
+                            let value = value.try_into(&field.field_type)?;
+                            if value.is_none() && field.required {
+                                return Err(invalid_err_with_reason(
+                                    "record",
+                                    &format!("required field {} is null", &field_name),
+                                ));
+                            }
+                            value_by_name.insert(field.name.clone(), value);
+                        }
+
+                        for (field_name, value) in optional.into_iter() {
+                            let field = struct_ty
+                                .field_by_name(field_name.as_str())
+                                .ok_or_else(|| {
+                                    invalid_err_with_reason(
+                                        "record",
+                                        &format!("field {} is not exist", &field_name),
+                                    )
+                                })?;
+                            let value = match value {
+                                Some(v) => v.try_into(&field.field_type)?,
+                                None => None,
+                            };
+                            value_by_name.insert(field.name.clone(), value);
+                        }
+
+                        let mut iters = Vec::with_capacity(struct_ty.fields().len());
+                        for field in struct_ty.fields() {
+                            match value_by_name.remove(&field.name) {
+                                Some(value) => iters.push(value),
+                                None => {
+                                    if field.required {
+                                        return Err(invalid_err_with_reason(
                                             "record",
-                                            &format!("field {} is not exist", &field_name),
-                                        )
-                                    })?;
-                                let value = value.try_into(&field.field_type)?;
-                                Ok(value)
-                            })
-                            .collect::<Result<_, Error>>()?;
+                                            &format!("required field {} is missing", field.name),
+                                        ));
+                                    }
+                                    iters.push(None);
+                                }
+                            }
+                        }
+
                         Ok(Some(Literal::Struct(Struct::from_iter(iters))))
                     }
                     Type::Map(map_ty) => {
