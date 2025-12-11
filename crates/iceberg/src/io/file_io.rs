@@ -28,6 +28,15 @@ use super::storage::OpenDALStorage;
 pub use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 
+/// FileIO implementation, used to manipulate files in underlying storage.
+///
+/// # Note
+///
+/// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
+/// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
+///
+/// Supported storages:
+///
 /// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
 /// |--------------------|-------------------|----------------------------------| ------------------------------|
 /// | Local file system  | `storage-fs`      | `file`                           | `file://path/to/file`         |
@@ -424,6 +433,7 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
 
+    use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
     use tempfile::TempDir;
@@ -461,6 +471,7 @@ mod tests {
         let input_file = file_io.new_input(&full_path).unwrap();
 
         assert!(input_file.exists().await.unwrap());
+        // Remove heading slash
         assert_eq!(&full_path, input_file.location());
         let read_content = read_from_file(full_path).await;
 
@@ -566,7 +577,7 @@ mod tests {
         assert!(io.exists(&path.clone()).await.unwrap());
         let input_file = io.new_input(&path).unwrap();
         let content = input_file.read().await.unwrap();
-        assert_eq!(content, bytes::Bytes::from("test"));
+        assert_eq!(content, Bytes::from("test"));
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
