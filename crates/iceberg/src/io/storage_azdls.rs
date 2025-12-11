@@ -125,7 +125,7 @@ pub(crate) fn azdls_create_operator<'a>(
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum AzureStorageScheme {
     Abfs,
     Abfss,
@@ -135,7 +135,7 @@ pub(crate) enum AzureStorageScheme {
 
 impl AzureStorageScheme {
     // Returns the respective encrypted or plain-text HTTP scheme.
-    pub fn as_http_scheme(&self) -> &str {
+    pub(crate) fn as_http_scheme(&self) -> &str {
         match self {
             AzureStorageScheme::Abfs | AzureStorageScheme::Wasb => "http",
             AzureStorageScheme::Abfss | AzureStorageScheme::Wasbs => "https",
