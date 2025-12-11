@@ -39,6 +39,8 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// The trait supports serialization via `typetag`, allowing storage instances to be
 /// serialized and deserialized across process boundaries.
+///
+/// Third-party implementations can implement this trait to provide custom storage backends.
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: Debug + Send + Sync {
@@ -78,7 +80,7 @@ pub trait Storage: Debug + Send + Sync {
 /// This storage handles all supported schemes (S3, GCS, Azure, filesystem, memory)
 /// through OpenDAL, creating operators on-demand based on the path scheme.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OpenDALStorage {
+pub(crate) enum OpenDALStorage {
     /// In-memory storage, useful for testing
     #[cfg(feature = "storage-memory")]
     Memory {

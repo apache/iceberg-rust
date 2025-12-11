@@ -70,7 +70,6 @@ mod file_io;
 mod storage;
 
 pub use file_io::*;
-pub use storage::{OpenDALStorage, Storage};
 pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]

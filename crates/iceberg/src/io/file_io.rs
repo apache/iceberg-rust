@@ -21,30 +21,21 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use url::Url;
 
-pub use super::storage::{OpenDALStorage, Storage};
+pub use super::storage::Storage;
+use super::storage::OpenDALStorage;
 use crate::{Error, ErrorKind, Result};
 
-/// FileIO implementation, used to manipulate files in underlying storage.
-///
-/// # Note
-///
-/// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
-/// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
-///
-/// Supported storages:
-///
-/// | Storage            | Feature Flag      | Schemes                          |
-/// |--------------------|-------------------|----------------------------------|
-/// | Local file system  | `storage-fs`      | `file://path/to/file`            |
-/// | Memory             | `storage-memory`  | `memory://path/to/file`          |
-/// | S3                 | `storage-s3`      | `s3://<bucket>/path/to/file`     |
-/// | GCS                | `storage-gcs`     | `gs://<bucket>/path/to/file`     |
-/// | OSS                | `storage-oss`     | `oss://<bucket>/path/to/file`    |
-/// | Azure Datalake     | `storage-azdls`   | `abfs[s]://...` or `wasb[s]://...` |
+/// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
+/// |--------------------|-------------------|----------------------------------| ------------------------------|
+/// | Local file system  | `storage-fs`      | `file`                           | `file://path/to/file`         |
+/// | Memory             | `storage-memory`  | `memory`                         | `memory://path/to/file`       |
+/// | S3                 | `storage-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
+/// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
+/// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
+/// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
@@ -295,11 +286,6 @@ impl InputFile {
         Self { storage, path }
     }
 
-    /// Returns the storage backend for this input file.
-    pub fn storage(&self) -> &Arc<dyn Storage> {
-        &self.storage
-    }
-
     /// Absolute path to root uri.
     pub fn location(&self) -> &str {
         &self.path
@@ -336,7 +322,7 @@ impl InputFile {
 ///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
-#[async_trait]
+#[async_trait::async_trait]
 pub trait FileWrite: Send + Sync + Unpin + 'static {
     /// Write bytes to file.
     ///
@@ -388,11 +374,6 @@ impl OutputFile {
     /// * `path` - Absolute path to the file
     pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
         Self { storage, path }
-    }
-
-    /// Returns the storage backend for this output file.
-    pub fn storage(&self) -> &Arc<dyn Storage> {
-        &self.storage
     }
 
     /// Relative path to root uri.
