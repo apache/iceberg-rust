@@ -477,8 +477,7 @@ impl Catalog for S3TablesCatalog {
             .build()?
             .metadata;
         let metadata_location =
-            MetadataLocation::new_with_properties(table_location, metadata.properties())
-                .to_string();
+            MetadataLocation::new_with_metadata(table_location, &metadata).to_string();
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
