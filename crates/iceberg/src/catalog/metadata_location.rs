@@ -181,10 +181,10 @@ mod test {
 
     use uuid::Uuid;
 
-    use crate::spec::{Schema, TableMetadataBuilder};
+    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder};
     use crate::{MetadataLocation, TableCreation};
 
-    fn create_test_metadata(properties: HashMap<String, String>) -> crate::spec::TableMetadata {
+    fn create_test_metadata(properties: HashMap<String, String>) -> TableMetadata {
         let table_creation = TableCreation::builder()
             .name("test_table".to_string())
             .location("/test/table".to_string())
