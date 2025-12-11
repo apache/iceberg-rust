@@ -121,14 +121,13 @@ impl SchemaVisitor for HiveSchemaBuilder {
             PrimitiveType::Double => "double".to_string(),
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
-            PrimitiveType::Timestamptz => {
+            PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
+            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
-                    format!("Conversion from ({p:?}) is not supported"),
+                    format!("Conversion from {p:?} is not supported"),
                 ))
             }
-            PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::TimestamptzNs => "timestamptz_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
