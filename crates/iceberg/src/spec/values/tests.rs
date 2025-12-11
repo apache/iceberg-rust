@@ -285,10 +285,9 @@ fn json_struct_preserves_schema_order() {
     ]));
 
     let raw = RawLiteral::try_from(literal.clone(), &Type::Struct(struct_type.clone())).unwrap();
-    let json = serde_json::to_string(&raw).unwrap();
-
-    // serde_json maps use BTreeMap ordering; this verifies we still recover schema order.
-    let deser: RawLiteral = serde_json::from_str(&json).unwrap();
+    // serde_json::Value uses BTreeMap (sorted keys), which mimics the RW metadata path.
+    let value = serde_json::to_value(&raw).unwrap();
+    let deser: RawLiteral = serde_json::from_value(value).unwrap();
     let roundtrip = deser.try_into(&Type::Struct(struct_type)).unwrap().unwrap();
 
     assert_eq!(roundtrip, literal);
