@@ -169,7 +169,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     format!("Conversion from {p:?} is not supported"),
-                ))
+                ));
             }
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
