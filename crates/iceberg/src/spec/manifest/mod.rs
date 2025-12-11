@@ -1127,7 +1127,7 @@ mod tests {
                 .file_size_in_bytes(1024)
                 .record_count(100)
                 .partition_spec_id(1)
-                .partition(Struct::empty())
+                .partition(Struct::from_iter([None::<Literal>]))
                 .column_sizes(HashMap::from([(1, 512), (2, 1024)]))
                 .value_counts(HashMap::from([(1, 100), (2, 500)]))
                 .null_value_counts(HashMap::from([(1, 0), (2, 1)]))
@@ -1140,7 +1140,7 @@ mod tests {
                 .file_size_in_bytes(2048)
                 .record_count(200)
                 .partition_spec_id(1)
-                .partition(Struct::empty())
+                .partition(Struct::from_iter([None::<Literal>]))
                 .column_sizes(HashMap::from([(1, 1024), (2, 2048)]))
                 .value_counts(HashMap::from([(1, 200), (2, 600)]))
                 .null_value_counts(HashMap::from([(1, 10), (2, 999)]))
@@ -1163,7 +1163,7 @@ mod tests {
             "content": 0,
             "file_path": "path/to/file1.parquet",
             "file_format": "PARQUET",
-            "partition": {},
+            "partition": { "id_partition": null },
             "record_count": 100,
             "file_size_in_bytes": 1024,
             "column_sizes": [
@@ -1194,7 +1194,7 @@ mod tests {
             "content": 0,
             "file_path": "path/to/file2.parquet",
             "file_format": "PARQUET",
-            "partition": {},
+            "partition": { "id_partition": null },
             "record_count": 200,
             "file_size_in_bytes": 2048,
             "column_sizes": [
