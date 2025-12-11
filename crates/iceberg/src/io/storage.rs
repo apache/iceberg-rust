@@ -143,47 +143,42 @@ impl OpenDALStorage {
 
         match scheme {
             #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(OpenDALStorage::Memory(super::memory_config_build()?)),
+            Scheme::Memory => Ok(Self::Memory(super::memory_config_build()?)),
 
             #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(OpenDALStorage::LocalFs),
+            Scheme::Fs => Ok(Self::LocalFs),
 
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => {
-                let config = super::s3_config_parse(props)?;
-                let customized_credential_load = extensions
-                    .get::<super::CustomAwsCredentialLoader>()
-                    .map(Arc::unwrap_or_clone);
-                Ok(OpenDALStorage::S3 {
+                Ok(Self::S3 {
                     configured_scheme: scheme_str,
-                    config: Arc::new(config),
-                    customized_credential_load,
+                    config: super::s3_config_parse(props)?.into(),
+                    customized_credential_load: extensions
+                    .get::<super::CustomAwsCredentialLoader>()
+                    .map(Arc::unwrap_or_clone),
                 })
             }
 
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => {
-                let config = super::gcs_config_parse(props)?;
-                Ok(OpenDALStorage::Gcs {
-                    config: Arc::new(config),
+                Ok(Self::Gcs {
+                    config: super::gcs_config_parse(props)?.into(),
                 })
             }
 
             #[cfg(feature = "storage-oss")]
             Scheme::Oss => {
-                let config = super::oss_config_parse(props)?;
-                Ok(OpenDALStorage::Oss {
-                    config: Arc::new(config),
+                Ok(Self::Oss {
+                    config: super::oss_config_parse(props)?.into(),
                 })
             }
 
             #[cfg(feature = "storage-azdls")]
             Scheme::Azdls => {
                 let configured_scheme = scheme_str.parse::<super::AzureStorageScheme>()?;
-                let config = super::azdls_config_parse(props)?;
-                Ok(OpenDALStorage::Azdls {
+                Ok(Self::Azdls {
                     configured_scheme,
-                    config: Arc::new(config),
+                    config: super::azdls_config_parse(props)?.into(),
                 })
             }
             // Update doc on [`FileIO`] when adding new schemes.
@@ -209,27 +204,27 @@ impl OpenDALStorage {
     fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
-            OpenDALStorage::Memory(op) => {
+            Self::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok((op.clone(), stripped))
+                    Ok::<_, crate::Error>((op.clone(), stripped))
                 } else {
-                    Ok((op.clone(), &path[1..]))
+                    Ok::<_, crate::Error>((op.clone(), &path[1..]))
                 }
             }
 
             #[cfg(feature = "storage-fs")]
-            OpenDALStorage::LocalFs => {
+            Self::LocalFs => {
                 let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
-                    Ok((op, stripped))
+                    Ok::<_, crate::Error>((op, stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    Ok::<_, crate::Error>((op, &path[1..]))
                 }
             }
 
             #[cfg(feature = "storage-s3")]
-            OpenDALStorage::S3 {
+            Self::S3 {
                 configured_scheme,
                 config,
                 customized_credential_load,
@@ -237,6 +232,7 @@ impl OpenDALStorage {
                 let op = super::s3_config_build(config, customized_credential_load, path)?;
                 let op_info = op.info();
 
+                // Check prefix of s3 path.
                 let prefix = format!("{}://{}/", configured_scheme, op_info.name());
                 if path.starts_with(&prefix) {
                     Ok((op, &path[prefix.len()..]))
@@ -249,7 +245,7 @@ impl OpenDALStorage {
             }
 
             #[cfg(feature = "storage-gcs")]
-            OpenDALStorage::Gcs { config } => {
+            Self::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
@@ -263,8 +259,9 @@ impl OpenDALStorage {
             }
 
             #[cfg(feature = "storage-oss")]
-            OpenDALStorage::Oss { config } => {
+            Self::Oss { config } => {
                 let op = super::oss_config_build(config, path)?;
+                // Check prefix of oss path.
                 let prefix = format!("oss://{}/", op.info().name());
                 if path.starts_with(&prefix) {
                     Ok((op, &path[prefix.len()..]))
@@ -277,7 +274,7 @@ impl OpenDALStorage {
             }
 
             #[cfg(feature = "storage-azdls")]
-            OpenDALStorage::Azdls {
+            Self::Azdls {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
