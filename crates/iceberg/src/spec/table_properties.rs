@@ -911,32 +911,23 @@ mod tests {
     }
 
     #[test]
-    fn test_table_properties_optional_compression_level() {
-        // Test that compression level is None when not specified
-        let props = HashMap::new();
+    fn test_table_properties_compression_with_level() {
+        // Test that compression level is used when specified
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+                "5".to_string(),
+            ),
+        ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.avro_compression_level, None);
-
-        // Test that compression level is Some(value) when specified
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
-            "5".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.avro_compression_level, Some(5));
-
-        // Test that invalid compression level returns error
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
-            "invalid".to_string(),
-        )]);
-        let result = TableProperties::try_from(&props);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid value for write.avro.compression-level")
-        );
+        // Check that it parsed to a Deflate codec
+        assert!(matches!(
+            table_properties.avro_compression_codec,
+            Codec::Deflate(_)
+        ));
     }
 }

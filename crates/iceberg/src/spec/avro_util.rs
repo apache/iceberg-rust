@@ -17,40 +17,23 @@
 
 //! Utilities for working with Apache Avro in Iceberg.
 
-use apache_avro::Codec;
+use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
 use log::warn;
+use miniz_oxide::deflate::CompressionLevel;
 
-use crate::spec::TableProperties;
+/// Codec name for gzip compression
+pub const CODEC_GZIP: &str = "gzip";
+/// Codec name for zstd compression
+pub const CODEC_ZSTD: &str = "zstd";
+/// Codec name for snappy compression
+pub const CODEC_SNAPPY: &str = "snappy";
+/// Codec name for uncompressed
+pub const CODEC_UNCOMPRESSED: &str = "uncompressed";
 
-/// Settings for compression codec and level.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompressionSettings {
-    /// The compression codec name (e.g., "gzip", "zstd", "snappy", "uncompressed")
-    pub codec: String,
-    /// The compression level (None uses codec-specific defaults)
-    pub level: Option<u8>,
-}
-
-impl CompressionSettings {
-    /// Create a new CompressionSettings with the specified codec and level.
-    pub fn new(codec: String, level: Option<u8>) -> Self {
-        Self { codec, level }
-    }
-
-    /// Convert to apache_avro::Codec using the codec_from_str helper function.
-    pub(crate) fn to_codec(&self) -> Codec {
-        codec_from_str(Some(&self.codec), self.level)
-    }
-}
-
-impl Default for CompressionSettings {
-    fn default() -> Self {
-        Self {
-            codec: TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-            level: None,
-        }
-    }
-}
+/// Default compression level for gzip (matches Java implementation)
+pub const DEFAULT_GZIP_LEVEL: u8 = 9;
+/// Default compression level for zstd (matches Java implementation)
+pub const DEFAULT_ZSTD_LEVEL: u8 = 1;
 
 /// Convert codec name and level to apache_avro::Codec.
 /// Returns Codec::Null for unknown or unsupported codecs.
@@ -75,18 +58,15 @@ impl Default for CompressionSettings {
 /// - `snappy`: Uses Snappy compression (level parameter ignored)
 /// - `uncompressed` or `None`: No compression
 /// - Any other value: Defaults to no compression (Codec::Null)
-pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
-    use apache_avro::{DeflateSettings, ZstandardSettings};
-
+/// Convert codec name and level to apache_avro::Codec.
+/// This is public so it can be used when parsing table properties.
+pub fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
     // Use case-insensitive comparison to match Java implementation
     match codec.map(|s| s.to_lowercase()).as_deref() {
-        Some("gzip") => {
+        Some(c) if c == CODEC_GZIP => {
             // Map compression level to miniz_oxide::deflate::CompressionLevel
             // Reference: https://docs.rs/miniz_oxide/latest/miniz_oxide/deflate/enum.CompressionLevel.html
-            // Default level for gzip/deflate is 9 (BestCompression) to match Java
-            use miniz_oxide::deflate::CompressionLevel;
-
-            let compression_level = match level.unwrap_or(9) {
+            let compression_level = match level.unwrap_or(DEFAULT_GZIP_LEVEL) {
                 0 => CompressionLevel::NoCompression,
                 1 => CompressionLevel::BestSpeed,
                 9 => CompressionLevel::BestCompression,
@@ -96,14 +76,14 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
 
             Codec::Deflate(DeflateSettings::new(compression_level))
         }
-        Some("zstd") => {
+        Some(c) if c == CODEC_ZSTD => {
             // Zstandard supports levels 0-22, clamp to valid range
-            // Default level for zstd is 1 to match Java
-            let zstd_level = level.unwrap_or(1).min(22);
+            let zstd_level = level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(22);
             Codec::Zstandard(ZstandardSettings::new(zstd_level))
         }
-        Some("snappy") => Codec::Snappy,
-        Some("uncompressed") | None => Codec::Null,
+        Some(c) if c == CODEC_SNAPPY => Codec::Snappy,
+        Some(c) if c == CODEC_UNCOMPRESSED => Codec::Null,
+        None => Codec::Null,
         Some(unknown) => {
             warn!(
                 "Unrecognized compression codec '{}', using no compression (Codec::Null)",

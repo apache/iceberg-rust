@@ -100,7 +100,9 @@ mod test {
     use super::_serde::ManifestFileV2;
     use super::*;
     use crate::io::FileIO;
-    use crate::spec::{CompressionSettings, Datum, FieldSummary, ManifestContentType, ManifestFile};
+    use apache_avro::Codec;
+
+    use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
 
     #[tokio::test]
     async fn test_parse_manifest_list_v1() {
@@ -137,7 +139,7 @@ mod test {
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer
@@ -211,7 +213,7 @@ mod test {
             1646658105718557341,
             Some(1646658105718557341),
             1,
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer
@@ -326,7 +328,7 @@ mod test {
             Some(377075049360453639),
             1,
             Some(10),
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer

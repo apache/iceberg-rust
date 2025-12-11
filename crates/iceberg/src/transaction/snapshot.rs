@@ -24,11 +24,12 @@ use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::spec::avro_util::codec_from_str;
 use crate::spec::{
-    CompressionSettings, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
-    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -262,10 +263,6 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let compression = CompressionSettings::new(
-            table_props.avro_compression_codec,
-            table_props.avro_compression_level,
-        );
 
         let builder = ManifestWriterBuilder::new(
             output_file,
@@ -277,7 +274,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-            compression,
+            codec_from_str(Some(&table_props.avro_compression_codec), table_props.avro_compression_level),
         );
 
         match self.table.metadata().format_version() {
@@ -469,24 +466,22 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let compression = CompressionSettings::new(
-            table_props.avro_compression_codec,
-            table_props.avro_compression_level,
-        );
+
+        let compression = codec_from_str(Some(&table_props.avro_compression_codec), table_props.avro_compression_level);
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-                compression,
+                compression.clone(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-                compression,
+                compression.clone(),
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 output_file,
@@ -494,7 +489,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
-                compression,
+                compression.clone(),
             ),
         };
 
