@@ -132,7 +132,7 @@ impl OpenDALGcsStorage {
         } else {
             Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Invalid gcs url: {}, should start with {}", path, prefix),
+                format!("Invalid gcs url: {path}, should start with {prefix}"),
             ))
         }
     }

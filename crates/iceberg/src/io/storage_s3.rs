@@ -259,7 +259,7 @@ impl OpenDALS3Storage {
         } else {
             Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Invalid s3 url: {}, should start with {}", path, prefix),
+                format!("Invalid s3 url: {path}, should start with {prefix}"),
             ))
         }
     }
