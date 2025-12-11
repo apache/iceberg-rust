@@ -66,8 +66,7 @@ pub enum ErrorKind {
 
     /// Catalog commit state is unknown after a server error.
     ///
-    /// This error is returned when a commit operation receives a 5xx response,
-    /// indicating the server failed but the commit state is uncertain.
+    /// This error is returned when a commit operation receives a 5xx response.
     CommitStateUnknown,
 
     /// Namespace is not empty and cannot be dropped.
