@@ -78,7 +78,10 @@ impl MetadataLocation {
 
     /// Creates a new metadata location for an updated metadata file.
     /// Uses compression settings from the new metadata.
-    pub fn next_version(current_location: impl ToString, new_metadata: &TableMetadata) -> Result<Self> {
+    pub fn next_version(
+        current_location: impl ToString,
+        new_metadata: &TableMetadata,
+    ) -> Result<Self> {
         let current = Self::from_str(&current_location.to_string())?;
         let next = Self {
             table_location: current.table_location,
@@ -103,7 +106,6 @@ impl MetadataLocation {
             compression_suffix: self.compression_suffix.clone(),
         }
     }
-
 
     fn parse_metadata_path_prefix(path: &str) -> Result<String> {
         let prefix = path.strip_suffix("/metadata").ok_or(Error::new(
@@ -346,15 +348,16 @@ mod test {
         ];
 
         for input in test_cases {
-            let next =
-                MetadataLocation::next_version(&input.to_string(), &create_test_metadata(HashMap::new()))
-                    .unwrap();
+            let next = MetadataLocation::next_version(
+                &input.to_string(),
+                &create_test_metadata(HashMap::new()),
+            )
+            .unwrap();
             assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
         }
     }
-
 
     #[test]
     fn test_metadata_location_new_with_metadata() {
