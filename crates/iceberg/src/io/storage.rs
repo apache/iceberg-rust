@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Storage implementation for Iceberg using OpenDAL.
-//!
-//! This module provides a unified storage abstraction that handles all supported
-//! storage backends (S3, GCS, Azure, local filesystem, memory, etc.) through OpenDAL.
+//! Storage interfaces of Iceberg
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -41,9 +38,6 @@ use super::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputF
 use crate::{Error, ErrorKind, Result};
 
 /// Trait for storage operations in Iceberg.
-///
-/// This trait defines the interface for all storage backends. The default implementation
-/// uses OpenDAL to support various storage systems like S3, GCS, Azure, local filesystem, etc.
 ///
 /// The trait supports serialization via `typetag`, allowing storage instances to be
 /// serialized and deserialized across process boundaries.

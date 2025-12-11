@@ -121,6 +121,7 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    #[must_use]
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
         self.inner.new_input(path.as_ref())
     }
@@ -130,6 +131,7 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    #[must_use]
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
         self.inner.new_output(path.as_ref())
     }
