@@ -663,18 +663,44 @@ pub(crate) fn create_primitive_array_single_element(
         (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
             Option::<&[u8]>::None,
         ]))),
-        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(v))) => {
-            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![{ *v }])))
+        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
+            let array = Decimal128Array::from(vec![{ *v }])
+                .with_precision_and_scale(*precision, *scale)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                        ),
+                    )
+                })?;
+            Ok(Arc::new(array))
         }
-        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(v))) => {
-            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![
-                *v as i128,
-            ])))
+        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::UInt128(v))) => {
+            let array = Decimal128Array::from(vec![*v as i128])
+                .with_precision_and_scale(*precision, *scale)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                        ),
+                    )
+                })?;
+            Ok(Arc::new(array))
         }
-        (DataType::Decimal128(_, _), None) => {
-            Ok(Arc::new(arrow_array::Decimal128Array::from(vec![
-                Option::<i128>::None,
-            ])))
+        (DataType::Decimal128(precision, scale), None) => {
+            let array = Decimal128Array::from(vec![Option::<i128>::None])
+                .with_precision_and_scale(*precision, *scale)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                        ),
+                    )
+                })?;
+            Ok(Arc::new(array))
         }
         (DataType::Struct(fields), None) => {
             // Create a single-element StructArray with nulls
@@ -795,15 +821,48 @@ pub(crate) fn create_primitive_array_repeated(
             let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
             Arc::new(BinaryArray::from_opt_vec(vals))
         }
-        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
-            Arc::new(Decimal128Array::from(vec![*value; num_rows]))
+        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
+            Arc::new(
+                Decimal128Array::from(vec![*value; num_rows])
+                    .with_precision_and_scale(*precision, *scale)
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                            ),
+                        )
+                    })?,
+            )
         }
-        (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(value))) => {
-            Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
+        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::UInt128(value))) => {
+            Arc::new(
+                Decimal128Array::from(vec![*value as i128; num_rows])
+                    .with_precision_and_scale(*precision, *scale)
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                            ),
+                        )
+                    })?,
+            )
         }
-        (DataType::Decimal128(_, _), None) => {
+        (DataType::Decimal128(precision, scale), None) => {
             let vals: Vec<Option<i128>> = vec![None; num_rows];
-            Arc::new(Decimal128Array::from(vals))
+            Arc::new(
+                Decimal128Array::from(vals)
+                    .with_precision_and_scale(*precision, *scale)
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
+                            ),
+                        )
+                    })?,
+            )
         }
         (DataType::Struct(fields), None) => {
             // Create a StructArray filled with nulls
@@ -1677,5 +1736,49 @@ mod test {
                 ])),
             ]))),
         ]);
+    }
+
+    #[test]
+    fn test_create_decimal_array_respects_precision() {
+        // Decimal128Array::from() uses Arrow's default precision (38) instead of the
+        // target precision, causing RecordBatch construction to fail when schemas don't match.
+        let target_precision = 18u8;
+        let target_scale = 10i8;
+        let target_type = DataType::Decimal128(target_precision, target_scale);
+        let value = PrimitiveLiteral::Int128(10000000000);
+
+        let array = create_primitive_array_single_element(&target_type, &Some(value))
+            .expect("Failed to create decimal array");
+
+        match array.data_type() {
+            DataType::Decimal128(precision, scale) => {
+                assert_eq!(*precision, target_precision);
+                assert_eq!(*scale, target_scale);
+            }
+            other => panic!("Expected Decimal128, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_create_decimal_array_repeated_respects_precision() {
+        // Ensure repeated arrays also respect target precision, not Arrow's default.
+        let target_precision = 18u8;
+        let target_scale = 10i8;
+        let target_type = DataType::Decimal128(target_precision, target_scale);
+        let value = PrimitiveLiteral::Int128(10000000000);
+        let num_rows = 5;
+
+        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+            .expect("Failed to create repeated decimal array");
+
+        match array.data_type() {
+            DataType::Decimal128(precision, scale) => {
+                assert_eq!(*precision, target_precision);
+                assert_eq!(*scale, target_scale);
+            }
+            other => panic!("Expected Decimal128, got {other:?}"),
+        }
+
+        assert_eq!(array.len(), num_rows);
     }
 }
