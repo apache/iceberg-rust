@@ -83,14 +83,10 @@ fn constants_map(
             // Handle both None (null) and Some(Literal::Primitive) cases
             match &partition_data[pos] {
                 None => {
-                    // TODO (https://github.com/apache/iceberg-rust/issues/1914): Add support for null datum values.
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "Partition field {} has null value for identity transform",
-                            field.source_id
-                        ),
-                    ));
+                    // Skip null partition values - they will be resolved as null per Iceberg spec rule #4.
+                    // When a partition value is null, we don't add it to the constants map,
+                    // allowing downstream column resolution to handle it correctly.
+                    continue;
                 }
                 Some(Literal::Primitive(value)) => {
                     // Create a Datum from the primitive type and value
@@ -1609,5 +1605,74 @@ mod test {
         // For null REE arrays, we still use the helper which handles extraction
         assert_eq!(get_string_value(result.column(4).as_ref(), 0), "");
         assert_eq!(get_string_value(result.column(4).as_ref(), 1), "");
+    }
+
+    /// Test handling of null values in identity-partitioned columns.
+    ///
+    /// Reproduces TestPartitionValues.testNullPartitionValue() from iceberg-java, which
+    /// writes records where the partition column has null values. Before the fix in #1922,
+    /// this would error with "Partition field X has null value for identity transform".
+    #[test]
+    fn null_identity_partition_value() {
+        use crate::spec::{Struct, Transform};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("data", "data", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition has null value for the data column
+        let partition_data = Struct::from_iter(vec![None]);
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            true,
+            "1",
+        )]));
+
+        let projected_field_ids = [1, 2];
+
+        let mut transformer = RecordBatchTransformerBuilder::new(schema, &projected_field_ids)
+            .with_partition(partition_spec, partition_data)
+            .expect("Should handle null partition values")
+            .build();
+
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 3);
+
+        let id_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.values(), &[1, 2, 3]);
+
+        // Partition column with null value should produce nulls
+        let data_col = result.column(1);
+        assert!(data_col.is_null(0));
+        assert!(data_col.is_null(1));
+        assert!(data_col.is_null(2));
     }
 }
