@@ -88,7 +88,7 @@ pub trait Storage: Debug + Send + Sync {
 /// This storage handles all supported schemes (S3, GCS, Azure, filesystem, memory)
 /// through OpenDAL, creating operators on-demand based on the path scheme.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum OpenDALStorage {
+pub(crate) enum OpenDalStorage {
     /// In-memory storage, useful for testing
     #[cfg(feature = "storage-memory")]
     Memory(#[serde(skip, default = "default_memory_op")] Operator),
@@ -96,9 +96,11 @@ pub(crate) enum OpenDALStorage {
     #[cfg(feature = "storage-fs")]
     LocalFs,
     /// Amazon S3 storage
+    /// Expects paths of the form `s3[a]://<bucket>/<path>`.
     #[cfg(feature = "storage-s3")]
     S3 {
-        /// The configured scheme (s3 or s3a)
+        /// s3 storage could have `s3://` and `s3a://`.
+        /// Storing the scheme string here to return the correct path.
         configured_scheme: String,
         /// S3 configuration
         config: Arc<S3Config>,
@@ -119,6 +121,9 @@ pub(crate) enum OpenDALStorage {
         config: Arc<OssConfig>,
     },
     /// Azure Data Lake Storage
+    /// Expects paths of the form
+    /// `abfs[s]://<filesystem>@<account>.dfs.<endpoint-suffix>/<path>` or
+    /// `wasb[s]://<container>@<account>.blob.<endpoint-suffix>/<path>`.
     #[cfg(feature = "storage-azdls")]
     Azdls {
         /// Because Azdls accepts multiple possible schemes, we store the full
@@ -134,7 +139,7 @@ fn default_memory_op() -> Operator {
     super::memory_config_build().expect("Failed to build memory operator")
 }
 
-impl OpenDALStorage {
+impl OpenDalStorage {
     /// Build storage from FileIOBuilder
     pub fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
@@ -149,29 +154,23 @@ impl OpenDALStorage {
             Scheme::Fs => Ok(Self::LocalFs),
 
             #[cfg(feature = "storage-s3")]
-            Scheme::S3 => {
-                Ok(Self::S3 {
-                    configured_scheme: scheme_str,
-                    config: super::s3_config_parse(props)?.into(),
-                    customized_credential_load: extensions
+            Scheme::S3 => Ok(Self::S3 {
+                configured_scheme: scheme_str,
+                config: super::s3_config_parse(props)?.into(),
+                customized_credential_load: extensions
                     .get::<super::CustomAwsCredentialLoader>()
                     .map(Arc::unwrap_or_clone),
-                })
-            }
+            }),
 
             #[cfg(feature = "storage-gcs")]
-            Scheme::Gcs => {
-                Ok(Self::Gcs {
-                    config: super::gcs_config_parse(props)?.into(),
-                })
-            }
+            Scheme::Gcs => Ok(Self::Gcs {
+                config: super::gcs_config_parse(props)?.into(),
+            }),
 
             #[cfg(feature = "storage-oss")]
-            Scheme::Oss => {
-                Ok(Self::Oss {
-                    config: super::oss_config_parse(props)?.into(),
-                })
-            }
+            Scheme::Oss => Ok(Self::Oss {
+                config: super::oss_config_parse(props)?.into(),
+            }),
 
             #[cfg(feature = "storage-azdls")]
             Scheme::Azdls => {
@@ -314,7 +313,7 @@ impl OpenDALStorage {
 
 #[async_trait]
 #[typetag::serde]
-impl Storage for OpenDALStorage {
+impl Storage for OpenDalStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(path)?;
         Ok(op.exists(relative_path).await?)
@@ -382,38 +381,38 @@ mod tests {
     #[cfg(feature = "storage-memory")]
     fn test_opendal_storage_memory() {
         let builder = FileIOBuilder::new("memory");
-        let storage = OpenDALStorage::build(builder).unwrap();
-        assert!(matches!(storage, OpenDALStorage::Memory { .. }));
+        let storage = OpenDalStorage::build(builder).unwrap();
+        assert!(matches!(storage, OpenDalStorage::Memory { .. }));
     }
 
     #[test]
     #[cfg(feature = "storage-fs")]
     fn test_opendal_storage_fs() {
         let builder = FileIOBuilder::new("file");
-        let storage = OpenDALStorage::build(builder).unwrap();
-        assert!(matches!(storage, OpenDALStorage::LocalFs));
+        let storage = OpenDalStorage::build(builder).unwrap();
+        assert!(matches!(storage, OpenDalStorage::LocalFs));
     }
 
     #[test]
     #[cfg(feature = "storage-s3")]
     fn test_opendal_storage_s3() {
         let builder = FileIOBuilder::new("s3");
-        let storage = OpenDALStorage::build(builder).unwrap();
-        assert!(matches!(storage, OpenDALStorage::S3 { .. }));
+        let storage = OpenDalStorage::build(builder).unwrap();
+        assert!(matches!(storage, OpenDalStorage::S3 { .. }));
     }
 
     #[test]
     #[cfg(feature = "storage-memory")]
     fn test_storage_serialization() {
         let builder = FileIOBuilder::new("memory");
-        let storage = OpenDALStorage::build(builder).unwrap();
+        let storage = OpenDalStorage::build(builder).unwrap();
 
         // Serialize
         let serialized = serde_json::to_string(&storage).unwrap();
 
         // Deserialize
-        let deserialized: OpenDALStorage = serde_json::from_str(&serialized).unwrap();
+        let deserialized: OpenDalStorage = serde_json::from_str(&serialized).unwrap();
 
-        assert!(matches!(deserialized, OpenDALStorage::Memory { .. }));
+        assert!(matches!(deserialized, OpenDalStorage::Memory { .. }));
     }
 }

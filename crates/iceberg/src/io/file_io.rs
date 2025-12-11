@@ -24,7 +24,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use url::Url;
 
-use super::storage::OpenDALStorage;
+use super::storage::OpenDalStorage;
 pub use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 
@@ -240,7 +240,7 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        let storage = OpenDALStorage::build(self.clone())?;
+        let storage = OpenDalStorage::build(self.clone())?;
 
         Ok(FileIO {
             builder: self,
