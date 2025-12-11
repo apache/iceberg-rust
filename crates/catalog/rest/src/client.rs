@@ -26,7 +26,8 @@ use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::RestCatalogConfig;
-use crate::types::{ErrorResponse, TokenResponse};
+use crate::error_handlers::{ErrorHandler, OAuthErrorHandler};
+use crate::types::{ErrorModel, ErrorResponse, OAuthError, TokenResponse};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -156,20 +157,39 @@ impl HttpClient {
                 .with_source(e)
             })?)
         } else {
-            let code = auth_resp.status();
+            let status = auth_resp.status();
             let text = auth_resp
                 .bytes()
                 .await
                 .map_err(|err| err.with_url(auth_url.clone()))?;
-            let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("operation", "auth")
-                    .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(Error::from(e))
+            let error_response = if text.is_empty() {
+                // use default error when response body is empty
+                ErrorResponse::build_default_response(status)
+            } else {
+                match serde_json::from_slice::<OAuthError>(&text) {
+                    Ok(oauth_error) => {
+                        // Convert OAuth error format to ErrorResponse format
+                        // OAuth "error" field becomes ErrorResponse "type"
+                        // OAuth "error_description" becomes ErrorResponse "message"
+                        ErrorResponse {
+                            error: ErrorModel {
+                                message: oauth_error
+                                    .error_description
+                                    .clone()
+                                    .unwrap_or_else(|| oauth_error.error.clone()),
+                                r#type: oauth_error.error, // OAuth error type
+                                code: status.as_u16(),
+                                stack: None,
+                            },
+                        }
+                    }
+                    Err(_parse_err) => {
+                        // use default error when parsing failed
+                        ErrorResponse::build_default_response(status)
+                    }
+                }
+            };
+            Err(OAuthErrorHandler.handle(status, &error_response))
         }?;
         Ok(auth_res.access_token)
     }
@@ -278,22 +298,39 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     })
 }
 
-/// Deserializes a unexpected catalog response into an error.
-pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
-    let err = Error::new(
-        ErrorKind::Unexpected,
-        "Received response with unexpected status code",
-    )
-    .with_context("status", response.status().to_string())
-    .with_context("headers", format!("{:?}", response.headers()));
+/// Handle an error response using the provided error handler.
+///
+/// Returns an `iceberg::Error` with appropriate error kind and context.
+pub(crate) async fn handle_error_response(response: Response, handler: &dyn ErrorHandler) -> Error {
+    let status = response.status();
 
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
-        Err(err) => return err.into(),
+        Err(err) => {
+            return Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Failed to read error response body for HTTP {}",
+                    status.as_u16()
+                ),
+            )
+            .with_context("status", status.to_string())
+            .with_source(err);
+        }
     };
 
-    if bytes.is_empty() {
-        return err;
-    }
-    err.with_context("json", String::from_utf8_lossy(&bytes))
+    let error_response = if bytes.is_empty() {
+        // use default error when response body is empty
+        ErrorResponse::build_default_response(status)
+    } else {
+        match serde_json::from_slice::<ErrorResponse>(&bytes) {
+            Ok(response) => response,
+            Err(_parse_err) => {
+                // use default error when parsing failed
+                ErrorResponse::build_default_response(status)
+            }
+        }
+    };
+
+    handler.handle(status, &error_response)
 }

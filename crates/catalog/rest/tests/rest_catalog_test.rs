@@ -24,7 +24,9 @@ use std::sync::RwLock;
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
-use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, CatalogBuilder, ErrorKind, Namespace, NamespaceIdent, TableCreation, TableIdent,
+};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -448,4 +450,306 @@ async fn test_register_table() {
         table.identifier().to_string(),
         table_registered.identifier().to_string()
     );
+}
+
+#[tokio::test]
+async fn test_create_namespace_already_exists() {
+    let catalog = get_catalog().await;
+    let ns_ident = NamespaceIdent::from_strs(["test_duplicate_ns"]).unwrap();
+
+    // Create once, should succeed
+    catalog
+        .create_namespace(&ns_ident, HashMap::new())
+        .await
+        .unwrap();
+
+    // Create again, should fail with NamespaceAlreadyExists
+    let result = catalog.create_namespace(&ns_ident, HashMap::new()).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceAlreadyExists);
+    assert!(err.message().contains("already exists") || err.message().contains("Conflict"));
+}
+
+#[tokio::test]
+async fn test_drop_namespace_not_empty() {
+    let catalog = get_catalog().await;
+
+    // Create namespace with a table
+    let ns = NamespaceIdent::from_strs(["test_drop_nonempty_ns"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    // Create a table in the namespace
+    let schema = Schema::builder()
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+        ])
+        .build()
+        .unwrap();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema)
+        .build();
+
+    catalog.create_table(&ns, table_creation).await.unwrap();
+
+    // Attempt to drop namespace, should fail with NamespaceNotEmpty
+    let result = catalog.drop_namespace(&ns).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotEmpty);
+}
+
+#[tokio::test]
+async fn test_drop_nonexistent_namespace() {
+    let catalog = get_catalog().await;
+    let ns = NamespaceIdent::from_strs(["test_drop_nonexistent_ns"]).unwrap();
+
+    let result = catalog.drop_namespace(&ns).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+}
+
+#[tokio::test]
+async fn test_list_namespaces_under_nonexistent_parent() {
+    let catalog = get_catalog().await;
+
+    // Try to list namespaces under a parent that doesn't exist
+    let parent = NamespaceIdent::from_strs(["test_nonexistent_parent", "sub"]).unwrap();
+
+    let result = catalog.list_namespaces(Some(&parent)).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+}
+
+#[tokio::test]
+async fn test_load_table_not_found() {
+    let catalog = get_catalog().await;
+
+    // Create namespace but no table
+    let ns = NamespaceIdent::from_strs(["test_load_table_nf"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let table_id = TableIdent::new(ns, "nonexistent_table".to_string());
+
+    // Try to load non-existent table
+    let result = catalog.load_table(&table_id).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableNotFound);
+}
+
+#[tokio::test]
+async fn test_create_table_namespace_not_found() {
+    let catalog = get_catalog().await;
+
+    // Try to create table in non-existent namespace
+    let ns = NamespaceIdent::from_strs(["test_create_table_ns_nf"]).unwrap();
+
+    let schema = Schema::builder()
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+        ])
+        .build()
+        .unwrap();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema)
+        .build();
+
+    let result = catalog.create_table(&ns, table_creation).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+}
+
+#[tokio::test]
+async fn test_create_table_already_exists() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["test_create_dup_table"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let schema = Schema::builder()
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+        ])
+        .build()
+        .unwrap();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema.clone())
+        .build();
+
+    // Create table once, should succeed
+    catalog.create_table(&ns, table_creation).await.unwrap();
+
+    // Create same table again, should fail
+    let table_creation2 = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema)
+        .build();
+
+    let result = catalog.create_table(&ns, table_creation2).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableAlreadyExists);
+}
+
+#[tokio::test]
+async fn test_drop_table_not_found() {
+    let catalog = get_catalog().await;
+
+    // Create namespace but no table
+    let ns = NamespaceIdent::from_strs(["test_drop_table_nf"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let table_id = TableIdent::new(ns, "nonexistent_table".to_string());
+    let result = catalog.drop_table(&table_id).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableNotFound);
+}
+
+#[tokio::test]
+async fn test_table_exists_nonexistent() {
+    let catalog = get_catalog().await;
+
+    // Create namespace but no table
+    let ns = NamespaceIdent::from_strs(["test_exists_table_nf"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let table_id = TableIdent::new(ns, "nonexistent_table".to_string());
+
+    // Check if non-existent table exists, should return false
+    let exists = catalog.table_exists(&table_id).await.unwrap();
+    assert!(!exists);
+}
+
+#[tokio::test]
+async fn test_rename_table_not_found() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["test_rename_table_nf"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let from = TableIdent::new(ns.clone(), "nonexistent".to_string());
+    let to = TableIdent::new(ns, "new_name".to_string());
+
+    // Try to rename non-existent table
+    let result = catalog.rename_table(&from, &to).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableNotFound);
+}
+
+#[tokio::test]
+async fn test_rename_table_to_existing_name() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["test_rename_table_dup"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    let schema = Schema::builder()
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+        ])
+        .build()
+        .unwrap();
+
+    // Create two tables
+    let table1_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema.clone())
+        .build();
+
+    let table2_creation = TableCreation::builder()
+        .name("t2".to_string())
+        .schema(schema)
+        .build();
+
+    catalog.create_table(&ns, table1_creation).await.unwrap();
+    catalog.create_table(&ns, table2_creation).await.unwrap();
+
+    let from = TableIdent::new(ns.clone(), "t1".to_string());
+    let to = TableIdent::new(ns, "t2".to_string());
+
+    // Try to rename t1 to t2 (which already exists)
+    let result = catalog.rename_table(&from, &to).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableAlreadyExists);
+}
+
+#[tokio::test]
+async fn test_list_tables_nonexistent_namespace() {
+    let catalog = get_catalog().await;
+
+    let ns = NamespaceIdent::from_strs(["test_list_tables_ns_nf"]).unwrap();
+
+    // Try to list tables in non-existent namespace
+    let result = catalog.list_tables(&ns).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+}
+
+#[tokio::test]
+async fn test_commit_to_nonexistent_table() {
+    let catalog = get_catalog().await;
+
+    // Create namespace
+    let ns = NamespaceIdent::from_strs(["test_commit_table_nf"]).unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+    // Create a table, then drop it
+    let schema = Schema::builder()
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+        ])
+        .build()
+        .unwrap();
+
+    let table_creation = TableCreation::builder()
+        .name("t1".to_string())
+        .schema(schema)
+        .build();
+
+    let table = catalog.create_table(&ns, table_creation).await.unwrap();
+    let table_id = table.identifier().clone();
+
+    // Drop the table
+    catalog.drop_table(&table_id).await.unwrap();
+
+    // Try to commit to the dropped table
+    let tx = Transaction::new(&table);
+    let result = tx
+        .update_table_properties()
+        .set("prop1".to_string(), "v1".to_string())
+        .apply(tx)
+        .unwrap()
+        .commit(&catalog)
+        .await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TableNotFound);
 }

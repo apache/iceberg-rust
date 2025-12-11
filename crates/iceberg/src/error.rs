@@ -63,6 +63,47 @@ pub enum ErrorKind {
 
     /// Catalog commit failed due to outdated metadata
     CatalogCommitConflicts,
+
+    /// Catalog commit state is unknown after a server error.
+    ///
+    /// This error is returned when a commit operation receives a 5xx response,
+    /// indicating the server failed but the commit state is uncertain.
+    CommitStateUnknown,
+
+    /// Namespace is not empty and cannot be dropped.
+    ///
+    /// This error is returned when attempting to drop a namespace that still
+    /// contains tables or other resources.
+    NamespaceNotEmpty,
+
+    /// Iceberg view does not exist.
+    ViewNotFound,
+
+    /// Iceberg view already exists at creation.
+    ViewAlreadyExists,
+
+    /// Service is temporarily unavailable.
+    ///
+    /// This error is returned when the server returns a 503 Service Unavailable status.
+    ServiceUnavailable,
+
+    /// Bad request.
+    ///
+    /// This error is returned when the server returns a 400 Bad Request status,
+    /// indicating a malformed or invalid request.
+    BadRequest,
+
+    /// Forbidden.
+    ///
+    /// This error is returned when the server returns a 403 Forbidden status,
+    /// indicating the client does not have permission to perform the operation.
+    Forbidden,
+
+    /// Not authorized.
+    ///
+    /// This error is returned when the server returns a 401 Unauthorized status,
+    /// indicating the client is not authenticated.
+    NotAuthorized,
 }
 
 impl ErrorKind {
@@ -84,6 +125,14 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
             ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
+            ErrorKind::CommitStateUnknown => "CommitStateUnknown",
+            ErrorKind::NamespaceNotEmpty => "NamespaceNotEmpty",
+            ErrorKind::ViewNotFound => "ViewNotFound",
+            ErrorKind::ViewAlreadyExists => "ViewAlreadyExists",
+            ErrorKind::ServiceUnavailable => "ServiceUnavailable",
+            ErrorKind::BadRequest => "BadRequest",
+            ErrorKind::Forbidden => "Forbidden",
+            ErrorKind::NotAuthorized => "NotAuthorized",
         }
     }
 }
