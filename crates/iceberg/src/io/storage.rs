@@ -26,7 +26,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use opendal::layers::RetryLayer;
-use opendal::Operator;
+#[cfg(feature = "storage-azdls")]
+use opendal::services::AzdlsConfig;
+#[cfg(feature = "storage-gcs")]
+use opendal::services::GcsConfig;
+#[cfg(feature = "storage-oss")]
+use opendal::services::OssConfig;
+#[cfg(feature = "storage-s3")]
+use opendal::services::S3Config;
+use opendal::{Operator, Scheme};
 use serde::{Deserialize, Serialize};
 
 use super::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
@@ -134,18 +142,19 @@ impl OpenDALStorage {
     pub fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let _ = (&props, &extensions);
+        let scheme = Self::parse_scheme(&scheme_str)?;
 
-        match scheme_str.to_lowercase().as_str() {
+        match scheme {
             #[cfg(feature = "storage-memory")]
-            "memory" => Ok(OpenDALStorage::Memory {
+            Scheme::Memory => Ok(OpenDALStorage::Memory {
                 op: Arc::new(std::sync::Mutex::new(None)),
             }),
 
             #[cfg(feature = "storage-fs")]
-            "file" | "" => Ok(OpenDALStorage::LocalFs),
+            Scheme::Fs => Ok(OpenDALStorage::LocalFs),
 
             #[cfg(feature = "storage-s3")]
-            "s3" | "s3a" => {
+            Scheme::S3 => {
                 let config = super::s3_config_parse(props)?;
                 let customized_credential_load = extensions
                     .get::<super::CustomAwsCredentialLoader>()
@@ -158,19 +167,19 @@ impl OpenDALStorage {
             }
 
             #[cfg(feature = "storage-gcs")]
-            "gs" | "gcs" => {
+            Scheme::Gcs => {
                 let config = super::gcs_config_parse(props)?;
                 Ok(OpenDALStorage::Gcs { config })
             }
 
             #[cfg(feature = "storage-oss")]
-            "oss" => {
+            Scheme::Oss => {
                 let config = super::oss_config_parse(props)?;
                 Ok(OpenDALStorage::Oss { config })
             }
 
             #[cfg(feature = "storage-azdls")]
-            "abfs" | "abfss" | "wasb" | "wasbs" => {
+            Scheme::Azdls => {
                 let configured_scheme = scheme_str.parse::<super::AzureStorageScheme>()?;
                 let config = super::azdls_config_parse(props)?;
                 Ok(OpenDALStorage::Azdls {
@@ -178,18 +187,26 @@ impl OpenDALStorage {
                     config,
                 })
             }
-
+            // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!(
-                    "Constructing file io from scheme: {} not supported now",
-                    scheme_str
-                ),
+                format!("Constructing file io from scheme: {scheme} not supported now",),
             )),
         }
     }
 
     /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
     fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
@@ -271,12 +288,37 @@ impl OpenDALStorage {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
+            #[cfg(all(
+                not(feature = "storage-s3"),
+                not(feature = "storage-fs"),
+                not(feature = "storage-gcs"),
+                not(feature = "storage-oss"),
+                not(feature = "storage-azdls"),
+            ))]
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "No storage service has been enabled",
+            )),
         }?;
 
-        // Transient errors are common for object stores
+        // Transient errors are common for object stores; however there's no
+        // harm in retrying temporary failures for other storage backends as well.
         let operator = operator.layer(RetryLayer::new());
 
         Ok((operator, relative_path))
+    }
+
+    /// Parse scheme.
+    fn parse_scheme(scheme: &str) -> crate::Result<Scheme> {
+        match scheme {
+            "memory" => Ok(Scheme::Memory),
+            "file" | "" => Ok(Scheme::Fs),
+            "s3" | "s3a" => Ok(Scheme::S3),
+            "gs" | "gcs" => Ok(Scheme::Gcs),
+            "oss" => Ok(Scheme::Oss),
+            "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
+            s => Ok(s.parse::<Scheme>()?),
+        }
     }
 }
 

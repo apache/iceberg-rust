@@ -24,8 +24,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use url::Url;
 
-pub use super::storage::Storage;
 use super::storage::OpenDALStorage;
+pub use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 
 /// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
