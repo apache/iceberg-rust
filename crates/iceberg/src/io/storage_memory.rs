@@ -175,7 +175,7 @@ mod tests {
         let deserialized: Box<dyn Storage> = serde_json::from_str(&serialized).unwrap();
 
         // Verify the type is correct
-        assert!(format!("{:?}", deserialized).contains("OpenDALMemoryStorage"));
+        assert!(format!("{deserialized:?}").contains("OpenDALMemoryStorage"));
     }
 
     #[test]
@@ -192,7 +192,7 @@ mod tests {
         let deserialized: Box<dyn StorageFactory> = serde_json::from_str(&serialized).unwrap();
 
         // Verify the type is correct
-        assert!(format!("{:?}", deserialized).contains("OpenDALMemoryStorageFactory"));
+        assert!(format!("{deserialized:?}").contains("OpenDALMemoryStorageFactory"));
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
         let deserialized_storage: Box<dyn Storage> = serde_json::from_str(&storage_json).unwrap();
 
         // Verify storage type
-        assert!(format!("{:?}", deserialized_storage).contains("OpenDALMemoryStorage"));
+        assert!(format!("{deserialized_storage:?}").contains("OpenDALMemoryStorage"));
 
         // Serialize the factory
         let factory_boxed: Box<dyn StorageFactory> = Box::new(factory);
@@ -223,6 +223,6 @@ mod tests {
             serde_json::from_str(&factory_json).unwrap();
 
         // Verify factory type
-        assert!(format!("{:?}", deserialized_factory).contains("OpenDALMemoryStorageFactory"));
+        assert!(format!("{deserialized_factory:?}").contains("OpenDALMemoryStorageFactory"));
     }
 }

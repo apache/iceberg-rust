@@ -157,7 +157,7 @@ mod tests {
         let deserialized: Box<dyn Storage> = serde_json::from_str(&serialized).unwrap();
 
         // Verify the type is correct
-        assert!(format!("{:?}", deserialized).contains("OpenDALFsStorage"));
+        assert!(format!("{deserialized:?}").contains("OpenDALFsStorage"));
     }
 
     #[test]
@@ -174,6 +174,6 @@ mod tests {
         let deserialized: Box<dyn StorageFactory> = serde_json::from_str(&serialized).unwrap();
 
         // Verify the type is correct
-        assert!(format!("{:?}", deserialized).contains("OpenDALFsStorageFactory"));
+        assert!(format!("{deserialized:?}").contains("OpenDALFsStorageFactory"));
     }
 }
