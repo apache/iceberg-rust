@@ -17,6 +17,7 @@
 
 //! Conversion between Iceberg and Arrow schema
 
+mod id_assigner;
 mod schema;
 pub use schema::*;
 
