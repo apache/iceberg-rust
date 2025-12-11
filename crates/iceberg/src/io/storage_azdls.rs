@@ -120,8 +120,6 @@ pub(crate) fn azdls_create_operator<'a>(
     Ok((op, relative_path))
 }
 
-/// Azure Storage scheme variants.
-///
 /// Note that `abf[s]` and `wasb[s]` variants have different implications:
 /// - `abfs[s]` is used to refer to files in ADLS Gen2, backed by blob storage;
 ///   paths are expected to contain the `dfs` storage service.
