@@ -182,7 +182,9 @@ static CHANGE_TYPE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
             RESERVED_COL_NAME_CHANGE_TYPE,
             Type::Primitive(PrimitiveType::String),
         )
-        .with_doc("The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)"),
+        .with_doc(
+            "The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)",
+        ),
     )
 });
 
