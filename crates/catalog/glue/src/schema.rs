@@ -164,6 +164,12 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Double => "double".to_string(),
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
+            PrimitiveType::Timestamptz => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from ({p:?}) is not supported"),
+                ))
+            }
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
             PrimitiveType::TimestamptzNs => "timestamptz_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
@@ -172,12 +178,6 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
-            }
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "Conversion from 'Timestamptz' is not supported",
-                ));
             }
         };
 
