@@ -21,6 +21,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
+use crate::metadata_columns;
 use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
 use crate::{Error, ErrorKind};
 
@@ -245,8 +246,19 @@ struct BytesEntry {
 fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32, Datum>, Error> {
     let mut m = HashMap::with_capacity(v.len());
     for entry in v {
-        // We ignore the entry if the field is not found in the schema, due to schema evolution.
-        if let Some(field) = schema.field_by_id(entry.key) {
+        // First try to find the field in the schema, or check if it's a reserved metadata field
+        let field_opt = schema.field_by_id(entry.key);
+        let metadata_field;
+        let field = if let Some(f) = field_opt {
+            Some(f)
+        } else if let Ok(f) = metadata_columns::get_metadata_field(entry.key) {
+            metadata_field = f;
+            Some(&metadata_field)
+        } else {
+            None
+        };
+
+        if let Some(field) = field {
             let data_type = field
                 .field_type
                 .as_primitive_type()
@@ -259,6 +271,7 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
                 .clone();
             m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
         }
+        // We ignore the entry if the field is not found in schema or metadata columns (schema evolution).
     }
     Ok(m)
 }
@@ -589,5 +602,36 @@ mod tests {
         assert_eq!(data_file.record_count, 500);
         assert_eq!(data_file.file_size_in_bytes, 2048);
         assert_eq!(data_file.partition_spec_id, 0);
+    }
+
+    #[test]
+    fn test_parse_bytes_entry_with_metadata_column() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_POS;
+        use crate::spec::manifest::_serde::{BytesEntry, parse_bytes_entry};
+
+        // Create a minimal schema that doesn't include the _pos metadata column
+        let test_schema = schema();
+
+        // Create a BytesEntry with the _pos field ID (reserved metadata field)
+        // The _pos field is a Long (i64) in the metadata column definition
+        let pos_value: i64 = 42;
+        let bytes_entry = BytesEntry {
+            key: RESERVED_FIELD_ID_POS,
+            value: serde_bytes::ByteBuf::from(pos_value.to_le_bytes().to_vec()),
+        };
+
+        // Parse the bytes entry - should use metadata column definition for _pos
+        let result = parse_bytes_entry(vec![bytes_entry], &test_schema).unwrap();
+
+        // Verify that the _pos field was parsed correctly using metadata column definition
+        assert!(
+            result.contains_key(&RESERVED_FIELD_ID_POS),
+            "_pos metadata field should be parsed"
+        );
+        assert_eq!(
+            result.get(&RESERVED_FIELD_ID_POS),
+            Some(&Datum::long(pos_value)),
+            "_pos should be parsed as long with correct value"
+        );
     }
 }

@@ -32,11 +32,68 @@ use crate::{Error, ErrorKind, Result};
 /// Reserved field ID for the file path (_file) column per Iceberg spec
 pub const RESERVED_FIELD_ID_FILE: i32 = i32::MAX - 1;
 
+/// Reserved field ID for the position (_pos) column per Iceberg spec
+pub const RESERVED_FIELD_ID_POS: i32 = i32::MAX - 2;
+
+/// Reserved field ID for the deleted (_deleted) column per Iceberg spec
+pub const RESERVED_FIELD_ID_DELETED: i32 = i32::MAX - 3;
+
+/// Reserved field ID for the spec ID (_spec_id) column per Iceberg spec
+pub const RESERVED_FIELD_ID_SPEC_ID: i32 = i32::MAX - 4;
+
+/// Reserved field ID for the file path in position delete files
+pub const RESERVED_FIELD_ID_DELETE_FILE_PATH: i32 = i32::MAX - 101;
+
+/// Reserved field ID for the position in position delete files
+pub const RESERVED_FIELD_ID_DELETE_FILE_POS: i32 = i32::MAX - 102;
+
+/// Reserved field ID for the change type (_change_type) column per Iceberg spec
+pub const RESERVED_FIELD_ID_CHANGE_TYPE: i32 = i32::MAX - 104;
+
+/// Reserved field ID for the change ordinal (_change_ordinal) column per Iceberg spec
+pub const RESERVED_FIELD_ID_CHANGE_ORDINAL: i32 = i32::MAX - 105;
+
+/// Reserved field ID for the commit snapshot ID (_commit_snapshot_id) column per Iceberg spec
+pub const RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID: i32 = i32::MAX - 106;
+
+/// Reserved field ID for the row ID (_row_id) column per Iceberg spec
+pub const RESERVED_FIELD_ID_ROW_ID: i32 = i32::MAX - 107;
+
+/// Reserved field ID for the last updated sequence number (_last_updated_sequence_number) column per Iceberg spec
+pub const RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER: i32 = i32::MAX - 108;
+
 /// Reserved column name for the file path metadata column
 pub const RESERVED_COL_NAME_FILE: &str = "_file";
 
-/// Documentation for the _file metadata column
-pub const RESERVED_COL_DOC_FILE: &str = "Path of the file in which a row is stored";
+/// Reserved column name for the position metadata column
+pub const RESERVED_COL_NAME_POS: &str = "_pos";
+
+/// Reserved column name for the deleted metadata column
+pub const RESERVED_COL_NAME_DELETED: &str = "_deleted";
+
+/// Reserved column name for the spec ID metadata column
+pub const RESERVED_COL_NAME_SPEC_ID: &str = "_spec_id";
+
+/// Reserved column name for the file path in position delete files
+pub const RESERVED_COL_NAME_DELETE_FILE_PATH: &str = "file_path";
+
+/// Reserved column name for the position in position delete files
+pub const RESERVED_COL_NAME_DELETE_FILE_POS: &str = "pos";
+
+/// Reserved column name for the change type metadata column
+pub const RESERVED_COL_NAME_CHANGE_TYPE: &str = "_change_type";
+
+/// Reserved column name for the change ordinal metadata column
+pub const RESERVED_COL_NAME_CHANGE_ORDINAL: &str = "_change_ordinal";
+
+/// Reserved column name for the commit snapshot ID metadata column
+pub const RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID: &str = "_commit_snapshot_id";
+
+/// Reserved column name for the row ID metadata column
+pub const RESERVED_COL_NAME_ROW_ID: &str = "_row_id";
+
+/// Reserved column name for the last updated sequence number metadata column
+pub const RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER: &str = "_last_updated_sequence_number";
 
 /// Lazy-initialized Iceberg field definition for the _file metadata column.
 /// This field represents the file path as a required string field.
@@ -47,7 +104,137 @@ static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
             RESERVED_COL_NAME_FILE,
             Type::Primitive(PrimitiveType::String),
         )
-        .with_doc(RESERVED_COL_DOC_FILE),
+        .with_doc("Path of the file in which a row is stored"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _pos metadata column.
+/// This field represents the ordinal position of a row in the source data file.
+static POS_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_POS,
+            RESERVED_COL_NAME_POS,
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .with_doc("Ordinal position of a row in the source data file"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _deleted metadata column.
+/// This field indicates whether a row has been deleted.
+static DELETED_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_DELETED,
+            RESERVED_COL_NAME_DELETED,
+            Type::Primitive(PrimitiveType::Boolean),
+        )
+        .with_doc("Whether the row has been deleted"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _spec_id metadata column.
+/// This field represents the spec ID used to track the file containing a row.
+static SPEC_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_SPEC_ID,
+            RESERVED_COL_NAME_SPEC_ID,
+            Type::Primitive(PrimitiveType::Int),
+        )
+        .with_doc("Spec ID used to track the file containing a row"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the file_path column in position delete files.
+/// This field represents the path of a file in position-based delete files.
+static DELETE_FILE_PATH_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+            RESERVED_COL_NAME_DELETE_FILE_PATH,
+            Type::Primitive(PrimitiveType::String),
+        )
+        .with_doc("Path of a file, used in position-based delete files"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the pos column in position delete files.
+/// This field represents the ordinal position of a row in position-based delete files.
+static DELETE_FILE_POS_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_DELETE_FILE_POS,
+            RESERVED_COL_NAME_DELETE_FILE_POS,
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .with_doc("Ordinal position of a row, used in position-based delete files"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _change_type metadata column.
+/// This field represents the record type in the changelog.
+static CHANGE_TYPE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_CHANGE_TYPE,
+            RESERVED_COL_NAME_CHANGE_TYPE,
+            Type::Primitive(PrimitiveType::String),
+        )
+        .with_doc("The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _change_ordinal metadata column.
+/// This field represents the order of the change.
+static CHANGE_ORDINAL_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_CHANGE_ORDINAL,
+            RESERVED_COL_NAME_CHANGE_ORDINAL,
+            Type::Primitive(PrimitiveType::Int),
+        )
+        .with_doc("The order of the change"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _commit_snapshot_id metadata column.
+/// This field represents the snapshot ID in which the change occurred.
+static COMMIT_SNAPSHOT_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID,
+            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID,
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .with_doc("The snapshot ID in which the change occurred"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _row_id metadata column.
+/// This field represents a unique long assigned for row lineage.
+static ROW_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_ROW_ID,
+            RESERVED_COL_NAME_ROW_ID,
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .with_doc("A unique long assigned for row lineage"),
+    )
+});
+
+/// Lazy-initialized Iceberg field definition for the _last_updated_sequence_number metadata column.
+/// This field represents the sequence number which last updated this row.
+static LAST_UPDATED_SEQUENCE_NUMBER_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(
+        NestedField::required(
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .with_doc("The sequence number which last updated this row"),
     )
 });
 
@@ -57,6 +244,86 @@ static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
 /// A reference to the _file field definition as an Iceberg NestedField
 pub fn file_field() -> &'static NestedFieldRef {
     &FILE_FIELD
+}
+
+/// Returns the Iceberg field definition for the _pos metadata column.
+///
+/// # Returns
+/// A reference to the _pos field definition as an Iceberg NestedField
+pub fn pos_field() -> &'static NestedFieldRef {
+    &POS_FIELD
+}
+
+/// Returns the Iceberg field definition for the _deleted metadata column.
+///
+/// # Returns
+/// A reference to the _deleted field definition as an Iceberg NestedField
+pub fn deleted_field() -> &'static NestedFieldRef {
+    &DELETED_FIELD
+}
+
+/// Returns the Iceberg field definition for the _spec_id metadata column.
+///
+/// # Returns
+/// A reference to the _spec_id field definition as an Iceberg NestedField
+pub fn spec_id_field() -> &'static NestedFieldRef {
+    &SPEC_ID_FIELD
+}
+
+/// Returns the Iceberg field definition for the file_path column in position delete files.
+///
+/// # Returns
+/// A reference to the file_path field definition as an Iceberg NestedField
+pub fn delete_file_path_field() -> &'static NestedFieldRef {
+    &DELETE_FILE_PATH_FIELD
+}
+
+/// Returns the Iceberg field definition for the pos column in position delete files.
+///
+/// # Returns
+/// A reference to the pos field definition as an Iceberg NestedField
+pub fn delete_file_pos_field() -> &'static NestedFieldRef {
+    &DELETE_FILE_POS_FIELD
+}
+
+/// Returns the Iceberg field definition for the _change_type metadata column.
+///
+/// # Returns
+/// A reference to the _change_type field definition as an Iceberg NestedField
+pub fn change_type_field() -> &'static NestedFieldRef {
+    &CHANGE_TYPE_FIELD
+}
+
+/// Returns the Iceberg field definition for the _change_ordinal metadata column.
+///
+/// # Returns
+/// A reference to the _change_ordinal field definition as an Iceberg NestedField
+pub fn change_ordinal_field() -> &'static NestedFieldRef {
+    &CHANGE_ORDINAL_FIELD
+}
+
+/// Returns the Iceberg field definition for the _commit_snapshot_id metadata column.
+///
+/// # Returns
+/// A reference to the _commit_snapshot_id field definition as an Iceberg NestedField
+pub fn commit_snapshot_id_field() -> &'static NestedFieldRef {
+    &COMMIT_SNAPSHOT_ID_FIELD
+}
+
+/// Returns the Iceberg field definition for the _row_id metadata column.
+///
+/// # Returns
+/// A reference to the _row_id field definition as an Iceberg NestedField
+pub fn row_id_field() -> &'static NestedFieldRef {
+    &ROW_ID_FIELD
+}
+
+/// Returns the Iceberg field definition for the _last_updated_sequence_number metadata column.
+///
+/// # Returns
+/// A reference to the _last_updated_sequence_number field definition as an Iceberg NestedField
+pub fn last_updated_sequence_number_field() -> &'static NestedFieldRef {
+    &LAST_UPDATED_SEQUENCE_NUMBER_FIELD
 }
 
 /// Returns the Iceberg field definition for a metadata field ID.
@@ -69,6 +336,18 @@ pub fn file_field() -> &'static NestedFieldRef {
 pub fn get_metadata_field(field_id: i32) -> Result<NestedFieldRef> {
     match field_id {
         RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_field())),
+        RESERVED_FIELD_ID_POS => Ok(Arc::clone(pos_field())),
+        RESERVED_FIELD_ID_DELETED => Ok(Arc::clone(deleted_field())),
+        RESERVED_FIELD_ID_SPEC_ID => Ok(Arc::clone(spec_id_field())),
+        RESERVED_FIELD_ID_DELETE_FILE_PATH => Ok(Arc::clone(delete_file_path_field())),
+        RESERVED_FIELD_ID_DELETE_FILE_POS => Ok(Arc::clone(delete_file_pos_field())),
+        RESERVED_FIELD_ID_CHANGE_TYPE => Ok(Arc::clone(change_type_field())),
+        RESERVED_FIELD_ID_CHANGE_ORDINAL => Ok(Arc::clone(change_ordinal_field())),
+        RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID => Ok(Arc::clone(commit_snapshot_id_field())),
+        RESERVED_FIELD_ID_ROW_ID => Ok(Arc::clone(row_id_field())),
+        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER => {
+            Ok(Arc::clone(last_updated_sequence_number_field()))
+        }
         _ if is_metadata_field(field_id) => {
             // Future metadata fields can be added here
             Err(Error::new(
@@ -95,6 +374,18 @@ pub fn get_metadata_field(field_id: i32) -> Result<NestedFieldRef> {
 pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
     match column_name {
         RESERVED_COL_NAME_FILE => Ok(RESERVED_FIELD_ID_FILE),
+        RESERVED_COL_NAME_POS => Ok(RESERVED_FIELD_ID_POS),
+        RESERVED_COL_NAME_DELETED => Ok(RESERVED_FIELD_ID_DELETED),
+        RESERVED_COL_NAME_SPEC_ID => Ok(RESERVED_FIELD_ID_SPEC_ID),
+        RESERVED_COL_NAME_DELETE_FILE_PATH => Ok(RESERVED_FIELD_ID_DELETE_FILE_PATH),
+        RESERVED_COL_NAME_DELETE_FILE_POS => Ok(RESERVED_FIELD_ID_DELETE_FILE_POS),
+        RESERVED_COL_NAME_CHANGE_TYPE => Ok(RESERVED_FIELD_ID_CHANGE_TYPE),
+        RESERVED_COL_NAME_CHANGE_ORDINAL => Ok(RESERVED_FIELD_ID_CHANGE_ORDINAL),
+        RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID => Ok(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID),
+        RESERVED_COL_NAME_ROW_ID => Ok(RESERVED_FIELD_ID_ROW_ID),
+        RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER => {
+            Ok(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+        }
         _ => Err(Error::new(
             ErrorKind::Unexpected,
             format!("Unknown/unsupported metadata column name: {column_name}"),
@@ -110,8 +401,20 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
 /// # Returns
 /// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
 pub fn is_metadata_field(field_id: i32) -> bool {
-    field_id == RESERVED_FIELD_ID_FILE
-    // Additional metadata fields can be checked here in the future
+    matches!(
+        field_id,
+        RESERVED_FIELD_ID_FILE
+            | RESERVED_FIELD_ID_POS
+            | RESERVED_FIELD_ID_DELETED
+            | RESERVED_FIELD_ID_SPEC_ID
+            | RESERVED_FIELD_ID_DELETE_FILE_PATH
+            | RESERVED_FIELD_ID_DELETE_FILE_POS
+            | RESERVED_FIELD_ID_CHANGE_TYPE
+            | RESERVED_FIELD_ID_CHANGE_ORDINAL
+            | RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID
+            | RESERVED_FIELD_ID_ROW_ID
+            | RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
+    )
 }
 
 /// Checks if a column name is a metadata column.
