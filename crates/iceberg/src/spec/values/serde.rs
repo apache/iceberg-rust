@@ -675,14 +675,15 @@ pub(crate) mod _serde {
                         let mut value_by_name = HashMap::new();
 
                         for (field_name, value) in required.into_iter() {
-                            let field = struct_ty
-                                .field_by_name(field_name.as_str())
-                                .ok_or_else(|| {
-                                    invalid_err_with_reason(
-                                        "record",
-                                        &format!("field {} is not exist", &field_name),
-                                    )
-                                })?;
+                            let field =
+                                struct_ty
+                                    .field_by_name(field_name.as_str())
+                                    .ok_or_else(|| {
+                                        invalid_err_with_reason(
+                                            "record",
+                                            &format!("field {} is not exist", &field_name),
+                                        )
+                                    })?;
                             let value = value.try_into(&field.field_type)?;
                             if value.is_none() && field.required {
                                 return Err(invalid_err_with_reason(
@@ -694,14 +695,15 @@ pub(crate) mod _serde {
                         }
 
                         for (field_name, value) in optional.into_iter() {
-                            let field = struct_ty
-                                .field_by_name(field_name.as_str())
-                                .ok_or_else(|| {
-                                    invalid_err_with_reason(
-                                        "record",
-                                        &format!("field {} is not exist", &field_name),
-                                    )
-                                })?;
+                            let field =
+                                struct_ty
+                                    .field_by_name(field_name.as_str())
+                                    .ok_or_else(|| {
+                                        invalid_err_with_reason(
+                                            "record",
+                                            &format!("field {} is not exist", &field_name),
+                                        )
+                                    })?;
                             let value = match value {
                                 Some(v) => v.try_into(&field.field_type)?,
                                 None => None,
