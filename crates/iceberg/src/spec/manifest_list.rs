@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
-use apache_avro::{Reader, Writer, from_value};
+use apache_avro::{Codec, Reader, Writer, from_value};
 use bytes::Bytes;
 pub use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
@@ -31,7 +31,6 @@ use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
-use crate::spec::avro_util::CompressionSettings;
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
 use crate::spec::manifest_list::_serde::ManifestFileV3;
 use crate::{Error, ErrorKind};
@@ -122,7 +121,7 @@ impl ManifestListWriter {
         output_file: OutputFile,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
-        compression_settings: CompressionSettings,
+        compression: Codec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -141,7 +140,7 @@ impl ManifestListWriter {
             0,
             snapshot_id,
             None,
-            compression_settings,
+            compression,
         )
     }
 
@@ -151,7 +150,7 @@ impl ManifestListWriter {
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
-        compression_settings: CompressionSettings,
+        compression: Codec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -171,7 +170,7 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             None,
-            compression_settings,
+            compression,
         )
     }
 
@@ -182,7 +181,7 @@ impl ManifestListWriter {
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
         first_row_id: Option<u64>, // Always None for delete manifests
-        compression_settings: CompressionSettings,
+        compression: Codec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -208,7 +207,7 @@ impl ManifestListWriter {
             sequence_number,
             snapshot_id,
             first_row_id,
-            compression_settings,
+            compression,
         )
     }
 
@@ -219,7 +218,7 @@ impl ManifestListWriter {
         sequence_number: i64,
         snapshot_id: i64,
         first_row_id: Option<u64>,
-        compression: CompressionSettings,
+        compression: Codec,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -227,10 +226,7 @@ impl ManifestListWriter {
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
 
-        // Use CompressionSettings to determine compression codec
-        let codec = compression.to_codec();
-
-        let mut avro_writer = Writer::with_codec(avro_schema, Vec::new(), codec);
+        let mut avro_writer = Writer::with_codec(avro_schema, Vec::new(), compression);
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
@@ -1381,11 +1377,13 @@ mod test {
     use tempfile::TempDir;
 
     use super::_serde::ManifestListV2;
+    use apache_avro::Codec;
+
     use crate::io::FileIOBuilder;
     use crate::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
     use crate::spec::{
-        CompressionSettings, Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
-        ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER,
+        Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
+        UNASSIGNED_SEQUENCE_NUMBER,
     };
 
     #[tokio::test]
@@ -1423,7 +1421,7 @@ mod test {
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer
@@ -1497,7 +1495,7 @@ mod test {
             1646658105718557341,
             Some(1646658105718557341),
             1,
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer
@@ -1572,7 +1570,7 @@ mod test {
             Some(377075049360453639),
             1,
             Some(10),
-            CompressionSettings::default(),
+            Codec::Null,
         );
 
         writer
@@ -1713,7 +1711,7 @@ mod test {
             output_file,
             1646658105718557341,
             Some(0),
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1766,7 +1764,7 @@ mod test {
             snapshot_id,
             Some(0),
             seq_num,
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1821,7 +1819,7 @@ mod test {
             Some(0),
             seq_num,
             Some(10),
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1873,7 +1871,7 @@ mod test {
             output_file,
             1646658105718557341,
             Some(0),
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1923,7 +1921,7 @@ mod test {
             output_file,
             1646658105718557341,
             Some(0),
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1976,7 +1974,7 @@ mod test {
             snapshot_id,
             Some(0),
             seq_num,
-            CompressionSettings::default(),
+            Codec::Null,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -2144,7 +2142,7 @@ mod test {
             1646658105718557341,
             Some(0),
             1,
-            CompressionSettings::new("uncompressed".to_string(), None),
+            Codec::Null,
         );
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -2159,7 +2157,10 @@ mod test {
             .to_str()
             .unwrap()
             .to_string();
-        let compression = CompressionSettings::new("gzip".to_string(), Some(9));
+        use apache_avro::DeflateSettings;
+        use miniz_oxide::deflate::CompressionLevel;
+
+        let compression = Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression));
         let mut writer = ManifestListWriter::v2(
             file_io.new_output(&compressed_path).unwrap(),
             1646658105718557341,

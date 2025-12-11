@@ -567,6 +567,7 @@ pub mod tests {
     use minijinja::{AutoEscape, Environment, context};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
+    use apache_avro::Codec;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -577,9 +578,9 @@ pub mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::scan::FileScanTask;
     use crate::spec::{
-        CompressionSettings, DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal,
-        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField,
-        PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
 
@@ -749,7 +750,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
-                CompressionSettings::default(),
+                Codec::Null,
             )
             .build_v2_data();
             writer
@@ -827,7 +828,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                CompressionSettings::default(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -963,7 +964,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
-                CompressionSettings::default(),
+                Codec::Null,
             )
             .build_v2_data();
 
@@ -1048,7 +1049,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                CompressionSettings::default(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())

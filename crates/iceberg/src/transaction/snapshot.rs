@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    CompressionSettings, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
-    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -205,10 +205,6 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let compression = CompressionSettings::new(
-            table_props.avro_compression_codec,
-            table_props.avro_compression_level,
-        );
 
         let builder = ManifestWriterBuilder::new(
             output_file,
@@ -220,7 +216,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-            compression,
+            table_props.avro_compression_codec.clone(),
         );
 
         match self.table.metadata().format_version() {
@@ -413,10 +409,8 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .with_source(e)
             })?;
-        let compression = CompressionSettings::new(
-            table_props.avro_compression_codec,
-            table_props.avro_compression_level,
-        );
+
+        let compression = table_props.avro_compression_codec.clone();
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
@@ -425,7 +419,7 @@ impl<'a> SnapshotProducer<'a> {
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-                compression,
+                compression.clone(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
@@ -434,7 +428,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-                compression,
+                compression.clone(),
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 self.table
@@ -444,7 +438,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
-                compression,
+                compression.clone(),
             ),
         };
 
