@@ -35,7 +35,8 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor, StructType, Type
+    Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
+    PrimitiveType, Schema, SchemaVisitor, StructType, Type,
 };
 use crate::{Error, ErrorKind};
 
@@ -299,7 +300,11 @@ impl ArrowSchemaConverter {
         }
     }
 
-    fn convert_fields(&mut self, fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
+    fn convert_fields(
+        &mut self,
+        fields: &Fields,
+        field_results: &[Type],
+    ) -> Result<Vec<NestedFieldRef>> {
         let mut results = Vec::with_capacity(fields.len());
         for i in 0..fields.len() {
             let field = &fields[i];
