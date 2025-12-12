@@ -246,16 +246,8 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
     let mut m = HashMap::with_capacity(v.len());
     for entry in v {
         // First try to find the field in the schema, or check if it's a reserved metadata field
-        let field_opt = schema.field_by_id(entry.key);
-        let metadata_field;
-        let field = if let Some(f) = field_opt {
-            Some(f)
-        } else if let Ok(f) = metadata_columns::get_metadata_field(entry.key) {
-            metadata_field = f;
-            Some(&metadata_field)
-        } else {
-            None
-        };
+        let field = schema.field_by_id(entry.key)
+            .or_else(|| metadata_columns::get_metadata_field(entry.key).ok());
 
         if let Some(field) = field {
             let data_type = field
