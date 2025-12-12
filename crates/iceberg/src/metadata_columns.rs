@@ -335,20 +335,20 @@ pub fn last_updated_sequence_number_field() -> &'static NestedFieldRef {
 ///
 /// # Returns
 /// The Iceberg field definition for the metadata column, or an error if not a metadata field
-pub fn get_metadata_field(field_id: i32) -> Result<NestedFieldRef> {
+pub fn get_metadata_field(field_id: i32) -> Result<&'static NestedFieldRef> {
     match field_id {
-        RESERVED_FIELD_ID_FILE => Ok(Arc::clone(file_field())),
-        RESERVED_FIELD_ID_POS => Ok(Arc::clone(pos_field())),
-        RESERVED_FIELD_ID_DELETED => Ok(Arc::clone(deleted_field())),
-        RESERVED_FIELD_ID_SPEC_ID => Ok(Arc::clone(spec_id_field())),
-        RESERVED_FIELD_ID_DELETE_FILE_PATH => Ok(Arc::clone(delete_file_path_field())),
-        RESERVED_FIELD_ID_DELETE_FILE_POS => Ok(Arc::clone(delete_file_pos_field())),
-        RESERVED_FIELD_ID_CHANGE_TYPE => Ok(Arc::clone(change_type_field())),
-        RESERVED_FIELD_ID_CHANGE_ORDINAL => Ok(Arc::clone(change_ordinal_field())),
-        RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID => Ok(Arc::clone(commit_snapshot_id_field())),
-        RESERVED_FIELD_ID_ROW_ID => Ok(Arc::clone(row_id_field())),
+        RESERVED_FIELD_ID_FILE => Ok(file_field()),
+        RESERVED_FIELD_ID_POS => Ok(pos_field()),
+        RESERVED_FIELD_ID_DELETED => Ok(deleted_field()),
+        RESERVED_FIELD_ID_SPEC_ID => Ok(spec_id_field()),
+        RESERVED_FIELD_ID_DELETE_FILE_PATH => Ok(delete_file_path_field()),
+        RESERVED_FIELD_ID_DELETE_FILE_POS => Ok(delete_file_pos_field()),
+        RESERVED_FIELD_ID_CHANGE_TYPE => Ok(change_type_field()),
+        RESERVED_FIELD_ID_CHANGE_ORDINAL => Ok(change_ordinal_field()),
+        RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID => Ok(commit_snapshot_id_field()),
+        RESERVED_FIELD_ID_ROW_ID => Ok(row_id_field()),
         RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER => {
-            Ok(Arc::clone(last_updated_sequence_number_field()))
+            Ok(last_updated_sequence_number_field())
         }
         _ if is_metadata_field(field_id) => {
             // Future metadata fields can be added here
