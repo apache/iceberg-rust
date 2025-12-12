@@ -102,8 +102,8 @@ impl SchemaBuilder {
     /// Reassignment starts from the field-id specified in `start_from` (inclusive).
     ///
     /// All specified aliases and identifier fields will be updated to the new field-ids.
-    pub(crate) fn with_reassigned_field_ids(mut self, start_from: u32) -> Self {
-        self.reassign_field_ids_from = Some(start_from.try_into().unwrap_or(i32::MAX));
+    pub(crate) fn with_reassigned_field_ids(mut self, start_from: i32) -> Self {
+        self.reassign_field_ids_from = Some(start_from);
         self
     }
 
@@ -127,6 +127,22 @@ impl SchemaBuilder {
 
     /// Builds the schema.
     pub fn build(self) -> Result<Schema> {
+        // If field IDs need to be reassigned, do it first before validation
+        if let Some(start_from) = self.reassign_field_ids_from {
+            let mut id_reassigner = ReassignFieldIds::new(start_from);
+            let new_fields = id_reassigner.reassign_field_ids(self.fields)?;
+            let new_identifier_field_ids =
+                id_reassigner.apply_to_identifier_fields(self.identifier_field_ids)?;
+            let new_alias_to_id = id_reassigner.apply_to_aliases(self.alias_to_id)?;
+
+            return Schema::builder()
+                .with_schema_id(self.schema_id)
+                .with_fields(new_fields)
+                .with_identifier_field_ids(new_identifier_field_ids)
+                .with_alias(new_alias_to_id)
+                .build();
+        }
+
         let field_id_to_accessor = self.build_accessors();
 
         let r#struct = StructType::new(self.fields);
@@ -151,7 +167,7 @@ impl SchemaBuilder {
 
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
-        let mut schema = Schema {
+        Ok(Schema {
             r#struct,
             schema_id: self.schema_id,
             highest_field_id,
@@ -164,24 +180,7 @@ impl SchemaBuilder {
             id_to_name,
 
             field_id_to_accessor,
-        };
-
-        if let Some(start_from) = self.reassign_field_ids_from {
-            let mut id_reassigner = ReassignFieldIds::new(start_from);
-            let new_fields = id_reassigner.reassign_field_ids(schema.r#struct.fields().to_vec())?;
-            let new_identifier_field_ids =
-                id_reassigner.apply_to_identifier_fields(schema.identifier_field_ids)?;
-            let new_alias_to_id = id_reassigner.apply_to_aliases(schema.alias_to_id.clone())?;
-
-            schema = Schema::builder()
-                .with_schema_id(schema.schema_id)
-                .with_fields(new_fields)
-                .with_identifier_field_ids(new_identifier_field_ids)
-                .with_alias(new_alias_to_id)
-                .build()?;
-        }
-
-        Ok(schema)
+        })
     }
 
     fn build_accessors(&self) -> HashMap<i32, Arc<StructAccessor>> {

@@ -35,8 +35,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
+    Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor, StructType, Type
 };
 use crate::{Error, ErrorKind};
 
@@ -221,6 +220,19 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     visit_schema(schema, &mut visitor)
 }
 
+/// Convert Arrow schema to Iceberg schema with automatically assigned field IDs.
+///
+/// Unlike [`arrow_schema_to_schema`], this function does not require field IDs in the Arrow
+/// schema metadata. Instead, it automatically assigns unique field IDs starting from 1,
+/// following Iceberg's field ID assignment rules.
+///
+/// This is useful when converting Arrow schemas that don't originate from Iceberg tables,
+/// such as schemas from DataFusion or other Arrow-based systems.
+pub fn arrow_schema_to_schema_auto_assign_ids(schema: &ArrowSchema) -> Result<Schema> {
+    let mut visitor = ArrowSchemaConverter::new_with_field_ids_from(FIRST_FIELD_ID);
+    visit_schema(schema, &mut visitor)
+}
+
 /// Convert Arrow type to iceberg type.
 pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
     let mut visitor = ArrowSchemaConverter::new();
@@ -229,7 +241,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-pub(super) fn get_field_id(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -253,19 +265,46 @@ fn get_field_doc(field: &Field) -> Option<String> {
     None
 }
 
-struct ArrowSchemaConverter;
+struct ArrowSchemaConverter {
+    // If some, then schema builder will re-assign field ids after the field
+    reassign_field_ids_from: Option<i32>,
+    // Counter for generating unique temporary field IDs when reassigning
+    temp_field_id_counter: i32,
+}
 
 impl ArrowSchemaConverter {
     fn new() -> Self {
-        Self {}
+        Self {
+            reassign_field_ids_from: None,
+            temp_field_id_counter: 0,
+        }
     }
 
-    fn convert_fields(fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
+    fn new_with_field_ids_from(start_from: i32) -> Self {
+        Self {
+            reassign_field_ids_from: Some(start_from),
+            temp_field_id_counter: 0,
+        }
+    }
+
+    fn get_field_id(&mut self, field: &Field) -> Result<i32> {
+        if self.reassign_field_ids_from.is_some() {
+            // Field IDs will be reassigned later when building the schema.
+            // Assign unique temporary IDs to avoid duplicate ID errors during schema construction.
+            let temp_id = self.temp_field_id_counter;
+            self.temp_field_id_counter += 1;
+            Ok(temp_id)
+        } else {
+            get_field_id_from_metadata(field)
+        }
+    }
+
+    fn convert_fields(&mut self, fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
         let mut results = Vec::with_capacity(fields.len());
         for i in 0..fields.len() {
             let field = &fields[i];
             let field_type = &field_results[i];
-            let id = get_field_id(field)?;
+            let id = self.get_field_id(field)?;
             let doc = get_field_doc(field);
             let nested_field = NestedField {
                 id,
@@ -287,13 +326,16 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
     type U = Schema;
 
     fn schema(&mut self, schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
-        let fields = Self::convert_fields(schema.fields(), &values)?;
-        let builder = Schema::builder().with_fields(fields);
+        let fields = self.convert_fields(schema.fields(), &values)?;
+        let mut builder = Schema::builder().with_fields(fields);
+        if let Some(start_from) = self.reassign_field_ids_from {
+            builder = builder.with_reassigned_field_ids(start_from)
+        }
         builder.build()
     }
 
     fn r#struct(&mut self, fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
-        let fields = Self::convert_fields(fields, &results)?;
+        let fields = self.convert_fields(fields, &results)?;
         Ok(Type::Struct(StructType::new(fields)))
     }
 
@@ -310,7 +352,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
-        let id = get_field_id(element_field)?;
+        let id = self.get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
             NestedField::list_element(id, value.clone(), !element_field.is_nullable());
@@ -335,7 +377,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     let key_field = &fields[0];
                     let value_field = &fields[1];
 
-                    let key_id = get_field_id(key_field)?;
+                    let key_id = self.get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
                     let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
                     if let Some(doc) = key_doc {
@@ -343,7 +385,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                     }
                     let key_field = Arc::new(key_field);
 
-                    let value_id = get_field_id(value_field)?;
+                    let value_id = self.get_field_id(value_field)?;
                     let value_doc = get_field_doc(value_field);
                     let mut value_field = NestedField::map_value_element(
                         value_id,
@@ -1931,5 +1973,196 @@ mod tests {
             assert!(is_scalar);
             assert_eq!(array.value(0), [66u8; 16]);
         }
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_with_field_id() {
+        // Create a complex Arrow schema without field ID metadata
+        // Including: primitives, list, nested struct, map, and nested list of structs
+
+        // Nested struct: address { street: string, city: string, zip: int }
+        let address_fields = Fields::from(vec![
+            Field::new("street", DataType::Utf8, true),
+            Field::new("city", DataType::Utf8, false),
+            Field::new("zip", DataType::Int32, true),
+        ]);
+
+        // Map: attributes { key: string, value: string }
+        let map_struct = DataType::Struct(Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let map_type = DataType::Map(
+            Arc::new(Field::new(DEFAULT_MAP_FIELD_NAME, map_struct, false)),
+            false,
+        );
+
+        // Nested list of structs: orders [{ order_id: long, amount: double }]
+        let order_struct = DataType::Struct(Fields::from(vec![
+            Field::new("order_id", DataType::Int64, false),
+            Field::new("amount", DataType::Float64, false),
+        ]));
+
+        let arrow_schema = ArrowSchema::new(vec![
+            // Primitive fields
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("price", DataType::Decimal128(10, 2), false),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                true,
+            ),
+            // Simple list
+            Field::new(
+                "tags",
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                true,
+            ),
+            // Nested struct
+            Field::new("address", DataType::Struct(address_fields), true),
+            // Map type
+            Field::new("attributes", map_type, true),
+            // List of structs
+            Field::new(
+                "orders",
+                DataType::List(Arc::new(Field::new("element", order_struct, true))),
+                true,
+            ),
+        ]);
+
+        let schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
+
+        // Verify top-level field count
+        let fields = schema.as_struct().fields();
+        assert_eq!(fields.len(), 8);
+
+        // Check primitive fields
+        assert_eq!(fields[0].name, "id");
+        assert!(matches!(
+            fields[0].field_type.as_ref(),
+            Type::Primitive(PrimitiveType::Long)
+        ));
+        assert!(fields[0].required);
+
+        assert_eq!(fields[1].name, "name");
+        assert!(matches!(
+            fields[1].field_type.as_ref(),
+            Type::Primitive(PrimitiveType::String)
+        ));
+
+        assert_eq!(fields[2].name, "price");
+        assert!(matches!(
+            fields[2].field_type.as_ref(),
+            Type::Primitive(PrimitiveType::Decimal { .. })
+        ));
+
+        assert_eq!(fields[3].name, "created_at");
+        assert!(matches!(
+            fields[3].field_type.as_ref(),
+            Type::Primitive(PrimitiveType::Timestamptz)
+        ));
+
+        // Check simple list
+        assert_eq!(fields[4].name, "tags");
+        assert!(matches!(fields[4].field_type.as_ref(), Type::List(_)));
+
+        // Check nested struct
+        assert_eq!(fields[5].name, "address");
+        if let Type::Struct(struct_type) = fields[5].field_type.as_ref() {
+            assert_eq!(struct_type.fields().len(), 3);
+            assert_eq!(struct_type.fields()[0].name, "street");
+            assert_eq!(struct_type.fields()[1].name, "city");
+            assert_eq!(struct_type.fields()[2].name, "zip");
+        } else {
+            panic!("Expected struct type for address field");
+        }
+
+        // Check map type
+        assert_eq!(fields[6].name, "attributes");
+        if let Type::Map(map_type) = fields[6].field_type.as_ref() {
+            assert!(matches!(
+                map_type.key_field.field_type.as_ref(),
+                Type::Primitive(PrimitiveType::String)
+            ));
+            assert!(matches!(
+                map_type.value_field.field_type.as_ref(),
+                Type::Primitive(PrimitiveType::String)
+            ));
+        } else {
+            panic!("Expected map type for attributes field");
+        }
+
+        // Check list of structs
+        assert_eq!(fields[7].name, "orders");
+        if let Type::List(list_type) = fields[7].field_type.as_ref() {
+            if let Type::Struct(order_struct) = list_type.element_field.field_type.as_ref() {
+                assert_eq!(order_struct.fields().len(), 2);
+                assert_eq!(order_struct.fields()[0].name, "order_id");
+                assert_eq!(order_struct.fields()[1].name, "amount");
+            } else {
+                panic!("Expected struct type for orders list element");
+            }
+        } else {
+            panic!("Expected list type for orders field");
+        }
+
+        // Collect ALL field IDs (including deeply nested ones) and verify uniqueness
+        fn collect_field_ids(field_type: &Type, ids: &mut Vec<i32>) {
+            match field_type {
+                Type::Struct(s) => {
+                    for f in s.fields() {
+                        ids.push(f.id);
+                        collect_field_ids(f.field_type.as_ref(), ids);
+                    }
+                }
+                Type::List(l) => {
+                    ids.push(l.element_field.id);
+                    collect_field_ids(l.element_field.field_type.as_ref(), ids);
+                }
+                Type::Map(m) => {
+                    ids.push(m.key_field.id);
+                    ids.push(m.value_field.id);
+                    collect_field_ids(m.key_field.field_type.as_ref(), ids);
+                    collect_field_ids(m.value_field.field_type.as_ref(), ids);
+                }
+                Type::Primitive(_) => {}
+            }
+        }
+
+        let mut all_field_ids: Vec<i32> = fields.iter().map(|f| f.id).collect();
+        for field in fields {
+            collect_field_ids(field.field_type.as_ref(), &mut all_field_ids);
+        }
+
+        // All IDs should be positive
+        assert!(
+            all_field_ids.iter().all(|&id| id > 0),
+            "All field IDs should be positive, got: {:?}",
+            all_field_ids
+        );
+
+        // All IDs should be unique
+        let unique_ids: std::collections::HashSet<_> = all_field_ids.iter().collect();
+        assert_eq!(
+            unique_ids.len(),
+            all_field_ids.len(),
+            "Field IDs should be unique, got duplicates in: {:?}",
+            all_field_ids
+        );
+
+        // Verify we have the expected number of fields (8 top-level + nested)
+        // Top-level: 8
+        // tags list element: 1
+        // address struct fields: 3
+        // attributes map key + value: 2
+        // orders list element: 1, order struct fields: 2
+        // Total: 8 + 1 + 3 + 2 + 1 + 2 = 17
+        assert_eq!(
+            all_field_ids.len(),
+            17,
+            "Expected 17 total fields, got {}",
+            all_field_ids.len()
+        );
     }
 }
