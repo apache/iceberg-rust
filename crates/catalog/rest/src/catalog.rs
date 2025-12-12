@@ -37,8 +37,10 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
-use crate::client::{
-    HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
+use crate::client::{HttpClient, deserialize_catalog_response, handle_error_response};
+use crate::error_handlers::{
+    DefaultErrorHandler, DropNamespaceErrorHandler, NamespaceErrorHandler, TableCommitHandler,
+    TableErrorHandler,
 };
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
@@ -378,7 +380,7 @@ impl RestCatalog {
 
         match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await,
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &DefaultErrorHandler).await),
         }
     }
 
@@ -473,13 +475,7 @@ impl Catalog for RestCatalog {
                         None => break,
                     }
                 }
-                StatusCode::NOT_FOUND => {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "The parent parameter of the namespace provided does not exist",
-                    ));
-                }
-                _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+                _ => return Err(handle_error_response(http_response, &NamespaceErrorHandler).await),
             }
         }
 
@@ -510,11 +506,7 @@ impl Catalog for RestCatalog {
                     deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
                 Ok(Namespace::from(response))
             }
-            StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to create a namespace that already exists",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &NamespaceErrorHandler).await),
         }
     }
 
@@ -534,11 +526,7 @@ impl Catalog for RestCatalog {
                     deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
                 Ok(Namespace::from(response))
             }
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to get a namespace that does not exist",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &NamespaceErrorHandler).await),
         }
     }
 
@@ -555,7 +543,7 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &NamespaceErrorHandler).await),
         }
     }
 
@@ -582,11 +570,7 @@ impl Catalog for RestCatalog {
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to drop a namespace that does not exist",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &DropNamespaceErrorHandler).await),
         }
     }
 
@@ -617,13 +601,7 @@ impl Catalog for RestCatalog {
                         None => break,
                     }
                 }
-                StatusCode::NOT_FOUND => {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "Tried to list tables of a namespace that does not exist",
-                    ));
-                }
-                _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+                _ => return Err(handle_error_response(http_response, &TableErrorHandler).await),
             }
         }
 
@@ -665,19 +643,7 @@ impl Catalog for RestCatalog {
             StatusCode::OK => {
                 deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to create a table under a namespace that does not exist",
-                ));
-            }
-            StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "The table already exists",
-                ));
-            }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => return Err(handle_error_response(http_response, &TableErrorHandler).await),
         };
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
@@ -726,13 +692,7 @@ impl Catalog for RestCatalog {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
                 deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to load a table that does not exist",
-                ));
-            }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => return Err(handle_error_response(http_response, &TableErrorHandler).await),
         };
 
         let config = response
@@ -770,11 +730,7 @@ impl Catalog for RestCatalog {
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to drop a table that does not exist",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &TableErrorHandler).await),
         }
     }
 
@@ -792,7 +748,7 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &TableErrorHandler).await),
         }
     }
 
@@ -813,15 +769,7 @@ impl Catalog for RestCatalog {
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to rename a table that does not exist (is the namespace correct?)",
-            )),
-            StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to rename a table to a name that already exists",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(handle_error_response(http_response, &TableErrorHandler).await),
         }
     }
 
@@ -853,19 +801,7 @@ impl Catalog for RestCatalog {
             StatusCode::OK => {
                 deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::NamespaceNotFound,
-                    "The namespace specified does not exist.",
-                ));
-            }
-            StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::TableAlreadyExists,
-                    "The given table already exists.",
-                ));
-            }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => return Err(handle_error_response(http_response, &TableErrorHandler).await),
         };
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
@@ -903,38 +839,7 @@ impl Catalog for RestCatalog {
 
         let response: CommitTableResponse = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await?,
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::TableNotFound,
-                    "Tried to update a table that does not exist",
-                ));
-            }
-            StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::CatalogCommitConflicts,
-                    "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
-                )
-                .with_retryable(true));
-            }
-            StatusCode::INTERNAL_SERVER_ERROR => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "An unknown server-side problem occurred; the commit state is unknown.",
-                ));
-            }
-            StatusCode::BAD_GATEWAY => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
-                ));
-            }
-            StatusCode::GATEWAY_TIMEOUT => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "A server-side gateway timeout occurred; the commit state is unknown.",
-                ));
-            }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => return Err(handle_error_response(http_response, &TableCommitHandler).await),
         };
 
         let file_io = self
