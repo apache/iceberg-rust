@@ -267,9 +267,12 @@ fn get_field_doc(field: &Field) -> Option<String> {
 }
 
 struct ArrowSchemaConverter {
-    // If some, then schema builder will re-assign field ids after the field
+    /// When set, the schema builder will reassign field IDs starting from this value
+    /// using level-order traversal (breadth-first).
     reassign_field_ids_from: Option<i32>,
-    // Counter for generating unique temporary field IDs when reassigning
+    /// Generates unique placeholder IDs for fields before reassignment.
+    /// Required because `ReassignFieldIds` builds an old-to-new ID mapping
+    /// that expects unique input IDs.
     temp_field_id_counter: i32,
 }
 
@@ -290,8 +293,9 @@ impl ArrowSchemaConverter {
 
     fn get_field_id(&mut self, field: &Field) -> Result<i32> {
         if self.reassign_field_ids_from.is_some() {
-            // Field IDs will be reassigned later when building the schema.
-            // Assign unique temporary IDs to avoid duplicate ID errors during schema construction.
+            // Field IDs will be reassigned by the schema builder.
+            // We need unique temporary IDs because ReassignFieldIds builds an
+            // old->new ID mapping that requires unique input IDs.
             let temp_id = self.temp_field_id_counter;
             self.temp_field_id_counter += 1;
             Ok(temp_id)
