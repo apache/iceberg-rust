@@ -52,6 +52,7 @@ linkedbytes = { workspace = true }
 metainfo = { workspace = true }
 motore-macros = { workspace = true }
 volo = { workspace = true }
+whoami = "1.6.1"
 
 [dev-dependencies]
 ctor = { workspace = true }

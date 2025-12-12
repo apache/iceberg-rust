@@ -50,7 +50,14 @@ pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
 /// HMS Catalog warehouse location
 pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
-/// Builder for [`RestCatalog`].
+///HMS Hive Locks Disabled
+pub const HMS_HIVE_LOCKS_DISABLED: &str = "hive_locks_disabled";
+
+/// HMS Environment Context
+const HMS_EXPECTED_PARAMETER_KEY: &str = "expected_parameter_key";
+const HMS_EXPECTED_PARAMETER_VALUE: &str = "expected_parameter_value";
+
+/// Builder for [`HmsCatalog`].
 #[derive(Debug)]
 pub struct HmsCatalogBuilder(HmsCatalogConfig);
 
@@ -167,6 +174,43 @@ impl Debug for HmsCatalog {
     }
 }
 
+/// RAII guard for HMS table locks. Automatically releases the lock when dropped.
+struct HmsLockGuard {
+    client: ThriftHiveMetastoreClient,
+    lockid: i64,
+}
+
+impl HmsLockGuard {
+    async fn acquire(
+        client: &ThriftHiveMetastoreClient,
+        db_name: &str,
+        tbl_name: &str,
+    ) -> Result<Self> {
+        let lock = client
+            .lock(create_lock_request(db_name, tbl_name))
+            .await
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
+
+        Ok(Self {
+            client: client.clone(),
+            lockid: lock.lockid,
+        })
+    }
+}
+
+impl Drop for HmsLockGuard {
+    fn drop(&mut self) {
+        let client = self.client.clone();
+        let lockid = self.lockid;
+        tokio::spawn(async move {
+            let _ = client
+                .unlock(hive_metastore::UnlockRequest { lockid })
+                .await;
+        });
+    }
+}
+
 impl HmsCatalog {
     /// Create a new hms catalog.
     fn new(config: HmsCatalogConfig) -> Result<Self> {
@@ -207,6 +251,64 @@ impl HmsCatalog {
     /// Get the catalogs `FileIO`
     pub fn file_io(&self) -> FileIO {
         self.file_io.clone()
+    }
+
+    /// Applies a commit to a table and prepares the update for HMS.
+    /// # Returns
+    /// A tuple of (staged_table, new_hive_table) ready for HMS alter_table operation
+    async fn apply_and_prepare_update(
+        &self,
+        commit: TableCommit,
+        db_name: &str,
+        tbl_name: &str,
+        hive_table: &hive_metastore::Table,
+    ) -> Result<(Table, hive_metastore::Table)> {
+        let metadata_location = get_metadata_location(&hive_table.parameters)?;
+
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+
+        let cur_table = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(TableIdent::new(
+                NamespaceIdent::new(db_name.to_string()),
+                tbl_name.to_string(),
+            ))
+            .build()?;
+
+        let staged_table = commit.apply(cur_table)?;
+        staged_table
+            .metadata()
+            .write_to(
+                staged_table.file_io(),
+                staged_table.metadata_location_result()?,
+            )
+            .await?;
+
+        let new_hive_table = update_hive_table_from_table(hive_table, &staged_table)?;
+
+        Ok((staged_table, new_hive_table))
+    }
+
+    /// Builds an EnvironmentContext for optimistic locking with HMS.
+    ///
+    /// The context includes the expected metadata_location, which HMS will use
+    /// to validate that the table hasn't been modified concurrently.
+    fn build_environment_context(metadata_location: &str) -> hive_metastore::EnvironmentContext {
+        let mut env_context_properties = pilota::AHashMap::new();
+        env_context_properties.insert(
+            HMS_EXPECTED_PARAMETER_KEY.into(),
+            "metadata_location".into(),
+        );
+        env_context_properties.insert(
+            HMS_EXPECTED_PARAMETER_VALUE.into(),
+            pilota::FastStr::from_string(metadata_location.to_string()),
+        );
+
+        hive_metastore::EnvironmentContext {
+            properties: Some(env_context_properties),
+        }
     }
 }
 
@@ -603,10 +705,94 @@ impl Catalog for HmsCatalog {
         ))
     }
 
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
-        ))
+    /// Updates an existing table by applying a commit operation.
+    ///
+    /// This method supports two update strategies depending on the catalog configuration:
+    ///
+    /// **Optimistic Locking** (when `hive_locks_disabled` is set):
+    /// - Retrieves the current table state from HMS without acquiring locks
+    /// - Constructs an `EnvironmentContext` with the expected metadata location
+    /// - Uses `alter_table_with_environment_context` to perform an atomic
+    ///   compare-and-swap operation.
+    /// - HMS will reject the update if the metadata location has changed,
+    ///   indicating a concurrent modification
+    ///
+    /// **Traditional Locking** (default):
+    /// - Acquires an exclusive HMS lock on the table before making changes
+    /// - Retrieves the current table state
+    /// - Applies the commit and writes new metadata
+    /// - Updates the table in HMS using `alter_table`
+    /// - Releases the lock after the operation completes
+    ///
+    /// # Returns
+    /// A `Result` wrapping the updated `Table` object with new metadata.
+    ///
+    /// # Errors
+    /// This function may return an error in several scenarios:
+    /// - Failure to validate the namespace or table identifier
+    /// - Inability to acquire a lock (traditional locking mode)
+    /// - Failure to retrieve the table from HMS
+    /// - Errors reading or writing table metadata
+    /// - HMS rejects the update due to concurrent modification (optimistic locking)
+    /// - Errors from the underlying Thrift communication with HMS
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let ident = commit.identifier().clone();
+        let db_name = validate_namespace(ident.namespace())?;
+        let tbl_name = ident.name.clone();
+
+        if self.config.props.contains_key(HMS_HIVE_LOCKS_DISABLED) {
+            // Optimistic locking path: read first, then validate with EnvironmentContext
+            let hive_table = self
+                .client
+                .0
+                .get_table(db_name.clone().into(), tbl_name.clone().into())
+                .await
+                .map(from_thrift_exception)
+                .map_err(from_thrift_error)??;
+
+            let metadata_location = get_metadata_location(&hive_table.parameters)?;
+            let env_context = Self::build_environment_context(&metadata_location);
+
+            let (staged_table, new_hive_table) = self
+                .apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
+                .await?;
+
+            self.client
+                .0
+                .alter_table_with_environment_context(
+                    db_name.into(),
+                    tbl_name.into(),
+                    new_hive_table,
+                    env_context,
+                )
+                .await
+                .map_err(from_thrift_error)?;
+
+            Ok(staged_table)
+        } else {
+            // Traditional locking path: acquire lock first, then read
+            let _guard = HmsLockGuard::acquire(&self.client.0, &db_name, &tbl_name).await?;
+
+            let hive_table = self
+                .client
+                .0
+                .get_table(db_name.clone().into(), tbl_name.clone().into())
+                .await
+                .map(from_thrift_exception)
+                .map_err(from_thrift_error)??;
+
+            let (staged_table, new_hive_table) = self
+                .apply_and_prepare_update(commit, &db_name, &tbl_name, &hive_table)
+                .await?;
+
+            self.client
+                .0
+                .alter_table(db_name.into(), tbl_name.into(), new_hive_table)
+                .await
+                .map_err(from_thrift_error)?;
+
+            Ok(staged_table)
+            // Lock automatically released here via Drop
+        }
     }
 }
