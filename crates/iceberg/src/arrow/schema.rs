@@ -1988,32 +1988,7 @@ mod tests {
     fn test_arrow_schema_to_schema_with_field_id() {
         // Create a complex Arrow schema without field ID metadata
         // Including: primitives, list, nested struct, map, and nested list of structs
-
-        // Nested struct: address { street: string, city: string, zip: int }
-        let address_fields = Fields::from(vec![
-            Field::new("street", DataType::Utf8, true),
-            Field::new("city", DataType::Utf8, false),
-            Field::new("zip", DataType::Int32, true),
-        ]);
-
-        // Map: attributes { key: string, value: string }
-        let map_struct = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-        ]));
-        let map_type = DataType::Map(
-            Arc::new(Field::new(DEFAULT_MAP_FIELD_NAME, map_struct, false)),
-            false,
-        );
-
-        // Nested list of structs: orders [{ order_id: long, amount: double }]
-        let order_struct = DataType::Struct(Fields::from(vec![
-            Field::new("order_id", DataType::Int64, false),
-            Field::new("amount", DataType::Float64, false),
-        ]));
-
         let arrow_schema = ArrowSchema::new(vec![
-            // Primitive fields
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Decimal128(10, 2), false),
@@ -2022,154 +1997,145 @@ mod tests {
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
                 true,
             ),
-            // Simple list
             Field::new(
                 "tags",
                 DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                 true,
             ),
-            // Nested struct
-            Field::new("address", DataType::Struct(address_fields), true),
-            // Map type
-            Field::new("attributes", map_type, true),
-            // List of structs
+            Field::new(
+                "address",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("street", DataType::Utf8, true),
+                    Field::new("city", DataType::Utf8, false),
+                    Field::new("zip", DataType::Int32, true),
+                ])),
+                true,
+            ),
+            Field::new(
+                "attributes",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        DEFAULT_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Utf8, true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ),
             Field::new(
                 "orders",
-                DataType::List(Arc::new(Field::new("element", order_struct, true))),
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("order_id", DataType::Int64, false),
+                        Field::new("amount", DataType::Float64, false),
+                    ])),
+                    true,
+                ))),
                 true,
             ),
         ]);
 
         let schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
 
-        // Verify top-level field count
-        let fields = schema.as_struct().fields();
-        assert_eq!(fields.len(), 8);
+        // Build expected schema with exact field IDs following level-order assignment:
+        // Level 0: id=1, name=2, price=3, created_at=4, tags=5, address=6, attributes=7, orders=8
+        // Level 1: tags.element=9, address.{street=10,city=11,zip=12}, attributes.{key=13,value=14}, orders.element=15
+        // Level 2: orders.element.{order_id=16,amount=17}
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(
+                    3,
+                    "price",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 10,
+                        scale: 2,
+                    }),
+                )
+                .into(),
+                NestedField::optional(4, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
+                    .into(),
+                NestedField::optional(
+                    5,
+                    "tags",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            9,
+                            Type::Primitive(PrimitiveType::String),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    6,
+                    "address",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(10, "street", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::required(11, "city", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::optional(12, "zip", Type::Primitive(PrimitiveType::Int))
+                            .into(),
+                    ])),
+                )
+                .into(),
+                NestedField::optional(
+                    7,
+                    "attributes",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            13,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            14,
+                            Type::Primitive(PrimitiveType::String),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    8,
+                    "orders",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            15,
+                            Type::Struct(StructType::new(vec![
+                                NestedField::required(
+                                    16,
+                                    "order_id",
+                                    Type::Primitive(PrimitiveType::Long),
+                                )
+                                .into(),
+                                NestedField::required(
+                                    17,
+                                    "amount",
+                                    Type::Primitive(PrimitiveType::Double),
+                                )
+                                .into(),
+                            ])),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
 
-        // Check primitive fields
-        assert_eq!(fields[0].name, "id");
-        assert!(matches!(
-            fields[0].field_type.as_ref(),
-            Type::Primitive(PrimitiveType::Long)
-        ));
-        assert!(fields[0].required);
-
-        assert_eq!(fields[1].name, "name");
-        assert!(matches!(
-            fields[1].field_type.as_ref(),
-            Type::Primitive(PrimitiveType::String)
-        ));
-
-        assert_eq!(fields[2].name, "price");
-        assert!(matches!(
-            fields[2].field_type.as_ref(),
-            Type::Primitive(PrimitiveType::Decimal { .. })
-        ));
-
-        assert_eq!(fields[3].name, "created_at");
-        assert!(matches!(
-            fields[3].field_type.as_ref(),
-            Type::Primitive(PrimitiveType::Timestamptz)
-        ));
-
-        // Check simple list
-        assert_eq!(fields[4].name, "tags");
-        assert!(matches!(fields[4].field_type.as_ref(), Type::List(_)));
-
-        // Check nested struct
-        assert_eq!(fields[5].name, "address");
-        if let Type::Struct(struct_type) = fields[5].field_type.as_ref() {
-            assert_eq!(struct_type.fields().len(), 3);
-            assert_eq!(struct_type.fields()[0].name, "street");
-            assert_eq!(struct_type.fields()[1].name, "city");
-            assert_eq!(struct_type.fields()[2].name, "zip");
-        } else {
-            panic!("Expected struct type for address field");
-        }
-
-        // Check map type
-        assert_eq!(fields[6].name, "attributes");
-        if let Type::Map(map_type) = fields[6].field_type.as_ref() {
-            assert!(matches!(
-                map_type.key_field.field_type.as_ref(),
-                Type::Primitive(PrimitiveType::String)
-            ));
-            assert!(matches!(
-                map_type.value_field.field_type.as_ref(),
-                Type::Primitive(PrimitiveType::String)
-            ));
-        } else {
-            panic!("Expected map type for attributes field");
-        }
-
-        // Check list of structs
-        assert_eq!(fields[7].name, "orders");
-        if let Type::List(list_type) = fields[7].field_type.as_ref() {
-            if let Type::Struct(order_struct) = list_type.element_field.field_type.as_ref() {
-                assert_eq!(order_struct.fields().len(), 2);
-                assert_eq!(order_struct.fields()[0].name, "order_id");
-                assert_eq!(order_struct.fields()[1].name, "amount");
-            } else {
-                panic!("Expected struct type for orders list element");
-            }
-        } else {
-            panic!("Expected list type for orders field");
-        }
-
-        // Collect ALL field IDs (including deeply nested ones) and verify uniqueness
-        fn collect_field_ids(field_type: &Type, ids: &mut Vec<i32>) {
-            match field_type {
-                Type::Struct(s) => {
-                    for f in s.fields() {
-                        ids.push(f.id);
-                        collect_field_ids(f.field_type.as_ref(), ids);
-                    }
-                }
-                Type::List(l) => {
-                    ids.push(l.element_field.id);
-                    collect_field_ids(l.element_field.field_type.as_ref(), ids);
-                }
-                Type::Map(m) => {
-                    ids.push(m.key_field.id);
-                    ids.push(m.value_field.id);
-                    collect_field_ids(m.key_field.field_type.as_ref(), ids);
-                    collect_field_ids(m.value_field.field_type.as_ref(), ids);
-                }
-                Type::Primitive(_) => {}
-            }
-        }
-
-        let mut all_field_ids: Vec<i32> = fields.iter().map(|f| f.id).collect();
-        for field in fields {
-            collect_field_ids(field.field_type.as_ref(), &mut all_field_ids);
-        }
-
-        // All IDs should be positive
-        assert!(
-            all_field_ids.iter().all(|&id| id > 0),
-            "All field IDs should be positive, got: {all_field_ids:?}",
-        );
-
-        // All IDs should be unique
-        let unique_ids: std::collections::HashSet<_> = all_field_ids.iter().collect();
-        assert_eq!(
-            unique_ids.len(),
-            all_field_ids.len(),
-            "Field IDs should be unique, got duplicates in: {all_field_ids:?}",
-        );
-
-        // Verify we have the expected number of fields (8 top-level + nested)
-        // Top-level: 8
-        // tags list element: 1
-        // address struct fields: 3
-        // attributes map key + value: 2
-        // orders list element: 1, order struct fields: 2
-        // Total: 8 + 1 + 3 + 2 + 1 + 2 = 17
-        assert_eq!(
-            all_field_ids.len(),
-            17,
-            "Expected 17 total fields, got {}",
-            all_field_ids.len()
-        );
+        pretty_assertions::assert_eq!(schema, expected);
+        assert_eq!(schema.highest_field_id(), 17);
     }
 }
