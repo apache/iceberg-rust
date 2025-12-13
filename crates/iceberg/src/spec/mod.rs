@@ -49,6 +49,7 @@ pub use snapshot_summary::*;
 pub use sort::*;
 pub use statistic_file::*;
 pub use table_metadata::*;
+pub(crate) use table_metadata_builder::FIRST_FIELD_ID;
 pub use table_properties::*;
 pub use transform::*;
 pub use values::*;
