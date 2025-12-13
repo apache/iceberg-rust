@@ -2147,8 +2147,7 @@ mod tests {
         // All IDs should be positive
         assert!(
             all_field_ids.iter().all(|&id| id > 0),
-            "All field IDs should be positive, got: {:?}",
-            all_field_ids
+            "All field IDs should be positive, got: {all_field_ids:?}",
         );
 
         // All IDs should be unique
@@ -2156,8 +2155,7 @@ mod tests {
         assert_eq!(
             unique_ids.len(),
             all_field_ids.len(),
-            "Field IDs should be unique, got duplicates in: {:?}",
-            all_field_ids
+            "Field IDs should be unique, got duplicates in: {all_field_ids:?}",
         );
 
         // Verify we have the expected number of fields (8 top-level + nested)
