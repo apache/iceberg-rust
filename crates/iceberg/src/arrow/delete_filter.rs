@@ -141,7 +141,8 @@ impl DeleteFilter {
             return Ok(None);
         }
 
-        let bound_predicate = combined_predicate.bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
+        let bound_predicate = combined_predicate
+            .bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
         Ok(Some(bound_predicate))
     }
 
@@ -384,12 +385,12 @@ pub(crate) mod tests {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use std::sync::Arc;
-        use crate::expr::{Reference};
+
+        use super::*;
+        use crate::expr::Reference;
         use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
-        use crate::spec::{NestedField, PrimitiveType, Type};
-        use crate::spec::{DataContentType, Datum, Schema};
+        use crate::spec::{DataContentType, Datum, NestedField, PrimitiveType, Schema, Type};
 
         #[tokio::test]
         async fn test_build_equality_delete_predicate_case_sensitive() {
@@ -397,12 +398,7 @@ pub(crate) mod tests {
                 Schema::builder()
                     .with_schema_id(1)
                     .with_fields(vec![
-                        NestedField::required(
-                            1,
-                            "Id",
-                            Type::Primitive(PrimitiveType::Long),
-                        )
-                            .into(),
+                        NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
                     ])
                     .build()
                     .unwrap(),
@@ -433,8 +429,7 @@ pub(crate) mod tests {
             let filter = DeleteFilter::default();
 
             // ---------- insert equality delete predicate ----------
-            let pred = Reference::new("id")
-                .equal_to(Datum::long(10));
+            let pred = Reference::new("id").equal_to(Datum::long(10));
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             filter.insert_equality_delete("eq-del.parquet", rx);
