@@ -211,8 +211,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+    use crate::expr::Reference;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, Schema};
+    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
 
     type ArrowSchemaRef = Arc<ArrowSchema>;
 
@@ -383,66 +384,56 @@ pub(crate) mod tests {
         Arc::new(arrow_schema::Schema::new(fields))
     }
 
-    #[cfg(test)]
-    mod tests {
-        use std::sync::Arc;
+    #[tokio::test]
+    async fn test_build_equality_delete_predicate_case_sensitive() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
 
-        use super::*;
-        use crate::expr::Reference;
-        use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
-        use crate::spec::{DataContentType, Datum, NestedField, PrimitiveType, Schema, Type};
+        // ---------- fake FileScanTask ----------
+        let task = FileScanTask {
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: "data.parquet".to_string(),
+            data_file_format: crate::spec::DataFileFormat::Parquet,
+            schema: schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: "eq-del.parquet".to_string(),
+                file_type: DataContentType::EqualityDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+            }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: true,
+        };
 
-        #[tokio::test]
-        async fn test_build_equality_delete_predicate_case_sensitive() {
-            let schema = Arc::new(
-                Schema::builder()
-                    .with_schema_id(1)
-                    .with_fields(vec![
-                        NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
-                    ])
-                    .build()
-                    .unwrap(),
-            );
+        let filter = DeleteFilter::default();
 
-            // ---------- fake FileScanTask ----------
-            let task = FileScanTask {
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: "data.parquet".to_string(),
-                data_file_format: crate::spec::DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![],
-                predicate: None,
-                deletes: vec![FileScanTaskDeleteFile {
-                    file_path: "eq-del.parquet".to_string(),
-                    file_type: DataContentType::EqualityDeletes,
-                    partition_spec_id: 0,
-                    equality_ids: None,
-                }],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: true,
-            };
+        // ---------- insert equality delete predicate ----------
+        let pred = Reference::new("id").equal_to(Datum::long(10));
 
-            let filter = DeleteFilter::default();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        filter.insert_equality_delete("eq-del.parquet", rx);
 
-            // ---------- insert equality delete predicate ----------
-            let pred = Reference::new("id").equal_to(Datum::long(10));
+        tx.send(pred).unwrap();
 
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            filter.insert_equality_delete("eq-del.parquet", rx);
+        // ---------- should FAIL ----------
+        let result = filter.build_equality_delete_predicate(&task).await;
 
-            tx.send(pred).unwrap();
-
-            // ---------- should FAIL ----------
-            let result = filter.build_equality_delete_predicate(&task).await;
-
-            assert!(
-                result.is_err(),
-                "case_sensitive=true should fail when column case mismatches"
-            );
-        }
+        assert!(
+            result.is_err(),
+            "case_sensitive=true should fail when column case mismatches"
+        );
     }
 }
