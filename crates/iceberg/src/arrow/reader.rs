@@ -1705,19 +1705,21 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         )
     }
 
-    // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
-    // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
-    fn get_metadata(
-        &mut self,
-        _options: Option<&'_ ArrowReaderOptions>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let reader = ParquetMetaDataReader::new()
+            let mut reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 // Set the page policy first because it updates both column and offset policies.
                 .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
                 .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
                 .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index));
+
+            if let Some(opts) = options {
+                reader = reader.with_metadata_options(Some(opts.metadata_options().clone()));
+            }
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
