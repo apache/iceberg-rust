@@ -1794,6 +1794,7 @@ pub mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
         test_fn(task);
 
@@ -1811,6 +1812,7 @@ pub mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
         test_fn(task);
     }

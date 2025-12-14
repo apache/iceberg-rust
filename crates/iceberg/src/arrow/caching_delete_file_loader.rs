@@ -911,6 +911,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         // Load the deletes - should handle both types without error

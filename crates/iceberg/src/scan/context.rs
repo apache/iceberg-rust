@@ -46,6 +46,7 @@ pub(crate) struct ManifestFileContext {
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
+    case_sensitive: bool,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -59,6 +60,7 @@ pub(crate) struct ManifestEntryContext {
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
+    pub case_sensitive: bool,
 }
 
 impl ManifestFileContext {
@@ -89,6 +91,7 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
+                case_sensitive: self.case_sensitive,
             };
 
             sender
@@ -135,6 +138,7 @@ impl ManifestEntryContext {
             partition_spec: None,
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
+            case_sensitive: self.case_sensitive,
         })
     }
 }
@@ -267,6 +271,7 @@ impl PlanContext {
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
+            case_sensitive: self.case_sensitive,
         }
     }
 }
