@@ -32,95 +32,541 @@
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Reserved field ID for the file path (_file) column per Iceberg spec
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_FILE: i32 = i32::MAX - <span class="number">1</span>;
 <a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a><span class="doccomment">/// Reserved column name for the file path metadata column
-<a href=#36 id=36 data-nosnippet>36</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_FILE: <span class="kw-2">&amp;</span>str = <span class="string">"_file"</span>;
+<a href=#35 id=35 data-nosnippet>35</a><span class="doccomment">/// Reserved field ID for the position (_pos) column per Iceberg spec
+<a href=#36 id=36 data-nosnippet>36</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_POS: i32 = i32::MAX - <span class="number">2</span>;
 <a href=#37 id=37 data-nosnippet>37</a>
-<a href=#38 id=38 data-nosnippet>38</a><span class="doccomment">/// Documentation for the _file metadata column
-<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub const </span>RESERVED_COL_DOC_FILE: <span class="kw-2">&amp;</span>str = <span class="string">"Path of the file in which a row is stored"</span>;
+<a href=#38 id=38 data-nosnippet>38</a><span class="doccomment">/// Reserved field ID for the deleted (_deleted) column per Iceberg spec
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_DELETED: i32 = i32::MAX - <span class="number">3</span>;
 <a href=#40 id=40 data-nosnippet>40</a>
-<a href=#41 id=41 data-nosnippet>41</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _file metadata column.
-<a href=#42 id=42 data-nosnippet>42</a>/// This field represents the file path as a required string field.
-<a href=#43 id=43 data-nosnippet>43</a></span><span class="kw">static </span>FILE_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
-<a href=#44 id=44 data-nosnippet>44</a>    Arc::new(
-<a href=#45 id=45 data-nosnippet>45</a>        NestedField::required(
-<a href=#46 id=46 data-nosnippet>46</a>            RESERVED_FIELD_ID_FILE,
-<a href=#47 id=47 data-nosnippet>47</a>            RESERVED_COL_NAME_FILE,
-<a href=#48 id=48 data-nosnippet>48</a>            Type::Primitive(PrimitiveType::String),
-<a href=#49 id=49 data-nosnippet>49</a>        )
-<a href=#50 id=50 data-nosnippet>50</a>        .with_doc(RESERVED_COL_DOC_FILE),
-<a href=#51 id=51 data-nosnippet>51</a>    )
-<a href=#52 id=52 data-nosnippet>52</a>});
-<a href=#53 id=53 data-nosnippet>53</a>
-<a href=#54 id=54 data-nosnippet>54</a><span class="doccomment">/// Returns the Iceberg field definition for the _file metadata column.
-<a href=#55 id=55 data-nosnippet>55</a>///
-<a href=#56 id=56 data-nosnippet>56</a>/// # Returns
-<a href=#57 id=57 data-nosnippet>57</a>/// A reference to the _file field definition as an Iceberg NestedField
-<a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">pub fn </span>file_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw-2">&amp;</span>FILE_FIELD
-<a href=#60 id=60 data-nosnippet>60</a>}
+<a href=#41 id=41 data-nosnippet>41</a><span class="doccomment">/// Reserved field ID for the spec ID (_spec_id) column per Iceberg spec
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_SPEC_ID: i32 = i32::MAX - <span class="number">4</span>;
+<a href=#43 id=43 data-nosnippet>43</a>
+<a href=#44 id=44 data-nosnippet>44</a><span class="doccomment">/// Reserved field ID for the partition (_partition) column per Iceberg spec
+<a href=#45 id=45 data-nosnippet>45</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_PARTITION: i32 = i32::MAX - <span class="number">5</span>;
+<a href=#46 id=46 data-nosnippet>46</a>
+<a href=#47 id=47 data-nosnippet>47</a><span class="doccomment">/// Reserved field ID for the file path in position delete files
+<a href=#48 id=48 data-nosnippet>48</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_DELETE_FILE_PATH: i32 = i32::MAX - <span class="number">101</span>;
+<a href=#49 id=49 data-nosnippet>49</a>
+<a href=#50 id=50 data-nosnippet>50</a><span class="doccomment">/// Reserved field ID for the position in position delete files
+<a href=#51 id=51 data-nosnippet>51</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_DELETE_FILE_POS: i32 = i32::MAX - <span class="number">102</span>;
+<a href=#52 id=52 data-nosnippet>52</a>
+<a href=#53 id=53 data-nosnippet>53</a><span class="doccomment">/// Reserved field ID for the change type (_change_type) column per Iceberg spec
+<a href=#54 id=54 data-nosnippet>54</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_CHANGE_TYPE: i32 = i32::MAX - <span class="number">104</span>;
+<a href=#55 id=55 data-nosnippet>55</a>
+<a href=#56 id=56 data-nosnippet>56</a><span class="doccomment">/// Reserved field ID for the change ordinal (_change_ordinal) column per Iceberg spec
+<a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_CHANGE_ORDINAL: i32 = i32::MAX - <span class="number">105</span>;
+<a href=#58 id=58 data-nosnippet>58</a>
+<a href=#59 id=59 data-nosnippet>59</a><span class="doccomment">/// Reserved field ID for the commit snapshot ID (_commit_snapshot_id) column per Iceberg spec
+<a href=#60 id=60 data-nosnippet>60</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID: i32 = i32::MAX - <span class="number">106</span>;
 <a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a><span class="doccomment">/// Returns the Iceberg field definition for a metadata field ID.
-<a href=#63 id=63 data-nosnippet>63</a>///
-<a href=#64 id=64 data-nosnippet>64</a>/// # Arguments
-<a href=#65 id=65 data-nosnippet>65</a>/// * `field_id` - The metadata field ID
-<a href=#66 id=66 data-nosnippet>66</a>///
-<a href=#67 id=67 data-nosnippet>67</a>/// # Returns
-<a href=#68 id=68 data-nosnippet>68</a>/// The Iceberg field definition for the metadata column, or an error if not a metadata field
-<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub fn </span>get_metadata_field(field_id: i32) -&gt; <span class="prelude-ty">Result</span>&lt;NestedFieldRef&gt; {
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">match </span>field_id {
-<a href=#71 id=71 data-nosnippet>71</a>        RESERVED_FIELD_ID_FILE =&gt; <span class="prelude-val">Ok</span>(Arc::clone(file_field())),
-<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">_ if </span>is_metadata_field(field_id) =&gt; {
-<a href=#73 id=73 data-nosnippet>73</a>            <span class="comment">// Future metadata fields can be added here
-<a href=#74 id=74 data-nosnippet>74</a>            </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#75 id=75 data-nosnippet>75</a>                ErrorKind::Unexpected,
-<a href=#76 id=76 data-nosnippet>76</a>                <span class="macro">format!</span>(
-<a href=#77 id=77 data-nosnippet>77</a>                    <span class="string">"Metadata field ID {field_id} recognized but field definition not implemented"
-<a href=#78 id=78 data-nosnippet>78</a>                </span>),
-<a href=#79 id=79 data-nosnippet>79</a>            ))
-<a href=#80 id=80 data-nosnippet>80</a>        }
-<a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#82 id=82 data-nosnippet>82</a>            ErrorKind::Unexpected,
-<a href=#83 id=83 data-nosnippet>83</a>            <span class="macro">format!</span>(<span class="string">"Field ID {field_id} is not a metadata field"</span>),
-<a href=#84 id=84 data-nosnippet>84</a>        )),
-<a href=#85 id=85 data-nosnippet>85</a>    }
-<a href=#86 id=86 data-nosnippet>86</a>}
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a><span class="doccomment">/// Returns the field ID for a metadata column name.
-<a href=#89 id=89 data-nosnippet>89</a>///
-<a href=#90 id=90 data-nosnippet>90</a>/// # Arguments
-<a href=#91 id=91 data-nosnippet>91</a>/// * `column_name` - The metadata column name
-<a href=#92 id=92 data-nosnippet>92</a>///
-<a href=#93 id=93 data-nosnippet>93</a>/// # Returns
-<a href=#94 id=94 data-nosnippet>94</a>/// The field ID of the metadata column, or an error if the column name is not recognized
-<a href=#95 id=95 data-nosnippet>95</a></span><span class="kw">pub fn </span>get_metadata_field_id(column_name: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">match </span>column_name {
-<a href=#97 id=97 data-nosnippet>97</a>        RESERVED_COL_NAME_FILE =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_FILE),
-<a href=#98 id=98 data-nosnippet>98</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#99 id=99 data-nosnippet>99</a>            ErrorKind::Unexpected,
-<a href=#100 id=100 data-nosnippet>100</a>            <span class="macro">format!</span>(<span class="string">"Unknown/unsupported metadata column name: {column_name}"</span>),
-<a href=#101 id=101 data-nosnippet>101</a>        )),
-<a href=#102 id=102 data-nosnippet>102</a>    }
-<a href=#103 id=103 data-nosnippet>103</a>}
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a><span class="doccomment">/// Checks if a field ID is a metadata field.
-<a href=#106 id=106 data-nosnippet>106</a>///
-<a href=#107 id=107 data-nosnippet>107</a>/// # Arguments
-<a href=#108 id=108 data-nosnippet>108</a>/// * `field_id` - The field ID to check
-<a href=#109 id=109 data-nosnippet>109</a>///
-<a href=#110 id=110 data-nosnippet>110</a>/// # Returns
-<a href=#111 id=111 data-nosnippet>111</a>/// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
-<a href=#112 id=112 data-nosnippet>112</a></span><span class="kw">pub fn </span>is_metadata_field(field_id: i32) -&gt; bool {
-<a href=#113 id=113 data-nosnippet>113</a>    field_id == RESERVED_FIELD_ID_FILE
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// Additional metadata fields can be checked here in the future
-<a href=#115 id=115 data-nosnippet>115</a></span>}
+<a href=#62 id=62 data-nosnippet>62</a><span class="doccomment">/// Reserved field ID for the row ID (_row_id) column per Iceberg spec
+<a href=#63 id=63 data-nosnippet>63</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_ROW_ID: i32 = i32::MAX - <span class="number">107</span>;
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a><span class="doccomment">/// Reserved field ID for the last updated sequence number (_last_updated_sequence_number) column per Iceberg spec
+<a href=#66 id=66 data-nosnippet>66</a></span><span class="kw">pub const </span>RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER: i32 = i32::MAX - <span class="number">108</span>;
+<a href=#67 id=67 data-nosnippet>67</a>
+<a href=#68 id=68 data-nosnippet>68</a><span class="doccomment">/// Reserved column name for the file path metadata column
+<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_FILE: <span class="kw-2">&amp;</span>str = <span class="string">"_file"</span>;
+<a href=#70 id=70 data-nosnippet>70</a>
+<a href=#71 id=71 data-nosnippet>71</a><span class="doccomment">/// Reserved column name for the position metadata column
+<a href=#72 id=72 data-nosnippet>72</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_POS: <span class="kw-2">&amp;</span>str = <span class="string">"_pos"</span>;
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a><span class="doccomment">/// Reserved column name for the deleted metadata column
+<a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_DELETED: <span class="kw-2">&amp;</span>str = <span class="string">"_deleted"</span>;
+<a href=#76 id=76 data-nosnippet>76</a>
+<a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// Reserved column name for the spec ID metadata column
+<a href=#78 id=78 data-nosnippet>78</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_SPEC_ID: <span class="kw-2">&amp;</span>str = <span class="string">"_spec_id"</span>;
+<a href=#79 id=79 data-nosnippet>79</a>
+<a href=#80 id=80 data-nosnippet>80</a><span class="doccomment">/// Reserved column name for the partition metadata column
+<a href=#81 id=81 data-nosnippet>81</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_PARTITION: <span class="kw-2">&amp;</span>str = <span class="string">"_partition"</span>;
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a><span class="doccomment">/// Reserved column name for the file path in position delete files
+<a href=#84 id=84 data-nosnippet>84</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_DELETE_FILE_PATH: <span class="kw-2">&amp;</span>str = <span class="string">"file_path"</span>;
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="doccomment">/// Reserved column name for the position in position delete files
+<a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_DELETE_FILE_POS: <span class="kw-2">&amp;</span>str = <span class="string">"pos"</span>;
+<a href=#88 id=88 data-nosnippet>88</a>
+<a href=#89 id=89 data-nosnippet>89</a><span class="doccomment">/// Reserved column name for the change type metadata column
+<a href=#90 id=90 data-nosnippet>90</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_CHANGE_TYPE: <span class="kw-2">&amp;</span>str = <span class="string">"_change_type"</span>;
+<a href=#91 id=91 data-nosnippet>91</a>
+<a href=#92 id=92 data-nosnippet>92</a><span class="doccomment">/// Reserved column name for the change ordinal metadata column
+<a href=#93 id=93 data-nosnippet>93</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_CHANGE_ORDINAL: <span class="kw-2">&amp;</span>str = <span class="string">"_change_ordinal"</span>;
+<a href=#94 id=94 data-nosnippet>94</a>
+<a href=#95 id=95 data-nosnippet>95</a><span class="doccomment">/// Reserved column name for the commit snapshot ID metadata column
+<a href=#96 id=96 data-nosnippet>96</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID: <span class="kw-2">&amp;</span>str = <span class="string">"_commit_snapshot_id"</span>;
+<a href=#97 id=97 data-nosnippet>97</a>
+<a href=#98 id=98 data-nosnippet>98</a><span class="doccomment">/// Reserved column name for the row ID metadata column
+<a href=#99 id=99 data-nosnippet>99</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_ROW_ID: <span class="kw-2">&amp;</span>str = <span class="string">"_row_id"</span>;
+<a href=#100 id=100 data-nosnippet>100</a>
+<a href=#101 id=101 data-nosnippet>101</a><span class="doccomment">/// Reserved column name for the last updated sequence number metadata column
+<a href=#102 id=102 data-nosnippet>102</a></span><span class="kw">pub const </span>RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER: <span class="kw-2">&amp;</span>str = <span class="string">"_last_updated_sequence_number"</span>;
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _file metadata column.
+<a href=#105 id=105 data-nosnippet>105</a>/// This field represents the file path as a required string field.
+<a href=#106 id=106 data-nosnippet>106</a></span><span class="kw">static </span>FILE_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#107 id=107 data-nosnippet>107</a>    Arc::new(
+<a href=#108 id=108 data-nosnippet>108</a>        NestedField::required(
+<a href=#109 id=109 data-nosnippet>109</a>            RESERVED_FIELD_ID_FILE,
+<a href=#110 id=110 data-nosnippet>110</a>            RESERVED_COL_NAME_FILE,
+<a href=#111 id=111 data-nosnippet>111</a>            Type::Primitive(PrimitiveType::String),
+<a href=#112 id=112 data-nosnippet>112</a>        )
+<a href=#113 id=113 data-nosnippet>113</a>        .with_doc(<span class="string">"Path of the file in which a row is stored"</span>),
+<a href=#114 id=114 data-nosnippet>114</a>    )
+<a href=#115 id=115 data-nosnippet>115</a>});
 <a href=#116 id=116 data-nosnippet>116</a>
-<a href=#117 id=117 data-nosnippet>117</a><span class="doccomment">/// Checks if a column name is a metadata column.
-<a href=#118 id=118 data-nosnippet>118</a>///
-<a href=#119 id=119 data-nosnippet>119</a>/// # Arguments
-<a href=#120 id=120 data-nosnippet>120</a>/// * `column_name` - The column name to check
-<a href=#121 id=121 data-nosnippet>121</a>///
-<a href=#122 id=122 data-nosnippet>122</a>/// # Returns
-<a href=#123 id=123 data-nosnippet>123</a>/// `true` if the column name is a metadata column, `false` otherwise
-<a href=#124 id=124 data-nosnippet>124</a></span><span class="kw">pub fn </span>is_metadata_column_name(column_name: <span class="kw-2">&amp;</span>str) -&gt; bool {
-<a href=#125 id=125 data-nosnippet>125</a>    get_metadata_field_id(column_name).is_ok()
-<a href=#126 id=126 data-nosnippet>126</a>}</code></pre></div></section></main></body></html>
+<a href=#117 id=117 data-nosnippet>117</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _pos metadata column.
+<a href=#118 id=118 data-nosnippet>118</a>/// This field represents the ordinal position of a row in the source data file.
+<a href=#119 id=119 data-nosnippet>119</a></span><span class="kw">static </span>POS_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#120 id=120 data-nosnippet>120</a>    Arc::new(
+<a href=#121 id=121 data-nosnippet>121</a>        NestedField::required(
+<a href=#122 id=122 data-nosnippet>122</a>            RESERVED_FIELD_ID_POS,
+<a href=#123 id=123 data-nosnippet>123</a>            RESERVED_COL_NAME_POS,
+<a href=#124 id=124 data-nosnippet>124</a>            Type::Primitive(PrimitiveType::Long),
+<a href=#125 id=125 data-nosnippet>125</a>        )
+<a href=#126 id=126 data-nosnippet>126</a>        .with_doc(<span class="string">"Ordinal position of a row in the source data file"</span>),
+<a href=#127 id=127 data-nosnippet>127</a>    )
+<a href=#128 id=128 data-nosnippet>128</a>});
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _deleted metadata column.
+<a href=#131 id=131 data-nosnippet>131</a>/// This field indicates whether a row has been deleted.
+<a href=#132 id=132 data-nosnippet>132</a></span><span class="kw">static </span>DELETED_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#133 id=133 data-nosnippet>133</a>    Arc::new(
+<a href=#134 id=134 data-nosnippet>134</a>        NestedField::required(
+<a href=#135 id=135 data-nosnippet>135</a>            RESERVED_FIELD_ID_DELETED,
+<a href=#136 id=136 data-nosnippet>136</a>            RESERVED_COL_NAME_DELETED,
+<a href=#137 id=137 data-nosnippet>137</a>            Type::Primitive(PrimitiveType::Boolean),
+<a href=#138 id=138 data-nosnippet>138</a>        )
+<a href=#139 id=139 data-nosnippet>139</a>        .with_doc(<span class="string">"Whether the row has been deleted"</span>),
+<a href=#140 id=140 data-nosnippet>140</a>    )
+<a href=#141 id=141 data-nosnippet>141</a>});
+<a href=#142 id=142 data-nosnippet>142</a>
+<a href=#143 id=143 data-nosnippet>143</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _spec_id metadata column.
+<a href=#144 id=144 data-nosnippet>144</a>/// This field represents the spec ID used to track the file containing a row.
+<a href=#145 id=145 data-nosnippet>145</a></span><span class="kw">static </span>SPEC_ID_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#146 id=146 data-nosnippet>146</a>    Arc::new(
+<a href=#147 id=147 data-nosnippet>147</a>        NestedField::required(
+<a href=#148 id=148 data-nosnippet>148</a>            RESERVED_FIELD_ID_SPEC_ID,
+<a href=#149 id=149 data-nosnippet>149</a>            RESERVED_COL_NAME_SPEC_ID,
+<a href=#150 id=150 data-nosnippet>150</a>            Type::Primitive(PrimitiveType::Int),
+<a href=#151 id=151 data-nosnippet>151</a>        )
+<a href=#152 id=152 data-nosnippet>152</a>        .with_doc(<span class="string">"Spec ID used to track the file containing a row"</span>),
+<a href=#153 id=153 data-nosnippet>153</a>    )
+<a href=#154 id=154 data-nosnippet>154</a>});
+<a href=#155 id=155 data-nosnippet>155</a>
+<a href=#156 id=156 data-nosnippet>156</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the file_path column in position delete files.
+<a href=#157 id=157 data-nosnippet>157</a>/// This field represents the path of a file in position-based delete files.
+<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">static </span>DELETE_FILE_PATH_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#159 id=159 data-nosnippet>159</a>    Arc::new(
+<a href=#160 id=160 data-nosnippet>160</a>        NestedField::required(
+<a href=#161 id=161 data-nosnippet>161</a>            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+<a href=#162 id=162 data-nosnippet>162</a>            RESERVED_COL_NAME_DELETE_FILE_PATH,
+<a href=#163 id=163 data-nosnippet>163</a>            Type::Primitive(PrimitiveType::String),
+<a href=#164 id=164 data-nosnippet>164</a>        )
+<a href=#165 id=165 data-nosnippet>165</a>        .with_doc(<span class="string">"Path of a file, used in position-based delete files"</span>),
+<a href=#166 id=166 data-nosnippet>166</a>    )
+<a href=#167 id=167 data-nosnippet>167</a>});
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the pos column in position delete files.
+<a href=#170 id=170 data-nosnippet>170</a>/// This field represents the ordinal position of a row in position-based delete files.
+<a href=#171 id=171 data-nosnippet>171</a></span><span class="kw">static </span>DELETE_FILE_POS_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#172 id=172 data-nosnippet>172</a>    Arc::new(
+<a href=#173 id=173 data-nosnippet>173</a>        NestedField::required(
+<a href=#174 id=174 data-nosnippet>174</a>            RESERVED_FIELD_ID_DELETE_FILE_POS,
+<a href=#175 id=175 data-nosnippet>175</a>            RESERVED_COL_NAME_DELETE_FILE_POS,
+<a href=#176 id=176 data-nosnippet>176</a>            Type::Primitive(PrimitiveType::Long),
+<a href=#177 id=177 data-nosnippet>177</a>        )
+<a href=#178 id=178 data-nosnippet>178</a>        .with_doc(<span class="string">"Ordinal position of a row, used in position-based delete files"</span>),
+<a href=#179 id=179 data-nosnippet>179</a>    )
+<a href=#180 id=180 data-nosnippet>180</a>});
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _change_type metadata column.
+<a href=#183 id=183 data-nosnippet>183</a>/// This field represents the record type in the changelog.
+<a href=#184 id=184 data-nosnippet>184</a></span><span class="kw">static </span>CHANGE_TYPE_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#185 id=185 data-nosnippet>185</a>    Arc::new(
+<a href=#186 id=186 data-nosnippet>186</a>        NestedField::required(
+<a href=#187 id=187 data-nosnippet>187</a>            RESERVED_FIELD_ID_CHANGE_TYPE,
+<a href=#188 id=188 data-nosnippet>188</a>            RESERVED_COL_NAME_CHANGE_TYPE,
+<a href=#189 id=189 data-nosnippet>189</a>            Type::Primitive(PrimitiveType::String),
+<a href=#190 id=190 data-nosnippet>190</a>        )
+<a href=#191 id=191 data-nosnippet>191</a>        .with_doc(
+<a href=#192 id=192 data-nosnippet>192</a>            <span class="string">"The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)"</span>,
+<a href=#193 id=193 data-nosnippet>193</a>        ),
+<a href=#194 id=194 data-nosnippet>194</a>    )
+<a href=#195 id=195 data-nosnippet>195</a>});
+<a href=#196 id=196 data-nosnippet>196</a>
+<a href=#197 id=197 data-nosnippet>197</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _change_ordinal metadata column.
+<a href=#198 id=198 data-nosnippet>198</a>/// This field represents the order of the change.
+<a href=#199 id=199 data-nosnippet>199</a></span><span class="kw">static </span>CHANGE_ORDINAL_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#200 id=200 data-nosnippet>200</a>    Arc::new(
+<a href=#201 id=201 data-nosnippet>201</a>        NestedField::required(
+<a href=#202 id=202 data-nosnippet>202</a>            RESERVED_FIELD_ID_CHANGE_ORDINAL,
+<a href=#203 id=203 data-nosnippet>203</a>            RESERVED_COL_NAME_CHANGE_ORDINAL,
+<a href=#204 id=204 data-nosnippet>204</a>            Type::Primitive(PrimitiveType::Int),
+<a href=#205 id=205 data-nosnippet>205</a>        )
+<a href=#206 id=206 data-nosnippet>206</a>        .with_doc(<span class="string">"The order of the change"</span>),
+<a href=#207 id=207 data-nosnippet>207</a>    )
+<a href=#208 id=208 data-nosnippet>208</a>});
+<a href=#209 id=209 data-nosnippet>209</a>
+<a href=#210 id=210 data-nosnippet>210</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _commit_snapshot_id metadata column.
+<a href=#211 id=211 data-nosnippet>211</a>/// This field represents the snapshot ID in which the change occurred.
+<a href=#212 id=212 data-nosnippet>212</a></span><span class="kw">static </span>COMMIT_SNAPSHOT_ID_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#213 id=213 data-nosnippet>213</a>    Arc::new(
+<a href=#214 id=214 data-nosnippet>214</a>        NestedField::required(
+<a href=#215 id=215 data-nosnippet>215</a>            RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID,
+<a href=#216 id=216 data-nosnippet>216</a>            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID,
+<a href=#217 id=217 data-nosnippet>217</a>            Type::Primitive(PrimitiveType::Long),
+<a href=#218 id=218 data-nosnippet>218</a>        )
+<a href=#219 id=219 data-nosnippet>219</a>        .with_doc(<span class="string">"The snapshot ID in which the change occurred"</span>),
+<a href=#220 id=220 data-nosnippet>220</a>    )
+<a href=#221 id=221 data-nosnippet>221</a>});
+<a href=#222 id=222 data-nosnippet>222</a>
+<a href=#223 id=223 data-nosnippet>223</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _row_id metadata column.
+<a href=#224 id=224 data-nosnippet>224</a>/// This field represents a unique long assigned for row lineage.
+<a href=#225 id=225 data-nosnippet>225</a></span><span class="kw">static </span>ROW_ID_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#226 id=226 data-nosnippet>226</a>    Arc::new(
+<a href=#227 id=227 data-nosnippet>227</a>        NestedField::required(
+<a href=#228 id=228 data-nosnippet>228</a>            RESERVED_FIELD_ID_ROW_ID,
+<a href=#229 id=229 data-nosnippet>229</a>            RESERVED_COL_NAME_ROW_ID,
+<a href=#230 id=230 data-nosnippet>230</a>            Type::Primitive(PrimitiveType::Long),
+<a href=#231 id=231 data-nosnippet>231</a>        )
+<a href=#232 id=232 data-nosnippet>232</a>        .with_doc(<span class="string">"A unique long assigned for row lineage"</span>),
+<a href=#233 id=233 data-nosnippet>233</a>    )
+<a href=#234 id=234 data-nosnippet>234</a>});
+<a href=#235 id=235 data-nosnippet>235</a>
+<a href=#236 id=236 data-nosnippet>236</a><span class="doccomment">/// Lazy-initialized Iceberg field definition for the _last_updated_sequence_number metadata column.
+<a href=#237 id=237 data-nosnippet>237</a>/// This field represents the sequence number which last updated this row.
+<a href=#238 id=238 data-nosnippet>238</a></span><span class="kw">static </span>LAST_UPDATED_SEQUENCE_NUMBER_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
+<a href=#239 id=239 data-nosnippet>239</a>    Arc::new(
+<a href=#240 id=240 data-nosnippet>240</a>        NestedField::required(
+<a href=#241 id=241 data-nosnippet>241</a>            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+<a href=#242 id=242 data-nosnippet>242</a>            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+<a href=#243 id=243 data-nosnippet>243</a>            Type::Primitive(PrimitiveType::Long),
+<a href=#244 id=244 data-nosnippet>244</a>        )
+<a href=#245 id=245 data-nosnippet>245</a>        .with_doc(<span class="string">"The sequence number which last updated this row"</span>),
+<a href=#246 id=246 data-nosnippet>246</a>    )
+<a href=#247 id=247 data-nosnippet>247</a>});
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a><span class="doccomment">/// Returns the Iceberg field definition for the _file metadata column.
+<a href=#250 id=250 data-nosnippet>250</a>///
+<a href=#251 id=251 data-nosnippet>251</a>/// # Returns
+<a href=#252 id=252 data-nosnippet>252</a>/// A reference to the _file field definition as an Iceberg NestedField
+<a href=#253 id=253 data-nosnippet>253</a></span><span class="kw">pub fn </span>file_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw-2">&amp;</span>FILE_FIELD
+<a href=#255 id=255 data-nosnippet>255</a>}
+<a href=#256 id=256 data-nosnippet>256</a>
+<a href=#257 id=257 data-nosnippet>257</a><span class="doccomment">/// Returns the Iceberg field definition for the _pos metadata column.
+<a href=#258 id=258 data-nosnippet>258</a>///
+<a href=#259 id=259 data-nosnippet>259</a>/// # Returns
+<a href=#260 id=260 data-nosnippet>260</a>/// A reference to the _pos field definition as an Iceberg NestedField
+<a href=#261 id=261 data-nosnippet>261</a></span><span class="kw">pub fn </span>pos_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw-2">&amp;</span>POS_FIELD
+<a href=#263 id=263 data-nosnippet>263</a>}
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a><span class="doccomment">/// Returns the Iceberg field definition for the _deleted metadata column.
+<a href=#266 id=266 data-nosnippet>266</a>///
+<a href=#267 id=267 data-nosnippet>267</a>/// # Returns
+<a href=#268 id=268 data-nosnippet>268</a>/// A reference to the _deleted field definition as an Iceberg NestedField
+<a href=#269 id=269 data-nosnippet>269</a></span><span class="kw">pub fn </span>deleted_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw-2">&amp;</span>DELETED_FIELD
+<a href=#271 id=271 data-nosnippet>271</a>}
+<a href=#272 id=272 data-nosnippet>272</a>
+<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// Returns the Iceberg field definition for the _spec_id metadata column.
+<a href=#274 id=274 data-nosnippet>274</a>///
+<a href=#275 id=275 data-nosnippet>275</a>/// # Returns
+<a href=#276 id=276 data-nosnippet>276</a>/// A reference to the _spec_id field definition as an Iceberg NestedField
+<a href=#277 id=277 data-nosnippet>277</a></span><span class="kw">pub fn </span>spec_id_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw-2">&amp;</span>SPEC_ID_FIELD
+<a href=#279 id=279 data-nosnippet>279</a>}
+<a href=#280 id=280 data-nosnippet>280</a>
+<a href=#281 id=281 data-nosnippet>281</a><span class="doccomment">/// Returns the Iceberg field definition for the file_path column in position delete files.
+<a href=#282 id=282 data-nosnippet>282</a>///
+<a href=#283 id=283 data-nosnippet>283</a>/// # Returns
+<a href=#284 id=284 data-nosnippet>284</a>/// A reference to the file_path field definition as an Iceberg NestedField
+<a href=#285 id=285 data-nosnippet>285</a></span><span class="kw">pub fn </span>delete_file_path_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw-2">&amp;</span>DELETE_FILE_PATH_FIELD
+<a href=#287 id=287 data-nosnippet>287</a>}
+<a href=#288 id=288 data-nosnippet>288</a>
+<a href=#289 id=289 data-nosnippet>289</a><span class="doccomment">/// Returns the Iceberg field definition for the pos column in position delete files.
+<a href=#290 id=290 data-nosnippet>290</a>///
+<a href=#291 id=291 data-nosnippet>291</a>/// # Returns
+<a href=#292 id=292 data-nosnippet>292</a>/// A reference to the pos field definition as an Iceberg NestedField
+<a href=#293 id=293 data-nosnippet>293</a></span><span class="kw">pub fn </span>delete_file_pos_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw-2">&amp;</span>DELETE_FILE_POS_FIELD
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="doccomment">/// Returns the Iceberg field definition for the _change_type metadata column.
+<a href=#298 id=298 data-nosnippet>298</a>///
+<a href=#299 id=299 data-nosnippet>299</a>/// # Returns
+<a href=#300 id=300 data-nosnippet>300</a>/// A reference to the _change_type field definition as an Iceberg NestedField
+<a href=#301 id=301 data-nosnippet>301</a></span><span class="kw">pub fn </span>change_type_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw-2">&amp;</span>CHANGE_TYPE_FIELD
+<a href=#303 id=303 data-nosnippet>303</a>}
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a><span class="doccomment">/// Returns the Iceberg field definition for the _change_ordinal metadata column.
+<a href=#306 id=306 data-nosnippet>306</a>///
+<a href=#307 id=307 data-nosnippet>307</a>/// # Returns
+<a href=#308 id=308 data-nosnippet>308</a>/// A reference to the _change_ordinal field definition as an Iceberg NestedField
+<a href=#309 id=309 data-nosnippet>309</a></span><span class="kw">pub fn </span>change_ordinal_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw-2">&amp;</span>CHANGE_ORDINAL_FIELD
+<a href=#311 id=311 data-nosnippet>311</a>}
+<a href=#312 id=312 data-nosnippet>312</a>
+<a href=#313 id=313 data-nosnippet>313</a><span class="doccomment">/// Returns the Iceberg field definition for the _commit_snapshot_id metadata column.
+<a href=#314 id=314 data-nosnippet>314</a>///
+<a href=#315 id=315 data-nosnippet>315</a>/// # Returns
+<a href=#316 id=316 data-nosnippet>316</a>/// A reference to the _commit_snapshot_id field definition as an Iceberg NestedField
+<a href=#317 id=317 data-nosnippet>317</a></span><span class="kw">pub fn </span>commit_snapshot_id_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="kw-2">&amp;</span>COMMIT_SNAPSHOT_ID_FIELD
+<a href=#319 id=319 data-nosnippet>319</a>}
+<a href=#320 id=320 data-nosnippet>320</a>
+<a href=#321 id=321 data-nosnippet>321</a><span class="doccomment">/// Returns the Iceberg field definition for the _row_id metadata column.
+<a href=#322 id=322 data-nosnippet>322</a>///
+<a href=#323 id=323 data-nosnippet>323</a>/// # Returns
+<a href=#324 id=324 data-nosnippet>324</a>/// A reference to the _row_id field definition as an Iceberg NestedField
+<a href=#325 id=325 data-nosnippet>325</a></span><span class="kw">pub fn </span>row_id_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw-2">&amp;</span>ROW_ID_FIELD
+<a href=#327 id=327 data-nosnippet>327</a>}
+<a href=#328 id=328 data-nosnippet>328</a>
+<a href=#329 id=329 data-nosnippet>329</a><span class="doccomment">/// Returns the Iceberg field definition for the _last_updated_sequence_number metadata column.
+<a href=#330 id=330 data-nosnippet>330</a>///
+<a href=#331 id=331 data-nosnippet>331</a>/// # Returns
+<a href=#332 id=332 data-nosnippet>332</a>/// A reference to the _last_updated_sequence_number field definition as an Iceberg NestedField
+<a href=#333 id=333 data-nosnippet>333</a></span><span class="kw">pub fn </span>last_updated_sequence_number_field() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef {
+<a href=#334 id=334 data-nosnippet>334</a>    <span class="kw-2">&amp;</span>LAST_UPDATED_SEQUENCE_NUMBER_FIELD
+<a href=#335 id=335 data-nosnippet>335</a>}
+<a href=#336 id=336 data-nosnippet>336</a>
+<a href=#337 id=337 data-nosnippet>337</a><span class="doccomment">/// Creates the Iceberg field definition for the _partition metadata column.
+<a href=#338 id=338 data-nosnippet>338</a>///
+<a href=#339 id=339 data-nosnippet>339</a>/// The _partition field is a struct whose fields depend on the partition spec.
+<a href=#340 id=340 data-nosnippet>340</a>/// This function creates the field dynamically with the provided partition fields.
+<a href=#341 id=341 data-nosnippet>341</a>///
+<a href=#342 id=342 data-nosnippet>342</a>/// # Arguments
+<a href=#343 id=343 data-nosnippet>343</a>/// * `partition_fields` - The fields that make up the partition struct
+<a href=#344 id=344 data-nosnippet>344</a>///
+<a href=#345 id=345 data-nosnippet>345</a>/// # Returns
+<a href=#346 id=346 data-nosnippet>346</a>/// A new _partition field definition as an Iceberg NestedField
+<a href=#347 id=347 data-nosnippet>347</a>///
+<a href=#348 id=348 data-nosnippet>348</a>/// # Example
+<a href=#349 id=349 data-nosnippet>349</a>/// ```
+<a href=#350 id=350 data-nosnippet>350</a>/// use std::sync::Arc;
+<a href=#351 id=351 data-nosnippet>351</a>///
+<a href=#352 id=352 data-nosnippet>352</a>/// use iceberg::metadata_columns::partition_field;
+<a href=#353 id=353 data-nosnippet>353</a>/// use iceberg::spec::{NestedField, PrimitiveType, Type};
+<a href=#354 id=354 data-nosnippet>354</a>///
+<a href=#355 id=355 data-nosnippet>355</a>/// let fields = vec![
+<a href=#356 id=356 data-nosnippet>356</a>///     Arc::new(NestedField::required(
+<a href=#357 id=357 data-nosnippet>357</a>///         1,
+<a href=#358 id=358 data-nosnippet>358</a>///         "year",
+<a href=#359 id=359 data-nosnippet>359</a>///         Type::Primitive(PrimitiveType::Int),
+<a href=#360 id=360 data-nosnippet>360</a>///     )),
+<a href=#361 id=361 data-nosnippet>361</a>///     Arc::new(NestedField::required(
+<a href=#362 id=362 data-nosnippet>362</a>///         2,
+<a href=#363 id=363 data-nosnippet>363</a>///         "month",
+<a href=#364 id=364 data-nosnippet>364</a>///         Type::Primitive(PrimitiveType::Int),
+<a href=#365 id=365 data-nosnippet>365</a>///     )),
+<a href=#366 id=366 data-nosnippet>366</a>/// ];
+<a href=#367 id=367 data-nosnippet>367</a>/// let partition_field = partition_field(fields);
+<a href=#368 id=368 data-nosnippet>368</a>/// ```
+<a href=#369 id=369 data-nosnippet>369</a></span><span class="kw">pub fn </span>partition_field(partition_fields: Vec&lt;NestedFieldRef&gt;) -&gt; NestedFieldRef {
+<a href=#370 id=370 data-nosnippet>370</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::StructType;
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>    Arc::new(
+<a href=#373 id=373 data-nosnippet>373</a>        NestedField::required(
+<a href=#374 id=374 data-nosnippet>374</a>            RESERVED_FIELD_ID_PARTITION,
+<a href=#375 id=375 data-nosnippet>375</a>            RESERVED_COL_NAME_PARTITION,
+<a href=#376 id=376 data-nosnippet>376</a>            Type::Struct(StructType::new(partition_fields)),
+<a href=#377 id=377 data-nosnippet>377</a>        )
+<a href=#378 id=378 data-nosnippet>378</a>        .with_doc(<span class="string">"Partition to which a row belongs"</span>),
+<a href=#379 id=379 data-nosnippet>379</a>    )
+<a href=#380 id=380 data-nosnippet>380</a>}
+<a href=#381 id=381 data-nosnippet>381</a>
+<a href=#382 id=382 data-nosnippet>382</a><span class="doccomment">/// Returns the Iceberg field definition for a metadata field ID.
+<a href=#383 id=383 data-nosnippet>383</a>///
+<a href=#384 id=384 data-nosnippet>384</a>/// Note: This function does not support `_partition` (field ID `i32::MAX - 5`) because
+<a href=#385 id=385 data-nosnippet>385</a>/// it's a struct field that requires dynamic partition fields. Use `partition_field()`
+<a href=#386 id=386 data-nosnippet>386</a>/// instead to create the `_partition` field with the appropriate partition fields.
+<a href=#387 id=387 data-nosnippet>387</a>///
+<a href=#388 id=388 data-nosnippet>388</a>/// # Arguments
+<a href=#389 id=389 data-nosnippet>389</a>/// * `field_id` - The metadata field ID
+<a href=#390 id=390 data-nosnippet>390</a>///
+<a href=#391 id=391 data-nosnippet>391</a>/// # Returns
+<a href=#392 id=392 data-nosnippet>392</a>/// The Iceberg field definition for the metadata column, or an error if not a metadata field
+<a href=#393 id=393 data-nosnippet>393</a></span><span class="kw">pub fn </span>get_metadata_field(field_id: i32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>NestedFieldRef&gt; {
+<a href=#394 id=394 data-nosnippet>394</a>    <span class="kw">match </span>field_id {
+<a href=#395 id=395 data-nosnippet>395</a>        RESERVED_FIELD_ID_FILE =&gt; <span class="prelude-val">Ok</span>(file_field()),
+<a href=#396 id=396 data-nosnippet>396</a>        RESERVED_FIELD_ID_POS =&gt; <span class="prelude-val">Ok</span>(pos_field()),
+<a href=#397 id=397 data-nosnippet>397</a>        RESERVED_FIELD_ID_DELETED =&gt; <span class="prelude-val">Ok</span>(deleted_field()),
+<a href=#398 id=398 data-nosnippet>398</a>        RESERVED_FIELD_ID_SPEC_ID =&gt; <span class="prelude-val">Ok</span>(spec_id_field()),
+<a href=#399 id=399 data-nosnippet>399</a>        RESERVED_FIELD_ID_PARTITION =&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#400 id=400 data-nosnippet>400</a>            ErrorKind::Unexpected,
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="string">"The _partition field must be created using partition_field() with appropriate partition fields"</span>,
+<a href=#402 id=402 data-nosnippet>402</a>        )),
+<a href=#403 id=403 data-nosnippet>403</a>        RESERVED_FIELD_ID_DELETE_FILE_PATH =&gt; <span class="prelude-val">Ok</span>(delete_file_path_field()),
+<a href=#404 id=404 data-nosnippet>404</a>        RESERVED_FIELD_ID_DELETE_FILE_POS =&gt; <span class="prelude-val">Ok</span>(delete_file_pos_field()),
+<a href=#405 id=405 data-nosnippet>405</a>        RESERVED_FIELD_ID_CHANGE_TYPE =&gt; <span class="prelude-val">Ok</span>(change_type_field()),
+<a href=#406 id=406 data-nosnippet>406</a>        RESERVED_FIELD_ID_CHANGE_ORDINAL =&gt; <span class="prelude-val">Ok</span>(change_ordinal_field()),
+<a href=#407 id=407 data-nosnippet>407</a>        RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID =&gt; <span class="prelude-val">Ok</span>(commit_snapshot_id_field()),
+<a href=#408 id=408 data-nosnippet>408</a>        RESERVED_FIELD_ID_ROW_ID =&gt; <span class="prelude-val">Ok</span>(row_id_field()),
+<a href=#409 id=409 data-nosnippet>409</a>        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER =&gt; <span class="prelude-val">Ok</span>(last_updated_sequence_number_field()),
+<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">_ if </span>is_metadata_field(field_id) =&gt; {
+<a href=#411 id=411 data-nosnippet>411</a>            <span class="comment">// Future metadata fields can be added here
+<a href=#412 id=412 data-nosnippet>412</a>            </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#413 id=413 data-nosnippet>413</a>                ErrorKind::Unexpected,
+<a href=#414 id=414 data-nosnippet>414</a>                <span class="macro">format!</span>(
+<a href=#415 id=415 data-nosnippet>415</a>                    <span class="string">"Metadata field ID {field_id} recognized but field definition not implemented"
+<a href=#416 id=416 data-nosnippet>416</a>                </span>),
+<a href=#417 id=417 data-nosnippet>417</a>            ))
+<a href=#418 id=418 data-nosnippet>418</a>        }
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#420 id=420 data-nosnippet>420</a>            ErrorKind::Unexpected,
+<a href=#421 id=421 data-nosnippet>421</a>            <span class="macro">format!</span>(<span class="string">"Field ID {field_id} is not a metadata field"</span>),
+<a href=#422 id=422 data-nosnippet>422</a>        )),
+<a href=#423 id=423 data-nosnippet>423</a>    }
+<a href=#424 id=424 data-nosnippet>424</a>}
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a><span class="doccomment">/// Returns the field ID for a metadata column name.
+<a href=#427 id=427 data-nosnippet>427</a>///
+<a href=#428 id=428 data-nosnippet>428</a>/// # Arguments
+<a href=#429 id=429 data-nosnippet>429</a>/// * `column_name` - The metadata column name
+<a href=#430 id=430 data-nosnippet>430</a>///
+<a href=#431 id=431 data-nosnippet>431</a>/// # Returns
+<a href=#432 id=432 data-nosnippet>432</a>/// The field ID of the metadata column, or an error if the column name is not recognized
+<a href=#433 id=433 data-nosnippet>433</a></span><span class="kw">pub fn </span>get_metadata_field_id(column_name: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="kw">match </span>column_name {
+<a href=#435 id=435 data-nosnippet>435</a>        RESERVED_COL_NAME_FILE =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_FILE),
+<a href=#436 id=436 data-nosnippet>436</a>        RESERVED_COL_NAME_POS =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_POS),
+<a href=#437 id=437 data-nosnippet>437</a>        RESERVED_COL_NAME_DELETED =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_DELETED),
+<a href=#438 id=438 data-nosnippet>438</a>        RESERVED_COL_NAME_SPEC_ID =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_SPEC_ID),
+<a href=#439 id=439 data-nosnippet>439</a>        RESERVED_COL_NAME_PARTITION =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_PARTITION),
+<a href=#440 id=440 data-nosnippet>440</a>        RESERVED_COL_NAME_DELETE_FILE_PATH =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_DELETE_FILE_PATH),
+<a href=#441 id=441 data-nosnippet>441</a>        RESERVED_COL_NAME_DELETE_FILE_POS =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_DELETE_FILE_POS),
+<a href=#442 id=442 data-nosnippet>442</a>        RESERVED_COL_NAME_CHANGE_TYPE =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_CHANGE_TYPE),
+<a href=#443 id=443 data-nosnippet>443</a>        RESERVED_COL_NAME_CHANGE_ORDINAL =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_CHANGE_ORDINAL),
+<a href=#444 id=444 data-nosnippet>444</a>        RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID),
+<a href=#445 id=445 data-nosnippet>445</a>        RESERVED_COL_NAME_ROW_ID =&gt; <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_ROW_ID),
+<a href=#446 id=446 data-nosnippet>446</a>        RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER =&gt; {
+<a href=#447 id=447 data-nosnippet>447</a>            <span class="prelude-val">Ok</span>(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+<a href=#448 id=448 data-nosnippet>448</a>        }
+<a href=#449 id=449 data-nosnippet>449</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#450 id=450 data-nosnippet>450</a>            ErrorKind::Unexpected,
+<a href=#451 id=451 data-nosnippet>451</a>            <span class="macro">format!</span>(<span class="string">"Unknown/unsupported metadata column name: {column_name}"</span>),
+<a href=#452 id=452 data-nosnippet>452</a>        )),
+<a href=#453 id=453 data-nosnippet>453</a>    }
+<a href=#454 id=454 data-nosnippet>454</a>}
+<a href=#455 id=455 data-nosnippet>455</a>
+<a href=#456 id=456 data-nosnippet>456</a><span class="doccomment">/// Checks if a field ID is a metadata field.
+<a href=#457 id=457 data-nosnippet>457</a>///
+<a href=#458 id=458 data-nosnippet>458</a>/// # Arguments
+<a href=#459 id=459 data-nosnippet>459</a>/// * `field_id` - The field ID to check
+<a href=#460 id=460 data-nosnippet>460</a>///
+<a href=#461 id=461 data-nosnippet>461</a>/// # Returns
+<a href=#462 id=462 data-nosnippet>462</a>/// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
+<a href=#463 id=463 data-nosnippet>463</a></span><span class="kw">pub fn </span>is_metadata_field(field_id: i32) -&gt; bool {
+<a href=#464 id=464 data-nosnippet>464</a>    <span class="macro">matches!</span>(
+<a href=#465 id=465 data-nosnippet>465</a>        field_id,
+<a href=#466 id=466 data-nosnippet>466</a>        RESERVED_FIELD_ID_FILE
+<a href=#467 id=467 data-nosnippet>467</a>            | RESERVED_FIELD_ID_POS
+<a href=#468 id=468 data-nosnippet>468</a>            | RESERVED_FIELD_ID_DELETED
+<a href=#469 id=469 data-nosnippet>469</a>            | RESERVED_FIELD_ID_SPEC_ID
+<a href=#470 id=470 data-nosnippet>470</a>            | RESERVED_FIELD_ID_PARTITION
+<a href=#471 id=471 data-nosnippet>471</a>            | RESERVED_FIELD_ID_DELETE_FILE_PATH
+<a href=#472 id=472 data-nosnippet>472</a>            | RESERVED_FIELD_ID_DELETE_FILE_POS
+<a href=#473 id=473 data-nosnippet>473</a>            | RESERVED_FIELD_ID_CHANGE_TYPE
+<a href=#474 id=474 data-nosnippet>474</a>            | RESERVED_FIELD_ID_CHANGE_ORDINAL
+<a href=#475 id=475 data-nosnippet>475</a>            | RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID
+<a href=#476 id=476 data-nosnippet>476</a>            | RESERVED_FIELD_ID_ROW_ID
+<a href=#477 id=477 data-nosnippet>477</a>            | RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
+<a href=#478 id=478 data-nosnippet>478</a>    )
+<a href=#479 id=479 data-nosnippet>479</a>}
+<a href=#480 id=480 data-nosnippet>480</a>
+<a href=#481 id=481 data-nosnippet>481</a><span class="doccomment">/// Checks if a column name is a metadata column.
+<a href=#482 id=482 data-nosnippet>482</a>///
+<a href=#483 id=483 data-nosnippet>483</a>/// # Arguments
+<a href=#484 id=484 data-nosnippet>484</a>/// * `column_name` - The column name to check
+<a href=#485 id=485 data-nosnippet>485</a>///
+<a href=#486 id=486 data-nosnippet>486</a>/// # Returns
+<a href=#487 id=487 data-nosnippet>487</a>/// `true` if the column name is a metadata column, `false` otherwise
+<a href=#488 id=488 data-nosnippet>488</a></span><span class="kw">pub fn </span>is_metadata_column_name(column_name: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#489 id=489 data-nosnippet>489</a>    get_metadata_field_id(column_name).is_ok()
+<a href=#490 id=490 data-nosnippet>490</a>}
+<a href=#491 id=491 data-nosnippet>491</a>
+<a href=#492 id=492 data-nosnippet>492</a><span class="attr">#[cfg(test)]
+<a href=#493 id=493 data-nosnippet>493</a></span><span class="kw">mod </span>tests {
+<a href=#494 id=494 data-nosnippet>494</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#495 id=495 data-nosnippet>495</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::PrimitiveType;
+<a href=#496 id=496 data-nosnippet>496</a>
+<a href=#497 id=497 data-nosnippet>497</a>    <span class="attr">#[test]
+<a href=#498 id=498 data-nosnippet>498</a>    </span><span class="kw">fn </span>test_partition_field_creation() {
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="comment">// Create partition fields for a hypothetical year/month partition
+<a href=#500 id=500 data-nosnippet>500</a>        </span><span class="kw">let </span>partition_fields = <span class="macro">vec!</span>[
+<a href=#501 id=501 data-nosnippet>501</a>            Arc::new(NestedField::required(
+<a href=#502 id=502 data-nosnippet>502</a>                <span class="number">1000</span>,
+<a href=#503 id=503 data-nosnippet>503</a>                <span class="string">"year"</span>,
+<a href=#504 id=504 data-nosnippet>504</a>                Type::Primitive(PrimitiveType::Int),
+<a href=#505 id=505 data-nosnippet>505</a>            )),
+<a href=#506 id=506 data-nosnippet>506</a>            Arc::new(NestedField::required(
+<a href=#507 id=507 data-nosnippet>507</a>                <span class="number">1001</span>,
+<a href=#508 id=508 data-nosnippet>508</a>                <span class="string">"month"</span>,
+<a href=#509 id=509 data-nosnippet>509</a>                Type::Primitive(PrimitiveType::Int),
+<a href=#510 id=510 data-nosnippet>510</a>            )),
+<a href=#511 id=511 data-nosnippet>511</a>        ];
+<a href=#512 id=512 data-nosnippet>512</a>
+<a href=#513 id=513 data-nosnippet>513</a>        <span class="comment">// Create the _partition metadata field
+<a href=#514 id=514 data-nosnippet>514</a>        </span><span class="kw">let </span>partition = partition_field(partition_fields);
+<a href=#515 id=515 data-nosnippet>515</a>
+<a href=#516 id=516 data-nosnippet>516</a>        <span class="comment">// Verify field properties
+<a href=#517 id=517 data-nosnippet>517</a>        </span><span class="macro">assert_eq!</span>(partition.id, RESERVED_FIELD_ID_PARTITION);
+<a href=#518 id=518 data-nosnippet>518</a>        <span class="macro">assert_eq!</span>(partition.name, RESERVED_COL_NAME_PARTITION);
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="macro">assert!</span>(partition.required);
+<a href=#520 id=520 data-nosnippet>520</a>
+<a href=#521 id=521 data-nosnippet>521</a>        <span class="comment">// Verify it's a struct type with correct fields
+<a href=#522 id=522 data-nosnippet>522</a>        </span><span class="kw">if let </span>Type::Struct(struct_type) = partition.field_type.as_ref() {
+<a href=#523 id=523 data-nosnippet>523</a>            <span class="macro">assert_eq!</span>(struct_type.fields().len(), <span class="number">2</span>);
+<a href=#524 id=524 data-nosnippet>524</a>            <span class="macro">assert_eq!</span>(struct_type.fields()[<span class="number">0</span>].name, <span class="string">"year"</span>);
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="macro">assert_eq!</span>(struct_type.fields()[<span class="number">1</span>].name, <span class="string">"month"</span>);
+<a href=#526 id=526 data-nosnippet>526</a>        } <span class="kw">else </span>{
+<a href=#527 id=527 data-nosnippet>527</a>            <span class="macro">panic!</span>(<span class="string">"Expected struct type for _partition field"</span>);
+<a href=#528 id=528 data-nosnippet>528</a>        }
+<a href=#529 id=529 data-nosnippet>529</a>    }
+<a href=#530 id=530 data-nosnippet>530</a>
+<a href=#531 id=531 data-nosnippet>531</a>    <span class="attr">#[test]
+<a href=#532 id=532 data-nosnippet>532</a>    </span><span class="kw">fn </span>test_partition_field_id_recognized() {
+<a href=#533 id=533 data-nosnippet>533</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_PARTITION));
+<a href=#534 id=534 data-nosnippet>534</a>    }
+<a href=#535 id=535 data-nosnippet>535</a>
+<a href=#536 id=536 data-nosnippet>536</a>    <span class="attr">#[test]
+<a href=#537 id=537 data-nosnippet>537</a>    </span><span class="kw">fn </span>test_partition_field_name_recognized() {
+<a href=#538 id=538 data-nosnippet>538</a>        <span class="macro">assert_eq!</span>(
+<a href=#539 id=539 data-nosnippet>539</a>            get_metadata_field_id(RESERVED_COL_NAME_PARTITION).unwrap(),
+<a href=#540 id=540 data-nosnippet>540</a>            RESERVED_FIELD_ID_PARTITION
+<a href=#541 id=541 data-nosnippet>541</a>        );
+<a href=#542 id=542 data-nosnippet>542</a>    }
+<a href=#543 id=543 data-nosnippet>543</a>
+<a href=#544 id=544 data-nosnippet>544</a>    <span class="attr">#[test]
+<a href=#545 id=545 data-nosnippet>545</a>    </span><span class="kw">fn </span>test_get_metadata_field_returns_error_for_partition() {
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="comment">// partition field requires dynamic creation, so get_metadata_field should return an error
+<a href=#547 id=547 data-nosnippet>547</a>        </span><span class="kw">let </span>result = get_metadata_field(RESERVED_FIELD_ID_PARTITION);
+<a href=#548 id=548 data-nosnippet>548</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#549 id=549 data-nosnippet>549</a>        <span class="macro">assert!</span>(
+<a href=#550 id=550 data-nosnippet>550</a>            result
+<a href=#551 id=551 data-nosnippet>551</a>                .unwrap_err()
+<a href=#552 id=552 data-nosnippet>552</a>                .to_string()
+<a href=#553 id=553 data-nosnippet>553</a>                .contains(<span class="string">"partition_field()"</span>)
+<a href=#554 id=554 data-nosnippet>554</a>        );
+<a href=#555 id=555 data-nosnippet>555</a>    }
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a>    <span class="attr">#[test]
+<a href=#558 id=558 data-nosnippet>558</a>    </span><span class="kw">fn </span>test_all_metadata_field_ids() {
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="comment">// Test that all non-partition metadata fields can be retrieved
+<a href=#560 id=560 data-nosnippet>560</a>        </span><span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_FILE).is_ok());
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_POS).is_ok());
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_DELETED).is_ok());
+<a href=#563 id=563 data-nosnippet>563</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_SPEC_ID).is_ok());
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_PATH).is_ok());
+<a href=#565 id=565 data-nosnippet>565</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_POS).is_ok());
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_CHANGE_TYPE).is_ok());
+<a href=#567 id=567 data-nosnippet>567</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_CHANGE_ORDINAL).is_ok());
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID).is_ok());
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_ROW_ID).is_ok());
+<a href=#570 id=570 data-nosnippet>570</a>        <span class="macro">assert!</span>(get_metadata_field(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER).is_ok());
+<a href=#571 id=571 data-nosnippet>571</a>    }
+<a href=#572 id=572 data-nosnippet>572</a>}</code></pre></div></section></main></body></html>
