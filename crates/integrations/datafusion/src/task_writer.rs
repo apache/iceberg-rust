@@ -15,21 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! TaskWriter for DataFusion integration.
-//!
-//! This module provides a high-level writer that handles partitioning and routing
-//! of RecordBatch data to Iceberg tables.
-
-use datafusion::arrow::array::RecordBatch;
-use iceberg::Result;
-use iceberg::arrow::RecordBatchPartitionSplitter;
-use iceberg::spec::{DataFile, PartitionSpecRef, SchemaRef};
-use iceberg::writer::IcebergWriterBuilder;
-use iceberg::writer::partitioning::PartitioningWriter;
-use iceberg::writer::partitioning::clustered_writer::ClusteredWriter;
-use iceberg::writer::partitioning::fanout_writer::FanoutWriter;
-use iceberg::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
-
 /// High-level writer for DataFusion that handles partitioning and routing of RecordBatch data.
 ///
 /// TaskWriter coordinates writing data to Iceberg tables by:
