@@ -194,7 +194,17 @@ impl PlanContext {
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let manifest_files = manifest_list.entries().iter();
+        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        // Sort manifest files to process delete manifests first.
+        // This avoids a deadlock where the producer blocks on sending data manifest entries
+        // (because the data channel is full) while the delete manifest consumer is waiting
+        // for delete manifest entries (which haven't been produced yet).
+        // By processing delete manifests first, we ensure the delete consumer can finish,
+        // which then allows the data consumer to start draining the data channel.
+        manifest_files.sort_by_key(|m| match m.content {
+            ManifestContentType::Deletes => 0,
+            ManifestContentType::Data => 1,
+        });
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
