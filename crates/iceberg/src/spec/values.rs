@@ -2254,6 +2254,8 @@ mod timestamptz {
 }
 
 mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -2904,15 +2906,13 @@ mod _serde {
                     }
                     _ => Err(invalid_err("list")),
                 },
-                RawLiteralEnum::Record(Record {
-                    required,
-                    optional: _,
-                }) => match ty {
+                RawLiteralEnum::Record(Record { required, optional }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<Option<Literal>> = required
-                            .into_iter()
-                            .map(|(field_name, value)| {
-                                let field = struct_ty
+                        let mut value_by_name = HashMap::new();
+
+                        for (field_name, value) in required.into_iter() {
+                            let field =
+                                struct_ty
                                     .field_by_name(field_name.as_str())
                                     .ok_or_else(|| {
                                         invalid_err_with_reason(
@@ -2920,10 +2920,49 @@ mod _serde {
                                             &format!("field {} is not exist", &field_name),
                                         )
                                     })?;
-                                let value = value.try_into(&field.field_type)?;
-                                Ok(value)
-                            })
-                            .collect::<Result<_, Error>>()?;
+                            let value = value.try_into(&field.field_type)?;
+                            if value.is_none() && field.required {
+                                return Err(invalid_err_with_reason(
+                                    "record",
+                                    &format!("required field {} is null", &field_name),
+                                ));
+                            }
+                            value_by_name.insert(field.name.clone(), value);
+                        }
+
+                        for (field_name, value) in optional.into_iter() {
+                            let field =
+                                struct_ty
+                                    .field_by_name(field_name.as_str())
+                                    .ok_or_else(|| {
+                                        invalid_err_with_reason(
+                                            "record",
+                                            &format!("field {} is not exist", &field_name),
+                                        )
+                                    })?;
+                            let value = match value {
+                                Some(v) => v.try_into(&field.field_type)?,
+                                None => None,
+                            };
+                            value_by_name.insert(field.name.clone(), value);
+                        }
+
+                        let mut iters = Vec::with_capacity(struct_ty.fields().len());
+                        for field in struct_ty.fields() {
+                            match value_by_name.remove(&field.name) {
+                                Some(value) => iters.push(value),
+                                None => {
+                                    if field.required {
+                                        return Err(invalid_err_with_reason(
+                                            "record",
+                                            &format!("required field {} is missing", field.name),
+                                        ));
+                                    }
+                                    iters.push(None);
+                                }
+                            }
+                        }
+
                         Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
                     }
                     Type::Map(map_ty) => {
@@ -3052,6 +3091,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn json_struct_preserves_schema_order() {
+        // struct fields are deliberately ordered as b, then a to detect ordering drift
+        let struct_type = StructType::new(vec![
+            NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+        let literal = Literal::Struct(Struct::from_iter(vec![
+            Some(Literal::int(5)),
+            Some(Literal::long(10)),
+        ]));
+
+        let raw =
+            RawLiteral::try_from(literal.clone(), &Type::Struct(struct_type.clone())).unwrap();
+
+        // serde_json::Value uses BTreeMap (sorted keys), which mimics the RW metadata path.
+        let value = serde_json::to_value(&raw).unwrap();
+        let deser: RawLiteral = serde_json::from_value(value).unwrap();
+        let roundtrip = deser.try_into(&Type::Struct(struct_type)).unwrap().unwrap();
+
+        assert_eq!(roundtrip, literal);
+    }
     #[test]
     fn json_boolean() {
         let record = r#"true"#;
