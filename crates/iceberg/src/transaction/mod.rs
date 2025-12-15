@@ -54,6 +54,8 @@ mod action;
 
 pub use action::*;
 mod append;
+
+pub use append::FastAppendAction;
 mod manifest_filter;
 
 pub use manifest_filter::*;
@@ -77,7 +79,7 @@ use rewrite_files::RewriteFilesAction;
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
-use crate::transaction::append::{FastAppendAction, MergeAppendAction};
+use crate::transaction::append::MergeAppendAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;

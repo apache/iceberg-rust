@@ -385,8 +385,10 @@
 //! ```
 
 pub mod base_writer;
+pub mod delta_writer;
 pub mod file_writer;
 pub mod partitioning;
+pub mod task_writer;
 
 use arrow_array::RecordBatch;
 
@@ -418,6 +420,8 @@ pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
     async fn close(&mut self) -> Result<O>;
 }
+
+pub use task_writer::TaskWriter;
 
 /// The current file status of the Iceberg writer.
 /// This is implemented for writers that write a single file at a time.

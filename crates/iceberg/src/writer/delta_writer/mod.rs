@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+//! Higher-level delta writers built on top of base Iceberg writers.
 
-mod error;
-pub use error::*;
+pub mod writer;
 
-pub mod physical_plan;
-mod schema;
-pub mod table;
-pub use table::table_provider_factory::IcebergTableProviderFactory;
-pub use table::*;
+pub use writer::{DELETE_OP, DeltaWriter, DeltaWriterBuilder, INSERT_OP};

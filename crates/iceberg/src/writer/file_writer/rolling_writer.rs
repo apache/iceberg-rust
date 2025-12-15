@@ -249,11 +249,15 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFi
     }
 
     fn current_row_num(&self) -> usize {
-        self.inner.as_ref().unwrap().current_row_num()
+        self.inner
+            .as_ref()
+            .map_or(0, |inner| inner.current_row_num())
     }
 
     fn current_written_size(&self) -> usize {
-        self.inner.as_ref().unwrap().current_written_size()
+        self.inner
+            .as_ref()
+            .map_or(0, |inner| inner.current_written_size())
     }
 }
 

@@ -68,6 +68,7 @@ impl FastAppendAction {
         self
     }
 
+    /// Set target branch for the snapshot.
     pub fn set_target_branch(mut self, target_branch: String) -> Self {
         self.target_branch = Some(target_branch);
         self
@@ -106,6 +107,7 @@ impl FastAppendAction {
         self
     }
 
+    /// Set snapshot id for the snapshot.
     pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self

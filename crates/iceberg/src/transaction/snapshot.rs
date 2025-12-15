@@ -29,8 +29,8 @@ use crate::io::FileIO;
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
     ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter,
-    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    ManifestWriterBuilder, Operation, PrimitiveLiteral, Snapshot, SnapshotReference,
+    SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
     UNASSIGNED_SEQUENCE_NUMBER, update_snapshot_summaries,
 };
 use crate::table::Table;
@@ -277,14 +277,41 @@ impl<'a> SnapshotProducer<'a> {
         partition_value: &Struct,
         partition_type: &StructType,
     ) -> Result<()> {
+        fn literal_type_name(literal: &PrimitiveLiteral) -> &'static str {
+            match literal {
+                PrimitiveLiteral::Boolean(_) => "boolean",
+                PrimitiveLiteral::Int(_) => "int",
+                PrimitiveLiteral::Long(_) => "long",
+                PrimitiveLiteral::Float(_) => "float",
+                PrimitiveLiteral::Double(_) => "double",
+                PrimitiveLiteral::String(_) => "string",
+                PrimitiveLiteral::Binary(_) => "binary",
+                PrimitiveLiteral::Int128(_) => "decimal",
+                PrimitiveLiteral::UInt128(_) => "uuid",
+                PrimitiveLiteral::AboveMax => "above_max",
+                PrimitiveLiteral::BelowMin => "below_min",
+            }
+        }
+
         if partition_value.fields().len() != partition_type.fields().len() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "Partition value is not compatible with partition type",
+                format!(
+                    "Partition struct field count mismatch. struct_value: {:?} ({} fields), partition_type: {:?} ({} fields)",
+                    partition_value,
+                    partition_value.fields().len(),
+                    partition_type,
+                    partition_type.fields().len()
+                ),
             ));
         }
 
-        for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
+        for (idx, (value, field)) in partition_value
+            .fields()
+            .iter()
+            .zip(partition_type.fields())
+            .enumerate()
+        {
             let field = field.field_type.as_primitive_type().ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
@@ -292,10 +319,20 @@ impl<'a> SnapshotProducer<'a> {
                 )
             })?;
             if let Some(value) = value {
-                if !field.compatible(&value.as_primitive_literal().unwrap()) {
+                let literal = value.as_primitive_literal().unwrap();
+                if !field.compatible(&literal) {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        "Partition value is not compatible partition type",
+                        format!(
+                            "Partition field value {:?} (type {}) is not compatible with partition field type {} at index {}. \
+partition_struct: {:?}, partition_type: {:?}",
+                            literal,
+                            literal_type_name(&literal),
+                            field,
+                            idx,
+                            partition_value,
+                            partition_type
+                        ),
                     ));
                 }
             }
@@ -708,14 +745,17 @@ impl<'a> SnapshotProducer<'a> {
         Ok(ActionCommit::new(updates, requirements))
     }
 
+    /// Set the new data file sequence number for this snapshot
     pub fn set_new_data_file_sequence_number(&mut self, new_data_file_sequence_number: i64) {
         self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
     }
 
+    /// Set the target branch for this snapshot
     pub fn set_target_branch(&mut self, target_branch: String) {
         self.target_branch = target_branch;
     }
 
+    /// Get the target branch for this snapshot
     pub fn target_branch(&self) -> &str {
         &self.target_branch
     }
