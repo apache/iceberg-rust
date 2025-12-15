@@ -273,6 +273,25 @@ fn json_struct() {
 }
 
 #[test]
+fn json_struct_preserves_schema_order() {
+    let struct_type = StructType::new(vec![
+        NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+        NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+    ]);
+    let literal = Literal::Struct(Struct::from_iter(vec![
+        Some(Literal::int(5)),
+        Some(Literal::long(10)),
+    ]));
+
+    let raw = RawLiteral::try_from(literal.clone(), &Type::Struct(struct_type.clone())).unwrap();
+    let value = serde_json::to_value(&raw).unwrap();
+    let deser: RawLiteral = serde_json::from_value(value).unwrap();
+    let roundtrip = deser.try_into(&Type::Struct(struct_type)).unwrap().unwrap();
+
+    assert_eq!(roundtrip, literal);
+}
+
+#[test]
 fn json_list() {
     let record = r#"[1, 2, 3, null]"#;
 
