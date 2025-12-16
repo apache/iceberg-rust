@@ -104,7 +104,7 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) lower_bounds: HashMap<i32, Datum>,
+    pub lower_bounds: HashMap<i32, Datum>,
     /// field id: 128
     /// key field id: 129
     /// value field id: 130
@@ -117,7 +117,7 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) upper_bounds: HashMap<i32, Datum>,
+    pub upper_bounds: HashMap<i32, Datum>,
     /// field id: 131
     ///
     /// Implementation-specific key metadata for encryption
