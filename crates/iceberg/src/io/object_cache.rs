@@ -185,12 +185,11 @@ impl ObjectCache {
 mod tests {
     use std::fs;
 
+    use apache_avro::Codec;
     use minijinja::value::Value;
     use minijinja::{AutoEscape, Environment, context};
     use tempfile::TempDir;
     use uuid::Uuid;
-
-    use apache_avro::Codec;
 
     use super::*;
     use crate::TableIdent;

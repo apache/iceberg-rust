@@ -1373,12 +1373,10 @@ pub(super) mod _serde {
 mod test {
     use std::fs;
 
-    use apache_avro::{Reader, Schema};
+    use apache_avro::{Codec, Reader, Schema};
     use tempfile::TempDir;
 
     use super::_serde::ManifestListV2;
-    use apache_avro::Codec;
-
     use crate::io::FileIOBuilder;
     use crate::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
     use crate::spec::{
@@ -1707,12 +1705,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v1(
-            output_file,
-            1646658105718557341,
-            Some(0),
-            Codec::Null,
-        );
+        let mut writer =
+            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1759,13 +1753,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(
-            output_file,
-            snapshot_id,
-            Some(0),
-            seq_num,
-            Codec::Null,
-        );
+        let mut writer =
+            ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, Codec::Null);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1867,12 +1856,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v1(
-            output_file,
-            1646658105718557341,
-            Some(0),
-            Codec::Null,
-        );
+        let mut writer =
+            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1917,12 +1902,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v1(
-            output_file,
-            1646658105718557341,
-            Some(0),
-            Codec::Null,
-        );
+        let mut writer =
+            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1969,13 +1950,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(
-            output_file,
-            snapshot_id,
-            Some(0),
-            seq_num,
-            Codec::Null,
-        );
+        let mut writer =
+            ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, Codec::Null);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

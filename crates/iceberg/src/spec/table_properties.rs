@@ -209,7 +209,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                     TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
                     255u8,
                 )?;
-                let level = if level_raw == 255 { None } else { Some(level_raw) };
+                let level = if level_raw == 255 {
+                    None
+                } else {
+                    Some(level_raw)
+                };
 
                 // Convert to Codec
                 avro_util::codec_from_str(Some(&codec_name), level)

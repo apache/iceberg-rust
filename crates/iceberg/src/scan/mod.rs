@@ -559,6 +559,7 @@ pub mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
+    use apache_avro::Codec;
     use arrow_array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
@@ -567,7 +568,6 @@ pub mod tests {
     use minijinja::{AutoEscape, Environment, context};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use apache_avro::Codec;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
     use uuid::Uuid;

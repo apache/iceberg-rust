@@ -423,7 +423,8 @@ impl ManifestWriter {
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
 
-        let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), self.compression.clone());
+        let mut avro_writer =
+            AvroWriter::with_codec(&avro_schema, Vec::new(), self.compression.clone());
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema).map_err(|err| {

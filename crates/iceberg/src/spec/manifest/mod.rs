@@ -161,10 +161,9 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
+    use apache_avro::Codec;
     use serde_json::Value;
     use tempfile::TempDir;
-
-    use apache_avro::Codec;
 
     use super::*;
     use crate::io::FileIOBuilder;

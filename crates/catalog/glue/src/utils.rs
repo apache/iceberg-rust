@@ -336,8 +336,13 @@ mod tests {
             .location(metadata.location())
             .build();
 
-        let result =
-            convert_to_glue_table(&table_name, metadata_location, &metadata, &metadata.properties, None)?;
+        let result = convert_to_glue_table(
+            &table_name,
+            metadata_location,
+            &metadata,
+            &metadata.properties,
+            None,
+        )?;
 
         assert_eq!(result.name(), &table_name);
         assert_eq!(result.description(), None);
