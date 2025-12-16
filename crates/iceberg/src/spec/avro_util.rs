@@ -87,8 +87,7 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
         None => Codec::Null,
         Some(unknown) => {
             warn!(
-                "Unrecognized compression codec '{}', using no compression (Codec::Null)",
-                unknown
+                "Unrecognized compression codec '{unknown}', using no compression (Codec::Null)"
             );
             Codec::Null
         }
