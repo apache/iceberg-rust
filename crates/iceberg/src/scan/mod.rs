@@ -619,7 +619,7 @@ pub mod tests {
     //! shared tests for the table scan API
     #![allow(missing_docs)]
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
     use std::sync::Arc;
@@ -2034,8 +2034,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_select_with_file_column() {
-        use arrow_array::cast::AsArray;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
@@ -2157,8 +2155,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_file_column_with_multiple_files() {
-        use std::collections::HashSet;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
