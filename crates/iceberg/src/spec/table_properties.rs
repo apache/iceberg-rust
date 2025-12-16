@@ -419,6 +419,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 
 #[cfg(test)]
 mod tests {
+    use apache_avro::{DeflateSettings, ZstandardSettings};
+    use miniz_oxide::deflate::CompressionLevel;
+
     use super::*;
     use crate::compression::CompressionCodec;
 

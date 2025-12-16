@@ -31,9 +31,11 @@ pub const CODEC_SNAPPY: &str = "snappy";
 pub const CODEC_UNCOMPRESSED: &str = "uncompressed";
 
 /// Default compression level for gzip (matches Java implementation)
-pub const DEFAULT_GZIP_LEVEL: u8 = 9;
+const DEFAULT_GZIP_LEVEL: u8 = 9;
 /// Default compression level for zstd (matches Java implementation)
-pub const DEFAULT_ZSTD_LEVEL: u8 = 1;
+const DEFAULT_ZSTD_LEVEL: u8 = 1;
+/// Max supported level for ZSTD
+const MAX_ZSTD_LEVEL: u8 = 22;
 
 /// Convert codec name and level to apache_avro::Codec.
 /// Returns Codec::Null for unknown or unsupported codecs.
@@ -48,6 +50,7 @@ pub const DEFAULT_ZSTD_LEVEL: u8 = 1;
 ///   - 10: UberCompression
 ///   - 6: DefaultLevel (balanced speed/compression)
 ///   - Other values: DefaultLevel
+///
 ///   For zstd, level is clamped to valid range (0-22).
 ///   When `None`, uses codec-specific defaults.
 ///
@@ -58,9 +61,7 @@ pub const DEFAULT_ZSTD_LEVEL: u8 = 1;
 /// - `snappy`: Uses Snappy compression (level parameter ignored)
 /// - `uncompressed` or `None`: No compression
 /// - Any other value: Defaults to no compression (Codec::Null)
-/// Convert codec name and level to apache_avro::Codec.
-/// This is public so it can be used when parsing table properties.
-pub fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
+pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
     // Use case-insensitive comparison to match Java implementation
     match codec.map(|s| s.to_lowercase()).as_deref() {
         Some(c) if c == CODEC_GZIP => {
@@ -78,7 +79,7 @@ pub fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
         }
         Some(c) if c == CODEC_ZSTD => {
             // Zstandard supports levels 0-22, clamp to valid range
-            let zstd_level = level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(22);
+            let zstd_level = level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(MAX_ZSTD_LEVEL);
             Codec::Zstandard(ZstandardSettings::new(zstd_level))
         }
         Some(c) if c == CODEC_SNAPPY => Codec::Snappy,
@@ -125,8 +126,11 @@ mod tests {
 
     #[test]
     fn test_codec_from_str_zstd_clamping() {
-        let codec = codec_from_str(Some("zstd"), Some(23));
-        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(22)));
+        let codec = codec_from_str(Some("zstd"), Some(MAX_ZSTD_LEVEL + 1));
+        assert_eq!(
+            codec,
+            Codec::Zstandard(ZstandardSettings::new(MAX_ZSTD_LEVEL))
+        );
     }
 
     #[test]
