@@ -386,8 +386,8 @@ mod test {
         assert_eq!(
             location.to_string(),
             format!(
-                "/test/table/metadata/00000-{}{}.metadata.json",
-                location.id, GZIP_SUFFIX
+                "/test/table/metadata/00000-{}{GZIP_SUFFIX}.metadata.json",
+                location.id
             )
         );
 
@@ -424,7 +424,7 @@ mod test {
         let next_none = MetadataLocation::next_version(&initial_path, &metadata_none).unwrap();
         let next_none_str = next_none.to_string();
         assert!(next_none_str.contains("/test/table/metadata/00001-"));
-        assert!(!next_none_str.contains(&format!("{}.", GZIP_SUFFIX)));
+        assert!(!next_none_str.contains(&format!("{GZIP_SUFFIX}.")));
         assert!(next_none_str.ends_with(".metadata.json"));
 
         // Update with gzip compression (should become compressed)
@@ -437,7 +437,7 @@ mod test {
         let next_gzip = MetadataLocation::next_version(&initial_path, &metadata_gzip).unwrap();
         let next_gzip_str = next_gzip.to_string();
         assert!(next_gzip_str.contains("/test/table/metadata/00001-"));
-        assert!(next_gzip_str.contains(&format!("{}.", GZIP_SUFFIX)));
+        assert!(next_gzip_str.contains(&format!("{GZIP_SUFFIX}.")));
         assert!(next_gzip_str.ends_with(".metadata.json"));
 
         // Start with a compressed location
@@ -449,7 +449,7 @@ mod test {
             MetadataLocation::next_version(&initial_gzip_path, &metadata_none).unwrap();
         let next_uncompressed_str = next_uncompressed.to_string();
         assert!(next_uncompressed_str.contains("/test/table/metadata/00001-"));
-        assert!(!next_uncompressed_str.contains(&format!("{}.", GZIP_SUFFIX)));
+        assert!(!next_uncompressed_str.contains(&format!("{GZIP_SUFFIX}.")));
         assert!(next_uncompressed_str.ends_with(".metadata.json"));
 
         // Update with "none" codec (should be uncompressed)
@@ -464,7 +464,7 @@ mod test {
         assert!(
             !next_explicit_none
                 .to_string()
-                .contains(&format!("{}.", GZIP_SUFFIX))
+                .contains(&format!("{GZIP_SUFFIX}."))
         );
 
         // Test case insensitivity
@@ -479,7 +479,7 @@ mod test {
         assert!(
             next_gzip_upper
                 .to_string()
-                .contains(&format!("{}.", GZIP_SUFFIX))
+                .contains(&format!("{GZIP_SUFFIX}."))
         );
     }
 
@@ -528,8 +528,8 @@ mod test {
         assert_eq!(
             next_location_gzip.to_string(),
             format!(
-                "/test/table/metadata/00001-{}{}.metadata.json",
-                next_location_gzip.id, GZIP_SUFFIX
+                "/test/table/metadata/00001-{}{GZIP_SUFFIX}.metadata.json",
+                next_location_gzip.id
             )
         );
     }
