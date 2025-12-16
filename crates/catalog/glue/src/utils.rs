@@ -307,7 +307,6 @@ mod tests {
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hive".to_string();
         let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
-        let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
