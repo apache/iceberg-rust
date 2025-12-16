@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use apache_avro::Codec;
+use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
+use miniz_oxide::deflate::CompressionLevel;
 
 use crate::error::{Error, ErrorKind};
 use crate::spec::avro_util;
@@ -251,10 +252,10 @@ mod tests {
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
         // Test compression defaults - should be gzip with default level (9)
-        assert!(matches!(
+        assert_eq!(
             table_properties.avro_compression_codec,
-            Codec::Deflate(_)
-        ));
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
     }
 
     #[test]
@@ -270,11 +271,11 @@ mod tests {
             ),
         ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
-        // Check that it parsed to a Zstandard codec
-        assert!(matches!(
+        // Check that it parsed to a Zstandard codec with level 3
+        assert_eq!(
             table_properties.avro_compression_codec,
-            Codec::Zstandard(_)
-        ));
+            Codec::Zstandard(ZstandardSettings::new(3))
+        );
     }
 
     #[test]
@@ -347,27 +348,6 @@ mod tests {
         let table_properties = TableProperties::try_from(&invalid_target_size).unwrap_err();
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
-        ));
-    }
-
-    #[test]
-    fn test_table_properties_compression_with_level() {
-        // Test that compression level is used when specified
-        let props = HashMap::from([
-            (
-                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
-                "gzip".to_string(),
-            ),
-            (
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
-                "5".to_string(),
-            ),
-        ]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        // Check that it parsed to a Deflate codec
-        assert!(matches!(
-            table_properties.avro_compression_codec,
-            Codec::Deflate(_)
         ));
     }
 }

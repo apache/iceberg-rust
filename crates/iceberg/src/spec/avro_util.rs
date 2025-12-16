@@ -124,6 +124,12 @@ mod tests {
     }
 
     #[test]
+    fn test_codec_from_str_zstd_clamping() {
+        let codec = codec_from_str(Some("zstd"), Some(23));
+        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(22)));
+    }
+
+    #[test]
     fn test_codec_from_str_uncompressed() {
         let codec = codec_from_str(Some("uncompressed"), None);
         assert!(matches!(codec, Codec::Null));
@@ -156,129 +162,5 @@ mod tests {
         // Test that None level defaults to 1 for zstd
         let codec = codec_from_str(Some("zstd"), None);
         assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(1)));
-    }
-
-    #[test]
-    fn test_codec_from_str_deflate_levels() {
-        use std::collections::HashMap;
-
-        use apache_avro::types::Record;
-        use apache_avro::{Schema, Writer};
-
-        // Create a simple schema for testing
-        let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
-
-        // Create test data
-        let test_str = "test data that should compress differently at different levels. This is a longer string to ensure compression has something to work with. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.";
-
-        // Test that different compression levels produce different output sizes
-        let mut sizes = HashMap::new();
-        for level in [0, 1, 5, 9, 10] {
-            let codec = codec_from_str(Some("gzip"), Some(level));
-            let mut writer = Writer::with_codec(&schema, Vec::new(), codec);
-
-            let mut record = Record::new(&schema).unwrap();
-            record.put("field", test_str);
-            writer.append(record).unwrap();
-
-            let encoded = writer.into_inner().unwrap();
-            sizes.insert(level, encoded.len());
-        }
-
-        // Level 0 (NoCompression) should be largest
-        // Level 10 (UberCompression) should be smallest or equal to level 9
-        assert!(sizes[&0] >= sizes[&1], "Level 0 should be >= level 1");
-        assert!(
-            sizes[&1] >= sizes[&9] || sizes[&1] == sizes[&9],
-            "Level 1 should be >= level 9"
-        );
-        assert!(
-            sizes[&9] >= sizes[&10] || sizes[&9] == sizes[&10],
-            "Level 9 should be >= level 10"
-        );
-    }
-
-    #[test]
-    fn test_codec_from_str_zstd_levels() {
-        use apache_avro::types::Record;
-        use apache_avro::{Schema, Writer};
-
-        // Create a simple schema for testing
-        let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
-        let test_str = "test data that should compress differently at different levels. This is a longer string to ensure compression has something to work with. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.";
-
-        // Test various levels by checking they produce valid codecs
-        for level in [0, 3, 15, 22] {
-            let codec = codec_from_str(Some("zstd"), Some(level));
-            assert!(matches!(codec, Codec::Zstandard(_)));
-
-            // Verify the codec actually works by compressing data
-            let mut writer = Writer::with_codec(&schema, Vec::new(), codec);
-            let mut record = Record::new(&schema).unwrap();
-            record.put("field", test_str);
-            writer.append(record).unwrap();
-
-            let encoded = writer.into_inner().unwrap();
-            assert!(!encoded.is_empty(), "Compression should produce output");
-        }
-
-        // Test clamping - higher than 22 should be clamped to 22
-        let codec_100 = codec_from_str(Some("zstd"), Some(100));
-        let codec_22 = codec_from_str(Some("zstd"), Some(22));
-
-        // Both should work and produce similar results
-        let mut writer_100 = Writer::with_codec(&schema, Vec::new(), codec_100);
-        let mut record_100 = Record::new(&schema).unwrap();
-        record_100.put("field", test_str);
-        writer_100.append(record_100).unwrap();
-        let encoded_100 = writer_100.into_inner().unwrap();
-
-        let mut writer_22 = Writer::with_codec(&schema, Vec::new(), codec_22);
-        let mut record_22 = Record::new(&schema).unwrap();
-        record_22.put("field", test_str);
-        writer_22.append(record_22).unwrap();
-        let encoded_22 = writer_22.into_inner().unwrap();
-
-        // Both should produce the same size since 100 is clamped to 22
-        assert_eq!(
-            encoded_100.len(),
-            encoded_22.len(),
-            "Level 100 should be clamped to 22"
-        );
-    }
-
-    #[test]
-    fn test_compression_level_differences() {
-        use apache_avro::types::Record;
-        use apache_avro::{Schema, Writer};
-
-        // Create a schema and data that will compress well
-        let schema = Schema::parse_str(r#"{"type": "record", "name": "test", "fields": [{"name": "field", "type": "string"}]}"#).unwrap();
-
-        // Use highly compressible data
-        let test_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-
-        // Test gzip level 0 (no compression) vs level 9 (best compression)
-        let codec_0 = codec_from_str(Some("gzip"), Some(0));
-        let mut writer_0 = Writer::with_codec(&schema, Vec::new(), codec_0);
-        let mut record_0 = Record::new(&schema).unwrap();
-        record_0.put("field", test_str);
-        writer_0.append(record_0).unwrap();
-        let size_0 = writer_0.into_inner().unwrap().len();
-
-        let codec_9 = codec_from_str(Some("gzip"), Some(9));
-        let mut writer_9 = Writer::with_codec(&schema, Vec::new(), codec_9);
-        let mut record_9 = Record::new(&schema).unwrap();
-        record_9.put("field", test_str);
-        writer_9.append(record_9).unwrap();
-        let size_9 = writer_9.into_inner().unwrap().len();
-
-        // Level 0 should produce larger output than level 9 for compressible data
-        assert!(
-            size_0 > size_9,
-            "NoCompression (level 0) should produce larger output than BestCompression (level 9): {} vs {}",
-            size_0,
-            size_9
-        );
     }
 }
