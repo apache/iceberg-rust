@@ -2072,12 +2072,6 @@ mod test {
 
     #[tokio::test]
     async fn test_manifest_list_writer_with_compression() {
-        use std::fs;
-
-        use tempfile::TempDir;
-
-        use crate::io::FileIOBuilder;
-
         // Create multiple manifest entries to make compression effective
         let mut entries = Vec::new();
         for i in 0..100 {
