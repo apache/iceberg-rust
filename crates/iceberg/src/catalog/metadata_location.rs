@@ -461,7 +461,11 @@ mod test {
         let metadata_none_explicit = create_test_metadata(props_explicit_none);
         let next_explicit_none =
             MetadataLocation::next_version(&initial_gzip_path, &metadata_none_explicit).unwrap();
-        assert!(!next_explicit_none.to_string().contains(&format!("{}.", GZIP_SUFFIX)));
+        assert!(
+            !next_explicit_none
+                .to_string()
+                .contains(&format!("{}.", GZIP_SUFFIX))
+        );
 
         // Test case insensitivity
         let mut props_gzip_upper = HashMap::new();
@@ -472,7 +476,11 @@ mod test {
         let metadata_gzip_upper = create_test_metadata(props_gzip_upper);
         let next_gzip_upper =
             MetadataLocation::next_version(&initial_path, &metadata_gzip_upper).unwrap();
-        assert!(next_gzip_upper.to_string().contains(&format!("{}.", GZIP_SUFFIX)));
+        assert!(
+            next_gzip_upper
+                .to_string()
+                .contains(&format!("{}.", GZIP_SUFFIX))
+        );
     }
 
     #[test]
@@ -505,7 +513,10 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let location_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
-        assert_eq!(location_gzip.compression_suffix, Some(GZIP_SUFFIX.to_string()));
+        assert_eq!(
+            location_gzip.compression_suffix,
+            Some(GZIP_SUFFIX.to_string())
+        );
 
         // Update to next version - gzip compression is preserved
         let next_location_gzip = location_gzip.with_next_version();
