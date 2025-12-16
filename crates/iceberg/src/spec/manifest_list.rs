@@ -2083,7 +2083,7 @@ mod test {
         let mut entries = Vec::new();
         for i in 0..100 {
             entries.push(ManifestFile {
-                manifest_path: format!("/test/manifest{}.avro", i),
+                manifest_path: format!("/test/manifest{i}.avro"),
                 manifest_length: 1000 + i,
                 partition_spec_id: 0,
                 content: ManifestContentType::Data,
@@ -2153,9 +2153,7 @@ mod test {
         // Verify compression is actually working
         assert!(
             compressed_size < uncompressed_size,
-            "Compressed size ({}) should be less than uncompressed size ({})",
-            compressed_size,
-            uncompressed_size
+            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
         );
 
         // Verify the compressed file can be read back correctly

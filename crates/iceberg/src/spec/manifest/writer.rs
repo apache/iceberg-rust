@@ -775,8 +775,7 @@ mod tests {
             let data_file = DataFileBuilder::default()
                 .content(DataContentType::Data)
                 .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{}.parquet",
-                    i
+                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
                 ))
                 .file_format(DataFileFormat::Parquet)
                 .partition(Struct::empty())
@@ -815,8 +814,7 @@ mod tests {
             let data_file = DataFileBuilder::default()
                 .content(DataContentType::Data)
                 .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{}.parquet",
-                    i
+                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
                 ))
                 .file_format(DataFileFormat::Parquet)
                 .partition(Struct::empty())
@@ -840,9 +838,7 @@ mod tests {
         // Verify compression is actually working
         assert!(
             compressed_size < uncompressed_size,
-            "Compressed size ({}) should be less than uncompressed size ({})",
-            compressed_size,
-            uncompressed_size
+            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
         );
 
         // Verify the compressed file can be read back correctly
