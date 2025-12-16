@@ -518,7 +518,7 @@ mod test_row_lineage {
         fn file_with_rows(record_count: u64) -> DataFile {
             DataFileBuilder::default()
                 .content(DataContentType::Data)
-                .file_path(format!("test/{}.parquet", record_count))
+                .file_path(format!("test/{record_count}.parquet"))
                 .file_format(DataFileFormat::Parquet)
                 .file_size_in_bytes(100)
                 .record_count(record_count)

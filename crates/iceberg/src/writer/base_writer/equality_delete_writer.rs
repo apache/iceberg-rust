@@ -34,7 +34,7 @@ use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EqualityDeleteFileWriterBuilder<
     B: FileWriterBuilder,
     L: LocationGenerator,
@@ -60,7 +60,7 @@ where
 }
 
 /// Config for `EqualityDeleteWriter`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EqualityDeleteWriterConfig {
     // Field ids used to determine row equality in equality delete files.
     equality_ids: Vec<i32>,
@@ -123,11 +123,11 @@ where
 {
     type R = EqualityDeleteFileWriter<B, L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
-            inner: Some(self.inner.clone().build()),
-            projector: self.config.projector,
-            equality_ids: self.config.equality_ids,
+            inner: Some(self.inner.build()),
+            projector: self.config.projector.clone(),
+            equality_ids: self.config.equality_ids.clone(),
             partition_key,
         })
     }
@@ -293,15 +293,15 @@ mod test {
             assert_eq!(*data_file.null_value_counts.get(id).unwrap(), expect);
         }
 
-        assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
-        data_file
+        let split_offsets = data_file
             .split_offsets
-            .iter()
-            .enumerate()
-            .for_each(|(i, &v)| {
-                let expect = metadata.row_groups()[i].file_offset().unwrap();
-                assert_eq!(v, expect);
-            });
+            .as_ref()
+            .expect("split_offsets should be set");
+        assert_eq!(split_offsets.len(), metadata.num_row_groups());
+        split_offsets.iter().enumerate().for_each(|(i, &v)| {
+            let expect = metadata.row_groups()[i].file_offset().unwrap();
+            assert_eq!(v, expect);
+        });
     }
 
     #[tokio::test]

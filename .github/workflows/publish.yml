@@ -42,10 +42,11 @@ jobs:
           - "crates/catalog/glue"
           - "crates/catalog/hms"
           - "crates/catalog/rest"
+          - "crates/catalog/s3tables"
           - "crates/catalog/sql"
           - "crates/integrations/datafusion"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder

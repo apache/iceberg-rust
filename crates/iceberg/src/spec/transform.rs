@@ -711,10 +711,10 @@ impl Transform {
             PredicateOperator::GreaterThan => Some(PredicateOperator::GreaterThanOrEq),
             PredicateOperator::StartsWith => match datum.literal() {
                 PrimitiveLiteral::String(s) => {
-                    if let Some(w) = width {
-                        if s.len() == w as usize {
-                            return Some(PredicateOperator::Eq);
-                        };
+                    if let Some(w) = width
+                        && s.len() == w as usize
+                    {
+                        return Some(PredicateOperator::Eq);
                     };
                     Some(*op)
                 }
@@ -757,47 +757,45 @@ impl Transform {
             _ => false,
         };
 
-        if should_adjust {
-            if let &PrimitiveLiteral::Int(v) = transformed.literal() {
-                match op {
-                    PredicateOperator::LessThan
-                    | PredicateOperator::LessThanOrEq
-                    | PredicateOperator::In => {
-                        if v < 0 {
+        if should_adjust && let &PrimitiveLiteral::Int(v) = transformed.literal() {
+            match op {
+                PredicateOperator::LessThan
+                | PredicateOperator::LessThanOrEq
+                | PredicateOperator::In => {
+                    if v < 0 {
+                        // # TODO
+                        // An ugly hack to fix. Refine the increment and decrement logic later.
+                        match self {
+                            Transform::Day => {
+                                return Some(AdjustedProjection::Single(Datum::date(v + 1)));
+                            }
+                            _ => {
+                                return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                            }
+                        }
+                    };
+                }
+                PredicateOperator::Eq => {
+                    if v < 0 {
+                        let new_set = FnvHashSet::from_iter(vec![
+                            transformed.to_owned(),
                             // # TODO
                             // An ugly hack to fix. Refine the increment and decrement logic later.
-                            match self {
-                                Transform::Day => {
-                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)));
+                            {
+                                match self {
+                                    Transform::Day => Datum::date(v + 1),
+                                    _ => Datum::int(v + 1),
                                 }
-                                _ => {
-                                    return Some(AdjustedProjection::Single(Datum::int(v + 1)));
-                                }
-                            }
-                        };
-                    }
-                    PredicateOperator::Eq => {
-                        if v < 0 {
-                            let new_set = FnvHashSet::from_iter(vec![
-                                transformed.to_owned(),
-                                // # TODO
-                                // An ugly hack to fix. Refine the increment and decrement logic later.
-                                {
-                                    match self {
-                                        Transform::Day => Datum::date(v + 1),
-                                        _ => Datum::int(v + 1),
-                                    }
-                                },
-                            ]);
-                            return Some(AdjustedProjection::Set(new_set));
-                        }
-                    }
-                    _ => {
-                        return None;
+                            },
+                        ]);
+                        return Some(AdjustedProjection::Set(new_set));
                     }
                 }
-            };
-        }
+                _ => {
+                    return None;
+                }
+            }
+        };
         None
     }
 

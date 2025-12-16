@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
-    BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array, FixedSizeBinaryArray,
-    Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
+    BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
@@ -678,6 +678,9 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Arc::new(StringArray::new_scalar(value.as_str())))
         }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(value)) => {
+            Ok(Arc::new(BinaryArray::new_scalar(value.as_slice())))
+        }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
             Ok(Arc::new(Date32Array::new_scalar(*value)))
         }
@@ -1013,6 +1016,60 @@ impl TryFrom<&crate::spec::Schema> for ArrowSchema {
 
     fn try_from(schema: &crate::spec::Schema) -> crate::Result<Self> {
         schema_to_arrow_schema(schema)
+    }
+}
+
+/// Converts a Datum (Iceberg type + primitive literal) to its corresponding Arrow DataType
+/// with Run-End Encoding (REE).
+///
+/// This function is used for constant fields in record batches, where all values are the same.
+/// Run-End Encoding provides efficient storage for such constant columns.
+///
+/// # Arguments
+/// * `datum` - The Datum to convert, which contains both type and value information
+///
+/// # Returns
+/// Arrow DataType with Run-End Encoding applied
+///
+/// # Example
+/// ```
+/// use iceberg::arrow::datum_to_arrow_type_with_ree;
+/// use iceberg::spec::Datum;
+///
+/// let datum = Datum::string("test_file.parquet");
+/// let ree_type = datum_to_arrow_type_with_ree(&datum);
+/// // Returns: RunEndEncoded(Int32, Utf8)
+/// ```
+pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
+    // Helper to create REE type with the given values type.
+    // Note: values field is nullable as Arrow expects this when building the
+    // final Arrow schema with `RunArray::try_new`.
+    let make_ree = |values_type: DataType| -> DataType {
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", values_type, true));
+        DataType::RunEndEncoded(run_ends_field, values_field)
+    };
+
+    // Match on the PrimitiveType from the Datum to determine the Arrow type
+    match datum.data_type() {
+        PrimitiveType::Boolean => make_ree(DataType::Boolean),
+        PrimitiveType::Int => make_ree(DataType::Int32),
+        PrimitiveType::Long => make_ree(DataType::Int64),
+        PrimitiveType::Float => make_ree(DataType::Float32),
+        PrimitiveType::Double => make_ree(DataType::Float64),
+        PrimitiveType::Date => make_ree(DataType::Date32),
+        PrimitiveType::Time => make_ree(DataType::Int64),
+        PrimitiveType::Timestamp => make_ree(DataType::Int64),
+        PrimitiveType::Timestamptz => make_ree(DataType::Int64),
+        PrimitiveType::TimestampNs => make_ree(DataType::Int64),
+        PrimitiveType::TimestamptzNs => make_ree(DataType::Int64),
+        PrimitiveType::String => make_ree(DataType::Utf8),
+        PrimitiveType::Uuid => make_ree(DataType::Binary),
+        PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
+        PrimitiveType::Binary => make_ree(DataType::Binary),
+        PrimitiveType::Decimal { precision, scale } => {
+            make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
+        }
     }
 }
 
@@ -1813,6 +1870,14 @@ mod tests {
             let array = array.as_any().downcast_ref::<StringArray>().unwrap();
             assert!(is_scalar);
             assert_eq!(array.value(0), "abc");
+        }
+        {
+            let datum = Datum::binary(vec![1, 2, 3, 4]);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value(0), &[1, 2, 3, 4]);
         }
         {
             let datum = Datum::date(42);
