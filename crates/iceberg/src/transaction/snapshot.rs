@@ -216,7 +216,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-            table_props.avro_compression_codec.clone(),
+            table_props.avro_compression_codec,
         );
 
         match self.table.metadata().format_version() {
@@ -410,7 +410,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_source(e)
             })?;
 
-        let compression = table_props.avro_compression_codec.clone();
+        let compression = table_props.avro_compression_codec;
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
@@ -419,7 +419,7 @@ impl<'a> SnapshotProducer<'a> {
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
@@ -428,7 +428,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-                compression.clone(),
+                compression,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 self.table
@@ -438,7 +438,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
-                compression.clone(),
+                compression,
             ),
         };
 

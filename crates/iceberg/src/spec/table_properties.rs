@@ -19,8 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
-use miniz_oxide::deflate::CompressionLevel;
+use apache_avro::Codec;
 
 use crate::error::{Error, ErrorKind};
 use crate::spec::avro_util;
@@ -225,6 +224,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 
 #[cfg(test)]
 mod tests {
+    use apache_avro::{DeflateSettings, ZstandardSettings};
+    use miniz_oxide::deflate::CompressionLevel;
+
     use super::*;
 
     #[test]
