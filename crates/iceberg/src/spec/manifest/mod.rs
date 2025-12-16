@@ -165,8 +165,6 @@ mod tests {
     use serde_json::{Value, to_vec};
     use tempfile::TempDir;
 
-    use apache_avro::Codec;
-
     use super::*;
     use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
