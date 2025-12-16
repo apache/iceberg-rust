@@ -572,7 +572,11 @@ mod tests {
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Manifest, ManifestContentType,
+        ManifestEntry, ManifestMetadata, ManifestStatus, NestedField, PartitionSpec, PrimitiveType,
+        Schema, Struct, Type,
+    };
 
     #[tokio::test]
     async fn test_add_delete_existing() {
@@ -727,16 +731,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifest_writer_with_compression() {
-        use std::fs;
-
-        use tempfile::TempDir;
-
-        use crate::io::FileIOBuilder;
-        use crate::spec::{
-            DataContentType, DataFileBuilder, DataFileFormat, ManifestContentType, ManifestEntry,
-            ManifestMetadata, ManifestStatus, NestedField, PartitionSpec, PrimitiveType, Schema,
-        };
-
         let metadata = {
             let schema = Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(

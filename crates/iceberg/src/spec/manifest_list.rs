@@ -1373,12 +1373,13 @@ pub(super) mod _serde {
 mod test {
     use std::fs;
 
-    use apache_avro::{Codec, Reader, Schema};
+    use apache_avro::{Codec, DeflateSettings, Reader, Schema};
+    use miniz_oxide::deflate::CompressionLevel;
     use tempfile::TempDir;
 
     use super::_serde::ManifestListV2;
     use crate::io::FileIOBuilder;
-    use crate::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
+    use crate::spec::manifest_list::_serde::{ManifestFileV1, ManifestListV1, ManifestListV3};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
         UNASSIGNED_SEQUENCE_NUMBER,
@@ -2020,8 +2021,6 @@ mod test {
 
     #[test]
     fn test_manifest_file_v1_to_v2_projection() {
-        use crate::spec::manifest_list::_serde::ManifestFileV1;
-
         // Create a V1 manifest file object (without V2 fields)
         let v1_manifest = ManifestFileV1 {
             manifest_path: "/test/manifest.avro".to_string(),
@@ -2133,8 +2132,6 @@ mod test {
             .to_str()
             .unwrap()
             .to_string();
-        use apache_avro::DeflateSettings;
-        use miniz_oxide::deflate::CompressionLevel;
 
         let compression = Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression));
         let mut writer = ManifestListWriter::v2(
