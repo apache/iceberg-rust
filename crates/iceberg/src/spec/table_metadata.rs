@@ -507,7 +507,7 @@ impl TableMetadata {
             Some(other) => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Unsupported metadata compression codec: {}", other),
+                    format!("Unsupported metadata compression codec: {other}"),
                 ));
             }
         };
