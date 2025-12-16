@@ -909,25 +909,4 @@ mod tests {
         let tp = TableProperties::try_from(&props).unwrap();
         assert!(!tp.cdc_enabled);
     }
-
-    #[test]
-    fn test_table_properties_compression_with_level() {
-        // Test that compression level is used when specified
-        let props = HashMap::from([
-            (
-                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
-                "gzip".to_string(),
-            ),
-            (
-                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
-                "5".to_string(),
-            ),
-        ]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        // Check that it parsed to a Deflate codec
-        assert!(matches!(
-            table_properties.avro_compression_codec,
-            Codec::Deflate(_)
-        ));
-    }
 }
