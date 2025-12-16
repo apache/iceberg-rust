@@ -350,7 +350,7 @@ mod test {
 
         for input in test_cases {
             let next = MetadataLocation::next_version(
-                &input.to_string(),
+                input.to_string(),
                 &create_test_metadata(HashMap::new()),
             )
             .unwrap();
