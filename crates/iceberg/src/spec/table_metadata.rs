@@ -74,7 +74,7 @@ pub struct TableMetadata {
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
     pub(crate) last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
-    pub(crate) last_column_id: i32,
+    pub last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
     pub(crate) schemas: HashMap<i32, SchemaRef>,
     /// ID of the table’s current schema.
