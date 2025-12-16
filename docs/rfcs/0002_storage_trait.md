@@ -42,19 +42,6 @@ pub(crate) enum Storage {
     Gcs { config: Arc<GcsConfig> },
     // ... other variants
 }
-
-impl Storage {
-    pub(crate) fn create_operator<'a>(&self, path: &'a impl AsRef<str>) 
-        -> crate::Result<(Operator, &'a str)> {
-        match self {
-            #[cfg(feature = "storage-s3")]
-            Storage::S3 { configured_scheme, config, customized_credential_load } => {
-                // S3-specific operator creation
-            }
-            // ... other match arms
-        }
-    }
-}
 ```
 
 Current structure:
@@ -886,13 +873,14 @@ match result {
 
 ## Implementation Plan
 
-### Phase 1: Storage Trait (Current Branch)
+### Phase 1: Storage Trait (Initial cut and stabilization)
 - Define `Storage` trait in `iceberg` crate
 - Update `InputFile`/`OutputFile` to use `Arc<dyn Storage>`
 - Update `FileIO` to wrap `Arc<dyn Storage>`
 - Implement `Storage` for existing `Storage` enum (backward compatibility)
+- Potential new API like `delete_iter`
 
-### Phase 2: Concrete Implementations
+### Phase 2: Separate trait and concrete implementations
 - Create `iceberg-storage` crate
 - Move/implement `OpenDalStorage` (Option 1) or scheme-specific storages (Option 2)
 - Update catalog implementations to accept storage
