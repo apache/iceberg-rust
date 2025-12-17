@@ -109,7 +109,10 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let tag_ref = self.tag_name.as_ref().map(|name| (name.clone(), self.tag_retention));
+        let tag_ref = self
+            .tag_name
+            .as_ref()
+            .map(|name| (name.clone(), self.tag_retention));
 
         let snapshot_producer = SnapshotProducer::new(
             table,
