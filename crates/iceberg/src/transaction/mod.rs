@@ -56,6 +56,7 @@ pub use action::*;
 mod append;
 
 pub use append::FastAppendAction;
+pub use update_schema::UpdateSchemaAction;
 mod manifest_filter;
 
 pub use manifest_filter::*;
@@ -66,6 +67,7 @@ mod snapshot;
 mod sort_order;
 mod update_location;
 mod update_properties;
+mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
 
@@ -157,6 +159,11 @@ impl Transaction {
     /// Update table's property.
     pub fn update_table_properties(&self) -> UpdatePropertiesAction {
         UpdatePropertiesAction::new()
+    }
+
+    /// Update table's schema.
+    pub fn update_schema(&self) -> UpdateSchemaAction {
+        UpdateSchemaAction::new()
     }
 
     /// Creates a fast append action.
