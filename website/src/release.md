@@ -325,13 +325,13 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   gpg --verify apache-iceberg-rust-*.tar.gz.asc
   ```
-  Expects: `"apache-iceberg-rust-0.7.0.tar.gz: OK"`
+  Expects: `gpg: Good signature from ...`
 * Verify the checksums: 
   
   ```bash
   shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
   ```
-  Expects: `gpg: Good signature from ...`
+  Expects: `"apache-iceberg-rust-...tar.gz: OK"`
 * Verify build and test:
   
   ```bash
