@@ -118,8 +118,8 @@ pub(crate) struct SnapshotProducer<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
-    // Optional tag name to create atomically with the snapshot.
-    tag_ref: Option<String>,
+    // Optional tag (name, retention) to create atomically with the snapshot.
+    tag_ref: Option<(String, Option<i64>)>,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -129,7 +129,7 @@ impl<'a> SnapshotProducer<'a> {
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
-        tag_ref: Option<String>,
+        tag_ref: Option<(String, Option<i64>)>,
     ) -> Self {
         Self {
             table,
@@ -502,11 +502,11 @@ impl<'a> SnapshotProducer<'a> {
             },
         ];
 
-        if let Some(tag_name) = self.tag_ref {
+        if let Some((tag_name, max_ref_age_ms)) = self.tag_ref {
             updates.push(TableUpdate::SetSnapshotRef {
                 ref_name: tag_name,
                 reference: SnapshotReference::new(self.snapshot_id, SnapshotRetention::Tag {
-                    max_ref_age_ms: None,
+                    max_ref_age_ms,
                 }),
             });
         }
