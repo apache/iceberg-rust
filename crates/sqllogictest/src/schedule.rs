@@ -204,4 +204,31 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_parse_engines_with_catalog_config() {
+        let toml_content = r#"
+            [engines]
+            df = { type = "datafusion", catalog_type = "memory" }
+        "#;
+
+        let table: TomlTable = toml::from_str(toml_content).unwrap();
+        let result = Schedule::parse_engines(&table).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_parse_engines_default_catalog() {
+        let toml_content = r#"
+            [engines]
+            df = { type = "datafusion" }
+        "#;
+
+        let table: TomlTable = toml::from_str(toml_content).unwrap();
+        let result = Schedule::parse_engines(&table).await;
+
+        // Should default to memory catalog
+        assert!(result.is_ok());
+    }
 }
