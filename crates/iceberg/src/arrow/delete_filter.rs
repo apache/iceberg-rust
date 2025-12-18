@@ -34,15 +34,40 @@ enum EqDelState {
     Loaded(Predicate),
 }
 
+/// State tracking for positional delete files.
+/// Unlike equality deletes, positional deletes must be fully loaded before
+/// the ArrowReader proceeds because retrieval is synchronous and non-blocking.
+#[derive(Debug)]
+enum PosDelState {
+    /// The file is currently being loaded by a task.
+    /// The notifier allows other tasks to wait for completion.
+    Loading(Arc<Notify>),
+    /// The file has been fully loaded and merged into the delete vector map.
+    Loaded,
+}
+
 #[derive(Debug, Default)]
 struct DeleteFileFilterState {
     delete_vectors: HashMap<String, Arc<Mutex<DeleteVector>>>,
     equality_deletes: HashMap<String, EqDelState>,
+    positional_deletes: HashMap<String, PosDelState>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DeleteFilter {
     state: Arc<RwLock<DeleteFileFilterState>>,
+}
+
+/// Action to take when trying to start loading a positional delete file
+pub(crate) enum PosDelLoadAction {
+    /// The file is not loaded, the caller should load it.
+    Load,
+    /// The file is already loaded, nothing to do.
+    AlreadyLoaded,
+    /// The file is currently being loaded by another task.
+    /// The caller *must* wait for this notifier to ensure data availability
+    /// before returning, as subsequent access (get_delete_vector) is synchronous.
+    WaitFor(Arc<Notify>),
 }
 
 impl DeleteFilter {
@@ -80,6 +105,47 @@ impl DeleteFilter {
             .insert(file_path.to_string(), EqDelState::Loading(notifier.clone()));
 
         Some(notifier)
+    }
+
+    /// Attempts to mark a positional delete file as "loading".
+    ///
+    /// Returns an action dictating whether the caller should load the file,
+    /// wait for another task to load it, or do nothing.
+    pub(crate) fn try_start_pos_del_load(&self, file_path: &str) -> PosDelLoadAction {
+        let mut state = self.state.write().unwrap();
+
+        if let Some(state) = state.positional_deletes.get(file_path) {
+            match state {
+                PosDelState::Loaded => return PosDelLoadAction::AlreadyLoaded,
+                PosDelState::Loading(notify) => return PosDelLoadAction::WaitFor(notify.clone()),
+            }
+        }
+
+        let notifier = Arc::new(Notify::new());
+        state
+            .positional_deletes
+            .insert(file_path.to_string(), PosDelState::Loading(notifier));
+
+        PosDelLoadAction::Load
+    }
+
+    /// Marks a positional delete file as successfully loaded and notifies any waiting tasks.
+    pub(crate) fn finish_pos_del_load(&self, file_path: &str) {
+        let notify = {
+            let mut state = self.state.write().unwrap();
+            if let Some(PosDelState::Loading(notify)) = state
+                .positional_deletes
+                .insert(file_path.to_string(), PosDelState::Loaded)
+            {
+                Some(notify)
+            } else {
+                None
+            }
+        };
+
+        if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
     }
 
     /// Retrieve the equality delete predicate for a given eq delete file path
