@@ -450,13 +450,13 @@ gpg --import KEYS
 <p>Verify the <code>.asc</code> file:</p>
 <pre><code class="language-bash">gpg --verify apache-iceberg-rust-*.tar.gz.asc
 </code></pre>
-<p>Expects: <code>&quot;apache-iceberg-rust-0.7.0.tar.gz: OK&quot;</code></p>
+<p>Expects: <code>gpg: Good signature from ...</code></p>
 </li>
 <li>
 <p>Verify the checksums: </p>
 <pre><code class="language-bash">shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
 </code></pre>
-<p>Expects: <code>gpg: Good signature from ...</code></p>
+<p>Expects: <code>&quot;apache-iceberg-rust-...tar.gz: OK&quot;</code></p>
 </li>
 <li>
 <p>Verify build and test:</p>
