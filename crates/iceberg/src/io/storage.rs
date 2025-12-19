@@ -17,12 +17,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-#[cfg(any(
-    feature = "storage-s3",
-    feature = "storage-gcs",
-    feature = "storage-oss",
-    feature = "storage-azdls",
-))]
 use std::sync::Arc;
 
 use opendal::layers::RetryLayer;
@@ -150,10 +144,32 @@ impl Storage {
                 }
             }
             // Update doc on [`FileIO`] when adding new schemes.
+            #[cfg(not(any(
+                feature = "storage-memory",
+                feature = "storage-fs",
+                feature = "storage-s3",
+                feature = "storage-gcs",
+                feature = "storage-oss",
+                feature = "storage-azdls"
+            )))]
             _ => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
-                    format!("Constructing file io from scheme: {scheme} not supported now",),
+                    "No storage service has been enabled".to_string(),
+                ));
+            }
+            #[cfg(any(
+                feature = "storage-memory",
+                feature = "storage-fs",
+                feature = "storage-s3",
+                feature = "storage-gcs",
+                feature = "storage-oss",
+                feature = "storage-azdls"
+            ))]
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Constructing file io from scheme: {scheme} not supported now"),
                 ));
             }
         };
