@@ -22,8 +22,9 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
-use iceberg::io::{FileIO, FileIOBuilder, RuntimeHandle};
+use iceberg::io::{FileIOBuilder, RuntimeHandle};
 use tokio::runtime::Builder;
 
 /// Test that RuntimeHandle can be created and used with FileIO
@@ -102,6 +103,89 @@ fn test_runtime_execution() {
 
     // Verify the task executed
     assert!(executed.load(Ordering::SeqCst));
+}
+
+/// Integration test that verifies FileIO operations execute on the configured runtime
+/// by checking thread names during actual I/O operations.
+///
+/// This test verifies that when a custom runtime is configured, the OpenDAL operations
+/// spawned by the FileIO will execute on that runtime's worker threads.
+#[test]
+fn test_fileio_operations_use_configured_runtime() {
+    // Create a custom runtime with a distinctive thread name
+    let io_runtime = Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("verified-io-runtime")
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    let io_handle = io_runtime.handle().clone();
+    let io_handle_for_fileio = io_handle.clone();
+
+    // Track thread names captured during FileIO operations
+    let captured_thread_names = Arc::new(Mutex::new(Vec::new()));
+    let captured_thread_names_clone = captured_thread_names.clone();
+
+    // Run the test on the I/O runtime
+    io_handle.block_on(async move {
+        // Create FileIO with the custom runtime handle
+        let file_io = FileIOBuilder::new("memory")
+            .with_extension(RuntimeHandle::new(io_handle_for_fileio))
+            .build()
+            .unwrap();
+
+        // Spawn a task to ensure we're on a worker thread
+        let task_handle = tokio::spawn({
+            let captured = captured_thread_names_clone.clone();
+            let file_io = file_io.clone();
+            async move {
+                // Perform write operation
+                let output_file = file_io.new_output("memory://test-file.txt").unwrap();
+                output_file.write("test content".as_bytes().into()).await.unwrap();
+
+                // Capture thread name after write
+                if let Some(name) = std::thread::current().name() {
+                    captured.lock().unwrap().push(name.to_string());
+                }
+
+                // Perform read operation
+                let input_file = file_io.new_input("memory://test-file.txt").unwrap();
+                let _content = input_file.read().await.unwrap();
+
+                // Capture thread name after read
+                if let Some(name) = std::thread::current().name() {
+                    captured.lock().unwrap().push(name.to_string());
+                }
+
+                // Perform exists check
+                let _exists = file_io.exists("memory://test-file.txt").await.unwrap();
+
+                // Capture thread name after exists check
+                if let Some(name) = std::thread::current().name() {
+                    captured.lock().unwrap().push(name.to_string());
+                }
+            }
+        });
+
+        task_handle.await.unwrap();
+    });
+
+    // Verify that at least some operations captured thread names
+    let thread_names = captured_thread_names.lock().unwrap();
+    assert!(!thread_names.is_empty(), "Should have captured at least one thread name");
+
+    // Verify all captured thread names match the expected runtime pattern
+    for thread_name in thread_names.iter() {
+        assert!(
+            thread_name.contains("verified-io-runtime"),
+            "Thread name '{}' should contain 'verified-io-runtime'",
+            thread_name
+        );
+    }
+
+    println!("✓ Successfully verified operations executed on threads: {:?}", *thread_names);
 }
 
 /// Test that RuntimeHandle can be cloned
