@@ -182,6 +182,53 @@ impl Extensions {
     }
 }
 
+/// Runtime handle for executing async I/O operations.
+///
+/// When provided via FileIOBuilder extensions, OpenDAL operations will spawn
+/// tasks on this runtime instead of using the current runtime context.
+///
+/// This is useful for runtime segregation scenarios where you want to separate
+/// CPU-bound query execution from I/O-bound operations (e.g., blob storage access).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use iceberg::io::{FileIOBuilder, RuntimeHandle};
+/// use tokio::runtime::Builder;
+///
+/// // Create dedicated I/O runtime
+/// let io_runtime = Builder::new_multi_thread()
+///     .worker_threads(8)
+///     .thread_name("io-pool")
+///     .enable_io()
+///     .enable_time()
+///     .build()?;
+///
+/// // Configure FileIO with runtime handle
+/// let file_io = FileIOBuilder::new("s3")
+///     .with_extension(RuntimeHandle::new(io_runtime.handle().clone()))
+///     .with_props(s3_config)
+///     .build()?;
+/// ```
+#[derive(Clone, Debug)]
+pub struct RuntimeHandle(pub tokio::runtime::Handle);
+
+impl RuntimeHandle {
+    /// Create a new RuntimeHandle from a Tokio runtime handle.
+    pub fn new(handle: tokio::runtime::Handle) -> Self {
+        Self(handle)
+    }
+
+    /// Get the current runtime handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside of a Tokio runtime context.
+    pub fn current() -> Self {
+        Self(tokio::runtime::Handle::current())
+    }
+}
+
 /// Builder for [`FileIO`].
 #[derive(Clone, Debug)]
 pub struct FileIOBuilder {

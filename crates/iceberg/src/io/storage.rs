@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::future::Future;
+use std::pin::Pin;
 #[cfg(any(
     feature = "storage-s3",
     feature = "storage-gcs",
@@ -36,14 +38,34 @@ use opendal::{Operator, Scheme};
 
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
-use super::FileIOBuilder;
+use super::{FileIOBuilder, RuntimeHandle};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
 use crate::{Error, ErrorKind};
 
+/// Custom OpenDAL executor that spawns tasks on a specific Tokio runtime.
+///
+/// This executor implements the OpenDAL Execute trait and routes all spawned
+/// tasks to a configured Tokio runtime handle, enabling runtime segregation.
+#[derive(Clone)]
+struct CustomTokioExecutor {
+    handle: tokio::runtime::Handle,
+}
+
+impl opendal::Execute for CustomTokioExecutor {
+    fn execute(&self, f: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        self.handle.spawn(f);
+    }
+}
+
 /// The storage carries all supported storage services in iceberg
+pub(crate) struct Storage {
+    backend: StorageBackend,
+    executor: Option<opendal::Executor>,
+}
+
 #[derive(Debug)]
-pub(crate) enum Storage {
+enum StorageBackend {
     #[cfg(feature = "storage-memory")]
     Memory(Operator),
     #[cfg(feature = "storage-fs")]
@@ -73,6 +95,18 @@ pub(crate) enum Storage {
     },
 }
 
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage")
+            .field("backend", &self.backend)
+            .field(
+                "executor",
+                &self.executor.as_ref().map(|_| "Some(Executor)"),
+            )
+            .finish()
+    }
+}
+
 impl Storage {
     /// Convert iceberg config to opendal config.
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
@@ -80,41 +114,51 @@ impl Storage {
         let _ = (&props, &extensions);
         let scheme = Self::parse_scheme(&scheme_str)?;
 
-        match scheme {
+        // Extract runtime handle and create executor if provided
+        let executor = extensions.get::<RuntimeHandle>().map(|runtime_handle| {
+            let handle = Arc::unwrap_or_clone(runtime_handle).0;
+            opendal::Executor::with(CustomTokioExecutor { handle })
+        });
+
+        let backend = match scheme {
             #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory(super::memory_config_build()?)),
+            Scheme::Memory => StorageBackend::Memory(super::memory_config_build()?),
             #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(Self::LocalFs),
+            Scheme::Fs => StorageBackend::LocalFs,
             #[cfg(feature = "storage-s3")]
-            Scheme::S3 => Ok(Self::S3 {
+            Scheme::S3 => StorageBackend::S3 {
                 configured_scheme: scheme_str,
                 config: super::s3_config_parse(props)?.into(),
                 customized_credential_load: extensions
                     .get::<CustomAwsCredentialLoader>()
                     .map(Arc::unwrap_or_clone),
-            }),
+            },
             #[cfg(feature = "storage-gcs")]
-            Scheme::Gcs => Ok(Self::Gcs {
+            Scheme::Gcs => StorageBackend::Gcs {
                 config: super::gcs_config_parse(props)?.into(),
-            }),
+            },
             #[cfg(feature = "storage-oss")]
-            Scheme::Oss => Ok(Self::Oss {
+            Scheme::Oss => StorageBackend::Oss {
                 config: super::oss_config_parse(props)?.into(),
-            }),
+            },
             #[cfg(feature = "storage-azdls")]
             Scheme::Azdls => {
                 let scheme = scheme_str.parse::<AzureStorageScheme>()?;
-                Ok(Self::Azdls {
+                StorageBackend::Azdls {
                     config: super::azdls_config_parse(props)?.into(),
                     configured_scheme: scheme,
-                })
+                }
             }
             // Update doc on [`FileIO`] when adding new schemes.
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now",),
-            )),
-        }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Constructing file io from scheme: {scheme} not supported now",),
+                ));
+            }
+        };
+
+        Ok(Self { backend, executor })
     }
 
     /// Creates operator from path.
@@ -135,9 +179,9 @@ impl Storage {
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
         let _ = path;
-        let (operator, relative_path): (Operator, &str) = match self {
+        let (operator, relative_path): (Operator, &str) = match &self.backend {
             #[cfg(feature = "storage-memory")]
-            Storage::Memory(op) => {
+            StorageBackend::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     Ok::<_, crate::Error>((op.clone(), stripped))
                 } else {
@@ -145,7 +189,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-fs")]
-            Storage::LocalFs => {
+            StorageBackend::LocalFs => {
                 let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
@@ -155,7 +199,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-s3")]
-            Storage::S3 {
+            StorageBackend::S3 {
                 configured_scheme,
                 config,
                 customized_credential_load,
@@ -175,7 +219,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-gcs")]
-            Storage::Gcs { config } => {
+            StorageBackend::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
@@ -188,7 +232,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-oss")]
-            Storage::Oss { config } => {
+            StorageBackend::Oss { config } => {
                 let op = super::oss_config_build(config, path)?;
 
                 // Check prefix of oss path.
@@ -203,7 +247,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-azdls")]
-            Storage::Azdls {
+            StorageBackend::Azdls {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme),
@@ -219,6 +263,12 @@ impl Storage {
                 "No storage service has been enabled",
             )),
         }?;
+
+        // Apply custom executor if configured for runtime segregation
+        if let Some(ref executor) = self.executor {
+            let executor_clone = executor.clone();
+            operator.update_executor(|_| executor_clone);
+        }
 
         // Transient errors are common for object stores; however there's no
         // harm in retrying temporary failures for other storage backends as well.
