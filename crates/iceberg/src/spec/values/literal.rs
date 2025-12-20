@@ -500,8 +500,41 @@ impl Literal {
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::UInt128(Uuid::parse_str(&s)?.as_u128()),
                 ))),
-                (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
-                (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
+                (PrimitiveType::Fixed(len), JsonValue::String(s)) => {
+                    use base64::Engine;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&s)
+                        .map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Failed to decode base64 for Fixed type: {}", e),
+                            )
+                        })?;
+                    if bytes.len() != *len as usize {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Fixed({}) expects {} bytes, but got {} bytes after base64 decode",
+                                len,
+                                len,
+                                bytes.len()
+                            ),
+                        ));
+                    }
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Fixed(bytes))))
+                }
+                (PrimitiveType::Binary, JsonValue::String(s)) => {
+                    use base64::Engine;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&s)
+                        .map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Failed to decode base64 for Binary type: {}", e),
+                            )
+                        })?;
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))))
+                }
                 (
                     PrimitiveType::Decimal {
                         precision: _,
