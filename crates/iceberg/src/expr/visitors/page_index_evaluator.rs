@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use fnv::FnvHashSet;
+use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
@@ -362,11 +363,129 @@ impl<'a> PageIndexEvaluator<'a> {
                     )
                 })
                 .collect(),
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "unsupported 'FIXED_LEN_BYTE_ARRAY' index type in column_index",
-                ));
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(idx) => {
+                // FIXED_LEN_BYTE_ARRAY is used for:
+                // - Decimal types (stored as big-endian signed integers)
+                // - UUID types (stored as 16-byte binary)
+                // - Fixed types (raw binary)
+                match &field_type {
+                    PrimitiveType::Decimal { .. } => {
+                        // Convert fixed-length bytes to i128 for decimal comparison
+                        idx.min_values_iter()
+                            .zip(idx.max_values_iter())
+                            .enumerate()
+                            .zip(row_counts.iter())
+                            .map(|((i, (min, max)), &row_count)| {
+                                let min_datum = min.and_then(|bytes| {
+                                    BigInt::from_signed_bytes_be(bytes)
+                                        .to_i128()
+                                        .map(|val| {
+                                            Datum::new(
+                                                field_type.clone(),
+                                                PrimitiveLiteral::Int128(val),
+                                            )
+                                        })
+                                });
+                                let max_datum = max.and_then(|bytes| {
+                                    BigInt::from_signed_bytes_be(bytes)
+                                        .to_i128()
+                                        .map(|val| {
+                                            Datum::new(
+                                                field_type.clone(),
+                                                PrimitiveLiteral::Int128(val),
+                                            )
+                                        })
+                                });
+                                predicate(
+                                    min_datum,
+                                    max_datum,
+                                    PageNullCount::from_row_and_null_counts(
+                                        row_count,
+                                        idx.null_count(i),
+                                    ),
+                                )
+                            })
+                            .collect()
+                    }
+                    PrimitiveType::Uuid => {
+                        // UUID stored as 16-byte fixed-length binary
+                        idx.min_values_iter()
+                            .zip(idx.max_values_iter())
+                            .enumerate()
+                            .zip(row_counts.iter())
+                            .map(|((i, (min, max)), &row_count)| {
+                                let min_datum = min.and_then(|bytes| {
+                                    if bytes.len() == 16 {
+                                        let arr: [u8; 16] = bytes.try_into().ok()?;
+                                        Some(Datum::new(
+                                            field_type.clone(),
+                                            PrimitiveLiteral::UInt128(u128::from_be_bytes(arr)),
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                let max_datum = max.and_then(|bytes| {
+                                    if bytes.len() == 16 {
+                                        let arr: [u8; 16] = bytes.try_into().ok()?;
+                                        Some(Datum::new(
+                                            field_type.clone(),
+                                            PrimitiveLiteral::UInt128(u128::from_be_bytes(arr)),
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                predicate(
+                                    min_datum,
+                                    max_datum,
+                                    PageNullCount::from_row_and_null_counts(
+                                        row_count,
+                                        idx.null_count(i),
+                                    ),
+                                )
+                            })
+                            .collect()
+                    }
+                    PrimitiveType::Fixed(_) => {
+                        // Fixed types are raw binary - use binary comparison
+                        idx.min_values_iter()
+                            .zip(idx.max_values_iter())
+                            .enumerate()
+                            .zip(row_counts.iter())
+                            .map(|((i, (min, max)), &row_count)| {
+                                predicate(
+                                    min.map(|bytes| {
+                                        Datum::new(
+                                            field_type.clone(),
+                                            PrimitiveLiteral::Fixed(bytes.to_vec()),
+                                        )
+                                    }),
+                                    max.map(|bytes| {
+                                        Datum::new(
+                                            field_type.clone(),
+                                            PrimitiveLiteral::Fixed(bytes.to_vec()),
+                                        )
+                                    }),
+                                    PageNullCount::from_row_and_null_counts(
+                                        row_count,
+                                        idx.null_count(i),
+                                    ),
+                                )
+                            })
+                            .collect()
+                    }
+                    _ => {
+                        // Other types using FIXED_LEN_BYTE_ARRAY are not supported
+                        return Err(Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            format!(
+                                "unsupported 'FIXED_LEN_BYTE_ARRAY' index type for {:?} in column_index",
+                                field_type
+                            ),
+                        ));
+                    }
+                }
             }
             ColumnIndexMetaData::INT96(_) => {
                 return Err(Error::new(
