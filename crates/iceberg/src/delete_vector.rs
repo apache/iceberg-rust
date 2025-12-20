@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::io::Cursor;
 use std::ops::BitOrAssign;
 
 use roaring::RoaringTreemap;
@@ -34,6 +35,34 @@ impl DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
+    }
+
+    /// Deserialize a DeleteVector from bytes (Puffin blob data).
+    ///
+    /// Per the Iceberg spec, deletion vectors are stored as serialized Roaring Bitmaps
+    /// in Puffin files with blob type "deletion-vector-v1".
+    pub fn deserialize_from(data: &[u8]) -> Result<Self> {
+        let cursor = Cursor::new(data);
+        let treemap = RoaringTreemap::deserialize_from(cursor).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Failed to deserialize deletion vector from Puffin blob: {}", e),
+            )
+        })?;
+        Ok(DeleteVector { inner: treemap })
+    }
+
+    /// Serialize a DeleteVector to bytes for storage in a Puffin blob.
+    #[allow(unused)]
+    pub fn serialize_to_vec(&self) -> Result<Vec<u8>> {
+        let mut buffer = Vec::new();
+        self.inner.serialize_into(&mut buffer).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to serialize deletion vector: {}", e),
+            )
+        })?;
+        Ok(buffer)
     }
 
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
@@ -197,5 +226,37 @@ mod tests {
         let positions = vec![1, 3, 5, 5];
         let res = dv.insert_positions(&positions);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_serialize_deserialize_round_trip() {
+        let mut dv = DeleteVector::default();
+        dv.insert(42);
+        dv.insert(100);
+        dv.insert(1 << 33); // Test high bits
+
+        let serialized = dv.serialize_to_vec().unwrap();
+        let deserialized = DeleteVector::deserialize_from(&serialized).unwrap();
+
+        let original_items: Vec<u64> = dv.iter().collect();
+        let deserialized_items: Vec<u64> = deserialized.iter().collect();
+
+        assert_eq!(original_items, deserialized_items);
+    }
+
+    #[test]
+    fn test_deserialize_empty() {
+        let empty_dv = DeleteVector::default();
+        let serialized = empty_dv.serialize_to_vec().unwrap();
+        let deserialized = DeleteVector::deserialize_from(&serialized).unwrap();
+
+        assert_eq!(deserialized.len(), 0);
+    }
+
+    #[test]
+    fn test_deserialize_invalid_data() {
+        let invalid_data = vec![0xFF, 0xFE, 0xFD]; // Invalid roaring bitmap data
+        let result = DeleteVector::deserialize_from(&invalid_data);
+        assert!(result.is_err());
     }
 }

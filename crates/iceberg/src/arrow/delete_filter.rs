@@ -315,6 +315,9 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let pos_del_2 = FileScanTaskDeleteFile {
@@ -322,6 +325,9 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let pos_del_3 = FileScanTaskDeleteFile {
@@ -329,6 +335,9 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let file_scan_tasks = vec![
@@ -411,6 +420,9 @@ pub(crate) mod tests {
                 file_type: DataContentType::EqualityDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
             }],
             partition: None,
             partition_spec: None,

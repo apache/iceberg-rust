@@ -30,6 +30,7 @@ use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
+use crate::puffin::{DELETION_VECTOR_V1, PuffinReader};
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
     DataContentType, Datum, ListType, MapType, NestedField, NestedFieldRef, PartnerAccessor,
@@ -46,7 +47,13 @@ pub(crate) struct CachingDeleteFileLoader {
 
 // Intermediate context during processing of a delete file task.
 enum DeleteFileContext {
-    // TODO: Delete Vector loader from Puffin files
+    /// Deletion vector loaded from a Puffin file
+    DeletionVector {
+        /// The data file path this deletion vector applies to
+        referenced_data_file: String,
+        /// The deserialized deletion vector
+        delete_vector: DeleteVector,
+    },
     ExistingEqDel,
     PosDels(ArrowRecordBatchStream),
     FreshEqDel {
@@ -209,6 +216,11 @@ impl CachingDeleteFileLoader {
         del_filter: DeleteFilter,
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
+        // Check if this is a deletion vector (stored in Puffin file)
+        if task.is_deletion_vector() {
+            return Self::load_deletion_vector(task, &basic_delete_file_loader).await;
+        }
+
         match task.file_type {
             DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
                 basic_delete_file_loader
@@ -250,10 +262,91 @@ impl CachingDeleteFileLoader {
         }
     }
 
+    /// Load a deletion vector from a Puffin file.
+    ///
+    /// Per the Iceberg spec, deletion vectors are stored as serialized Roaring Bitmaps
+    /// in Puffin files with blob type "deletion-vector-v1".
+    async fn load_deletion_vector(
+        task: &FileScanTaskDeleteFile,
+        basic_delete_file_loader: &BasicDeleteFileLoader,
+    ) -> Result<DeleteFileContext> {
+        let referenced_data_file = task.referenced_data_file.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Deletion vector must have referenced_data_file set",
+            )
+        })?;
+
+        let content_offset = task.content_offset.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Deletion vector must have content_offset set",
+            )
+        })?;
+
+        let content_size = task.content_size_in_bytes.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Deletion vector must have content_size_in_bytes set",
+            )
+        })?;
+
+        // Open the Puffin file
+        let input_file = basic_delete_file_loader.file_io().new_input(&task.file_path)?;
+        let puffin_reader = PuffinReader::new(input_file);
+
+        // Get file metadata to find the blob
+        let file_metadata = puffin_reader.file_metadata().await?;
+
+        // Find the deletion vector blob at the specified offset
+        let blob_metadata = file_metadata
+            .blobs
+            .iter()
+            .find(|blob| blob.offset == content_offset && blob.length == content_size as usize)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Could not find deletion vector blob at offset {} with length {} in Puffin file {}",
+                        content_offset, content_size, &task.file_path
+                    ),
+                )
+            })?;
+
+        // Verify blob type
+        if blob_metadata.r#type != DELETION_VECTOR_V1 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Expected blob type '{}', found '{}' in Puffin file {}",
+                    DELETION_VECTOR_V1, blob_metadata.r#type, &task.file_path
+                ),
+            ));
+        }
+
+        // Read and deserialize the blob
+        let blob = puffin_reader.blob(blob_metadata).await?;
+        let delete_vector = DeleteVector::deserialize_from(blob.data())?;
+
+        Ok(DeleteFileContext::DeletionVector {
+            referenced_data_file: referenced_data_file.clone(),
+            delete_vector,
+        })
+    }
+
     async fn parse_file_content_for_task(
         ctx: DeleteFileContext,
     ) -> Result<ParsedDeleteFileContext> {
         match ctx {
+            DeleteFileContext::DeletionVector {
+                referenced_data_file,
+                delete_vector,
+            } => {
+                // Deletion vectors are already deserialized, just wrap in a HashMap
+                let mut map = HashMap::new();
+                map.insert(referenced_data_file, delete_vector);
+                Ok(ParsedDeleteFileContext::DelVecs(map))
+            }
             DeleteFileContext::ExistingEqDel => Ok(ParsedDeleteFileContext::EqDel),
             DeleteFileContext::PosDels(batch_stream) => {
                 let del_vecs =
@@ -889,6 +982,9 @@ mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let eq_del = FileScanTaskDeleteFile {
@@ -896,6 +992,9 @@ mod tests {
             file_type: DataContentType::EqualityDeletes,
             partition_spec_id: 0,
             equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let file_scan_task = FileScanTask {
