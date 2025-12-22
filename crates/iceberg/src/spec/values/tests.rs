@@ -1332,3 +1332,93 @@ fn test_date_from_json_as_number() {
 
     // Both formats should produce the same Literal value
 }
+
+/// Test Fixed and Binary deserialization from JSON (base64 encoded strings)
+/// Per Iceberg spec, Fixed and Binary types are encoded as base64 strings in JSON.
+#[test]
+fn test_fixed_from_json_base64() {
+    use base64::Engine;
+    use serde_json::json;
+
+    // Create test bytes and encode as base64
+    let bytes = vec![0x01, 0x02, 0x03, 0x04];
+    let base64_str = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let json_value = json!(base64_str);
+    let result =
+        Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Fixed(4))).unwrap();
+
+    assert_eq!(result, Some(Literal::Primitive(PrimitiveLiteral::Fixed(bytes))));
+}
+
+#[test]
+fn test_fixed_from_json_wrong_length() {
+    use base64::Engine;
+    use serde_json::json;
+
+    // Create 3 bytes but expect Fixed(4)
+    let bytes = vec![0x01, 0x02, 0x03];
+    let base64_str = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let json_value = json!(base64_str);
+    let result = Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Fixed(4)));
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(err.to_string().contains("expects 4 bytes"));
+}
+
+#[test]
+fn test_fixed_from_json_empty() {
+    use serde_json::json;
+
+    // Empty base64 string for Fixed(0)
+    let json_value = json!("");
+    let result =
+        Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Fixed(0))).unwrap();
+
+    assert_eq!(result, Some(Literal::Primitive(PrimitiveLiteral::Fixed(vec![]))));
+}
+
+#[test]
+fn test_binary_from_json_base64() {
+    use base64::Engine;
+    use serde_json::json;
+
+    // Create test bytes and encode as base64
+    let bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+    let base64_str = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let json_value = json!(base64_str);
+    let result =
+        Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Binary)).unwrap();
+
+    assert_eq!(result, Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))));
+}
+
+#[test]
+fn test_binary_from_json_empty() {
+    use serde_json::json;
+
+    // Empty base64 string
+    let json_value = json!("");
+    let result =
+        Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Binary)).unwrap();
+
+    assert_eq!(result, Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![]))));
+}
+
+#[test]
+fn test_binary_from_json_invalid_base64() {
+    use serde_json::json;
+
+    // Invalid base64 string
+    let json_value = json!("not-valid-base64!!!");
+    let result = Literal::try_from_json(json_value, &Type::Primitive(PrimitiveType::Binary));
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(err.to_string().contains("Failed to decode base64"));
+}
