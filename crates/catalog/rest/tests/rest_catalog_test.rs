@@ -58,7 +58,7 @@ fn after_all() {
     guard.take();
 }
 
-async fn get_catalog() -> RestCatalog {
+async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> RestCatalog {
     set_up();
 
     let rest_catalog_ip = {
@@ -73,7 +73,12 @@ async fn get_catalog() -> RestCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
-    RestCatalogBuilder::default()
+    let mut builder = RestCatalogBuilder::default();
+    if let Some(auth) = authenticator {
+        builder = builder.with_token_authenticator(auth);
+    }
+
+    builder
         .load(
             "rest",
             HashMap::from([(
@@ -87,7 +92,7 @@ async fn get_catalog() -> RestCatalog {
 
 #[tokio::test]
 async fn test_get_non_exist_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let result = catalog
         .get_namespace(&NamespaceIdent::from_strs(["test_get_non_exist_namespace"]).unwrap())
@@ -99,7 +104,7 @@ async fn test_get_non_exist_namespace() {
 
 #[tokio::test]
 async fn test_get_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
@@ -129,7 +134,7 @@ async fn test_get_namespace() {
 
 #[tokio::test]
 async fn test_list_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns1 = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_namespace", "ios"]).unwrap(),
@@ -181,7 +186,7 @@ async fn test_list_namespace() {
 
 #[tokio::test]
 async fn test_list_empty_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns_apple = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_empty_namespace", "apple"]).unwrap(),
@@ -215,7 +220,7 @@ async fn test_list_empty_namespace() {
 
 #[tokio::test]
 async fn test_list_root_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns1 = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap(),
@@ -260,7 +265,7 @@ async fn test_list_root_namespace() {
 
 #[tokio::test]
 async fn test_create_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_create_table", "apple", "ios"]).unwrap(),
@@ -315,7 +320,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_update_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_update_table", "apple", "ios"]).unwrap(),
@@ -384,7 +389,7 @@ fn assert_map_contains(map1: &HashMap<String, String>, map2: &HashMap<String, St
 
 #[tokio::test]
 async fn test_list_empty_multi_level_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns_apple = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
@@ -422,7 +427,7 @@ async fn test_list_empty_multi_level_namespace() {
 
 #[tokio::test]
 async fn test_register_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     // Create namespace
     let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
@@ -471,36 +476,6 @@ impl CustomAuthenticator for CountingAuthenticator {
     }
 }
 
-async fn get_catalog_with_authenticator(
-    authenticator: Arc<dyn CustomAuthenticator>,
-) -> RestCatalog {
-    set_up();
-
-    let rest_catalog_ip = {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        docker_compose.get_container_ip("rest")
-    };
-
-    let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
-    while !scan_port_addr(rest_socket_addr) {
-        info!("Waiting for 1s rest catalog to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
-    }
-
-    RestCatalogBuilder::default()
-        .with_token_authenticator(authenticator)
-        .load(
-            "rest",
-            HashMap::from([(
-                REST_CATALOG_PROP_URI.to_string(),
-                format!("http://{rest_socket_addr}"),
-            )]),
-        )
-        .await
-        .unwrap()
-}
-
 #[tokio::test]
 async fn test_authenticator_token_refresh() {
     // Track how many times tokens were requested
@@ -511,7 +486,7 @@ async fn test_authenticator_token_refresh() {
         count: token_request_count_clone,
     });
 
-    let catalog_with_auth = get_catalog_with_authenticator(authenticator).await;
+    let catalog_with_auth = get_catalog(Some(authenticator)).await;
 
     // Perform multiple operations that should trigger token requests
     let ns1 = Namespace::with_properties(
@@ -550,7 +525,7 @@ async fn test_authenticator_persists_across_operations() {
         count: operation_count_clone,
     });
 
-    let catalog_with_auth = get_catalog_with_authenticator(authenticator).await;
+    let catalog_with_auth = get_catalog(Some(authenticator)).await;
 
     // Create a namespace
     let ns = Namespace::with_properties(
