@@ -33,6 +33,9 @@ pub trait EngineRunner: Send {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
+/// Load an engine runner based on the engine type and configuration.
+/// Each engine is responsible for creating its own catalog based on the
+/// `catalog_type` and `catalog_properties` fields in the config.
 pub async fn load_engine_runner(
     engine_type: &str,
     cfg: TomlTable,
@@ -80,7 +83,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_datafusion() {
+    async fn test_load_datafusion_default_catalog() {
         let input = r#"
             [engines]
             df = { type = "datafusion" }
@@ -88,6 +91,18 @@ mod tests {
         let tbl = toml::from_str(input).unwrap();
         let result = load_engine_runner(TYPE_DATAFUSION, tbl).await;
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Failed to load engine: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_load_datafusion_with_memory_catalog() {
+        let input = r#"
+            [engines]
+            df = { type = "datafusion", catalog_type = "memory" }
+        "#;
+        let tbl = toml::from_str(input).unwrap();
+        let result = load_engine_runner(TYPE_DATAFUSION, tbl).await;
+
+        assert!(result.is_ok(), "Failed to load engine: {:?}", result.err());
     }
 }

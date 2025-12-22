@@ -19,18 +19,20 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
+use iceberg_catalog_loader::CatalogLoader;
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 use toml::Table as TomlTable;
 
 use crate::engine::{EngineRunner, run_slt_with_runner};
 use crate::error::Result;
+
+const DEFAULT_CATALOG_TYPE: &str = "memory";
 
 pub struct DataFusionEngine {
     test_data_path: PathBuf,
@@ -59,12 +61,38 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
+    /// Create a new DataFusion engine with catalog configuration from the TOML config.
+    ///
+    /// # Configuration
+    ///
+    /// The engine reads catalog configuration from the TOML config:
+    /// - `catalog_type`: The type of catalog to use (e.g., "memory", "rest"). Defaults to "memory".
+    /// - `catalog_properties`: Additional properties for the catalog (optional).
+    ///
+    /// # Example configuration
+    ///
+    /// ```toml
+    /// [engines]
+    /// df = { type = "datafusion", catalog_type = "rest", catalog_properties = { uri = "http://localhost:8181" } }
+    /// ```
     pub async fn new(config: TomlTable) -> Result<Self> {
+        let catalog = Self::create_catalog(&config).await?;
+
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("default", Self::create_catalog(&config).await?);
+
+        // Create test namespace and tables in the catalog
+        Self::setup_test_data(&catalog).await?;
+
+        // Register the catalog with DataFusion
+        let catalog_provider = IcebergCatalogProvider::try_new(catalog)
+            .await
+            .map_err(|e| {
+                crate::error::Error(anyhow::anyhow!("Failed to create catalog provider: {e}"))
+            })?;
+        ctx.register_catalog("default", Arc::new(catalog_provider));
 
         Ok(Self {
             test_data_path: PathBuf::from("testdata"),
@@ -72,36 +100,87 @@ impl DataFusionEngine {
         })
     }
 
-    async fn create_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        // TODO: support dynamic catalog configuration
-        //  See: https://github.com/apache/iceberg-rust/issues/1780
-        let catalog = MemoryCatalogBuilder::default()
-            .load(
-                "memory",
-                HashMap::from([(
-                    MEMORY_CATALOG_WAREHOUSE.to_string(),
-                    "memory://".to_string(),
-                )]),
-            )
-            .await?;
+    /// Create a catalog from the engine configuration.
+    ///
+    /// Supported catalog types:
+    /// - "memory": In-memory catalog (default), useful for testing
+    /// - "rest": REST catalog
+    /// - "glue": AWS Glue catalog
+    /// - "hms": Hive Metastore catalog
+    /// - "s3tables": S3 Tables catalog
+    /// - "sql": SQL catalog
+    async fn create_catalog(config: &TomlTable) -> Result<Arc<dyn Catalog>> {
+        let catalog_type = config
+            .get("catalog_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or(DEFAULT_CATALOG_TYPE);
 
+        let catalog_properties: HashMap<String, String> = config
+            .get("catalog_properties")
+            .and_then(|v| v.as_table())
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if catalog_type == "memory" {
+            // Memory catalog is built-in to iceberg crate, not in catalog-loader
+            // Ensure warehouse is set for memory catalog
+            let mut props = catalog_properties;
+            if !props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
+                // Use a temp directory as default warehouse for testing
+                props.insert(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    std::env::temp_dir()
+                        .join("iceberg-sqllogictest")
+                        .to_string_lossy()
+                        .to_string(),
+                );
+            }
+            let catalog = MemoryCatalogBuilder::default()
+                .load("default", props)
+                .await
+                .map_err(|e| {
+                    crate::error::Error(anyhow::anyhow!("Failed to load memory catalog: {e}"))
+                })?;
+            Ok(Arc::new(catalog))
+        } else {
+            // Use catalog-loader for other catalog types
+            let catalog = CatalogLoader::from(catalog_type)
+                .load("default".to_string(), catalog_properties)
+                .await
+                .map_err(|e| crate::error::Error(anyhow::anyhow!("Failed to load catalog: {e}")))?;
+            Ok(catalog)
+        }
+    }
+
+    /// Set up the test namespace and tables in the catalog.
+    async fn setup_test_data(catalog: &Arc<dyn Catalog>) -> anyhow::Result<()> {
         // Create a test namespace for INSERT INTO tests
         let namespace = NamespaceIdent::new("default".to_string());
-        catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-        // Create test tables
-        Self::create_unpartitioned_table(&catalog, &namespace).await?;
-        Self::create_partitioned_table(&catalog, &namespace).await?;
+        // Try to create the namespace, ignore if it already exists
+        if catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .is_err()
+        {
+            // Namespace might already exist, that's ok
+        }
 
-        Ok(Arc::new(
-            IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
-        ))
+        // Create test tables (ignore errors if they already exist)
+        let _ = Self::create_unpartitioned_table(catalog, &namespace).await;
+        let _ = Self::create_partitioned_table(catalog, &namespace).await;
+
+        Ok(())
     }
 
     /// Create an unpartitioned test table with id and name columns
     /// TODO: this can be removed when we support CREATE TABLE
     async fn create_unpartitioned_table(
-        catalog: &impl Catalog,
+        catalog: &Arc<dyn Catalog>,
         namespace: &NamespaceIdent,
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()
@@ -128,7 +207,7 @@ impl DataFusionEngine {
     /// Partitioned by category using identity transform
     /// TODO: this can be removed when we support CREATE TABLE
     async fn create_partitioned_table(
-        catalog: &impl Catalog,
+        catalog: &Arc<dyn Catalog>,
         namespace: &NamespaceIdent,
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()

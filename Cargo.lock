@@ -3597,6 +3597,7 @@ dependencies = [
  "enum-ordinalize",
  "env_logger",
  "iceberg",
+ "iceberg-catalog-loader",
  "iceberg-datafusion",
  "indicatif",
  "libtest-mimic",
