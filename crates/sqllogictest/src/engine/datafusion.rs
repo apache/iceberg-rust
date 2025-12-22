@@ -27,9 +27,8 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, Unbound
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
-use toml::Table as TomlTable;
 
-use crate::engine::{EngineRunner, run_slt_with_runner};
+use crate::engine::{EngineConfig, EngineRunner, run_slt_with_runner};
 use crate::error::Result;
 
 pub struct DataFusionEngine {
@@ -59,12 +58,12 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
-    pub async fn new(config: TomlTable) -> Result<Self> {
+    pub async fn new(_name: &str, config: &EngineConfig) -> Result<Self> {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("default", Self::create_catalog(&config).await?);
+        ctx.register_catalog("default", Self::create_catalog(&config.extra).await?);
 
         Ok(Self {
             test_data_path: PathBuf::from("testdata"),
@@ -72,7 +71,9 @@ impl DataFusionEngine {
         })
     }
 
-    async fn create_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+    async fn create_catalog(
+        _extra: &HashMap<String, toml::Value>,
+    ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
         // TODO: support dynamic catalog configuration
         //  See: https://github.com/apache/iceberg-rust/issues/1780
         let catalog = MemoryCatalogBuilder::default()
