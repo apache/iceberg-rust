@@ -82,12 +82,12 @@ impl DeleteFilter {
     /// Retrieve a delete vector for a data file
     pub(crate) fn get_delete_vector_for_path(
         &self,
-        delete_file_path: &str,
+        data_file_path: &str,
     ) -> Option<Arc<Mutex<DeleteVector>>> {
         self.state
             .read()
             .ok()
-            .and_then(|st| st.delete_vectors.get(delete_file_path).cloned())
+            .and_then(|st| st.delete_vectors.get(data_file_path).cloned())
     }
 
     pub(crate) fn try_start_eq_del_load(&self, file_path: &str) -> Option<Arc<Notify>> {
