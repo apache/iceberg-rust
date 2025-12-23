@@ -27,24 +27,25 @@ use sqllogictest::{AsyncDB, MakeConnection, Runner, parse_file};
 use crate::engine::datafusion::DataFusionEngine;
 use crate::error::{Error, Result};
 
-/// Supported engine types for sqllogictest
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EngineType {
-    Datafusion,
+/// Configuration for the catalog used by an engine
+#[derive(Debug, Clone, Deserialize)]
+pub struct CatalogConfig {
+    /// Catalog type: "memory", "rest", "glue", "hms", "s3tables", "sql"
+    #[serde(rename = "type")]
+    pub catalog_type: String,
+    /// Catalog properties passed to the catalog loader
+    #[serde(default)]
+    pub props: HashMap<String, String>,
 }
 
-/// Configuration for a single engine instance
+/// Engine configuration as a tagged enum
 #[derive(Debug, Clone, Deserialize)]
-pub struct EngineConfig {
-    /// The type of engine
-    #[serde(rename = "type")]
-    pub engine_type: EngineType,
-
-    /// Additional configuration fields for extensibility
-    /// This allows forward-compatibility with future fields like catalog_type, catalog_properties
-    #[serde(flatten)]
-    pub extra: HashMap<String, toml::Value>,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum EngineConfig {
+    Datafusion {
+        #[serde(default)]
+        catalog: Option<CatalogConfig>,
+    },
 }
 
 #[async_trait::async_trait]
@@ -52,9 +53,9 @@ pub trait EngineRunner: Send {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
-pub async fn load_engine_runner(name: &str, config: EngineConfig) -> Result<Box<dyn EngineRunner>> {
-    match config.engine_type {
-        EngineType::Datafusion => Ok(Box::new(DataFusionEngine::new(name, &config).await?)),
+pub async fn load_engine_runner(config: EngineConfig) -> Result<Box<dyn EngineRunner>> {
+    match config {
+        EngineConfig::Datafusion { catalog } => Ok(Box::new(DataFusionEngine::new(catalog).await?)),
     }
 }
 
@@ -80,45 +81,63 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use crate::engine::{EngineConfig, EngineType, load_engine_runner};
+    use crate::engine::{CatalogConfig, EngineConfig, load_engine_runner};
 
     #[test]
     fn test_deserialize_engine_config() {
-        let input = r#"
-            type = "datafusion"
-        "#;
+        let input = r#"type = "datafusion""#;
 
         let config: EngineConfig = toml::from_str(input).unwrap();
-        assert_eq!(config.engine_type, EngineType::Datafusion);
-        assert!(config.extra.is_empty());
+        assert!(matches!(config, EngineConfig::Datafusion { catalog: None }));
     }
 
     #[test]
-    fn test_deserialize_engine_config_with_extras() {
+    fn test_deserialize_engine_config_with_catalog() {
         let input = r#"
             type = "datafusion"
-            catalog_type = "rest"
 
-            [catalog_properties]
+            [catalog]
+            type = "rest"
+
+            [catalog.props]
             uri = "http://localhost:8181"
         "#;
 
         let config: EngineConfig = toml::from_str(input).unwrap();
-        assert_eq!(config.engine_type, EngineType::Datafusion);
-        assert!(config.extra.contains_key("catalog_type"));
-        assert!(config.extra.contains_key("catalog_properties"));
+        match config {
+            EngineConfig::Datafusion { catalog: Some(cat) } => {
+                assert_eq!(cat.catalog_type, "rest");
+                assert_eq!(
+                    cat.props.get("uri"),
+                    Some(&"http://localhost:8181".to_string())
+                );
+            }
+            _ => panic!("Expected Datafusion with catalog"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_catalog_config() {
+        let input = r#"
+            type = "memory"
+
+            [props]
+            warehouse = "file:///tmp/warehouse"
+        "#;
+
+        let config: CatalogConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.catalog_type, "memory");
+        assert_eq!(
+            config.props.get("warehouse"),
+            Some(&"file:///tmp/warehouse".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_load_datafusion() {
-        let config = EngineConfig {
-            engine_type: EngineType::Datafusion,
-            extra: HashMap::new(),
-        };
+        let config = EngineConfig::Datafusion { catalog: None };
 
-        let result = load_engine_runner("df", config).await;
+        let result = load_engine_runner(config).await;
         assert!(result.is_ok());
     }
 }

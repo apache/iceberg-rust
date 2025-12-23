@@ -83,7 +83,7 @@ impl Schedule {
         let mut engines = HashMap::new();
 
         for (name, config) in configs {
-            let engine = load_engine_runner(&name, config).await?;
+            let engine = load_engine_runner(config).await?;
             engines.insert(name, engine);
         }
 
@@ -129,7 +129,7 @@ impl Schedule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::EngineType;
+    use crate::engine::EngineConfig;
     use crate::schedule::ScheduleConfig;
 
     #[test]
@@ -147,7 +147,9 @@ mod tests {
 
         assert_eq!(config.engines.len(), 1);
         assert!(config.engines.contains_key("df"));
-        assert_eq!(config.engines["df"].engine_type, EngineType::Datafusion);
+        assert!(matches!(config.engines["df"], EngineConfig::Datafusion {
+            catalog: None
+        }));
         assert_eq!(config.steps.len(), 1);
         assert_eq!(config.steps[0].engine, "df");
         assert_eq!(config.steps[0].slt, "test.slt");
@@ -178,11 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_with_extra_fields() {
-        // Test forward-compatibility with extra fields (for PR #1943)
+    fn test_deserialize_with_catalog_config() {
         let input = r#"
-            [engines]
-            df = { type = "datafusion", catalog_type = "rest", some_future_field = "value" }
+            [engines.df]
+            type = "datafusion"
+
+            [engines.df.catalog]
+            type = "rest"
+
+            [engines.df.catalog.props]
+            uri = "http://localhost:8181"
 
             [[steps]]
             engine = "df"
@@ -191,8 +198,16 @@ mod tests {
 
         let config: ScheduleConfig = toml::from_str(input).unwrap();
 
-        assert!(config.engines["df"].extra.contains_key("catalog_type"));
-        assert!(config.engines["df"].extra.contains_key("some_future_field"));
+        match &config.engines["df"] {
+            EngineConfig::Datafusion { catalog: Some(cat) } => {
+                assert_eq!(cat.catalog_type, "rest");
+                assert_eq!(
+                    cat.props.get("uri"),
+                    Some(&"http://localhost:8181".to_string())
+                );
+            }
+            _ => panic!("Expected Datafusion with catalog config"),
+        }
     }
 
     #[test]
