@@ -27,9 +27,9 @@ use sqllogictest::{AsyncDB, MakeConnection, Runner, parse_file};
 use crate::engine::datafusion::DataFusionEngine;
 use crate::error::{Error, Result};
 
-/// Configuration for the catalog used by an engine
+/// Configuration for the catalog used by the DataFusion engine
 #[derive(Debug, Clone, Deserialize)]
-pub struct CatalogConfig {
+pub struct DatafusionCatalogConfig {
     /// Catalog type: "memory", "rest", "glue", "hms", "s3tables", "sql"
     #[serde(rename = "type")]
     pub catalog_type: String,
@@ -44,7 +44,7 @@ pub struct CatalogConfig {
 pub enum EngineConfig {
     Datafusion {
         #[serde(default)]
-        catalog: Option<CatalogConfig>,
+        catalog: Option<DatafusionCatalogConfig>,
     },
 }
 
@@ -81,7 +81,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{CatalogConfig, EngineConfig, load_engine_runner};
+    use crate::engine::{DatafusionCatalogConfig, EngineConfig, load_engine_runner};
 
     #[test]
     fn test_deserialize_engine_config() {
@@ -125,7 +125,7 @@ mod tests {
             warehouse = "file:///tmp/warehouse"
         "#;
 
-        let config: CatalogConfig = toml::from_str(input).unwrap();
+        let config: DatafusionCatalogConfig = toml::from_str(input).unwrap();
         assert_eq!(config.catalog_type, "memory");
         assert_eq!(
             config.props.get("warehouse"),

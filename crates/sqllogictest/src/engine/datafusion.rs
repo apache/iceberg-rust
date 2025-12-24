@@ -28,7 +28,7 @@ use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 
-use crate::engine::{CatalogConfig, EngineRunner, run_slt_with_runner};
+use crate::engine::{DatafusionCatalogConfig, EngineRunner, run_slt_with_runner};
 use crate::error::Result;
 
 pub struct DataFusionEngine {
@@ -58,7 +58,7 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
-    pub async fn new(catalog_config: Option<CatalogConfig>) -> Result<Self> {
+    pub async fn new(catalog_config: Option<DatafusionCatalogConfig>) -> Result<Self> {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
@@ -75,7 +75,7 @@ impl DataFusionEngine {
     }
 
     async fn create_catalog(
-        _catalog_config: Option<&CatalogConfig>,
+        _catalog_config: Option<&DatafusionCatalogConfig>,
     ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
         // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
         // See: https://github.com/apache/iceberg-rust/issues/1780
