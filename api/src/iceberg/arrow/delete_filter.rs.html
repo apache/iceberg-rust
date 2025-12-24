@@ -82,12 +82,12 @@
 <a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Retrieve a delete vector for a data file
 <a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_delete_vector_for_path(
 <a href=#84 id=84 data-nosnippet>84</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#85 id=85 data-nosnippet>85</a>        delete_file_path: <span class="kw-2">&amp;</span>str,
+<a href=#85 id=85 data-nosnippet>85</a>        data_file_path: <span class="kw-2">&amp;</span>str,
 <a href=#86 id=86 data-nosnippet>86</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;DeleteVector&gt;&gt;&gt; {
 <a href=#87 id=87 data-nosnippet>87</a>        <span class="self">self</span>.state
 <a href=#88 id=88 data-nosnippet>88</a>            .read()
 <a href=#89 id=89 data-nosnippet>89</a>            .ok()
-<a href=#90 id=90 data-nosnippet>90</a>            .and_then(|st| st.delete_vectors.get(delete_file_path).cloned())
+<a href=#90 id=90 data-nosnippet>90</a>            .and_then(|st| st.delete_vectors.get(data_file_path).cloned())
 <a href=#91 id=91 data-nosnippet>91</a>    }
 <a href=#92 id=92 data-nosnippet>92</a>
 <a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>try_start_eq_del_load(<span class="kw-2">&amp;</span><span class="self">self</span>, file_path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Notify&gt;&gt; {
