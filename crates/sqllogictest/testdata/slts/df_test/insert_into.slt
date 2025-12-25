@@ -15,53 +15,62 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Verify the table is initially empty
-query IT rowsort
-SELECT * FROM default.default.test_unpartitioned_table
-----
+# ============================================
+# Test INSERT INTO for unpartitioned table
+# Uses test_create_simple created by create_table.slt
+# ============================================
 
-# Insert a single row and verify the count
+# Note: test_create_simple already has (1, 'test') from create_table.slt
+# Insert more rows
 query I
-INSERT INTO default.default.test_unpartitioned_table VALUES (1, 'Alice')
+INSERT INTO default.default.test_create_simple VALUES (2, 'Alice')
 ----
 1
 
 # Verify the inserted row
 query IT rowsort
-SELECT * FROM default.default.test_unpartitioned_table
+SELECT * FROM default.default.test_create_simple
 ----
-1 Alice
+1 test
+2 Alice
 
 # Insert multiple rows and verify the count
 query I
-INSERT INTO default.default.test_unpartitioned_table VALUES (2, 'Bob'), (3, 'Charlie')
+INSERT INTO default.default.test_create_simple VALUES (3, 'Bob'), (4, 'Charlie')
 ----
 2
 
 # Verify all rows
 query IT rowsort
-SELECT * FROM default.default.test_unpartitioned_table
+SELECT * FROM default.default.test_create_simple
 ----
-1 Alice
-2 Bob
-3 Charlie
+1 test
+2 Alice
+3 Bob
+4 Charlie
 
 # Insert with NULL value and verify the count
 query I
-INSERT INTO default.default.test_unpartitioned_table VALUES (4, NULL)
+INSERT INTO default.default.test_create_simple VALUES (5, NULL)
 ----
 1
 
 # Verify NULL handling
 query IT rowsort
-SELECT * FROM default.default.test_unpartitioned_table
+SELECT * FROM default.default.test_create_simple
 ----
-1 Alice
-2 Bob
-3 Charlie
-4 NULL
+1 test
+2 Alice
+3 Bob
+4 Charlie
+5 NULL
 
-# Test partitioned table - verify initially empty
+# ============================================
+# Test INSERT INTO for partitioned table
+# Uses test_partitioned_table
+# ============================================
+
+# Verify partitioned table is initially empty
 query ITT rowsort
 SELECT * FROM default.default.test_partitioned_table
 ----

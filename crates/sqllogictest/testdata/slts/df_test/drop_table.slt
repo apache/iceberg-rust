@@ -15,9 +15,30 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Verify tables created in create_table.slt and programmatically in datafusion.rs
-# - test_create_simple: created via CREATE TABLE in create_table.slt
-# - test_partitioned_table: created programmatically (partitioned tables can't be created via SQL yet)
+# Test DROP TABLE functionality
+
+# Drop tables created in create_table.slt and used in insert_into.slt
+# - test_create_simple: created via CREATE TABLE
+# - test_partitioned_table: created programmatically
+
+# Drop test_create_simple
+statement ok
+DROP TABLE default.default.test_create_simple
+
+# Verify test_create_simple no longer exists (should error)
+statement error
+SELECT * FROM default.default.test_create_simple
+
+# Drop test_partitioned_table
+statement ok
+DROP TABLE default.default.test_partitioned_table
+
+# Verify test_partitioned_table no longer exists (should error)
+statement error
+SELECT * FROM default.default.test_partitioned_table
+
+# Verify tables are gone with SHOW TABLES
+# Only information_schema tables should remain in the default catalog
 query TTTT rowsort
 SHOW TABLES
 ----
@@ -28,12 +49,6 @@ datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
-default default test_create_simple BASE TABLE
-default default test_create_simple$manifests BASE TABLE
-default default test_create_simple$snapshots BASE TABLE
-default default test_partitioned_table BASE TABLE
-default default test_partitioned_table$manifests BASE TABLE
-default default test_partitioned_table$snapshots BASE TABLE
 default information_schema columns VIEW
 default information_schema df_settings VIEW
 default information_schema parameters VIEW
@@ -41,3 +56,7 @@ default information_schema routines VIEW
 default information_schema schemata VIEW
 default information_schema tables VIEW
 default information_schema views VIEW
+
+# Test DROP TABLE IF EXISTS on non-existent table (should not error)
+statement ok
+DROP TABLE IF EXISTS default.default.test_create_simple

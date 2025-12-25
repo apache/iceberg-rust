@@ -33,6 +33,7 @@ use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
 
+use super::id_assigner::ArrowSchemaIdAssigner;
 use crate::error::Result;
 use crate::spec::{
     Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
@@ -221,6 +222,17 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     visit_schema(schema, &mut visitor)
 }
 
+/// Convert Arrow schema to Iceberg schema with auto-assigned field IDs.
+///
+/// This function is useful when converting Arrow schemas that don't have field IDs
+/// in their metadata (e.g., from DataFusion CREATE TABLE statements). Field IDs
+/// are assigned sequentially starting from 1, using breadth-first traversal to assign
+/// IDs level by level (all fields at one level before descending to nested fields).
+pub fn arrow_schema_to_schema_with_assigned_ids(schema: &ArrowSchema) -> Result<Schema> {
+    let mut assigner = ArrowSchemaIdAssigner::new(1);
+    assigner.convert_schema(schema)
+}
+
 /// Convert Arrow type to iceberg type.
 pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
     let mut visitor = ArrowSchemaConverter::new();
@@ -246,7 +258,7 @@ pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     ))
 }
 
-fn get_field_doc(field: &Field) -> Option<String> {
+pub(super) fn get_field_doc(field: &Field) -> Option<String> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
         return Some(value.clone());
     }

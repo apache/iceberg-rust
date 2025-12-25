@@ -89,12 +89,12 @@ impl DataFusionEngine {
             )
             .await?;
 
-        // Create a test namespace for INSERT INTO tests
+        // Create a test namespace
         let namespace = NamespaceIdent::new("default".to_string());
         catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-        // Create test tables
-        Self::create_unpartitioned_table(&catalog, &namespace).await?;
+        // Create partitioned table programmatically (can't be created via SQL yet)
+        // This table is automatically registered to DataFusion via IcebergCatalogProvider
         Self::create_partitioned_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
@@ -102,35 +102,10 @@ impl DataFusionEngine {
         ))
     }
 
-    /// Create an unpartitioned test table with id and name columns
-    /// TODO: this can be removed when we support CREATE TABLE
-    async fn create_unpartitioned_table(
-        catalog: &impl Catalog,
-        namespace: &NamespaceIdent,
-    ) -> anyhow::Result<()> {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
-
-        catalog
-            .create_table(
-                namespace,
-                TableCreation::builder()
-                    .name("test_unpartitioned_table".to_string())
-                    .schema(schema)
-                    .build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
-    /// TODO: this can be removed when we support CREATE TABLE
+    /// Note: Partitioned tables can't be created via SQL yet, so we create them programmatically.
+    /// The table is automatically registered to DataFusion via IcebergCatalogProvider.
     async fn create_partitioned_table(
         catalog: &impl Catalog,
         namespace: &NamespaceIdent,

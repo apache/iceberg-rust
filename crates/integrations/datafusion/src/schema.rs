@@ -16,16 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
+use iceberg::arrow::arrow_schema_to_schema_with_assigned_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, NamespaceIdent, Result};
+use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -34,10 +35,14 @@ use crate::to_datafusion_error;
 /// access to table providers within a specific namespace.
 #[derive(Debug)]
 pub(crate) struct IcebergSchemaProvider {
-    /// A `HashMap` where keys are table names
+    /// Reference to the Iceberg catalog
+    catalog: Arc<dyn Catalog>,
+    /// The namespace this schema represents
+    namespace: NamespaceIdent,
+    /// A concurrent map where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
-    tables: HashMap<String, Arc<IcebergTableProvider>>,
+    tables: Arc<DashMap<String, Arc<IcebergTableProvider>>>,
 }
 
 impl IcebergSchemaProvider {
@@ -71,13 +76,16 @@ impl IcebergSchemaProvider {
         )
         .await?;
 
-        let tables: HashMap<String, Arc<IcebergTableProvider>> = table_names
-            .into_iter()
-            .zip(providers.into_iter())
-            .map(|(name, provider)| (name, Arc::new(provider)))
-            .collect();
+        let tables = DashMap::new();
+        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
+            tables.insert(name, Arc::new(provider));
+        }
 
-        Ok(IcebergSchemaProvider { tables })
+        Ok(IcebergSchemaProvider {
+            catalog: client,
+            namespace,
+            tables: Arc::new(tables),
+        })
     }
 }
 
@@ -89,13 +97,16 @@ impl SchemaProvider for IcebergSchemaProvider {
 
     fn table_names(&self) -> Vec<String> {
         self.tables
-            .keys()
-            .flat_map(|table_name| {
+            .iter()
+            .flat_map(|entry| {
+                let table_name = entry.key().clone();
                 [table_name.clone()]
                     .into_iter()
-                    .chain(MetadataTableType::all_types().map(|metadata_table_name| {
-                        format!("{}${}", table_name.clone(), metadata_table_name.as_str())
-                    }))
+                    .chain(
+                        MetadataTableType::all_types().map(move |metadata_table_name| {
+                            format!("{}${}", table_name, metadata_table_name.as_str())
+                        }),
+                    )
             })
             .collect()
     }
@@ -127,7 +138,97 @@ impl SchemaProvider for IcebergSchemaProvider {
         Ok(self
             .tables
             .get(name)
-            .cloned()
-            .map(|t| t as Arc<dyn TableProvider>))
+            .map(|entry| entry.value().clone() as Arc<dyn TableProvider>))
+    }
+
+    fn register_table(
+        &self,
+        name: String,
+        table: Arc<dyn TableProvider>,
+    ) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Convert DataFusion schema to Iceberg schema
+        // DataFusion schemas don't have field IDs, so we use the function that assigns them automatically
+        let df_schema = table.schema();
+        let iceberg_schema = arrow_schema_to_schema_with_assigned_ids(df_schema.as_ref())
+            .map_err(to_datafusion_error)?;
+
+        // Create the table in the Iceberg catalog
+        let table_creation = TableCreation::builder()
+            .name(name.clone())
+            .schema(iceberg_schema)
+            .build();
+
+        let catalog = self.catalog.clone();
+        let namespace = self.namespace.clone();
+        let tables = self.tables.clone();
+        let name_clone = name.clone();
+
+        // Use tokio's spawn_blocking to handle the async work on a blocking thread pool
+        // This avoids the "cannot block within async runtime" error
+        let result = tokio::task::spawn_blocking(move || {
+            // Create a new runtime handle to execute the async work
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                catalog
+                    .create_table(&namespace, table_creation)
+                    .await
+                    .map_err(to_datafusion_error)?;
+
+                // Create a new table provider using the catalog reference
+                let table_provider = IcebergTableProvider::try_new(
+                    catalog.clone(),
+                    namespace.clone(),
+                    name_clone.clone(),
+                )
+                .await
+                .map_err(to_datafusion_error)?;
+
+                // Store the new table provider
+                let old_table = tables.insert(name_clone, Arc::new(table_provider));
+
+                Ok(old_table.map(|t| t as Arc<dyn TableProvider>))
+            })
+        });
+
+        // Block on the spawned task to get the result
+        // This is safe because spawn_blocking moves the blocking to a dedicated thread pool
+        futures::executor::block_on(result).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e))
+        })?
+    }
+
+    fn deregister_table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Don't allow dropping metadata tables directly
+        if name.contains('$') {
+            return Err(DataFusionError::Plan(
+                "Cannot drop metadata tables directly. Drop the parent table instead.".to_string(),
+            ));
+        }
+
+        let catalog = self.catalog.clone();
+        let namespace = self.namespace.clone();
+        let tables = self.tables.clone();
+        let name = name.to_string();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                let table_ident = iceberg::TableIdent::new(namespace.clone(), name.clone());
+
+                // Drop the table from the Iceberg catalog
+                catalog
+                    .drop_table(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?;
+
+                // Remove from local cache and return the old provider
+                let old_table = tables.remove(&name);
+                Ok(old_table.map(|(_, provider)| provider as Arc<dyn TableProvider>))
+            })
+        });
+
+        futures::executor::block_on(result).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to drop Iceberg table: {}", e))
+        })?
     }
 }
