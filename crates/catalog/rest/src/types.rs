@@ -15,20 +15,244 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Request and response types for the Iceberg REST API.
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
-use std::collections::HashMap;
-
+use http::Method;
 use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
 };
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,
     pub(super) defaults: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub(super) endpoints: HashSet<Endpoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Struct containing the method and path of an REST Catalog Endpoint
+pub struct Endpoint {
+    method: Method,
+    path: String,
+}
+
+impl Endpoint {
+    /// HTTP Method for endpoint
+    pub fn method(&self) -> &Method {
+        &self.method
+    }
+
+    /// Endpoint path
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Check if the set of supported endpoints supports the provided endpoint
+    pub fn check_supported(
+        supported_endpoints: &HashSet<Endpoint>,
+        endpoint: &Endpoint,
+    ) -> Result<(), Error> {
+        if supported_endpoints.contains(endpoint) {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Endpoint '{}' is not supported by the server",
+                    endpoint.as_str()
+                ),
+            ))
+        }
+    }
+
+    /// Parse endpoint in the form <HTTP Method> <URL> into an endpoint structure
+    pub fn parse(endpoint: &str) -> Result<Self, Error> {
+        let parts: Vec<&str> = endpoint.splitn(2, ' ').collect();
+        if parts.len() != 2 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid endpoint format: '{}'. Expected <Method> <Path>",
+            ));
+        }
+
+        let method: Method = Method::from_bytes(parts[0].as_bytes()).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid HTTP method: '{}'", parts[0]),
+            )
+        })?;
+
+        // Validate that the method is one of the standard HTTP methods since from_bytes allows for http extensions
+        match method {
+            Method::GET
+            | Method::POST
+            | Method::PUT
+            | Method::DELETE
+            | Method::HEAD
+            | Method::OPTIONS
+            | Method::PATCH => {}
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Invalid HTTP method: '{}'. Must be one of GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH",
+                        parts[0]
+                    ),
+                ));
+            }
+        }
+
+        return Ok(Self {
+            method: method,
+            path: parts[1].to_string(),
+        });
+    }
+
+    /// Config endpoint
+    pub fn v1_config() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("GET /v1/config").unwrap())
+    }
+
+    /// List namespaces endpoint
+    pub fn v1_list_namespaces() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("GET /v1/{prefix}/namespaces").unwrap())
+    }
+
+    /// Create namespace endpoint
+    pub fn v1_create_namespace() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("POST /v1/{prefix}/namespaces").unwrap())
+    }
+
+    /// Load namespace endpoint
+    pub fn v1_load_namespace() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("GET /v1/{prefix}/namespaces/{namespace}").unwrap())
+    }
+
+    /// Update namespace endpoint
+    pub fn v1_update_namespace() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("POST /v1/{prefix}/namespaces/{namespace}/properties").unwrap()
+        })
+    }
+
+    /// Delete namespace endpoint
+    pub fn v1_delete_namespace() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT
+            .get_or_init(|| Endpoint::parse("DELETE /v1/{prefix}/namespaces/{namespace}").unwrap())
+    }
+
+    /// List tables endpoint
+    pub fn v1_list_tables() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("GET /v1/{prefix}/namespaces/{namespace}/tables").unwrap()
+        })
+    }
+
+    /// Create table endpoint
+    pub fn v1_create_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("POST /v1/{prefix}/namespaces/{namespace}/tables").unwrap()
+        })
+    }
+
+    /// Load table endpoint
+    pub fn v1_load_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}").unwrap()
+        })
+    }
+
+    /// Update table endpoint
+    pub fn v1_update_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}").unwrap()
+        })
+    }
+
+    /// Delete table endpoint
+    pub fn v1_delete_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}").unwrap()
+        })
+    }
+
+    /// Rename table endpoint
+    pub fn v1_rename_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("POST /v1/{prefix}/tables/rename").unwrap())
+    }
+
+    /// Register table endpoint
+    pub fn v1_register_table() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("POST /v1/{prefix}/namespaces/{namespace}/register").unwrap()
+        })
+    }
+
+    /// Report metrics endpoint
+    pub fn v1_report_metrics() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics")
+                .unwrap()
+        })
+    }
+
+    /// Commit transaction endpoint
+    pub fn v1_commit_transaction() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| Endpoint::parse("POST /v1/{prefix}/transactions/commit").unwrap())
+    }
+
+    /// Check namespace exists endpoint
+    pub fn v1_namespace_exists() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT
+            .get_or_init(|| Endpoint::parse("HEAD /v1/{prefix}/namespaces/{namespace}").unwrap())
+    }
+
+    /// Check table exists endpoint
+    pub fn v1_table_exists() -> &'static Endpoint {
+        static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
+        ENDPOINT.get_or_init(|| {
+            Endpoint::parse("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}").unwrap()
+        })
+    }
+
+    fn as_str(&self) -> String {
+        format!("{} {}", self.method, self.path)
+    }
+}
+
+impl<'de> Deserialize<'de> for Endpoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        Endpoint::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for Endpoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str(&format!("{} {}", self.method, self.path))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -314,6 +538,193 @@ pub struct RegisterTableRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_endpoint_parse_valid() {
+        let endpoint = Endpoint::parse("GET /v1/config").unwrap();
+        assert_eq!(endpoint.method(), &Method::GET);
+        assert_eq!(endpoint.path(), "/v1/config");
+
+        let endpoint = Endpoint::parse("POST /v1/namespaces").unwrap();
+        assert_eq!(endpoint.method(), &Method::POST);
+        assert_eq!(endpoint.path(), "/v1/namespaces");
+
+        let endpoint = Endpoint::parse("DELETE /v1/namespaces/{namespace}").unwrap();
+        assert_eq!(endpoint.method(), &Method::DELETE);
+        assert_eq!(endpoint.path(), "/v1/namespaces/{namespace}");
+
+        let endpoint = Endpoint::parse("HEAD /v1/namespaces/{namespace}/tables/{table}").unwrap();
+        assert_eq!(endpoint.method(), &Method::HEAD);
+        assert_eq!(endpoint.path(), "/v1/namespaces/{namespace}/tables/{table}");
+    }
+
+    #[test]
+    fn test_endpoint_parse_invalid_format() {
+        // Missing space separator
+        let result = Endpoint::parse("GET/v1/config");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid endpoint format")
+        );
+
+        // Missing method
+        let result = Endpoint::parse("/v1/config");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid endpoint format")
+        );
+
+        // Missing path
+        let result = Endpoint::parse("GET");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid endpoint format")
+        );
+
+        // Empty string
+        let result = Endpoint::parse("");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid endpoint format")
+        );
+    }
+
+    #[test]
+    fn test_endpoint_parse_invalid_method() {
+        let result = Endpoint::parse("INVALID /v1/config");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid HTTP method")
+        );
+
+        let result = Endpoint::parse("get /v1/config");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid HTTP method")
+        );
+    }
+
+    #[test]
+    fn test_endpoint_serialize() {
+        let endpoint = Endpoint::parse("GET /v1/config").unwrap();
+        let serialized = serde_json::to_string(&endpoint).unwrap();
+        assert_eq!(serialized, "\"GET /v1/config\"");
+
+        let endpoint = Endpoint::parse("POST /v1/namespaces/{namespace}/tables").unwrap();
+        let serialized = serde_json::to_string(&endpoint).unwrap();
+        assert_eq!(serialized, "\"POST /v1/namespaces/{namespace}/tables\"");
+    }
+
+    #[test]
+    fn test_endpoint_deserialize() {
+        let json = "\"GET /v1/config\"";
+        let endpoint: Endpoint = serde_json::from_str(json).unwrap();
+        assert_eq!(endpoint.method(), &Method::GET);
+        assert_eq!(endpoint.path(), "/v1/config");
+
+        let json = "\"DELETE /v1/namespaces/{namespace}\"";
+        let endpoint: Endpoint = serde_json::from_str(json).unwrap();
+        assert_eq!(endpoint.method(), &Method::DELETE);
+        assert_eq!(endpoint.path(), "/v1/namespaces/{namespace}");
+    }
+
+    #[test]
+    fn test_endpoint_deserialize_invalid() {
+        let json = "\"INVALID /v1/config\"";
+        let result: Result<Endpoint, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        let json = "\"GET\"";
+        let result: Result<Endpoint, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_endpoint_check_supported() {
+        let mut supported = HashSet::new();
+        supported.insert(Endpoint::parse("GET /v1/config").unwrap());
+        supported.insert(Endpoint::parse("GET /v1/namespaces").unwrap());
+        supported.insert(Endpoint::parse("POST /v1/namespaces").unwrap());
+
+        // Supported endpoint
+        let endpoint = Endpoint::parse("GET /v1/config").unwrap();
+        assert!(Endpoint::check_supported(&supported, &endpoint).is_ok());
+
+        // Unsupported endpoint
+        let endpoint = Endpoint::parse("DELETE /v1/namespaces/{namespace}").unwrap();
+        let result = Endpoint::check_supported(&supported, &endpoint);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not supported by the server")
+        );
+    }
+
+    #[test]
+    fn test_catalog_config_endpoints_serde() {
+        // Test with endpoints
+        let json = serde_json::json!({
+            "overrides": {},
+            "defaults": {},
+            "endpoints": [
+                "GET /v1/config",
+                "POST /v1/namespaces",
+                "GET /v1/namespaces/{namespace}"
+            ]
+        });
+
+        let config: CatalogConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(config.endpoints.len(), 3);
+        assert!(
+            config
+                .endpoints
+                .contains(&Endpoint::parse("GET /v1/config").unwrap())
+        );
+        assert!(
+            config
+                .endpoints
+                .contains(&Endpoint::parse("POST /v1/namespaces").unwrap())
+        );
+        assert!(
+            config
+                .endpoints
+                .contains(&Endpoint::parse("GET /v1/namespaces/{namespace}").unwrap())
+        );
+
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert_eq!(serialized["endpoints"].as_array().unwrap().len(), 3);
+
+        let json_no_endpoints = serde_json::json!({
+            "overrides": {},
+            "defaults": {}
+        });
+
+        let config: CatalogConfig = serde_json::from_value(json_no_endpoints.clone()).unwrap();
+        assert!(config.endpoints.is_empty());
+
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert!(serialized.get("endpoints").is_none());
+    }
 
     #[test]
     fn test_namespace_response_serde() {
