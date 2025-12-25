@@ -53,6 +53,7 @@
 
 mod catalog;
 mod client;
+mod error_handlers;
 mod types;
 
 pub use catalog::*;
