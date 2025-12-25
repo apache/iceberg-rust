@@ -410,14 +410,14 @@ pub(super) mod _serde {
                     (Some(file), None) => file,
                     (Some(_), Some(_)) => {
                         return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            "v1 snapshot invariant violated: manifest_list and manifests are both set",
+                            ErrorKind::DataInvalid,
+                            "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted",
                         ));
                     }
                     (None, _) => {
                         return Err(Error::new(
-                            ErrorKind::FeatureUnsupported,
-                            "v1 snapshot invariant violated: manifest_list is missing",
+                            ErrorKind::DataInvalid,
+                            "Unsupported v1 snapshot, only manifest list is supported",
                         ));
                     }
                 },
@@ -648,6 +648,10 @@ mod tests {
 
             let result = serde_json::from_str::<TableMetadata>(metadata);
             assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "DataInvalid => Invalid v1 snapshot, when manifest list provided, manifest files should be omitted"
+            )
         }
 
         {
@@ -679,6 +683,10 @@ mod tests {
     "#;
             let result = serde_json::from_str::<TableMetadata>(metadata);
             assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "DataInvalid => Unsupported v1 snapshot, only manifest list is supported"
+            )
         }
     }
 
