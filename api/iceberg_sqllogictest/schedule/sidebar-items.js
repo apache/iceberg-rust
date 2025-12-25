@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Schedule","Step"]};
+window.SIDEBAR_ITEMS = {"struct":["Schedule","ScheduleConfig","Step"]};
