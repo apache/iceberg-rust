@@ -646,10 +646,13 @@ mod tests {
     }
     "#;
 
-            let result = serde_json::from_str::<TableMetadata>(metadata);
-            assert!(result.is_err());
+            let result_both_manifest_list_and_manifest_set =
+                serde_json::from_str::<TableMetadata>(metadata);
+            assert!(result_both_manifest_list_and_manifest_set.is_err());
             assert_eq!(
-                result.unwrap_err().to_string(),
+                result_both_manifest_list_and_manifest_set
+                    .unwrap_err()
+                    .to_string(),
                 "DataInvalid => Invalid v1 snapshot, when manifest list provided, manifest files should be omitted"
             )
         }
@@ -681,10 +684,10 @@ mod tests {
         ]
     }
     "#;
-            let result = serde_json::from_str::<TableMetadata>(metadata);
-            assert!(result.is_err());
+            let result_missing_manifest_list = serde_json::from_str::<TableMetadata>(metadata);
+            assert!(result_missing_manifest_list.is_err());
             assert_eq!(
-                result.unwrap_err().to_string(),
+                result_missing_manifest_list.unwrap_err().to_string(),
                 "DataInvalid => Unsupported v1 snapshot, only manifest list is supported"
             )
         }
