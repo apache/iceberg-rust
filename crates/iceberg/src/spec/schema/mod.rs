@@ -102,8 +102,8 @@ impl SchemaBuilder {
     /// Reassignment starts from the field-id specified in `start_from` (inclusive).
     ///
     /// All specified aliases and identifier fields will be updated to the new field-ids.
-    pub(crate) fn with_reassigned_field_ids(mut self, start_from: u32) -> Self {
-        self.reassign_field_ids_from = Some(start_from.try_into().unwrap_or(i32::MAX));
+    pub(crate) fn with_reassigned_field_ids(mut self, start_from: i32) -> Self {
+        self.reassign_field_ids_from = Some(start_from);
         self
     }
 
