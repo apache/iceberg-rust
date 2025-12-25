@@ -266,9 +266,9 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{Operation, Snapshot, Summary};
-    use crate::Error;
     use crate::spec::SchemaId;
     use crate::spec::snapshot::SnapshotRowRange;
+    use crate::{Error, ErrorKind};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -408,9 +408,19 @@ pub(super) mod _serde {
                 timestamp_ms: v1.timestamp_ms,
                 manifest_list: match (v1.manifest_list, v1.manifests) {
                     (Some(file), None) => file,
-                    (Some(_), Some(_)) => "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted".to_string(),
-                    (None, _) => "Unsupported v1 snapshot, only manifest list is supported".to_string()
-                   },
+                    (Some(_), Some(_)) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted",
+                        ));
+                    }
+                    (None, _) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Unsupported v1 snapshot, only manifest list is supported",
+                        ));
+                    }
+                },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
                     additional_properties: HashMap::new(),
@@ -517,6 +527,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
+    use crate::spec::TableMetadata;
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
 
@@ -602,6 +613,84 @@ mod tests {
                 .get("added-files"),
             Some(&"5".to_string())
         );
+    }
+
+    #[test]
+    fn test_v1_snapshot_with_manifest_list_and_manifests() {
+        {
+            let metadata = r#"
+    {
+        "format-version": 1,
+        "table-uuid": "d20125c8-7284-442c-9aea-15fee620737c",
+        "location": "s3://bucket/test/location",
+        "last-updated-ms": 1700000000000,
+        "last-column-id": 1,
+        "schema": {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "x", "required": true, "type": "long"}
+            ]
+        },
+        "partition-spec": [],
+        "properties": {},
+        "current-snapshot-id": 111111111,
+        "snapshots": [
+            {
+                "snapshot-id": 111111111,
+                "timestamp-ms": 1600000000000,
+                "summary": {"operation": "append"},
+                "manifest-list": "s3://bucket/metadata/snap-123.avro",
+                "manifests": ["s3://bucket/metadata/manifest-1.avro"]
+            }
+        ]
+    }
+    "#;
+
+            let result_both_manifest_list_and_manifest_set =
+                serde_json::from_str::<TableMetadata>(metadata);
+            assert!(result_both_manifest_list_and_manifest_set.is_err());
+            assert_eq!(
+                result_both_manifest_list_and_manifest_set
+                    .unwrap_err()
+                    .to_string(),
+                "DataInvalid => Invalid v1 snapshot, when manifest list provided, manifest files should be omitted"
+            )
+        }
+
+        {
+            let metadata = r#"
+    {
+        "format-version": 1,
+        "table-uuid": "d20125c8-7284-442c-9aea-15fee620737c",
+        "location": "s3://bucket/test/location",
+        "last-updated-ms": 1700000000000,
+        "last-column-id": 1,
+        "schema": {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "x", "required": true, "type": "long"}
+            ]
+        },
+        "partition-spec": [],
+        "properties": {},
+        "current-snapshot-id": 111111111,
+        "snapshots": [
+            {
+                "snapshot-id": 111111111,
+                "timestamp-ms": 1600000000000,
+                "summary": {"operation": "append"},
+                "manifests": ["s3://bucket/metadata/manifest-1.avro"]
+            }
+        ]
+    }
+    "#;
+            let result_missing_manifest_list = serde_json::from_str::<TableMetadata>(metadata);
+            assert!(result_missing_manifest_list.is_err());
+            assert_eq!(
+                result_missing_manifest_list.unwrap_err().to_string(),
+                "DataInvalid => Unsupported v1 snapshot, only manifest list is supported"
+            )
+        }
     }
 
     #[test]
