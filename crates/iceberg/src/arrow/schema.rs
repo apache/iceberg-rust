@@ -273,21 +273,21 @@ struct ArrowSchemaConverter {
     /// Generates unique placeholder IDs for fields before reassignment.
     /// Required because `ReassignFieldIds` builds an old-to-new ID mapping
     /// that expects unique input IDs.
-    temp_field_id_counter: i32,
+    next_field_id: i32,
 }
 
 impl ArrowSchemaConverter {
     fn new() -> Self {
         Self {
             reassign_field_ids_from: None,
-            temp_field_id_counter: 0,
+            next_field_id: 0,
         }
     }
 
     fn new_with_field_ids_from(start_from: i32) -> Self {
         Self {
             reassign_field_ids_from: Some(start_from),
-            temp_field_id_counter: 0,
+            next_field_id: 0,
         }
     }
 
@@ -296,10 +296,11 @@ impl ArrowSchemaConverter {
             // Field IDs will be reassigned by the schema builder.
             // We need unique temporary IDs because ReassignFieldIds builds an
             // old->new ID mapping that requires unique input IDs.
-            let temp_id = self.temp_field_id_counter;
-            self.temp_field_id_counter += 1;
+            let temp_id = self.next_field_id;
+            self.next_field_id += 1;
             Ok(temp_id)
         } else {
+            // Get field ID from arrow field metadata
             get_field_id_from_metadata(field)
         }
     }
