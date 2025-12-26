@@ -2395,6 +2395,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "ctor",
+ "futures",
  "http 1.3.1",
  "iceberg",
  "iceberg_test_utils",

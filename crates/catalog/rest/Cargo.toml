@@ -45,6 +45,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 ctor = { workspace = true }
+futures = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 port_scanner = { workspace = true }
