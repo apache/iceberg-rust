@@ -75,7 +75,7 @@ async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> Res
 
     let mut builder = RestCatalogBuilder::default();
     if let Some(auth) = authenticator {
-        builder = builder.with_token_authenticator(auth);
+        builder = builder.authenticator(auth);
     }
 
     builder

@@ -127,24 +127,6 @@ impl RestCatalogBuilder {
         self.0.client = Some(client);
         self
     }
-
-    /// Set a custom token authenticator.
-    ///
-    /// The authenticator will be used to obtain tokens instead of using static tokens
-    /// or OAuth credentials.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let authenticator = Arc::new(MyAuthenticator::new());
-    /// let catalog = RestCatalogBuilder::default()
-    ///     .with_token_authenticator(authenticator)
-    ///     .load("rest", config)
-    ///     .await?;
-    /// ```
-    pub fn with_token_authenticator(mut self, authenticator: Arc<dyn CustomAuthenticator>) -> Self {
-        self.0.authenticator = Some(authenticator);
-        self
-    }
 }
 
 /// Rest catalog configuration.
