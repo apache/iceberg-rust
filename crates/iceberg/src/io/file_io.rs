@@ -17,14 +17,15 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use opendal::Operator;
 use url::Url;
 
-use super::storage::Storage;
+use super::storage::OpenDalStorage;
+pub use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -47,8 +48,7 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
-
-    inner: Arc<Storage>,
+    inner: Arc<dyn Storage>,
 }
 
 impl FileIO {
@@ -89,8 +89,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.delete(relative_path).await?)
+        self.inner.delete(path.as_ref()).await
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -104,14 +103,8 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
-    pub async fn remove_dir_all(&self, path: impl AsRef<str>) -> Result<()> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        let path = if relative_path.ends_with('/') {
-            relative_path.to_string()
-        } else {
-            format!("{relative_path}/")
-        };
-        Ok(op.remove_all(&path).await?)
+    pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
+        self.inner.delete_prefix(path.as_ref()).await
     }
 
     /// Check file exists.
@@ -120,8 +113,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.exists(relative_path).await?)
+        self.inner.exists(path.as_ref()).await
     }
 
     /// Creates input file.
@@ -130,14 +122,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        let path = path.as_ref().to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(InputFile {
-            op,
-            path,
-            relative_path_pos,
-        })
+        self.inner.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -146,14 +131,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        let path = path.as_ref().to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(OutputFile {
-            op,
-            path,
-            relative_path_pos,
-        })
+        self.inner.new_output(path.as_ref())
     }
 }
 
@@ -262,7 +240,8 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        let storage = Storage::build(self.clone())?;
+        let storage = OpenDalStorage::build(self.clone())?;
+
         Ok(FileIO {
             builder: self,
             inner: Arc::new(storage),
@@ -293,7 +272,7 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
 
 #[async_trait::async_trait]
 impl FileRead for opendal::Reader {
-    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
+    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         Ok(opendal::Reader::read(self, range).await?.to_bytes())
     }
 }
@@ -301,49 +280,48 @@ impl FileRead for opendal::Reader {
 /// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
-    op: Operator,
-    // Absolution path of file.
+    storage: Arc<dyn Storage>,
     path: String,
-    // Relative path of file to uri, starts at [`relative_path_pos`]
-    relative_path_pos: usize,
 }
 
 impl InputFile {
+    /// Creates a new input file.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - The storage backend to use
+    /// * `path` - Absolute path to the file
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+        Self { storage, path }
+    }
+
     /// Absolute path to root uri.
     pub fn location(&self) -> &str {
         &self.path
     }
 
     /// Check if file exists.
-    pub async fn exists(&self) -> crate::Result<bool> {
-        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+    pub async fn exists(&self) -> Result<bool> {
+        self.storage.exists(&self.path).await
     }
 
     /// Fetch and returns metadata of file.
-    pub async fn metadata(&self) -> crate::Result<FileMetadata> {
-        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
-
-        Ok(FileMetadata {
-            size: meta.content_length(),
-        })
+    pub async fn metadata(&self) -> Result<FileMetadata> {
+        self.storage.metadata(&self.path).await
     }
 
     /// Read and returns whole content of file.
     ///
     /// For continuous reading, use [`Self::reader`] instead.
-    pub async fn read(&self) -> crate::Result<Bytes> {
-        Ok(self
-            .op
-            .read(&self.path[self.relative_path_pos..])
-            .await?
-            .to_bytes())
+    pub async fn read(&self) -> Result<Bytes> {
+        self.storage.read(&self.path).await
     }
 
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
-        Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
+    pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
+        self.storage.reader(&self.path).await
     }
 }
 
@@ -354,16 +332,16 @@ impl InputFile {
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
 #[async_trait::async_trait]
-pub trait FileWrite: Send + Unpin + 'static {
+pub trait FileWrite: Send + Sync + Unpin + 'static {
     /// Write bytes to file.
     ///
     /// TODO: we can support writing non-contiguous bytes in the future.
-    async fn write(&mut self, bs: Bytes) -> crate::Result<()>;
+    async fn write(&mut self, bs: Bytes) -> Result<()>;
 
     /// Close file.
     ///
     /// Calling close on closed file will generate an error.
-    async fn close(&mut self) -> crate::Result<()>;
+    async fn close(&mut self) -> Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -389,17 +367,24 @@ impl FileWrite for Box<dyn FileWrite> {
     }
 }
 
-/// Output file is used for writing to files..
+/// Output file is used for writing to files.
 #[derive(Debug)]
 pub struct OutputFile {
-    op: Operator,
-    // Absolution path of file.
+    storage: Arc<dyn Storage>,
     path: String,
-    // Relative path of file to uri, starts at [`relative_path_pos`]
-    relative_path_pos: usize,
 }
 
 impl OutputFile {
+    /// Creates a new output file.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - The storage backend to use
+    /// * `path` - Absolute path to the file
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+        Self { storage, path }
+    }
+
     /// Relative path to root uri.
     pub fn location(&self) -> &str {
         &self.path
@@ -407,23 +392,19 @@ impl OutputFile {
 
     /// Checks if file exists.
     pub async fn exists(&self) -> Result<bool> {
-        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+        self.storage.exists(&self.path).await
     }
 
     /// Deletes file.
     ///
     /// If the file does not exist, it will not return error.
     pub async fn delete(&self) -> Result<()> {
-        Ok(self.op.delete(&self.path[self.relative_path_pos..]).await?)
+        self.storage.delete(&self.path).await
     }
 
     /// Converts into [`InputFile`].
     pub fn to_input_file(self) -> InputFile {
-        InputFile {
-            op: self.op,
-            path: self.path,
-            relative_path_pos: self.relative_path_pos,
-        }
+        InputFile::new(self.storage, self.path)
     }
 
     /// Create a new output file with given bytes.
@@ -433,9 +414,7 @@ impl OutputFile {
     /// Calling `write` will overwrite the file if it exists.
     /// For continuous writing, use [`Self::writer`].
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
-        let mut writer = self.writer().await?;
-        writer.write(bs).await?;
-        writer.close().await
+        self.storage.write(self.path.as_str(), bs).await
     }
 
     /// Creates output file for continuous writing.
@@ -444,9 +423,7 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        Ok(Box::new(
-            self.op.writer(&self.path[self.relative_path_pos..]).await?,
-        ))
+        Ok(Box::new(self.storage.writer(&self.path).await?))
     }
 }
 
@@ -517,14 +494,14 @@ mod tests {
         assert!(file_io.exists(&a_path).await.unwrap());
 
         // Remove a file should be no-op.
-        file_io.remove_dir_all(&a_path).await.unwrap();
+        file_io.delete_prefix(&a_path).await.unwrap();
         assert!(file_io.exists(&a_path).await.unwrap());
 
         // Remove a not exist dir should be no-op.
-        file_io.remove_dir_all("not_exists/").await.unwrap();
+        file_io.delete_prefix("not_exists/").await.unwrap();
 
         // Remove a dir should remove all files in it.
-        file_io.remove_dir_all(&sub_dir_path).await.unwrap();
+        file_io.delete_prefix(&sub_dir_path).await.unwrap();
         assert!(!file_io.exists(&b_path).await.unwrap());
         assert!(!file_io.exists(&c_path).await.unwrap());
         assert!(file_io.exists(&a_path).await.unwrap());
@@ -543,7 +520,7 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(!file_io.exists(&full_path).await.unwrap());
         assert!(file_io.delete(&full_path).await.is_ok());
-        assert!(file_io.remove_dir_all(&full_path).await.is_ok());
+        assert!(file_io.delete_prefix(&full_path).await.is_ok());
     }
 
     #[tokio::test]
