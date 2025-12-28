@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::io::{Read, Write};
+
+use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, ErrorKind, Result};
@@ -36,10 +39,14 @@ impl CompressionCodec {
     pub(crate) fn decompress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 decompression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                let mut decoder = FrameDecoder::new(&bytes[..]);
+                let mut decompressed = Vec::new();
+                decoder
+                    .read_to_end(&mut decompressed)
+                    .map_err(|e| Error::new(ErrorKind::IOError, e.to_string()))?;
+                Ok(decompressed)
+            }
             CompressionCodec::Zstd => {
                 let decompressed = zstd::stream::decode_all(&bytes[..])?;
                 Ok(decompressed)
@@ -50,10 +57,16 @@ impl CompressionCodec {
     pub(crate) fn compress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 compression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                let mut encoder = FrameEncoder::new(Vec::new());
+                encoder
+                    .write_all(&bytes)
+                    .map_err(|e| Error::new(ErrorKind::IOError, e.to_string()))?;
+                let compressed = encoder
+                    .finish()
+                    .map_err(|e| Error::new(ErrorKind::IOError, e.to_string()))?;
+                Ok(compressed)
+            }
             CompressionCodec::Zstd => {
                 let writer = Vec::<u8>::new();
                 let mut encoder = zstd::stream::Encoder::new(writer, 3)?;
@@ -90,23 +103,19 @@ mod tests {
     #[tokio::test]
     async fn test_compression_codec_lz4() {
         let compression_codec = CompressionCodec::Lz4;
-        let bytes_vec = [0_u8; 100].to_vec();
 
-        assert_eq!(
-            compression_codec
-                .compress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently",
-        );
+        // Highly compressible data: all zeros
+        let data = vec![0u8; 10_000];
+        let compressed = compression_codec.compress(data.clone()).unwrap();
+        assert!(compressed.len() < data.len() / 2); // Should compress to less than half the original size
+        let decompressed = compression_codec.decompress(compressed).unwrap();
+        assert_eq!(decompressed, data);
 
-        assert_eq!(
-            compression_codec
-                .decompress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 decompression is not supported currently",
-        )
+        // Empty input
+        let empty = vec![];
+        let compressed_empty = compression_codec.compress(empty.clone()).unwrap();
+        let decompressed_empty = compression_codec.decompress(compressed_empty).unwrap();
+        assert_eq!(decompressed_empty, empty);
     }
 
     #[tokio::test]
@@ -119,5 +128,24 @@ mod tests {
 
         let decompressed = compression_codec.decompress(compressed.clone()).unwrap();
         assert_eq!(decompressed, bytes_vec)
+    }
+
+    #[test]
+    fn test_lz4_roundtrip() {
+        let data: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
+
+        let compressed = CompressionCodec::Lz4.compress(data.clone()).unwrap();
+        assert!(compressed.len() < data.len());
+
+        let decompressed = CompressionCodec::Lz4.decompress(compressed).unwrap();
+        assert_eq!(data, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_empty() {
+        let empty = vec![];
+        let compressed = CompressionCodec::Lz4.compress(empty.clone()).unwrap();
+        let decompressed = CompressionCodec::Lz4.decompress(compressed).unwrap();
+        assert_eq!(empty, decompressed);
     }
 }

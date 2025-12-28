@@ -3372,6 +3372,7 @@ dependencies = [
  "futures",
  "iceberg_test_utils",
  "itertools 0.13.0",
+ "lz4_flex",
  "minijinja",
  "mockall",
  "moka",

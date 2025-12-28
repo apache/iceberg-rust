@@ -63,6 +63,11 @@ pub enum ErrorKind {
 
     /// Catalog commit failed due to outdated metadata
     CatalogCommitConflicts,
+
+    /// An I/O error occurred during filesystem or object store operations (e.g., file not found,
+    /// permission denied, network timeout, disk full, etc.).
+    /// Typically recoverable with retries, but may require manual intervention in persistent cases.
+    IOError,
 }
 
 impl ErrorKind {
@@ -84,6 +89,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
             ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
+            ErrorKind::IOError => "IOError",
         }
     }
 }
