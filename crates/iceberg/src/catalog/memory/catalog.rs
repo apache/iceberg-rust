@@ -166,9 +166,9 @@ impl Catalog for MemoryCatalog {
                     .map(|name| {
                         let mut names = parent_namespace_ident.iter().cloned().collect::<Vec<_>>();
                         names.push(name.to_string());
-                        NamespaceIdent::from_vec(names).unwrap()
+                        NamespaceIdent::from_vec(names)
                     })
-                    .collect_vec();
+                    .collect::<Result<Vec<_>>>()?;
 
                 Ok(namespaces)
             }
