@@ -302,7 +302,8 @@ impl StorageConfig {
 #### Backend-Specific Configuration Types
 
 In addition to `StorageConfig`, we provide typed configuration structs for each storage backend.
-These can be constructed from `StorageConfig` and provide a structured way to access backend-specific settings:
+These implement `From<&StorageConfig>` for easy conversion and provide a structured way to access
+backend-specific settings:
 
 - `S3Config` - Amazon S3 configuration
 - `GcsConfig` - Google Cloud Storage configuration
@@ -324,7 +325,7 @@ pub struct S3Config {
     // ... other S3-specific fields
 }
 
-// Can be constructed from StorageConfig
+// All backend configs implement From<&StorageConfig> for easy conversion
 impl From<&StorageConfig> for S3Config {
     fn from(config: &StorageConfig) -> Self { /* ... */ }
 }
@@ -855,7 +856,7 @@ impl StorageFactory for RoutingStorageFactory {
 - Add `with_file_io()` to `CatalogBuilder` trait
 - Update all catalog implementations to support FileIO injection
 
-### Phase 2: Separate Storage Crates (Completed)
+### Phase 2: Separate Storage Crates
 - Create `iceberg-storage-opendal` crate with `OpenDalStorage` and `OpenDalStorageFactory`
 - Move S3, GCS, OSS, Azure implementations to `iceberg-storage-opendal`
 - Create `iceberg-storage-utils` crate with `ResolvingStorageFactory` and `default_storage_factory()`
