@@ -266,8 +266,28 @@ impl ExecutionPlan for IcebergWriteExec {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create TaskWriter
-        // TODO: Make fanout_enabled configurable via table properties
-        let fanout_enabled = true;
+        let fanout_enabled = self
+            .table
+            .metadata()
+            .properties()
+            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
+            .map(|value| {
+                value
+                    .parse::<bool>()
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Invalid value for {}, expected 'true' or 'false'",
+                                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
+                            ),
+                        )
+                        .with_source(e)
+                    })
+                    .map_err(to_datafusion_error)
+            })
+            .transpose()?
+            .unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
         let task_writer = TaskWriter::try_new(
