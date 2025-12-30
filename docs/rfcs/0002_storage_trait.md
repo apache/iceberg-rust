@@ -17,7 +17,7 @@
   ~ under the License.
 -->
 
-# Making Storage a Trait in Iceberg-rust
+# Making Storage a Trait
 
 ## Background
 
@@ -60,91 +60,335 @@ The original design has several limitations:
 
 As discussed in Issue #1314, making Storage a trait would allow pluggable storage and better integration with existing systems.
 
-### New Trait-Based Design
+---
 
-The new design replaces the concrete `Storage` enum with a `Storage` trait:
+## High-Level Architecture
 
-```rust
-// New: Trait-based abstraction (defined in iceberg crate)
-#[async_trait]
-pub trait Storage: Debug + Send + Sync {
-    ...
-}
+The new design introduces a trait-based storage abstraction with a factory pattern for creating storage instances. This enables pluggable storage backends while maintaining a clean separation between the core Iceberg library and storage implementations.
+
+### Component Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              User Application                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                 Catalog                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  CatalogBuilder::with_file_io(file_io)                              │    │
+│  │  - Accepts optional FileIO injection                                │    │
+│  │  - Falls back to default_storage_factory() if not provided          │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                 FileIO                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  - config: StorageConfig (scheme + properties)                      │    │
+│  │  - factory: Arc<dyn StorageFactory>                                 │    │
+│  │  - storage: OnceCell<Arc<dyn Storage>> (lazy initialization)        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Methods: new_input(), new_output(), delete(), exists(), delete_prefix()    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                    ┌─────────────────┴─────────────────┐
+                    ▼                                   ▼
+┌───────────────────────────────┐     ┌───────────────────────────────────────┐
+│        StorageFactory         │     │              Storage                   │
+│  (trait in iceberg crate)     │     │        (trait in iceberg crate)        │
+│                               │     │                                        │
+│  fn build(&self, config)      │────▶│  async fn exists(&self, path)          │
+│     -> Arc<dyn Storage>       │     │  async fn read(&self, path)            │
+│                               │     │  async fn write(&self, path, bytes)    │
+│                               │     │  async fn delete(&self, path)          │
+│                               │     │  fn new_input(&self, path)             │
+│                               │     │  fn new_output(&self, path)            │
+└───────────────────────────────┘     └───────────────────────────────────────┘
+            │                                           ▲
+            │                                           │
+            ▼                                           │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Storage Implementations                               │
+│                                                                              │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐  │
+│  │   MemoryStorage     │  │   LocalFsStorage    │  │   OpenDalStorage    │  │
+│  │   (iceberg crate)   │  │   (iceberg crate)   │  │ (iceberg-storage-   │  │
+│  │                     │  │                     │  │      opendal)       │  │
+│  │  - In-memory HashMap│  │  - std::fs ops      │  │  - S3, GCS, Azure   │  │
+│  │  - For testing      │  │  - For local files  │  │  - OSS, filesystem  │  │
+│  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-This enables:
-- **Pluggable backends** – Users can implement custom storage backends
-- **Multiple libraries** – Support for OpenDAL, object_store, or custom implementations
-- **Separate crates** – Storage implementations can live in separate crates
+### Data Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           FileIO Creation Flow                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  User Code                    FileIO                     StorageFactory
+      │                          │                              │
+      │  FileIO::from_path()     │                              │
+      │─────────────────────────▶│                              │
+      │                          │                              │
+      │  .with_storage_factory() │                              │
+      │─────────────────────────▶│                              │
+      │                          │                              │
+      │  .with_props()           │                              │
+      │─────────────────────────▶│                              │
+      │                          │                              │
+      │  new_input(path)         │                              │
+      │─────────────────────────▶│                              │
+      │                          │  (lazy) factory.build()      │
+      │                          │─────────────────────────────▶│
+      │                          │                              │
+      │                          │◀─────────────────────────────│
+      │                          │  Arc<dyn Storage>            │
+      │                          │                              │
+      │◀─────────────────────────│                              │
+      │  InputFile               │                              │
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        Catalog with FileIO Injection                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  User Code                  CatalogBuilder                  Catalog
+      │                          │                              │
+      │  ::default()             │                              │
+      │─────────────────────────▶│                              │
+      │                          │                              │
+      │  .with_file_io(file_io)  │                              │
+      │─────────────────────────▶│                              │
+      │                          │                              │
+      │  .load(name, props)      │                              │
+      │─────────────────────────▶│                              │
+      │                          │  new(config, Some(file_io))  │
+      │                          │─────────────────────────────▶│
+      │                          │                              │
+      │◀─────────────────────────│◀─────────────────────────────│
+      │  Catalog                 │                              │
+```
+
+### Crate Structure
+
+```
+crates/
+├── iceberg/                         # Core Iceberg functionality
+│   └── src/
+│       └── io/
+│           ├── mod.rs               # Re-exports
+│           ├── storage.rs           # Storage + StorageFactory traits
+│           ├── file_io.rs           # FileIO, InputFile, OutputFile
+│           ├── config/              # StorageConfig and backend configs
+│           │   ├── mod.rs           # StorageConfig
+│           │   ├── s3.rs            # S3Config constants
+│           │   ├── gcs.rs           # GcsConfig constants
+│           │   ├── oss.rs           # OssConfig constants
+│           │   └── azdls.rs         # AzdlsConfig constants
+│           ├── memory.rs            # MemoryStorage (built-in)
+│           └── local_fs.rs          # LocalFsStorage (built-in)
+│
+├── storage/
+│   ├── opendal/                     # OpenDAL-based implementations
+│   │   └── src/
+│   │       ├── lib.rs               # Re-exports
+│   │       ├── storage.rs           # OpenDalStorage + OpenDalStorageFactory
+│   │       ├── storage_s3.rs        # S3 support
+│   │       ├── storage_gcs.rs       # GCS support
+│   │       ├── storage_oss.rs       # OSS support
+│   │       ├── storage_azdls.rs     # Azure support
+│   │       └── storage_fs.rs        # Filesystem support
+│   │
+│   └── utils/                       # Storage utilities
+│       └── src/
+│           └── lib.rs               # ResolvingStorageFactory, default_storage_factory()
+│
+└── catalog/                         # Catalog implementations
+    ├── rest/                        # Uses with_file_io injection
+    ├── glue/                        # Uses with_file_io injection
+    ├── hms/                         # Uses with_file_io injection
+    ├── s3tables/                    # Uses with_file_io injection
+    └── sql/                         # Uses with_file_io injection
+```
 
 ---
 
-## Design (Phase 1): Storage Trait and Core Types
+## Design Phase 1: Storage Trait and Core Types
 
-Phase 1 focuses on defining the `Storage` trait and updating `InputFile`/`OutputFile` to use trait-based storage.
+Phase 1 focuses on converting Storage from an enum to a trait, introducing `StorageFactory` and `StorageConfig`, and updating `FileIO`, `InputFile`, and `OutputFile` to use the trait-based abstraction.
 
 ### Storage Trait
 
-The `Storage` trait is defined in the `iceberg` crate and defines the interface for all storage operations:
+The `Storage` trait is defined in the `iceberg` crate and provides the interface for all storage operations. It uses `typetag` for serialization support across process boundaries.
 
 ```rust
 #[async_trait]
+#[typetag::serde(tag = "type")]
 pub trait Storage: Debug + Send + Sync {
     /// Check if a file exists at the given path
     async fn exists(&self, path: &str) -> Result<bool>;
-    
-    /// Get metadata for a file
+
+    /// Get metadata from an input path
     async fn metadata(&self, path: &str) -> Result<FileMetadata>;
 
-    /// Read entire file content
+    /// Read bytes from a path
     async fn read(&self, path: &str) -> Result<Bytes>;
-    
-    /// Create a reader for streaming reads
+
+    /// Get FileRead from a path
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>>;
 
-    /// Write bytes to a file (overwrites if exists)
+    /// Write bytes to an output path
     async fn write(&self, path: &str, bs: Bytes) -> Result<()>;
-    
-    /// Create a writer for streaming writes
+
+    /// Get FileWrite from a path
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>>;
 
-    /// Delete a single file
+    /// Delete a file at the given path
     async fn delete(&self, path: &str) -> Result<()>;
-    
-    /// Delete all files under a prefix (directory)
+
+    /// Delete all files with the given prefix
     async fn delete_prefix(&self, path: &str) -> Result<()>;
 
-    /// Create an InputFile handle for the given path
+    /// Create a new input file for reading
     fn new_input(&self, path: &str) -> Result<InputFile>;
-    
-    /// Create an OutputFile handle for the given path
+
+    /// Create a new output file for writing
     fn new_output(&self, path: &str) -> Result<OutputFile>;
 }
 ```
 
-Note:
-- All paths are absolute paths with scheme (e.g., `s3://bucket/path`)
+### StorageFactory Trait
 
-### InputFile and OutputFile Changes
+The `StorageFactory` trait creates `Storage` instances from configuration. This enables lazy initialization and custom storage injection.
 
-`InputFile` and `OutputFile` change from holding an `Operator` directly to holding a reference to the `Storage` trait:
-
-**Before (current implementation):**
 ```rust
-pub struct InputFile {
-    op: Operator,
-    path: String,
-    relative_path_pos: usize,
-}
-
-impl InputFile {
-    pub async fn read(&self) -> crate::Result<Bytes> {
-        Ok(self.op.read(&self.path[self.relative_path_pos..]).await?.to_bytes())
-    }
+#[typetag::serde(tag = "type")]
+pub trait StorageFactory: Debug + Send + Sync {
+    /// Build a new Storage instance from the given configuration.
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>>;
 }
 ```
 
-**After (new design):**
+### StorageConfig
+
+`StorageConfig` replaces `FileIOBuilder` and `Extensions`, providing a simpler configuration model:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// URL scheme (e.g., "s3", "gs", "file", "memory")
+    scheme: String,
+    /// Configuration properties for the storage backend
+    props: HashMap<String, String>,
+}
+
+impl StorageConfig {
+    pub fn new(scheme: impl Into<String>, props: HashMap<String, String>) -> Self;
+    pub fn from_path(path: impl AsRef<str>) -> Result<Self>;
+    pub fn scheme(&self) -> &str;
+    pub fn props(&self) -> &HashMap<String, String>;
+    pub fn get(&self, key: &str) -> Option<&String>;
+    pub fn with_prop(self, key: impl Into<String>, value: impl Into<String>) -> Self;
+    pub fn with_props(self, props: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Self;
+}
+```
+
+#### Backend-Specific Configuration Types
+
+In addition to `StorageConfig`, we provide typed configuration structs for each storage backend.
+These can be constructed from `StorageConfig` and provide a structured way to access backend-specific settings:
+
+- `S3Config` - Amazon S3 configuration
+- `GcsConfig` - Google Cloud Storage configuration
+- `OssConfig` - Alibaba Cloud OSS configuration
+- `AzdlsConfig` - Azure Data Lake Storage configuration
+
+Example of `S3Config`:
+
+```rust
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct S3Config {
+    pub endpoint: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>,
+    pub region: Option<String>,
+    pub role_arn: Option<String>,
+    pub allow_anonymous: bool,
+    // ... other S3-specific fields
+}
+
+// Can be constructed from StorageConfig
+impl From<&StorageConfig> for S3Config {
+    fn from(config: &StorageConfig) -> Self { /* ... */ }
+}
+```
+
+These typed configs are used internally by storage implementations (e.g., `OpenDalStorage`) to
+parse properties from `StorageConfig` into strongly-typed configuration.
+
+### FileIO Changes
+
+`FileIO` is redesigned to use lazy storage initialization with a factory pattern:
+
+```rust
+#[derive(Clone)]
+pub struct FileIO {
+    /// Storage configuration containing scheme and properties
+    config: StorageConfig,
+    /// Factory for creating storage instances
+    factory: Arc<dyn StorageFactory>,
+    /// Cached storage instance (lazily initialized)
+    storage: Arc<OnceCell<Arc<dyn Storage>>>,
+}
+
+impl FileIO {
+    /// Create a new FileIO with the given configuration.
+    pub fn new(config: StorageConfig) -> Self;
+
+    /// Create a new FileIO backed by in-memory storage.
+    pub fn new_with_memory() -> Self;
+
+    /// Create FileIO from a path, inferring the scheme.
+    pub fn from_path(path: impl AsRef<str>) -> Result<Self>;
+
+    /// Set a custom storage factory.
+    pub fn with_storage_factory(self, factory: Arc<dyn StorageFactory>) -> Self;
+
+    /// Add a configuration property.
+    pub fn with_prop(self, key: impl Into<String>, value: impl Into<String>) -> Self;
+
+    /// Add multiple configuration properties.
+    pub fn with_props(self, props: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Self;
+
+    /// Get the storage configuration.
+    pub fn config(&self) -> &StorageConfig;
+
+    // File operations delegate to the lazily-initialized storage
+    pub async fn delete(&self, path: impl AsRef<str>) -> Result<()>;
+    pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()>;
+    pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool>;
+    pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile>;
+    pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile>;
+}
+```
+
+Key changes from the old design:
+- Removed `FileIOBuilder` - configuration is now done via builder methods on `FileIO` itself
+- Removed `Extensions` - custom behavior is now provided via `StorageFactory`
+- Storage is lazily initialized on first use via `OnceCell`
+- `DefaultStorageFactory` supports only "memory" and "file" schemes by default
+
+### InputFile and OutputFile Changes
+
+`InputFile` and `OutputFile` now hold a reference to `Arc<dyn Storage>` instead of an `Operator`:
+
 ```rust
 pub struct InputFile {
     storage: Arc<dyn Storage>,
@@ -152,144 +396,144 @@ pub struct InputFile {
 }
 
 impl InputFile {
-    pub fn location(&self) -> &str { 
-        &self.path 
-    }
-    
-    pub async fn exists(&self) -> Result<bool> {
-        self.storage.exists(&self.path).await
-    }
-
-    pub async fn read(&self) -> Result<Bytes> {
-        self.storage.read(&self.path).await
-    }
-    
-    pub async fn metadata(&self) -> Result<FileMetadata> {
-        self.storage.metadata(&self.path).await
-    }
-    
-    pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
-        self.storage.reader(&self.path).await
-    }
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self;
+    pub fn location(&self) -> &str;
+    pub async fn exists(&self) -> Result<bool>;
+    pub async fn metadata(&self) -> Result<FileMetadata>;
+    pub async fn read(&self) -> Result<Bytes>;
+    pub async fn reader(&self) -> Result<Box<dyn FileRead>>;
 }
-```
 
-Similarly for `OutputFile`:
-
-```rust
 pub struct OutputFile {
     storage: Arc<dyn Storage>,
     path: String,
 }
 
 impl OutputFile {
-    pub fn location(&self) -> &str { &self.path }
-    
-    pub async fn exists(&self) -> Result<bool> {
-        self.storage.exists(&self.path).await
-    }
-    
-    pub async fn write(&self, bs: Bytes) -> Result<()> {
-        self.storage.write(&self.path, bs).await
-    }
-    
-    pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
-        self.storage.writer(&self.path).await
-    }
-    
-    pub fn to_input_file(self) -> InputFile {
-        InputFile { storage: self.storage, path: self.path }
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self;
+    pub fn location(&self) -> &str;
+    pub async fn exists(&self) -> Result<bool>;
+    pub async fn delete(&self) -> Result<()>;
+    pub fn to_input_file(self) -> InputFile;
+    pub async fn write(&self, bs: Bytes) -> Result<()>;
+    pub async fn writer(&self) -> Result<Box<dyn FileWrite>>;
+}
+```
+
+### Built-in Storage Implementations
+
+The `iceberg` crate includes two built-in storage implementations for testing and basic use cases:
+
+#### MemoryStorage
+
+In-memory storage using a thread-safe `HashMap`, primarily for testing:
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct MemoryStorage {
+    data: Arc<RwLock<HashMap<String, Bytes>>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MemoryStorageFactory;
+
+#[typetag::serde]
+impl StorageFactory for MemoryStorageFactory {
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        if config.scheme() != "memory" {
+            return Err(/* error */);
+        }
+        Ok(Arc::new(MemoryStorage::new()))
     }
 }
 ```
 
-### FileIO Changes
+#### LocalFsStorage
 
-`FileIO` wraps an `Arc<dyn Storage>` instead of `Arc<Storage>` enum:
+Local filesystem storage using standard Rust `std::fs` operations:
 
 ```rust
-#[derive(Clone, Debug)]
-pub struct FileIO {
-    inner: Arc<dyn Storage>,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LocalFsStorage;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LocalFsStorageFactory;
+
+#[typetag::serde]
+impl StorageFactory for LocalFsStorageFactory {
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        if config.scheme() != "file" {
+            return Err(/* error */);
+        }
+        Ok(Arc::new(LocalFsStorage::new()))
+    }
+}
+```
+
+### CatalogBuilder Changes
+
+The `CatalogBuilder` trait is extended with `with_file_io()` to allow FileIO injection:
+
+```rust
+pub trait CatalogBuilder: Default + Debug + Send + Sync {
+    type C: Catalog;
+
+    /// Set a custom FileIO to use for storage operations.
+    fn with_file_io(self, file_io: FileIO) -> Self;
+
+    /// Create a new catalog instance.
+    fn load(
+        self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send;
+}
+```
+
+Catalog implementations store the optional `FileIO` and use it when provided:
+
+```rust
+pub struct GlueCatalogBuilder {
+    config: GlueCatalogConfig,
+    file_io: Option<FileIO>,  // New field
 }
 
-impl FileIO {
-    /// Create a new FileIO with the given storage implementation
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
-        Self { inner: storage }
+impl CatalogBuilder for GlueCatalogBuilder {
+    fn with_file_io(mut self, file_io: FileIO) -> Self {
+        self.file_io = Some(file_io);
+        self
     }
 
-    pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.inner.delete(path.as_ref()).await
-    }
-
-    pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.inner.exists(path.as_ref()).await
-    }
-
-    pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.inner.new_input(path.as_ref())
-    }
-
-    pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.inner.new_output(path.as_ref())
-    }
+    // In load():
+    // Use provided FileIO if Some, otherwise construct default
+    let file_io = match file_io {
+        Some(io) => io,
+        None => FileIO::from_path(&config.warehouse)?
+            .with_props(file_io_props)
+            .with_storage_factory(default_storage_factory()),
+    };
 }
 ```
 
 ---
 
-## Design (Phase 2): Storage Architecture Options
+## Design Part 2: Separate Storage Crates
 
-Phase 2 addresses how storage implementations are organized and how users interact with them. There are two architectural options under consideration.
+Phase 2 moves concrete OpenDAL-based implementations to a separate crate (`iceberg-storage-opendal`) and introduces `iceberg-storage-utils` as an adapter for catalog implementations.
 
-### Crate Structure (Common to Both Options)
+### iceberg-storage-opendal Crate
 
-Both options use the same crate structure. The `Storage` trait remains in the `iceberg` crate (as it's an API/interface), while concrete implementations move to `iceberg-storage`:
-
-```
-crates/
-├── iceberg/                    # Core Iceberg functionality (APIs/interfaces)
-│   └── src/
-│       └── io/
-│           ├── mod.rs
-│           ├── storage.rs      # Storage trait definition (stays here)
-│           └── file_io.rs      # FileIO, InputFile, OutputFile
-│
-└── iceberg-storage/            # Concrete storage implementations
-    └── src/
-        ├── lib.rs              # Re-exports
-        └── opendal/            # OpenDAL-based implementations
-            └── ...
-```
-
-The `iceberg-storage` crate depends on the `iceberg` crate (for `Storage` trait, `Result`, `Error`, etc.).
-
----
-
-### Option 1: Unified Storage (Multi-Scheme)
-
-In this option, a single `Storage` implementation (e.g., `OpenDalStorage`) handles multiple URL schemes internally. There is no need for a registry since scheme routing happens within the storage implementation itself.
-
-#### OpenDalStorage Implementation
+This crate provides OpenDAL-based storage implementations for cloud storage backends:
 
 ```rust
+// crates/storage/opendal/src/storage.rs
+
 /// Unified OpenDAL-based storage implementation.
-///
-/// This storage handles all supported schemes (S3, GCS, Azure, filesystem, memory)
-/// through OpenDAL, creating operators on-demand based on the path scheme.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OpenDalStorage {
-    /// In-memory storage, useful for testing
-    #[cfg(feature = "storage-memory")]
-    Memory(#[serde(skip, default = "default_memory_op")] Operator),
-    
-    /// Local filesystem storage
     #[cfg(feature = "storage-fs")]
     LocalFs,
-    
-    /// Amazon S3 storage
-    /// Expects paths of the form `s3[a]://<bucket>/<path>`.
+
     #[cfg(feature = "storage-s3")]
     S3 {
         configured_scheme: String,
@@ -297,16 +541,13 @@ pub enum OpenDalStorage {
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
-    
-    /// Google Cloud Storage
+
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
-    
-    /// Alibaba Cloud OSS
+
     #[cfg(feature = "storage-oss")]
     Oss { config: Arc<OssConfig> },
-    
-    /// Azure Data Lake Storage
+
     #[cfg(feature = "storage-azdls")]
     Azdls {
         configured_scheme: AzureStorageScheme,
@@ -315,577 +556,312 @@ pub enum OpenDalStorage {
 }
 
 impl OpenDalStorage {
-    /// Build storage from FileIOBuilder
-    pub fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
-        let (scheme_str, props, extensions) = file_io_builder.into_parts();
-        let scheme = Self::parse_scheme(&scheme_str)?;
-        
-        match scheme {
-            #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory(memory_config_build()?)),
-            #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(Self::LocalFs),
-            #[cfg(feature = "storage-s3")]
-            Scheme::S3 => Ok(Self::S3 {
-                configured_scheme: scheme_str,
-                config: s3_config_parse(props)?.into(),
-                customized_credential_load: extensions
-                    .get::<CustomAwsCredentialLoader>()
-                    .map(Arc::unwrap_or_clone),
-            }),
-            // ... other schemes
-        }
-    }
-    
-    fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)> {
-        match self {
-            #[cfg(feature = "storage-memory")]
-            Self::Memory(op) => { /* ... */ }
-            #[cfg(feature = "storage-fs")]
-            Self::LocalFs => { /* ... */ }
-            #[cfg(feature = "storage-s3")]
-            Self::S3 { configured_scheme, config, customized_credential_load } => { /* ... */ }
-            // ... other variants
-        }
-    }
+    /// Build storage from StorageConfig.
+    pub fn build_from_config(config: &StorageConfig) -> Result<Self>;
+
+    /// Creates operator from path.
+    fn create_operator<'a>(&self, path: &'a str) -> Result<(Operator, &'a str)>;
 }
 
 #[async_trait]
+#[typetag::serde]
 impl Storage for OpenDalStorage {
-    async fn exists(&self, path: &str) -> Result<bool> {
-        let (op, rel_path) = self.create_operator(path)?;
-        Ok(op.exists(rel_path).await?)
+    // Delegates all operations to the appropriate OpenDAL operator
+}
+
+/// Factory for creating OpenDalStorage instances.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OpenDalStorageFactory;
+
+impl OpenDalStorageFactory {
+    /// Check if this factory supports the given scheme.
+    pub fn supports_scheme(&self, scheme: &str) -> bool {
+        matches!(scheme, "file" | "" | "s3" | "s3a" | "gs" | "gcs" | "oss" | "abfss" | "abfs" | "wasbs" | "wasb")
     }
-    
-    async fn read(&self, path: &str) -> Result<Bytes> {
-        let (op, rel_path) = self.create_operator(path)?;
-        Ok(op.read(rel_path).await?.to_bytes())
+}
+
+#[typetag::serde]
+impl StorageFactory for OpenDalStorageFactory {
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        let storage = OpenDalStorage::build_from_config(config)?;
+        Ok(Arc::new(storage))
     }
-    
-    // ... implement other Storage trait methods
 }
 ```
 
-#### StorageRouter Helper
+Feature flags control which backends are available:
+- `storage-fs`: Local filesystem
+- `storage-s3`: Amazon S3
+- `storage-gcs`: Google Cloud Storage
+- `storage-oss`: Alibaba Cloud OSS
+- `storage-azdls`: Azure Data Lake Storage
 
-For users who want to compose multiple storage implementations (e.g., use OpenDAL for S3 but a custom storage for a proprietary system), we provide a `StorageRouter` helper. Note: `StorageRouter` does NOT implement `Storage` trait; it's a helper for resolving paths within custom storage implementations.
+### iceberg-storage-utils Crate
+
+This crate provides utilities for catalog implementations, including a resolving factory that delegates to the appropriate backend:
 
 ```rust
-/// Helper for routing paths to different storage implementations.
-/// This is NOT a Storage implementation itself, but a utility for building custom storages.
-#[derive(Debug, Clone)]
-pub struct StorageRouter {
-    routes: DashMap<String, Arc<dyn Storage>>,  // prefix -> storage
+// crates/storage/utils/src/lib.rs
+
+/// Returns the default storage factory based on enabled features.
+pub fn default_storage_factory() -> Arc<dyn StorageFactory> {
+    Arc::new(ResolvingStorageFactory::new())
 }
 
-impl StorageRouter {
-    pub fn new() -> Self {
-        Self { routes: DashMap::new() }
+/// A composite storage factory that delegates to the appropriate
+/// backend based on the scheme.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResolvingStorageFactory {
+    #[cfg(feature = "opendal")]
+    #[serde(skip)]
+    opendal: OpenDalStorageFactory,
+}
+
+impl ResolvingStorageFactory {
+    pub fn new() -> Self;
+
+    /// Check if this factory supports the given scheme.
+    pub fn supports_scheme(&self, scheme: &str) -> bool {
+        #[cfg(feature = "opendal")]
+        if self.opendal.supports_scheme(scheme) {
+            return true;
+        }
+        scheme == "memory"
     }
-    
-    /// Register a storage for a URL prefix (e.g., "s3://", "s3://my-bucket/", "gs://")
-    pub fn register(&self, prefix: impl Into<String>, storage: Arc<dyn Storage>) {
-        self.routes.insert(prefix.into(), storage);
-    }
-    
-    /// Resolve which storage should handle the given path.
-    /// Returns the storage registered with the longest matching prefix.
-    pub fn resolve(&self, path: &str) -> Result<Arc<dyn Storage>> {
-        let mut best_match: Option<(usize, Arc<dyn Storage>)> = None;
-        
-        for entry in self.routes.iter() {
-            if path.starts_with(entry.key()) {
-                let prefix_len = entry.key().len();
-                if best_match.is_none() || prefix_len > best_match.as_ref().unwrap().0 {
-                    best_match = Some((prefix_len, entry.value().clone()));
-                }
+}
+
+#[typetag::serde]
+impl StorageFactory for ResolvingStorageFactory {
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        let scheme = config.scheme();
+
+        #[cfg(feature = "opendal")]
+        {
+            if self.opendal.supports_scheme(scheme) {
+                return self.opendal.build(config);
             }
         }
-        
-        best_match
-            .map(|(_, storage)| storage)
-            .ok_or_else(|| Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("No storage configured for path: {}", path),
-            ))
+
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!("No storage backend available for scheme '{}'", scheme),
+        ))
     }
 }
 ```
 
-#### Example: Custom Storage Using StorageRouter
+### Catalog Integration
+
+Catalog implementations depend on `iceberg-storage-utils` and use `default_storage_factory()` when no FileIO is injected:
 
 ```rust
-use iceberg::io::{Storage, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
-use iceberg::{Result, Error, ErrorKind};
-use iceberg_storage::{StorageRouter, OpenDalStorage};
+// In catalog implementation (e.g., GlueCatalog)
+use iceberg_storage_utils::default_storage_factory;
+
+impl GlueCatalog {
+    async fn new(config: GlueCatalogConfig, file_io: Option<FileIO>) -> Result<Self> {
+        let file_io = match file_io {
+            Some(io) => io,
+            None => {
+                // Build default FileIO with OpenDAL support
+                FileIO::from_path(&config.warehouse)?
+                    .with_props(file_io_props)
+                    .with_storage_factory(default_storage_factory())
+            }
+        };
+        // ...
+    }
+}
+```
+
+---
+
+## Example Usage
+
+### Basic Usage with Memory Storage (Testing)
+
+```rust
+use iceberg::io::FileIO;
+
+// Create in-memory FileIO for testing
+let file_io = FileIO::new_with_memory();
+
+// Write and read files
+let output = file_io.new_output("memory://test/file.txt")?;
+output.write("Hello, World!".into()).await?;
+
+let input = file_io.new_input("memory://test/file.txt")?;
+let content = input.read().await?;
+assert_eq!(content, bytes::Bytes::from("Hello, World!"));
+```
+
+### Using OpenDAL Storage Factory
+
+```rust
+use std::sync::Arc;
+use iceberg::io::FileIO;
+use iceberg_storage_opendal::OpenDalStorageFactory;
+
+// Create FileIO with OpenDAL for S3
+let file_io = FileIO::from_path("s3://my-bucket/warehouse")?
+    .with_prop("s3.region", "us-east-1")
+    .with_prop("s3.access-key-id", "my-access-key")
+    .with_prop("s3.secret-access-key", "my-secret-key")
+    .with_storage_factory(Arc::new(OpenDalStorageFactory));
+
+// Use the FileIO
+let input = file_io.new_input("s3://my-bucket/warehouse/table/metadata.json")?;
+let metadata = input.read().await?;
+```
+
+### Using Catalogs with Default Storage
+
+When using a catalog without injecting a custom `FileIO`, the catalog automatically uses
+`default_storage_factory()` which includes all storage backends enabled by feature flags.
+
+```rust
+use std::collections::HashMap;
+use iceberg::CatalogBuilder;
+use iceberg_catalog_glue::GlueCatalogBuilder;
+
+// No custom FileIO needed - catalog uses default_storage_factory() internally
+// Storage backends are determined by enabled features (e.g., opendal)
+let catalog = GlueCatalogBuilder::default()
+    .load("my_catalog", HashMap::from([
+        ("warehouse".to_string(), "s3://my-bucket/warehouse".to_string()),
+        ("s3.region".to_string(), "us-east-1".to_string()),
+    ]))
+    .await?;
+
+// Load and scan a table - storage is handled automatically
+let table = catalog.load_table(&TableIdent::from_strs(["db", "my_table"])?).await?;
+let scan = table.scan().build()?;
+```
+
+### Injecting Custom FileIO into Catalogs
+
+For advanced use cases, you can inject a custom `FileIO` with specific storage configuration:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use iceberg::CatalogBuilder;
+use iceberg::io::FileIO;
+use iceberg_catalog_glue::GlueCatalogBuilder;
+use iceberg_storage_opendal::OpenDalStorageFactory;
+
+// Create a custom FileIO with specific configuration
+let file_io = FileIO::from_path("s3://my-bucket/warehouse")?
+    .with_prop("s3.region", "us-east-1")
+    .with_storage_factory(Arc::new(OpenDalStorageFactory));
+
+// Inject FileIO into catalog
+let catalog = GlueCatalogBuilder::default()
+    .with_file_io(file_io)
+    .load("my_catalog", HashMap::from([
+        ("warehouse".to_string(), "s3://my-bucket/warehouse".to_string()),
+    ]))
+    .await?;
+```
+
+### Implementing Custom Storage
+
+To implement a custom storage backend, implement the `Storage` trait with `#[typetag::serde]`:
+
+```rust
+use std::sync::Arc;
 use async_trait::async_trait;
-use bytes::Bytes;
-use std::sync::Arc;
+use iceberg::io::{Storage, StorageFactory, StorageConfig, InputFile, OutputFile};
 
-/// Custom storage that routes S3 to OpenDAL and proprietary URLs to custom backend
-#[derive(Debug, Clone)]
-pub struct MyCompanyStorage {
-    router: StorageRouter,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MyCustomStorage { /* fields */ }
+
+#[async_trait]
+#[typetag::serde]
+impl Storage for MyCustomStorage {
+    // Implement all required methods: exists, metadata, read, reader,
+    // write, writer, delete, delete_prefix, new_input, new_output
 }
 
-impl MyCompanyStorage {
-    pub fn new(s3_config: S3Config, prop_client: ProprietaryClient) -> Result<Self> {
-        let router = StorageRouter::new();
-        
-        // Route S3 URLs to OpenDAL
-        let opendal = Arc::new(OpenDalStorage::S3 {
-            configured_scheme: "s3".to_string(),
-            config: Arc::new(s3_config),
-            customized_credential_load: None,
-        });
-        router.register("s3://", opendal.clone());
-        router.register("s3a://", opendal);
-        
-        // Route proprietary URLs to custom storage
-        let prop_storage = Arc::new(ProprietaryStorage::new(prop_client));
-        router.register("prop://", prop_storage);
-        
-        Ok(Self { router })
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MyCustomStorageFactory;
+
+#[typetag::serde]
+impl StorageFactory for MyCustomStorageFactory {
+    fn build(&self, config: &StorageConfig) -> iceberg::Result<Arc<dyn Storage>> {
+        Ok(Arc::new(MyCustomStorage { /* ... */ }))
     }
+}
+```
+
+### Routing to Multiple Storage Backends
+
+To use different storage implementations for different schemes (e.g., a native S3 client
+for S3 and OpenDAL for other schemes), implement routing at the `Storage` level:
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use iceberg::io::{Storage, StorageFactory, StorageConfig, InputFile, OutputFile};
+
+/// A storage that routes to different backends based on path scheme
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RoutingStorage {
+    s3_storage: NativeS3Storage,      // Custom S3 implementation
+    opendal_storage: OpenDalStorage,  // OpenDAL for other schemes
 }
 
 #[async_trait]
-impl Storage for MyCompanyStorage {
-    async fn exists(&self, path: &str) -> Result<bool> {
-        self.router.resolve(path)?.exists(path).await
-    }
-    
-    async fn read(&self, path: &str) -> Result<Bytes> {
-        self.router.resolve(path)?.read(path).await
-    }
-    
-    // ... delegate all methods to router.resolve(path)?
-    
-    fn new_input(&self, path: &str) -> Result<InputFile> {
-        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-    
-    fn new_output(&self, path: &str) -> Result<OutputFile> {
-        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-}
-
-// Usage
-fn create_file_io() -> Result<FileIO> {
-    let storage = MyCompanyStorage::new(s3_config, prop_client)?;
-    Ok(FileIO::new(Arc::new(storage)))
-}
-```
-
----
-
-### Option 2: Scheme-Specific Storage with Registry
-
-In this option, each `Storage` implementation handles only one scheme (or a small set of related schemes like `s3`/`s3a`). A `StorageRegistry` maps URL schemes/prefixes to their corresponding storage implementations.
-
-#### Crate Structure for Option 2
-
-```
-crates/iceberg-storage/
-└── src/
-    ├── lib.rs
-    ├── registry.rs         # StorageRegistry
-    └── opendal/
-        ├── mod.rs
-        ├── s3.rs           # OpenDalS3Storage
-        ├── gcs.rs          # OpenDalGcsStorage
-        ├── fs.rs           # OpenDalFsStorage
-        ├── memory.rs       # OpenDalMemoryStorage
-        ├── oss.rs          # OpenDalOssStorage
-        └── azdls.rs        # OpenDalAzdlsStorage
-```
-
-#### StorageRegistry
-
-The registry maps URL prefixes to storage implementations using `DashMap` for thread-safe concurrent access. Unlike `StorageRouter` which is a helper for custom `Storage` implementations, `StorageRegistry` is designed to be passed directly to `Catalog` implementations.
-
-```rust
-/// Registry that maps URL prefixes to storage implementations.
-/// Can be passed directly to Catalog implementations.
-#[derive(Debug, Clone, Default)]
-pub struct StorageRegistry {
-    storages: DashMap<String, Arc<dyn Storage>>,
-}
-
-impl StorageRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    
-    /// Register a storage for a URL prefix (e.g., "s3://", "s3://my-bucket/", "gs://")
-    pub fn register(&self, prefix: impl Into<String>, storage: Arc<dyn Storage>) {
-        self.storages.insert(prefix.into(), storage);
-    }
-    
-    /// Get storage for a path.
-    /// Returns the storage registered with the longest matching prefix.
-    pub fn get(&self, path: &str) -> Result<Arc<dyn Storage>> {
-        let mut best_match: Option<(usize, Arc<dyn Storage>)> = None;
-        
-        for entry in self.storages.iter() {
-            if path.starts_with(entry.key()) {
-                let prefix_len = entry.key().len();
-                if best_match.is_none() || prefix_len > best_match.as_ref().unwrap().0 {
-                    best_match = Some((prefix_len, entry.value().clone()));
-                }
-            }
+#[typetag::serde]
+impl Storage for RoutingStorage {
+    async fn read(&self, path: &str) -> iceberg::Result<bytes::Bytes> {
+        if path.starts_with("s3://") || path.starts_with("s3a://") {
+            self.s3_storage.read(path).await
+        } else {
+            self.opendal_storage.read(path).await
         }
-        
-        best_match
-            .map(|(_, storage)| storage)
-            .ok_or_else(|| Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("No storage registered for path '{}'. Registered prefixes: {:?}", 
-                    path, self.list_prefixes()),
-            ))
     }
-    
-    /// List all registered prefixes
-    pub fn list_prefixes(&self) -> Vec<String> {
-        self.storages.iter().map(|e| e.key().clone()).collect()
-    }
-}
-```
 
-#### Scheme-Specific Storage Implementation
-
-```rust
-/// S3-specific storage implementation using OpenDAL
-#[derive(Debug, Clone)]
-pub struct OpenDalS3Storage {
-    config: Arc<S3Config>,
-    credential_loader: Option<Arc<dyn CredentialLoader>>,
+    // Route other methods similarly...
 }
 
-impl OpenDalS3Storage {
-    pub fn new(props: HashMap<String, String>) -> Result<Self> {
-        let config = parse_s3_config(&props)?;
-        Ok(Self {
-            config: Arc::new(config),
-            credential_loader: None,
-        })
-    }
-    
-    pub fn with_credential_loader(mut self, loader: Arc<dyn CredentialLoader>) -> Self {
-        self.credential_loader = Some(loader);
-        self
-    }
-    
-    fn create_operator(&self, path: &str) -> Result<(Operator, &str)> {
-        // Validate scheme
-        if !path.starts_with("s3://") && !path.starts_with("s3a://") {
-            return Err(Error::new(ErrorKind::DataInvalid,
-                format!("OpenDalS3Storage only handles s3:// URLs, got: {}", path)));
-        }
-        
-        let bucket = extract_bucket(path)?;
-        let mut builder = S3::from_config((*self.config).clone());
-        builder.bucket(&bucket);
-        
-        let op = Operator::new(builder)?.layer(RetryLayer::new()).finish();
-        let rel_path = extract_relative_path(path)?;
-        Ok((op, rel_path))
-    }
-}
+/// Factory that creates RoutingStorage
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RoutingStorageFactory;
 
-#[async_trait]
-impl Storage for OpenDalS3Storage {
-    async fn exists(&self, path: &str) -> Result<bool> {
-        let (op, rel_path) = self.create_operator(path)?;
-        Ok(op.exists(rel_path).await?)
+#[typetag::serde]
+impl StorageFactory for RoutingStorageFactory {
+    fn build(&self, config: &StorageConfig) -> iceberg::Result<Arc<dyn Storage>> {
+        Ok(Arc::new(RoutingStorage {
+            s3_storage: NativeS3Storage::new(config)?,
+            opendal_storage: OpenDalStorage::build_from_config(config)?,
+        }))
     }
-    
-    async fn read(&self, path: &str) -> Result<Bytes> {
-        let (op, rel_path) = self.create_operator(path)?;
-        Ok(op.read(rel_path).await?.to_bytes())
-    }
-    
-    // ... implement other Storage trait methods
-    
-    fn new_input(&self, path: &str) -> Result<InputFile> {
-        if !path.starts_with("s3://") && !path.starts_with("s3a://") {
-            return Err(Error::new(ErrorKind::DataInvalid,
-                format!("Invalid S3 path: {}", path)));
-        }
-        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-    
-    fn new_output(&self, path: &str) -> Result<OutputFile> {
-        if !path.starts_with("s3://") && !path.starts_with("s3a://") {
-            return Err(Error::new(ErrorKind::DataInvalid,
-                format!("Invalid S3 path: {}", path)));
-        }
-        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
-    }
-}
-```
-
-#### Example: Using StorageRegistry with Catalog
-
-```rust
-use iceberg_storage::{StorageRegistry, OpenDalS3Storage, OpenDalGcsStorage, OpenDalFsStorage};
-use std::sync::Arc;
-
-fn create_catalog_with_registry() -> Result<GlueCatalog> {
-    let registry = StorageRegistry::new();
-    
-    // Register scheme-specific storages
-    let s3_storage = Arc::new(OpenDalS3Storage::new(s3_props)?);
-    registry.register("s3://", s3_storage.clone());
-    registry.register("s3a://", s3_storage);
-    
-    let gcs_storage = Arc::new(OpenDalGcsStorage::new(gcs_props)?);
-    registry.register("gs://", gcs_storage.clone());
-    registry.register("gcs://", gcs_storage);
-    
-    let fs_storage = Arc::new(OpenDalFsStorage::new()?);
-    registry.register("file://", fs_storage);
-    
-    // Pass registry directly to catalog
-    GlueCatalog::new(config, registry).await
-}
-```
-
-#### Example: Per-Bucket Configuration
-
-```rust
-fn create_multi_account_catalog() -> Result<GlueCatalog> {
-    let registry = StorageRegistry::new();
-    
-    // Different S3 configurations for different buckets
-    let prod_s3 = Arc::new(OpenDalS3Storage::new(prod_s3_props)?);
-    let staging_s3 = Arc::new(OpenDalS3Storage::new(staging_s3_props)?);
-    
-    // Register specific bucket prefixes (longest match wins)
-    registry.register("s3://prod-bucket/", prod_s3.clone());
-    registry.register("s3://staging-bucket/", staging_s3);
-    
-    // Fallback for other S3 URLs
-    registry.register("s3://", prod_s3);
-    
-    // Pass registry directly to catalog
-    GlueCatalog::new(config, registry).await
 }
 ```
 
 ---
 
-### Comparison of Options
-
-| Aspect | Option 1: Unified Storage | Option 2: Scheme-Specific + Registry |
-|--------|---------------------------|--------------------------------------|
-| **Crate Structure** | Single `OpenDalStorage` enum | Multiple `OpenDalXxxStorage` structs |
-| **Routing** | Internal (via `StorageRouter`) | External (via `StorageRegistry`) |
-| **Custom Storage** | Implement all schemes in one type | Implement one scheme per type |
-| **Composition** | Use `StorageRouter` helper within Storage impl | Pass `StorageRegistry` to Catalog |
-| **Type Safety** | Less (runtime scheme checking) | More (compile-time per storage) |
-| **Code Organization** | Centralized | Modular |
-
----
-
-## Catalog API Changes
-
-The `Catalog` trait currently does not expose storage directly. However, catalogs internally use `FileIO` to read/write table metadata. With the storage trait abstraction, catalogs will need to be updated to work with the new `FileIO` that wraps `Arc<dyn Storage>`.
-
-### Current Catalog Usage
-
-```rust
-// Current: Catalog implementations create FileIO internally
-impl GlueCatalog {
-    pub async fn new(config: GlueCatalogConfig) -> Result<Self> {
-        let file_io = FileIOBuilder::new(&config.warehouse)
-            .with_props(config.props.clone())
-            .build()?;
-        // ...
-    }
-}
-```
-
-### Updated Catalog Usage
-
-The catalog API changes differ between the two architecture options:
-
-#### For Option 1 (Unified Storage)
-
-Catalogs accept `Arc<dyn Storage>` directly:
-
-```rust
-// Catalog accepts Storage directly
-impl GlueCatalog {
-    pub async fn new(config: GlueCatalogConfig, storage: Arc<dyn Storage>) -> Result<Self> {
-        let file_io = FileIO::new(storage);
-        // ...
-    }
-}
-
-// Usage
-let storage = Arc::new(OpenDalStorage::build(builder)?);
-let catalog = GlueCatalog::new(config, storage).await?;
-```
-
-#### For Option 2 (Scheme-Specific + Registry)
-
-Catalogs accept `StorageRegistry` directly, which allows the catalog to resolve the appropriate storage for each table location:
-
-```rust
-// Catalog accepts StorageRegistry
-impl GlueCatalog {
-    pub async fn new(config: GlueCatalogConfig, registry: StorageRegistry) -> Result<Self> {
-        // Registry is stored and used to resolve storage for each table location
-        // ...
-    }
-    
-    pub async fn load_table(&self, table: &TableIdent) -> Result<Table> {
-        let metadata_location = self.get_metadata_location(table)?;
-        // Use registry to get the right storage for this table's location
-        let storage = self.registry.get(&metadata_location)?;
-        let file_io = FileIO::new(storage);
-        // ...
-    }
-}
-
-// Usage
-let registry = StorageRegistry::new();
-registry.register("s3://", Arc::new(OpenDalS3Storage::new(s3_props)?));
-registry.register("gs://", Arc::new(OpenDalGcsStorage::new(gcs_props)?));
-let catalog = GlueCatalog::new(config, registry).await?;
-```
-
-### CatalogBuilder Changes
-
-The `CatalogBuilder` trait may need to accept storage configuration:
-
-```rust
-pub trait CatalogBuilder: Default + Debug + Send + Sync {
-    type C: Catalog;
-    
-    /// Build catalog with default storage (from props)
-    fn build(self, name: impl Into<String>, props: HashMap<String, String>) 
-        -> impl Future<Output = Result<Self::C>> + Send;
-    
-    /// Build catalog with custom storage (Option 1)
-    fn build_with_storage(
-        self, 
-        name: impl Into<String>, 
-        props: HashMap<String, String>,
-        storage: Arc<dyn Storage>,
-    ) -> impl Future<Output = Result<Self::C>> + Send;
-    
-    /// Build catalog with storage registry (Option 2)
-    fn build_with_registry(
-        self, 
-        name: impl Into<String>, 
-        props: HashMap<String, String>,
-        registry: StorageRegistry,
-    ) -> impl Future<Output = Result<Self::C>> + Send;
-}
-```
-
-This allows users to:
-1. Use default storage behavior (backward compatible)
-2. Inject custom storage implementations for testing or custom backends
-
----
-
-## Open Questions
-
-1. **Which architecture option should we adopt?** 
-   - Option 1 (Unified Storage) is simpler and closer to current implementation
-   - Option 2 (Scheme-Specific + Registry) is more modular and type-safe
-
-2. **How should catalogs receive storage?**
-   - Accept `Arc<dyn Storage>` directly?
-   - Accept `FileIO`?
-   - Accept `StorageRegistry` (Option 2)?
-   - Keep current `FileIOBuilder` approach for backward compatibility?
-
-3. **Should `StorageRouter`/`StorageRegistry` support prefix-based routing?**
-   - e.g., different storage for `s3://bucket-a/` vs `s3://bucket-b/`
-   - Current design supports this, but is it needed?
-
-4. **How should credentials/extensions be passed?**
-   - Current design uses `Extensions` type in `FileIOBuilder`
-   - Should this be part of storage construction or a separate concern?
-
-5. **Should we provide default implementations?**
-   - e.g., `OpenDalStorage` that handles all schemes out of the box
-   - For users who don't need customization
-
----
-
-## Other Considerations
-
-### Storage Error Handling
-
-After the storage trait is stabilized, we may want to introduce more specific error handling for storage operations. Currently, storage errors are wrapped in the general `Error` type with `ErrorKind`. A future enhancement could add storage-specific error kinds to better handle different failure scenarios from various backends.
-
-```rust
-/// Storage-specific error kinds
-pub enum IoErrorKind {
-    /// File or object not found
-    FileNotFound,
-    /// Credentials expired or invalid
-    CredentialExpired,
-    /// Permission denied
-    PermissionDenied,
-    /// Network or connectivity error
-    NetworkError,
-    /// Storage service unavailable
-    ServiceUnavailable,
-    /// Rate limit exceeded
-    RateLimitExceeded,
-}
-
-pub enum ErrorKind {
-    // Existing variants...
-    DataInvalid,
-    FeatureUnsupported,
-    // ...
-    
-    /// Storage I/O error with specific kind
-    Io(IoErrorKind),
-}
-```
-
-This would allow users to handle specific storage errors more precisely:
-
-```rust
-match result {
-    Err(e) if matches!(e.kind(), ErrorKind::Io(IoErrorKind::FileNotFound)) => {
-        // Handle missing file
-    }
-    Err(e) if matches!(e.kind(), ErrorKind::Io(IoErrorKind::CredentialExpired)) => {
-        // Refresh credentials and retry
-    }
-    Err(e) => {
-        // Handle other errors
-    }
-    Ok(data) => { /* ... */ }
-}
-```
-
----
 
 ## Implementation Plan
 
-### Phase 1: Storage Trait (Initial cut and stabilization)
+### Phase 1: Storage Trait
 - Define `Storage` trait in `iceberg` crate
+- Define `StorageFactory` trait in `iceberg` crate
+- Introduce `StorageConfig` to replace `FileIOBuilder` configuration
+- Update `FileIO` to use lazy storage initialization with factory pattern
 - Update `InputFile`/`OutputFile` to use `Arc<dyn Storage>`
-- Update `FileIO` to wrap `Arc<dyn Storage>`
-- Implement `Storage` for existing `Storage` enum (backward compatibility)
-- Potential new API like `delete_iter`
+- Implement `MemoryStorage` and `LocalFsStorage` in `iceberg` crate
+- Add `with_file_io()` to `CatalogBuilder` trait
+- Update all catalog implementations to support FileIO injection
 
-### Phase 2: Separate trait and concrete implementations
-- Create `iceberg-storage` crate
-- Move/implement `OpenDalStorage` (Option 1) or scheme-specific storages (Option 2)
-- Update catalog implementations to accept storage
+### Phase 2: Separate Storage Crates (Completed)
+- Create `iceberg-storage-opendal` crate with `OpenDalStorage` and `OpenDalStorageFactory`
+- Move S3, GCS, OSS, Azure implementations to `iceberg-storage-opendal`
+- Create `iceberg-storage-utils` crate with `ResolvingStorageFactory` and `default_storage_factory()`
+- Update catalog crates to depend on `iceberg-storage-utils`
+- Remove storage feature flags from `iceberg` crate
+
+### Future Work
+- Add `object_store`-based storage implementations
 - Consider introducing `IoErrorKind` for storage-specific error handling
-
-### Phase 3: Additional Backends
-- Add `object_store`-based implementations
-- Document custom storage implementation guide
