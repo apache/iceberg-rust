@@ -864,5 +864,6 @@ impl StorageFactory for RoutingStorageFactory {
 - Remove storage feature flags from `iceberg` crate
 
 ### Future Work
+- Add `delete_iter` to `Storage` trait to batch delete objects
 - Add `object_store`-based storage implementations
 - Consider introducing `IoErrorKind` for storage-specific error handling
