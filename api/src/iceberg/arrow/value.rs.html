@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>arrow_schema::{DataType, FieldRef};
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>uuid::Uuid;
 <a href=#29 id=29 data-nosnippet>29</a>
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">super</span>::get_field_id;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">super</span>::get_field_id_from_metadata;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span><span class="kw">crate</span>::spec::{
 <a href=#32 id=32 data-nosnippet>32</a>    ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
 <a href=#33 id=33 data-nosnippet>33</a>    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
@@ -450,7 +450,7 @@
 <a href=#450 id=450 data-nosnippet>450</a>    <span class="doccomment">/// Determines if an Arrow field matches an Iceberg field based on the matching mode.
 <a href=#451 id=451 data-nosnippet>451</a>    </span><span class="kw">pub fn </span>match_field(<span class="kw-2">&amp;</span><span class="self">self</span>, arrow_field: <span class="kw-2">&amp;</span>FieldRef, iceberg_field: <span class="kw-2">&amp;</span>NestedField) -&gt; bool {
 <a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#453 id=453 data-nosnippet>453</a>            FieldMatchMode::Id =&gt; get_field_id(arrow_field)
+<a href=#453 id=453 data-nosnippet>453</a>            FieldMatchMode::Id =&gt; get_field_id_from_metadata(arrow_field)
 <a href=#454 id=454 data-nosnippet>454</a>                .map(|id| id == iceberg_field.id)
 <a href=#455 id=455 data-nosnippet>455</a>                .unwrap_or(<span class="bool-val">false</span>),
 <a href=#456 id=456 data-nosnippet>456</a>            FieldMatchMode::Name =&gt; arrow_field.name() == <span class="kw-2">&amp;</span>iceberg_field.name,

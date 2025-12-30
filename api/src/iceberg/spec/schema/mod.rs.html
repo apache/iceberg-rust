@@ -102,8 +102,8 @@
 <a href=#102 id=102 data-nosnippet>102</a>    /// Reassignment starts from the field-id specified in `start_from` (inclusive).
 <a href=#103 id=103 data-nosnippet>103</a>    ///
 <a href=#104 id=104 data-nosnippet>104</a>    /// All specified aliases and identifier fields will be updated to the new field-ids.
-<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_reassigned_field_ids(<span class="kw-2">mut </span><span class="self">self</span>, start_from: u32) -&gt; <span class="self">Self </span>{
-<a href=#106 id=106 data-nosnippet>106</a>        <span class="self">self</span>.reassign_field_ids_from = <span class="prelude-val">Some</span>(start_from.try_into().unwrap_or(i32::MAX));
+<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_reassigned_field_ids(<span class="kw-2">mut </span><span class="self">self</span>, start_from: i32) -&gt; <span class="self">Self </span>{
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="self">self</span>.reassign_field_ids_from = <span class="prelude-val">Some</span>(start_from);
 <a href=#107 id=107 data-nosnippet>107</a>        <span class="self">self
 <a href=#108 id=108 data-nosnippet>108</a>    </span>}
 <a href=#109 id=109 data-nosnippet>109</a>
