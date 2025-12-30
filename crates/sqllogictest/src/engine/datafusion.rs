@@ -103,6 +103,7 @@ impl DataFusionEngine {
 
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
+    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
     async fn create_partitioned_table(
         catalog: &impl Catalog,
         namespace: &NamespaceIdent,
