@@ -67,6 +67,8 @@ impl Default for RestCatalogBuilder {
             warehouse: None,
             props: HashMap::new(),
             client: None,
+            #[cfg(feature = "middleware")]
+            middleware_client: None,
         })
     }
 }
@@ -124,6 +126,35 @@ impl RestCatalogBuilder {
         self.0.client = Some(client);
         self
     }
+
+    /// Configures the catalog with a custom HTTP client with middleware.
+    ///
+    /// This method allows you to provide a `reqwest_middleware::ClientWithMiddleware`
+    /// which wraps a `reqwest::Client` and adds middleware functionality.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use reqwest::Client;
+    /// use reqwest_middleware::ClientBuilder;
+    /// use iceberg_catalog_rest::RestCatalogBuilder;
+    ///
+    /// let reqwest_client = Client::new();
+    /// let client_with_middleware = ClientBuilder::new(reqwest_client)
+    ///     .with(some_middleware)
+    ///     .build();
+    ///
+    /// let catalog_builder = RestCatalogBuilder::default()
+    ///     .with_middleware_client(client_with_middleware);
+    /// ```
+    #[cfg(feature = "middleware")]
+    pub fn with_middleware_client(
+        mut self,
+        client: reqwest_middleware::ClientWithMiddleware,
+    ) -> Self {
+        self.0.middleware_client = Some(client);
+        self
+    }
 }
 
 /// Rest catalog configuration.
@@ -142,6 +173,10 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    #[cfg(feature = "middleware")]
+    #[builder(default)]
+    middleware_client: Option<reqwest_middleware::ClientWithMiddleware>,
 }
 
 impl RestCatalogConfig {
@@ -197,6 +232,18 @@ impl RestCatalogConfig {
     /// Get the client from the config.
     pub(crate) fn client(&self) -> Option<Client> {
         self.client.clone()
+    }
+
+    /// Check if a middleware client is configured.
+    #[cfg(feature = "middleware")]
+    pub(crate) fn has_middleware_client(&self) -> bool {
+        self.middleware_client.is_some()
+    }
+
+    /// Get the middleware client from the config.
+    #[cfg(feature = "middleware")]
+    pub(crate) fn middleware_client(&self) -> Option<reqwest_middleware::ClientWithMiddleware> {
+        self.middleware_client.clone()
     }
 
     /// Get the token from the config.
@@ -2721,5 +2768,110 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    #[cfg(feature = "middleware")]
+    #[tokio::test]
+    async fn test_with_middleware_client() {
+        use reqwest::Client;
+        use reqwest_middleware::ClientBuilder;
+
+        let mut server = Server::new_async().await;
+
+        // Mock the config endpoint
+        let _config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "defaults": {},
+                "overrides": {}
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        // Create a middleware client
+        let middleware_client = ClientBuilder::new(Client::new()).build();
+
+        // Create catalog with middleware client
+        let _catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .middleware_client(Some(middleware_client))
+                .build(),
+        );
+
+        // If we got here without panicking, the catalog was created successfully
+    }
+
+    #[cfg(feature = "middleware")]
+    #[tokio::test]
+    async fn test_middleware_intercepts_requests() {
+        use mockito::Matcher;
+        use reqwest::Client;
+        use reqwest_middleware::{ClientBuilder, Middleware, Next};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // Custom middleware that counts requests
+        #[derive(Clone)]
+        struct CountingMiddleware {
+            counter: Arc<AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl Middleware for CountingMiddleware {
+            async fn handle(
+                &self,
+                req: reqwest::Request,
+                extensions: &mut http::Extensions,
+                next: Next<'_>,
+            ) -> reqwest_middleware::Result<reqwest::Response> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                next.run(req, extensions).await
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        // Mock the config endpoint
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_header("user-agent", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "defaults": {},
+                "overrides": {}
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        // Create middleware client with counting middleware
+        let middleware_client = ClientBuilder::new(Client::new())
+            .with(CountingMiddleware {
+                counter: counter.clone(),
+            })
+            .build();
+
+        // Create catalog with middleware client
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .middleware_client(Some(middleware_client))
+                .build(),
+        );
+
+        // Make a request to trigger the middleware
+        let _ = catalog.context().await;
+
+        // Verify the middleware intercepted the request
+        config_mock.assert();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
