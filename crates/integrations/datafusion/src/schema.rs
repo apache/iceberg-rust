@@ -193,7 +193,7 @@ impl SchemaProvider for IcebergSchemaProvider {
         // Block on the spawned task to get the result
         // This is safe because spawn_blocking moves the blocking to a dedicated thread pool
         futures::executor::block_on(result).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to create Iceberg table: {}", e))
+            DataFusionError::Execution(format!("Failed to create Iceberg table: {e}"))
         })?
     }
 }
