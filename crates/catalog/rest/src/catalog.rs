@@ -2809,11 +2809,12 @@ mod tests {
     #[cfg(feature = "middleware")]
     #[tokio::test]
     async fn test_middleware_intercepts_requests() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         use mockito::Matcher;
         use reqwest::Client;
         use reqwest_middleware::{ClientBuilder, Middleware, Next};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
 
         // Custom middleware that counts requests
         #[derive(Clone)]
