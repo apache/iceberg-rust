@@ -24,10 +24,9 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
-use iceberg::TableCreation;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, NamespaceIdent, Result};
+use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -43,7 +42,8 @@ pub(crate) struct IcebergSchemaProvider {
     /// A concurrent map where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
-    tables: DashMap<String, Arc<IcebergTableProvider>>,
+    /// Wrapped in Arc to allow sharing across async boundaries in register_table.
+    tables: Arc<DashMap<String, Arc<IcebergTableProvider>>>,
 }
 
 impl IcebergSchemaProvider {
@@ -77,7 +77,7 @@ impl IcebergSchemaProvider {
         )
         .await?;
 
-        let tables = DashMap::new();
+        let tables = Arc::new(DashMap::new());
         for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
             tables.insert(name, Arc::new(provider));
         }
@@ -165,7 +165,6 @@ impl SchemaProvider for IcebergSchemaProvider {
         let name_clone = name.clone();
 
         // Use tokio's spawn_blocking to handle the async work on a blocking thread pool
-        // This avoids the "cannot block within async runtime" error
         let result = tokio::task::spawn_blocking(move || {
             // Create a new runtime handle to execute the async work
             let rt = tokio::runtime::Handle::current();
