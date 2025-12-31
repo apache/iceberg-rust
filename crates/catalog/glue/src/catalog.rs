@@ -395,7 +395,6 @@ impl Catalog for GlueCatalog {
     /// representation and then attempts to update the corresponding namespace
     /// in the Glue Catalog.
     ///
-    /// # Returns
     /// Returns `Ok(())` if the namespace update is successful. If the
     /// namespace cannot be updated due to missing information or an error
     /// during the update process, an `Err(...)` is returned.
@@ -723,7 +722,6 @@ impl Catalog for GlueCatalog {
     /// Glue-compatible table representation, and attempts to create the
     /// corresponding table in the Glue Catalog.
     ///
-    /// # Returns
     /// Returns `Ok(Table)` if the table is successfully registered and loaded.
     /// If the registration fails due to validation issues, existing table conflicts,
     /// metadata problems, or errors during the registration or loading process,
