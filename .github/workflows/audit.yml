@@ -39,6 +39,7 @@ on:
 jobs:
   security_audit:
     runs-on: ubuntu-latest
+    if: github.repository == 'apache/iceberg-rust'
     steps:
       - uses: actions/checkout@v6
       - name: Setup Rust toolchain
