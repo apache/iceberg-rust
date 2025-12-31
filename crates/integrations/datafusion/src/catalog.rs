@@ -50,30 +50,21 @@ impl IcebergCatalogProvider {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
-        let schema_names: Vec<_> = client
-            .list_namespaces(None)
-            .await?
-            .iter()
-            .flat_map(|ns| ns.as_ref().clone())
-            .collect();
+        let namespace_idents = fetch_all_namespaces(client.as_ref()).await?;
 
         let providers = try_join_all(
-            schema_names
+            namespace_idents
                 .iter()
-                .map(|name| {
-                    IcebergSchemaProvider::try_new(
-                        client.clone(),
-                        NamespaceIdent::new(name.clone()),
-                    )
-                })
+                .map(|nsi| IcebergSchemaProvider::try_new(client.clone(), nsi.clone()))
                 .collect::<Vec<_>>(),
         )
         .await?;
 
-        let schemas: HashMap<String, Arc<dyn SchemaProvider>> = schema_names
+        let schemas: HashMap<String, Arc<dyn SchemaProvider>> = namespace_idents
             .into_iter()
             .zip(providers.into_iter())
-            .map(|(name, provider)| {
+            .map(|(nsi, provider)| {
+                let name = nsi.as_ref().join(".");
                 let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
                 (name, provider)
             })
@@ -81,6 +72,22 @@ impl IcebergCatalogProvider {
 
         Ok(IcebergCatalogProvider { schemas })
     }
+}
+
+async fn fetch_all_namespaces(client: &dyn Catalog) -> Result<Vec<NamespaceIdent>> {
+    let mut all_namespaces = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(None);
+
+    while let Some(parent) = queue.pop_front() {
+        let children = client.list_namespaces(parent.as_ref()).await?;
+        for child in children {
+            all_namespaces.push(child.clone());
+            queue.push_back(Some(child));
+        }
+    }
+
+    Ok(all_namespaces)
 }
 
 impl CatalogProvider for IcebergCatalogProvider {
@@ -193,5 +200,49 @@ mod tests {
 
         assert!(provider.schema("a").is_some());
         assert!(provider.schema("a.b").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_all_namespaces_empty() {
+        let catalog = create_catalog().await;
+        let namespaces = fetch_all_namespaces(catalog.as_ref()).await.unwrap();
+        assert!(namespaces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_all_namespaces_one() {
+        let catalog = create_catalog().await;
+        let ns = NamespaceIdent::new("a".to_string());
+        catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+        let namespaces = fetch_all_namespaces(catalog.as_ref()).await.unwrap();
+        assert_eq!(namespaces.len(), 1);
+        assert!(namespaces.contains(&ns));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_all_namespaces_nested() {
+        let catalog = create_catalog().await;
+        let ns1 = NamespaceIdent::new("a".to_string());
+        let ns2 = NamespaceIdent::from_vec(vec!["a".to_string(), "b".to_string()]).unwrap();
+        let ns3 = NamespaceIdent::from_vec(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+            .unwrap();
+        catalog
+            .create_namespace(&ns1, HashMap::new())
+            .await
+            .unwrap();
+        catalog
+            .create_namespace(&ns2, HashMap::new())
+            .await
+            .unwrap();
+        catalog
+            .create_namespace(&ns3, HashMap::new())
+            .await
+            .unwrap();
+
+        let namespaces = fetch_all_namespaces(catalog.as_ref()).await.unwrap();
+        assert!(namespaces.contains(&ns1));
+        assert!(namespaces.contains(&ns2));
+        assert!(namespaces.contains(&ns3));
     }
 }
