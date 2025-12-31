@@ -106,7 +106,7 @@ impl CatalogProvider for IcebergCatalogProvider {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::memory::MemoryCatalogBuilder;
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
     use iceberg::{CatalogBuilder, NamespaceIdent, TableCreation};
 
@@ -114,7 +114,10 @@ mod tests {
 
     async fn create_catalog() -> Arc<dyn Catalog> {
         let mut props = HashMap::new();
-        props.insert("warehouse".to_string(), "memory://".to_string());
+        props.insert(
+            MEMORY_CATALOG_WAREHOUSE.to_string(),
+            "memory://".to_string(),
+        );
 
         let catalog = MemoryCatalogBuilder::default()
             .load("test", props)

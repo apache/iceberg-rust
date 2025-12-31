@@ -598,8 +598,8 @@ async fn test_insert_into_nested() -> Result<()> {
     // Insert data with nested structs
     let insert_sql = r#"
     INSERT INTO catalog.test_insert_nested.nested_table
-    SELECT 
-        1 as id, 
+    SELECT
+        1 as id,
         'Alice' as name,
         named_struct(
             'address', named_struct(
@@ -613,8 +613,8 @@ async fn test_insert_into_nested() -> Result<()> {
             )
         ) as profile
     UNION ALL
-    SELECT 
-        2 as id, 
+    SELECT
+        2 as id,
         'Bob' as name,
         named_struct(
             'address', named_struct(
@@ -736,15 +736,15 @@ async fn test_insert_into_nested() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            SELECT 
-                id, 
+            SELECT
+                id,
                 name,
                 profile.address.street,
                 profile.address.city,
                 profile.address.zip,
                 profile.contact.email,
                 profile.contact.phone
-            FROM catalog.test_insert_nested.nested_table 
+            FROM catalog.test_insert_nested.nested_table
             ORDER BY id
         "#,
         )
@@ -850,8 +850,8 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            INSERT INTO catalog.test_partitioned_write.partitioned_table 
-            VALUES 
+            INSERT INTO catalog.test_partitioned_write.partitioned_table
+            VALUES
                 (1, 'electronics', 'laptop'),
                 (2, 'electronics', 'phone'),
                 (3, 'books', 'novel'),
@@ -939,6 +939,67 @@ async fn test_insert_into_partitioned() -> Result<()> {
     assert!(
         file_io.exists(&clothing_path).await?,
         "Expected partition directory: {clothing_path}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_child_namespace_crud() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+
+    let parent_ns = NamespaceIdent::new("parent_ns".to_string());
+    set_test_namespace(&iceberg_catalog, &parent_ns).await?;
+    let child_ns = NamespaceIdent::from_vec(vec!["parent_ns".to_string(), "child_ns".to_string()])?;
+    set_test_namespace(&iceberg_catalog, &child_ns).await?;
+
+    let creation = get_table_creation(temp_path(), "t", None)?;
+    iceberg_catalog.create_table(&child_ns, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    let df = ctx
+        .sql("INSERT INTO catalog.\"parent_ns.child_ns\".t VALUES (1, 'test')")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    let rows_inserted = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), 1);
+
+    let df = ctx
+        .sql("SELECT * FROM catalog.\"parent_ns.child_ns\".t")
+        .await
+        .unwrap();
+
+    let batches = df.collect().await.unwrap();
+
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { "foo1": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "foo2": Utf8, metadata: {"PARQUET:field_id": "2"} }"#]],
+        expect![[r#"
+            foo1: PrimitiveArray<Int32>
+            [
+              1,
+            ],
+            foo2: StringArray
+            [
+              "test",
+            ]"#]],
+        &[],
+        Some("foo1"),
     );
 
     Ok(())
