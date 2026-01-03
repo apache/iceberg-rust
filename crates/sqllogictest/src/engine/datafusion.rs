@@ -24,7 +24,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
-use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, table};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 
@@ -96,6 +96,7 @@ impl DataFusionEngine {
         // Create test tables
         Self::create_unpartitioned_table(&catalog, &namespace).await?;
         Self::create_partitioned_table(&catalog, &namespace).await?;
+        Self::create_namespaced_table(&catalog).await?;
 
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
@@ -158,6 +159,30 @@ impl DataFusionEngine {
                     .build(),
             )
             .await?;
+
+        Ok(())
+    }
+
+    async fn create_namespaced_table(catalog: &impl Catalog) -> anyhow::Result<()> {
+        let parent_ns = NamespaceIdent::new("parent_ns".to_string());
+        catalog.create_namespace(&parent_ns, HashMap::new()).await?;
+        let child_ns =
+            NamespaceIdent::from_vec(vec!["parent_ns".to_string(), "child_ns".to_string()])?;
+        catalog.create_namespace(&child_ns, HashMap::new()).await?;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        let table_creation = TableCreation::builder()
+            .name("t".to_string())
+            .schema(schema.clone())
+            .build();
+
+        catalog.create_table(&child_ns, table_creation).await?;
 
         Ok(())
     }

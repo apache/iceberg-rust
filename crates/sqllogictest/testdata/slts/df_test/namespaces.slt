@@ -15,17 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[engines]
-df = { type = "datafusion" }
+# Insert a single row into the namespaced table and verify the count
+query I
+INSERT INTO default."parent_ns.child_ns".t VALUES (1, 'test')
+----
+1
 
-[[steps]]
-engine = "df"
-slt = "df_test/show_tables.slt"
-
-[[steps]]
-engine = "df"
-slt = "df_test/insert_into.slt"
-
-[[steps]]
-engine = "df"
-slt = "df_test/namespaces.slt"
+# Verify the inserted row
+query IT
+SELECT * FROM default."parent_ns.child_ns".t
+----
+1 test
