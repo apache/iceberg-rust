@@ -163,8 +163,12 @@ impl Catalog for MemoryCatalog {
                 let namespaces = root_namespace_state
                     .list_namespaces_under(parent_namespace_ident)?
                     .into_iter()
-                    .map(|name| NamespaceIdent::new(name.to_string()))
-                    .collect_vec();
+                    .map(|name| {
+                        let mut names = parent_namespace_ident.iter().cloned().collect::<Vec<_>>();
+                        names.push(name.to_string());
+                        NamespaceIdent::from_vec(names)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 Ok(namespaces)
             }
@@ -599,7 +603,7 @@ pub(crate) mod tests {
                 .list_namespaces(Some(&namespace_ident_1))
                 .await
                 .unwrap(),
-            vec![NamespaceIdent::new("b".into())]
+            vec![namespace_ident_2]
         );
     }
 
@@ -628,9 +632,9 @@ pub(crate) mod tests {
                     .unwrap()
             ),
             to_set(vec![
-                NamespaceIdent::new("a".into()),
-                NamespaceIdent::new("b".into()),
-                NamespaceIdent::new("c".into()),
+                namespace_ident_2,
+                namespace_ident_3,
+                namespace_ident_4,
             ])
         );
     }
