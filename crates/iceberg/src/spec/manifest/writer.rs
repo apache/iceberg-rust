@@ -437,11 +437,12 @@ impl ManifestWriter {
             "format-version".to_string(),
             (self.metadata.format_version as u8).to_string(),
         )?;
-        if self.metadata.format_version == FormatVersion::V2
-            || self.metadata.format_version == FormatVersion::V3
-        {
-            avro_writer
-                .add_user_metadata("content".to_string(), self.metadata.content.to_string())?;
+        match self.metadata.format_version {
+            FormatVersion::V1 => {}
+            FormatVersion::V2 | FormatVersion::V3 => {
+                avro_writer
+                    .add_user_metadata("content".to_string(), self.metadata.content.to_string())?;
+            }
         }
 
         let partition_summary = self.construct_partition_summaries(&partition_type)?;
