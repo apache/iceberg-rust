@@ -31,7 +31,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
-const FIRST_FIELD_ID: u32 = 1;
+pub(crate) const FIRST_FIELD_ID: i32 = 1;
 
 /// Manipulating table metadata.
 ///
