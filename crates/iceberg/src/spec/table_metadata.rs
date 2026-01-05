@@ -511,7 +511,7 @@ impl TableMetadata {
             && !sort_order.fields.is_empty()
         {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::Unexpected,
                 format!(
                     "Sort order ID {} is reserved for unsorted order",
                     SortOrder::UNSORTED_ORDER_ID
