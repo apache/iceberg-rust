@@ -136,8 +136,6 @@ impl CatalogBuilder for SqlCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        let name = name.into();
-
         for (k, v) in props {
             self.0.props.insert(k, v);
         }
@@ -147,6 +145,12 @@ impl CatalogBuilder for SqlCatalogBuilder {
         }
         if let Some(warehouse_location) = self.0.props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
             self.0.warehouse_location = warehouse_location;
+        }
+
+        let name = name.into();
+        let valid_name = !name.trim().is_empty();
+        if valid_name {
+            self.0.name = name;
         }
 
         let mut valid_sql_bind_style = true;
@@ -159,7 +163,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
         }
 
         async move {
-            if name.trim().is_empty() {
+            if !valid_name {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
@@ -1004,8 +1008,12 @@ mod tests {
         HashMap::from([("exists".to_string(), "true".to_string())])
     }
 
-    async fn new_sql_catalog(warehouse_location: String) -> impl Catalog {
-        let sql_lite_uri = format!("sqlite:{}", temp_path());
+    async fn new_sql_catalog_with_name(
+        catalog_location: String,
+        warehouse_location: String,
+        name: String,
+    ) -> impl Catalog {
+        let sql_lite_uri = format!("sqlite:{catalog_location}");
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
 
         let props = HashMap::from_iter([
@@ -1017,9 +1025,13 @@ mod tests {
             ),
         ]);
         SqlCatalogBuilder::default()
-            .load("iceberg", props)
+            .load(name, props)
             .await
             .unwrap()
+    }
+
+    async fn new_sql_catalog(warehouse_location: String) -> impl Catalog {
+        new_sql_catalog_with_name(temp_path(), warehouse_location, "iceberg".to_string()).await
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -1321,6 +1333,33 @@ mod tests {
         let catalog = new_sql_catalog(warehouse_loc).await;
 
         assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_empty_different_name() {
+        let warehouse_loc = temp_path();
+        let catalog_loc = temp_path();
+        let catalog = new_sql_catalog_with_name(
+            catalog_loc.clone(),
+            warehouse_loc.clone(),
+            "iceberg".to_string(),
+        )
+        .await;
+        let namespace_ident_1 = NamespaceIdent::new("a".into());
+        let namespace_ident_2 = NamespaceIdent::new("b".into());
+        create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
+        assert_eq!(
+            to_set(catalog.list_namespaces(None).await.unwrap()),
+            to_set(vec![namespace_ident_1, namespace_ident_2])
+        );
+
+        let catalog2 = new_sql_catalog_with_name(
+            catalog_loc.clone(),
+            warehouse_loc.clone(),
+            "test".to_string(),
+        )
+        .await;
+        assert_eq!(catalog2.list_namespaces(None).await.unwrap(), vec![]);
     }
 
     #[tokio::test]
