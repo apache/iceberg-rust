@@ -185,7 +185,14 @@ impl<'a> SnapshotProducer<'a> {
 
         for delete_file in &self.added_delete_files {
             match delete_file.content_type() {
-                DataContentType::PositionDeletes => {}
+                DataContentType::PositionDeletes => {
+                    if delete_file.equality_ids().is_some() {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Position delete files must not have equality_ids set",
+                        ));
+                    }
+                }
                 DataContentType::EqualityDeletes => {
                     let ids = delete_file.equality_ids().ok_or_else(|| {
                         Error::new(
@@ -208,6 +215,9 @@ impl<'a> SnapshotProducer<'a> {
                 }
             }
 
+            // TODO: This validation is too strict for partition evolution scenarios where delete
+            // files may reference older partition specs. Once manifest-per-spec is implemented,
+            // relax this to check that the spec_id exists rather than matching the default.
             if self.table.metadata().default_partition_spec_id() != delete_file.partition_spec_id {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -260,6 +270,21 @@ impl<'a> SnapshotProducer<'a> {
 
         let new_data_files = seen_data_files;
         let new_delete_files = seen_delete_files;
+
+        // Check for cross-type duplicates: same path cannot appear in both data and delete files
+        let cross_type_duplicates: Vec<_> = new_data_files
+            .intersection(&new_delete_files)
+            .map(|s| s.to_string())
+            .collect();
+        if !cross_type_duplicates.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add the same file path as both a data file and a delete file: {}",
+                    cross_type_duplicates.join(", ")
+                ),
+            ));
+        }
 
         let mut duplicate_data_files = Vec::new();
         let mut duplicate_delete_files = Vec::new();
@@ -436,17 +461,11 @@ impl<'a> SnapshotProducer<'a> {
             ));
         }
 
-        let snapshot_id = self.snapshot_id;
-        let format_version = self.table.metadata().format_version();
         let manifest_entries = added_delete_files.into_iter().map(|delete_file| {
-            let builder = ManifestEntry::builder()
+            ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
-                .data_file(delete_file);
-            if format_version == FormatVersion::V1 {
-                builder.snapshot_id(snapshot_id).build()
-            } else {
-                builder.build()
-            }
+                .data_file(delete_file)
+                .build()
         });
         let mut writer = self.new_manifest_writer(ManifestContentType::Deletes)?;
         for entry in manifest_entries {
@@ -677,7 +696,10 @@ mod tests {
             .unwrap()
     }
 
-    fn make_equality_delete_file_with_ids(spec_id: i32, equality_ids: Option<Vec<i32>>) -> DataFile {
+    fn make_equality_delete_file_with_ids(
+        spec_id: i32,
+        equality_ids: Option<Vec<i32>>,
+    ) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::EqualityDeletes)
             .file_path("test/eq-delete-1.parquet".to_string())
@@ -710,21 +732,18 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let delete_file = make_position_delete_file(spec_id);
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![delete_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message()
-            .contains("Delete files are not supported in format version 1"));
+        assert!(
+            err.message()
+                .contains("Delete files are not supported in format version 1")
+        );
     }
 
     #[test]
@@ -733,21 +752,18 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let delete_file = make_equality_delete_file_with_ids(spec_id, None);
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![delete_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message()
-            .contains("Equality delete files must have equality_ids set"));
+        assert!(
+            err.message()
+                .contains("Equality delete files must have equality_ids set")
+        );
     }
 
     #[test]
@@ -756,21 +772,18 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let delete_file = make_equality_delete_file_with_ids(spec_id, Some(vec![]));
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![delete_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message()
-            .contains("Equality delete files must have equality_ids set"));
+        assert!(
+            err.message()
+                .contains("Equality delete files must have equality_ids set")
+        );
     }
 
     #[test]
@@ -779,21 +792,18 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let data_file = make_data_file_as_delete(spec_id);
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![data_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                data_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message()
-            .contains("Data content type is not allowed for delete files"));
+        assert!(
+            err.message()
+                .contains("Data content type is not allowed for delete files")
+        );
     }
 
     #[test]
@@ -802,14 +812,10 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let delete_file = make_position_delete_file(spec_id);
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![delete_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_ok());
@@ -821,37 +827,110 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let delete_file = make_equality_delete_file_with_ids(spec_id, Some(vec![1]));
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![delete_file],
-        );
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
 
         let result = producer.validate_added_delete_files();
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_empty_delete_files_returns_error() {
+    fn test_write_delete_manifest_precondition_empty_files() {
         let table = make_v2_minimal_table();
 
-        let mut producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![],
-            vec![],
-        );
+        let mut producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![]);
 
         let result = futures::executor::block_on(producer.write_delete_manifest());
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message()
-            .contains("No added delete files found when write a delete manifest file"));
+        assert!(
+            err.message()
+                .contains("No added delete files found when write a delete manifest file")
+        );
+    }
+
+    fn make_data_file_with_path(spec_id: i32, path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition_spec_id(spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    fn make_position_delete_file_with_path(spec_id: i32, path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition_spec_id(spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_validate_cross_type_duplicate_files_rejected() {
+        let table = make_v2_minimal_table();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let shared_path = "test/shared-file.parquet";
+        let data_file = make_data_file_with_path(spec_id, shared_path);
+        let delete_file = make_position_delete_file_with_path(spec_id, shared_path);
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file],
+            vec![delete_file],
+        );
+
+        let result = futures::executor::block_on(producer.validate_duplicate_files());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message()
+                .contains("Cannot add the same file path as both a data file and a delete file")
+        );
+    }
+
+    #[test]
+    fn test_validate_position_delete_rejects_equality_ids() {
+        let table = make_v2_minimal_table();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let delete_file = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/pos-delete-with-eq-ids.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition_spec_id(spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .equality_ids(Some(vec![1, 2]))
+            .build()
+            .unwrap();
+
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![], vec![
+                delete_file,
+            ]);
+
+        let result = producer.validate_added_delete_files();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message()
+                .contains("Position delete files must not have equality_ids set")
+        );
     }
 }
