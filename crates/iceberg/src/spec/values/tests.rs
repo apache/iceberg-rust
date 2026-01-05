@@ -1293,6 +1293,31 @@ fn test_iceberg_float_order() {
     assert_eq!(double_sorted, double_expected);
 }
 
+#[test]
+fn test_negative_zero_less_than_positive_zero() {
+    {
+        let neg_zero = Datum::float(-0.0);
+        let pos_zero = Datum::float(0.0);
+
+        assert_eq!(
+            neg_zero.partial_cmp(&pos_zero),
+            Some(std::cmp::Ordering::Less),
+            "IEEE 754 totalOrder requires -0.0 < +0.0 on F32"
+        );
+    }
+
+    {
+        let neg_zero = Datum::double(-0.0);
+        let pos_zero = Datum::double(0.0);
+
+        assert_eq!(
+            neg_zero.partial_cmp(&pos_zero),
+            Some(std::cmp::Ordering::Less),
+            "IEEE 754 totalOrder requires -0.0 < +0.0 on F64"
+        );
+    }
+}
+
 /// Test Date deserialization from JSON as number (days since epoch).
 ///
 /// This reproduces the scenario from Iceberg Java's TestAddFilesProcedure where:

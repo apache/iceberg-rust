@@ -26,6 +26,7 @@ allow = [
   "CC0-1.0",
   "Zlib",
   "CDLA-Permissive-2.0",
+  "bzip2-1.0.6",
   # Category-A: https://issues.apache.org/jira/browse/LEGAL-660
   "Unicode-3.0",
   # Boost Software License Version 1.0 is allowed (Category-A):
