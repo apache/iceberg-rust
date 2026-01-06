@@ -918,7 +918,6 @@ impl StorageFactory for RoutingStorageFactory {
 - Define `Storage` trait in `iceberg` crate
 - Define `StorageFactory` trait in `iceberg` crate
 - Introduce `StorageConfig` for configuration properties
-- Introduce `FileIOBuilder` for building `FileIO` instances with explicit factory injection
 - Update `FileIO` to use lazy storage initialization with factory pattern
 - Update `InputFile`/`OutputFile` to use `Arc<dyn Storage>`
 - Implement `MemoryStorage` and `LocalFsStorage` in `iceberg` crate
