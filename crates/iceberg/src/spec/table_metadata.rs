@@ -37,6 +37,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -358,6 +359,13 @@ impl TableMetadata {
     #[inline]
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    /// Returns typed table properties parsed from the raw properties map with defaults.
+    pub fn table_properties(&self) -> Result<TableProperties> {
+        TableProperties::try_from(&self.properties).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+        })
     }
 
     /// Return location of statistics files.
@@ -1561,7 +1569,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
-    use crate::TableCreation;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -1570,6 +1577,7 @@ mod tests {
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
         Summary, Transform, Type, UnboundPartitionField,
     };
+    use crate::{ErrorKind, TableCreation};
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -3860,5 +3868,114 @@ mod tests {
             result.is_err(),
             "Parsing should fail for sort order ID 0 with fields"
         );
+    }
+
+    #[test]
+    fn test_table_properties_with_defaults() {
+        use crate::spec::TableProperties;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let props = metadata.table_properties().unwrap();
+
+        assert_eq!(
+            props.commit_num_retries,
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
+        assert_eq!(
+            props.write_target_file_size_bytes,
+            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_with_custom_values() {
+        use crate::spec::TableProperties;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let properties = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "10".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "1024".to_string(),
+            ),
+        ]);
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            properties,
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let props = metadata.table_properties().unwrap();
+
+        assert_eq!(props.commit_num_retries, 10);
+        assert_eq!(props.write_target_file_size_bytes, 1024);
+    }
+
+    #[test]
+    fn test_table_properties_with_invalid_value() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let properties = HashMap::from([(
+            "commit.retry.num-retries".to_string(),
+            "not_a_number".to_string(),
+        )]);
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            properties,
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let err = metadata.table_properties().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Invalid table properties"));
     }
 }
