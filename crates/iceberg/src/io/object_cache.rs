@@ -120,7 +120,7 @@ impl ObjectCache {
 
     /// Retrieves an Arc [`ManifestList`] from the cache
     /// or retrieves one from FileIO and parses it if not present
-    pub(crate) async fn get_manifest_list(
+    pub async fn get_manifest_list(
         &self,
         snapshot: &SnapshotRef,
         table_metadata: &TableMetadataRef,
