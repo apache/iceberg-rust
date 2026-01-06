@@ -44,6 +44,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
+use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
@@ -53,6 +54,7 @@ use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
 /// Catalog-backed table provider with automatic metadata refresh.
@@ -185,9 +187,38 @@ impl TableProvider for IcebergTableProvider {
         let repartitioned_plan =
             repartition(plan_with_partition, table.metadata_ref(), target_partitions)?;
 
+        // Apply sort node when it's not fanout mode
+        let fanout_enabled = table
+            .metadata()
+            .properties()
+            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
+            .map(|value| {
+                value
+                    .parse::<bool>()
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Invalid value for {}, expected 'true' or 'false'",
+                                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
+                            ),
+                        )
+                        .with_source(e)
+                    })
+                    .map_err(to_datafusion_error)
+            })
+            .transpose()?
+            .unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
+
+        let write_input = if fanout_enabled {
+            repartitioned_plan
+        } else {
+            sort_by_partition(repartitioned_plan)?
+        };
+
         let write_plan = Arc::new(IcebergWriteExec::new(
             table.clone(),
-            repartitioned_plan,
+            write_input,
             self.schema.clone(),
         ));
 
