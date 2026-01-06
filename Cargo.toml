@@ -109,7 +109,7 @@ rand = "0.8.5"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
-rust_decimal = "1.37.2"
+rust_decimal = { version = "1.39", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
 serde_derive = "1.0.219"
@@ -132,3 +132,5 @@ uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
 zstd = "0.13.3"
+# See: https://github.com/apache/iceberg-rust/issues/1992
+rkyv = "0.8.13"
