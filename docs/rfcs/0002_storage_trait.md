@@ -85,11 +85,18 @@ The new design introduces a trait-based storage abstraction with a factory patte
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                                 FileIO                                       │
+│                          FileIO / FileIOBuilder                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  FileIOBuilder:                                                     │    │
+│  │  - factory: Arc<dyn StorageFactory>                                 │    │
+│  │  - config: StorageConfig                                            │    │
+│  │  - Methods: new(), with_prop(), with_props(), config(), build()     │    │
+│  │                                                                     │    │
+│  │  FileIO:                                                            │    │
 │  │  - config: StorageConfig (properties only, no scheme)               │    │
 │  │  - factory: Arc<dyn StorageFactory>                                 │    │
 │  │  - storage: OnceCell<Arc<dyn Storage>> (lazy initialization)        │    │
+│  │  - Methods: new_with_memory(), new_with_fs(), into_builder()        │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
 │  Methods: new_input(), new_output(), delete(), exists(), delete_prefix()    │
@@ -131,16 +138,19 @@ The new design introduces a trait-based storage abstraction with a factory patte
 │                           FileIO Creation Flow                                │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  User Code                    FileIO                     StorageFactory
+  User Code                 FileIOBuilder                  StorageFactory
       │                          │                              │
-      │  FileIO::from_path()     │                              │
+      │  FileIOBuilder::new()    │                              │
       │─────────────────────────▶│                              │
       │                          │                              │
-      │  .with_storage_factory() │                              │
+      │  .with_prop()            │                              │
       │─────────────────────────▶│                              │
       │                          │                              │
-      │  .with_props()           │                              │
+      │  .build()                │                              │
       │─────────────────────────▶│                              │
+      │                          │                              │
+      │◀─────────────────────────│                              │
+      │  FileIO                  │                              │
       │                          │                              │
       │  new_input(path)         │                              │
       │─────────────────────────▶│                              │
@@ -207,7 +217,7 @@ crates/
 │   │
 │   └── utils/                       # Storage utilities
 │       └── src/
-│           └── lib.rs               # ResolvingStorageFactory, default_storage_factory()
+│           └── lib.rs               # default_storage_factory()
 │
 └── catalog/                         # Catalog implementations
     ├── rest/                        # Uses with_file_io injection
@@ -356,14 +366,14 @@ assert_eq!(s3_config.region(), Some("us-east-1"));
 These typed configs are used internally by storage implementations (e.g., `OpenDalStorage`) to
 parse properties from `StorageConfig` into strongly-typed configuration.
 
-### FileIO Changes
+### FileIO and FileIOBuilder
 
-`FileIO` is redesigned to use lazy storage initialization with a factory pattern:
+`FileIO` is redesigned to use lazy storage initialization with a factory pattern. Configuration is done via `FileIOBuilder`:
 
 ```rust
 #[derive(Clone)]
 pub struct FileIO {
-    /// Storage configuration containing scheme and properties
+    /// Storage configuration containing properties
     config: StorageConfig,
     /// Factory for creating storage instances
     factory: Arc<dyn StorageFactory>,
@@ -372,17 +382,32 @@ pub struct FileIO {
 }
 
 impl FileIO {
-    /// Create a new FileIO with the given configuration.
-    pub fn new(config: StorageConfig) -> Self;
-
     /// Create a new FileIO backed by in-memory storage.
     pub fn new_with_memory() -> Self;
 
-    /// Create FileIO from a path, inferring the scheme.
-    pub fn from_path(path: impl AsRef<str>) -> Result<Self>;
+    /// Create a new FileIO backed by local filesystem storage.
+    pub fn new_with_fs() -> Self;
 
-    /// Set a custom storage factory.
-    pub fn with_storage_factory(self, factory: Arc<dyn StorageFactory>) -> Self;
+    /// Convert this FileIO into a FileIOBuilder for modification.
+    pub fn into_builder(self) -> FileIOBuilder;
+
+    // File operations delegate to the lazily-initialized storage
+    pub async fn delete(&self, path: impl AsRef<str>) -> Result<()>;
+    pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()>;
+    pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool>;
+    pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile>;
+    pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile>;
+}
+
+/// Builder for creating FileIO instances.
+pub struct FileIOBuilder {
+    factory: Arc<dyn StorageFactory>,
+    config: StorageConfig,
+}
+
+impl FileIOBuilder {
+    /// Create a new FileIOBuilder with the given storage factory.
+    pub fn new(factory: Arc<dyn StorageFactory>) -> Self;
 
     /// Add a configuration property.
     pub fn with_prop(self, key: impl Into<String>, value: impl Into<String>) -> Self;
@@ -393,20 +418,16 @@ impl FileIO {
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig;
 
-    // File operations delegate to the lazily-initialized storage
-    pub async fn delete(&self, path: impl AsRef<str>) -> Result<()>;
-    pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()>;
-    pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool>;
-    pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile>;
-    pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile>;
+    /// Build the FileIO instance.
+    pub fn build(self) -> Result<FileIO>;
 }
 ```
 
 Key changes from the old design:
-- Removed `FileIOBuilder` - configuration is now done via builder methods on `FileIO` itself
+- `FileIOBuilder` is used for configuration with explicit factory injection
+- `FileIO` has convenience constructors (`new_with_memory()`, `new_with_fs()`) for common cases
 - Removed `Extensions` - custom behavior is now provided via `StorageFactory`
 - Storage is lazily initialized on first use via `OnceCell`
-- `DefaultStorageFactory` supports only "memory" and "file" schemes by default
 
 ### InputFile and OutputFile Changes
 
@@ -531,9 +552,9 @@ impl CatalogBuilder for GlueCatalogBuilder {
     // Use provided FileIO if Some, otherwise construct default
     let file_io = match file_io {
         Some(io) => io,
-        None => FileIO::from_path(&config.warehouse)?
+        None => FileIOBuilder::new(default_storage_factory())
             .with_props(file_io_props)
-            .with_storage_factory(default_storage_factory()),
+            .build()?,
     };
 }
 ```
@@ -712,9 +733,9 @@ impl GlueCatalog {
             Some(io) => io,
             None => {
                 // Build default FileIO with OpenDAL support
-                FileIO::from_path(&config.warehouse)?
+                FileIOBuilder::new(default_storage_factory())
                     .with_props(file_io_props)
-                    .with_storage_factory(default_storage_factory())
+                    .build()?
             }
         };
         // ...
@@ -747,14 +768,15 @@ assert_eq!(content, bytes::Bytes::from("Hello, World!"));
 
 ```rust
 use std::sync::Arc;
-use iceberg::io::FileIO;
+use iceberg::io::FileIOBuilder;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
 // Create FileIO with explicit S3 factory
-let file_io = FileIO::new(Arc::new(OpenDalStorageFactory::S3))
+let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3))
     .with_prop("s3.region", "us-east-1")
     .with_prop("s3.access-key-id", "my-access-key")
-    .with_prop("s3.secret-access-key", "my-secret-key");
+    .with_prop("s3.secret-access-key", "my-secret-key")
+    .build()?;
 
 // Use the FileIO
 let input = file_io.new_input("s3://my-bucket/warehouse/table/metadata.json")?;
@@ -793,13 +815,14 @@ For advanced use cases, you can inject a custom `FileIO` with specific storage c
 use std::collections::HashMap;
 use std::sync::Arc;
 use iceberg::CatalogBuilder;
-use iceberg::io::FileIO;
+use iceberg::io::FileIOBuilder;
 use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
 // Create a custom FileIO with explicit S3 factory
-let file_io = FileIO::new(Arc::new(OpenDalStorageFactory::S3))
-    .with_prop("s3.region", "us-east-1");
+let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3))
+    .with_prop("s3.region", "us-east-1")
+    .build()?;
 
 // Inject FileIO into catalog
 let catalog = GlueCatalogBuilder::default()
@@ -894,7 +917,8 @@ impl StorageFactory for RoutingStorageFactory {
 ### Phase 1: Storage Trait
 - Define `Storage` trait in `iceberg` crate
 - Define `StorageFactory` trait in `iceberg` crate
-- Introduce `StorageConfig` to replace `FileIOBuilder` configuration
+- Introduce `StorageConfig` for configuration properties
+- Introduce `FileIOBuilder` for building `FileIO` instances with explicit factory injection
 - Update `FileIO` to use lazy storage initialization with factory pattern
 - Update `InputFile`/`OutputFile` to use `Arc<dyn Storage>`
 - Implement `MemoryStorage` and `LocalFsStorage` in `iceberg` crate
@@ -911,4 +935,3 @@ impl StorageFactory for RoutingStorageFactory {
 ### Future Work
 - Add `object_store`-based storage implementations
 - Consider introducing `IoErrorKind` for storage-specific error handling
-- Consider adding a mechanism to add config key to `StorageConfig`s
