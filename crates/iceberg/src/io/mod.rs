@@ -72,7 +72,7 @@ mod storage;
 pub use file_io::*;
 pub use storage::*;
 
-pub(crate) mod object_cache;
+pub mod object_cache;
 
 #[cfg(feature = "storage-azblob")]
 mod storage_azblob;

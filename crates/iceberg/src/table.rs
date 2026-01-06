@@ -215,7 +215,7 @@ impl Table {
     }
 
     /// Returns this table's object cache
-    pub(crate) fn object_cache(&self) -> Arc<ObjectCache> {
+    pub fn object_cache(&self) -> Arc<ObjectCache> {
         self.object_cache.clone()
     }
 
@@ -243,6 +243,12 @@ impl Table {
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
         ArrowReaderBuilder::new(self.file_io.clone())
+    }
+
+    /// Returns a new `Table` instance with the provided object cache.
+    pub fn with_object_cache(mut self, object_cache: Arc<ObjectCache>) -> Self {
+        self.object_cache = object_cache;
+        self
     }
 }
 
