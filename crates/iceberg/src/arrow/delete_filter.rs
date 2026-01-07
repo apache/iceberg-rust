@@ -324,6 +324,9 @@ pub(crate) mod tests {
             sequence_number: 0,
             equality_ids: None,
             file_size_in_bytes: 0,
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
         };
 
         let file_scan_tasks = vec![
@@ -341,6 +344,9 @@ pub(crate) mod tests {
                 sequence_number: 0,
                 equality_ids: None,
                 file_size_in_bytes: 0,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
             },
             FileScanTask {
                 start: 0,
@@ -356,6 +362,9 @@ pub(crate) mod tests {
                 sequence_number: 0,
                 equality_ids: None,
                 file_size_in_bytes: 0,
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
             },
         ];
 

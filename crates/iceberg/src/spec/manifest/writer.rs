@@ -757,7 +757,7 @@ mod tests {
                 lower_bounds: HashMap::new(),
                 upper_bounds: HashMap::new(),
                 key_metadata: None,
-                split_offsets: None,
+                split_offsets: vec![],
                 equality_ids: None,
                 sort_order_id: None,
                 partition_spec_id: 0,

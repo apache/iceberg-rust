@@ -141,6 +141,13 @@ impl ManifestEntryContext {
             sequence_number: self.manifest_entry.sequence_number().unwrap_or(0),
             equality_ids: self.manifest_entry.data_file().equality_ids(),
             file_size_in_bytes: self.manifest_entry.data_file().file_size_in_bytes(),
+
+            // Include partition data and spec from manifest entry
+            partition: Some(self.manifest_entry.data_file.partition.clone()),
+            // TODO: Pass actual PartitionSpec through context chain for native flow
+            partition_spec: None,
+            // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
+            name_mapping: None,
         })
     }
 }
