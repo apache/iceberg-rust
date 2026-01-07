@@ -132,5 +132,3 @@ uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
 zstd = "0.13.3"
-# See: https://github.com/apache/iceberg-rust/issues/1992
-rkyv = "0.8.13"

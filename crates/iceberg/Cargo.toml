@@ -89,7 +89,6 @@ typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zstd = { workspace = true }
-rkyv = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
