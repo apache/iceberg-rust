@@ -37,6 +37,8 @@ pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
 datafusion-ffi = { version = "51.0" }
 tokio = { version = "1.46.1", default-features = false }
+# Security: disable rkyv feature to avoid RUSTSEC-2026-0001 (rkyv 0.7.45 vulnerability)
+rust_decimal = { version = "1.39", default-features = false, features = ["std"] }
 
 [profile.release]
 codegen-units = 1
@@ -44,3 +46,7 @@ debug = false
 lto = "thin"
 opt-level = "z"
 strip = true
+
+[package.metadata.cargo-machete]
+# rust_decimal is included to override feature flags for security (disable rkyv)
+ignored = ["rust_decimal"]
