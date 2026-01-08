@@ -44,558 +44,734 @@
 <a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 <a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>iceberg::arrow::schema_to_arrow_schema;
 <a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>iceberg::inspect::MetadataTableType;
-<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>iceberg::table::Table;
-<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, <span class="prelude-ty">Result</span>, TableIdent};
-<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>metadata_table::IcebergMetadataTableProvider;
-<a href=#50 id=50 data-nosnippet>50</a>
-<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span><span class="kw">crate</span>::error::to_datafusion_error;
-<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::commit::IcebergCommitExec;
-<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::project::project_with_partition;
-<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::repartition::repartition;
-<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::scan::IcebergTableScan;
-<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::write::IcebergWriteExec;
-<a href=#57 id=57 data-nosnippet>57</a>
-<a href=#58 id=58 data-nosnippet>58</a><span class="doccomment">/// Catalog-backed table provider with automatic metadata refresh.
-<a href=#59 id=59 data-nosnippet>59</a>///
-<a href=#60 id=60 data-nosnippet>60</a>/// This provider loads fresh table metadata from the catalog on every scan and write
-<a href=#61 id=61 data-nosnippet>61</a>/// operation, ensuring you always see the latest table state. Use this when you need
-<a href=#62 id=62 data-nosnippet>62</a>/// write operations or want to see the most up-to-date data.
-<a href=#63 id=63 data-nosnippet>63</a>///
-<a href=#64 id=64 data-nosnippet>64</a>/// For read-only access to a specific snapshot without catalog overhead, use
-<a href=#65 id=65 data-nosnippet>65</a>/// [`IcebergStaticTableProvider`] instead.
-<a href=#66 id=66 data-nosnippet>66</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#67 id=67 data-nosnippet>67</a></span><span class="kw">pub struct </span>IcebergTableProvider {
-<a href=#68 id=68 data-nosnippet>68</a>    <span class="doccomment">/// The catalog that manages this table
-<a href=#69 id=69 data-nosnippet>69</a>    </span>catalog: Arc&lt;<span class="kw">dyn </span>Catalog&gt;,
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// The table identifier (namespace + name)
-<a href=#71 id=71 data-nosnippet>71</a>    </span>table_ident: TableIdent,
-<a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// A reference-counted arrow `Schema` (cached at construction)
-<a href=#73 id=73 data-nosnippet>73</a>    </span>schema: ArrowSchemaRef,
-<a href=#74 id=74 data-nosnippet>74</a>}
-<a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a><span class="kw">impl </span>IcebergTableProvider {
-<a href=#77 id=77 data-nosnippet>77</a>    <span class="doccomment">/// Creates a new catalog-backed table provider.
-<a href=#78 id=78 data-nosnippet>78</a>    ///
-<a href=#79 id=79 data-nosnippet>79</a>    /// Loads the table once to get the initial schema, then stores the catalog
-<a href=#80 id=80 data-nosnippet>80</a>    /// reference for future metadata refreshes on each operation.
-<a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>try_new(
-<a href=#82 id=82 data-nosnippet>82</a>        catalog: Arc&lt;<span class="kw">dyn </span>Catalog&gt;,
-<a href=#83 id=83 data-nosnippet>83</a>        namespace: NamespaceIdent,
-<a href=#84 id=84 data-nosnippet>84</a>        name: <span class="kw">impl </span>Into&lt;String&gt;,
-<a href=#85 id=85 data-nosnippet>85</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>table_ident = TableIdent::new(namespace, name.into());
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a>        <span class="comment">// Load table once to get initial schema
-<a href=#89 id=89 data-nosnippet>89</a>        </span><span class="kw">let </span>table = catalog.load_table(<span class="kw-2">&amp;</span>table_ident).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
-<a href=#91 id=91 data-nosnippet>91</a>
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="prelude-val">Ok</span>(IcebergTableProvider {
-<a href=#93 id=93 data-nosnippet>93</a>            catalog,
-<a href=#94 id=94 data-nosnippet>94</a>            table_ident,
-<a href=#95 id=95 data-nosnippet>95</a>            schema,
-<a href=#96 id=96 data-nosnippet>96</a>        })
-<a href=#97 id=97 data-nosnippet>97</a>    }
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>metadata_table(
-<a href=#100 id=100 data-nosnippet>100</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#101 id=101 data-nosnippet>101</a>        r#type: MetadataTableType,
-<a href=#102 id=102 data-nosnippet>102</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;IcebergMetadataTableProvider&gt; {
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="comment">// Load fresh table metadata for metadata table access
-<a href=#104 id=104 data-nosnippet>104</a>        </span><span class="kw">let </span>table = <span class="self">self</span>.catalog.load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#105 id=105 data-nosnippet>105</a>        <span class="prelude-val">Ok</span>(IcebergMetadataTableProvider { table, r#type })
-<a href=#106 id=106 data-nosnippet>106</a>    }
-<a href=#107 id=107 data-nosnippet>107</a>}
-<a href=#108 id=108 data-nosnippet>108</a>
-<a href=#109 id=109 data-nosnippet>109</a><span class="attr">#[async_trait]
-<a href=#110 id=110 data-nosnippet>110</a></span><span class="kw">impl </span>TableProvider <span class="kw">for </span>IcebergTableProvider {
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="self">self
-<a href=#113 id=113 data-nosnippet>113</a>    </span>}
-<a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowSchemaRef {
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="self">self</span>.schema.clone()
-<a href=#117 id=117 data-nosnippet>117</a>    }
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">fn </span>table_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableType {
-<a href=#120 id=120 data-nosnippet>120</a>        TableType::Base
-<a href=#121 id=121 data-nosnippet>121</a>    }
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">async fn </span>scan(
-<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#125 id=125 data-nosnippet>125</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
-<a href=#126 id=126 data-nosnippet>126</a>        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
-<a href=#127 id=127 data-nosnippet>127</a>        filters: <span class="kw-2">&amp;</span>[Expr],
-<a href=#128 id=128 data-nosnippet>128</a>        _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#129 id=129 data-nosnippet>129</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="comment">// Load fresh table metadata from catalog
-<a href=#131 id=131 data-nosnippet>131</a>        </span><span class="kw">let </span>table = <span class="self">self
-<a href=#132 id=132 data-nosnippet>132</a>            </span>.catalog
-<a href=#133 id=133 data-nosnippet>133</a>            .load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident)
-<a href=#134 id=134 data-nosnippet>134</a>            .<span class="kw">await
-<a href=#135 id=135 data-nosnippet>135</a>            </span>.map_err(to_datafusion_error)<span class="question-mark">?</span>;
-<a href=#136 id=136 data-nosnippet>136</a>
-<a href=#137 id=137 data-nosnippet>137</a>        <span class="comment">// Create scan with fresh metadata (always use current snapshot)
-<a href=#138 id=138 data-nosnippet>138</a>        </span><span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
-<a href=#139 id=139 data-nosnippet>139</a>            table,
-<a href=#140 id=140 data-nosnippet>140</a>            <span class="prelude-val">None</span>, <span class="comment">// Always use current snapshot for catalog-backed provider
-<a href=#141 id=141 data-nosnippet>141</a>            </span><span class="self">self</span>.schema.clone(),
-<a href=#142 id=142 data-nosnippet>142</a>            projection,
-<a href=#143 id=143 data-nosnippet>143</a>            filters,
-<a href=#144 id=144 data-nosnippet>144</a>        )))
-<a href=#145 id=145 data-nosnippet>145</a>    }
-<a href=#146 id=146 data-nosnippet>146</a>
-<a href=#147 id=147 data-nosnippet>147</a>    <span class="kw">fn </span>supports_filters_pushdown(
-<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#149 id=149 data-nosnippet>149</a>        filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
-<a href=#150 id=150 data-nosnippet>150</a>    ) -&gt; DFResult&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt; {
-<a href=#151 id=151 data-nosnippet>151</a>        <span class="comment">// Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
-<a href=#152 id=152 data-nosnippet>152</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[TableProviderFilterPushDown::Inexact; filters.len()])
-<a href=#153 id=153 data-nosnippet>153</a>    }
-<a href=#154 id=154 data-nosnippet>154</a>
-<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">async fn </span>insert_into(
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#157 id=157 data-nosnippet>157</a>        state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
-<a href=#158 id=158 data-nosnippet>158</a>        input: Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;,
-<a href=#159 id=159 data-nosnippet>159</a>        _insert_op: InsertOp,
-<a href=#160 id=160 data-nosnippet>160</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
-<a href=#161 id=161 data-nosnippet>161</a>        <span class="comment">// Load fresh table metadata from catalog
-<a href=#162 id=162 data-nosnippet>162</a>        </span><span class="kw">let </span>table = <span class="self">self
-<a href=#163 id=163 data-nosnippet>163</a>            </span>.catalog
-<a href=#164 id=164 data-nosnippet>164</a>            .load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident)
-<a href=#165 id=165 data-nosnippet>165</a>            .<span class="kw">await
-<a href=#166 id=166 data-nosnippet>166</a>            </span>.map_err(to_datafusion_error)<span class="question-mark">?</span>;
-<a href=#167 id=167 data-nosnippet>167</a>
-<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">let </span>partition_spec = table.metadata().default_partition_spec();
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>iceberg::spec::TableProperties;
+<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>iceberg::table::Table;
+<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, <span class="prelude-ty">Result</span>, TableIdent};
+<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>metadata_table::IcebergMetadataTableProvider;
+<a href=#51 id=51 data-nosnippet>51</a>
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span><span class="kw">crate</span>::error::to_datafusion_error;
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::commit::IcebergCommitExec;
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::project::project_with_partition;
+<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::repartition::repartition;
+<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::scan::IcebergTableScan;
+<a href=#57 id=57 data-nosnippet>57</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::sort::sort_by_partition;
+<a href=#58 id=58 data-nosnippet>58</a><span class="kw">use </span><span class="kw">crate</span>::physical_plan::write::IcebergWriteExec;
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a><span class="doccomment">/// Catalog-backed table provider with automatic metadata refresh.
+<a href=#61 id=61 data-nosnippet>61</a>///
+<a href=#62 id=62 data-nosnippet>62</a>/// This provider loads fresh table metadata from the catalog on every scan and write
+<a href=#63 id=63 data-nosnippet>63</a>/// operation, ensuring you always see the latest table state. Use this when you need
+<a href=#64 id=64 data-nosnippet>64</a>/// write operations or want to see the most up-to-date data.
+<a href=#65 id=65 data-nosnippet>65</a>///
+<a href=#66 id=66 data-nosnippet>66</a>/// For read-only access to a specific snapshot without catalog overhead, use
+<a href=#67 id=67 data-nosnippet>67</a>/// [`IcebergStaticTableProvider`] instead.
+<a href=#68 id=68 data-nosnippet>68</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub struct </span>IcebergTableProvider {
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// The catalog that manages this table
+<a href=#71 id=71 data-nosnippet>71</a>    </span>catalog: Arc&lt;<span class="kw">dyn </span>Catalog&gt;,
+<a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// The table identifier (namespace + name)
+<a href=#73 id=73 data-nosnippet>73</a>    </span>table_ident: TableIdent,
+<a href=#74 id=74 data-nosnippet>74</a>    <span class="doccomment">/// A reference-counted arrow `Schema` (cached at construction)
+<a href=#75 id=75 data-nosnippet>75</a>    </span>schema: ArrowSchemaRef,
+<a href=#76 id=76 data-nosnippet>76</a>}
+<a href=#77 id=77 data-nosnippet>77</a>
+<a href=#78 id=78 data-nosnippet>78</a><span class="kw">impl </span>IcebergTableProvider {
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Creates a new catalog-backed table provider.
+<a href=#80 id=80 data-nosnippet>80</a>    ///
+<a href=#81 id=81 data-nosnippet>81</a>    /// Loads the table once to get the initial schema, then stores the catalog
+<a href=#82 id=82 data-nosnippet>82</a>    /// reference for future metadata refreshes on each operation.
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>try_new(
+<a href=#84 id=84 data-nosnippet>84</a>        catalog: Arc&lt;<span class="kw">dyn </span>Catalog&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>        namespace: NamespaceIdent,
+<a href=#86 id=86 data-nosnippet>86</a>        name: <span class="kw">impl </span>Into&lt;String&gt;,
+<a href=#87 id=87 data-nosnippet>87</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="kw">let </span>table_ident = TableIdent::new(namespace, name.into());
+<a href=#89 id=89 data-nosnippet>89</a>
+<a href=#90 id=90 data-nosnippet>90</a>        <span class="comment">// Load table once to get initial schema
+<a href=#91 id=91 data-nosnippet>91</a>        </span><span class="kw">let </span>table = catalog.load_table(<span class="kw-2">&amp;</span>table_ident).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a>        <span class="prelude-val">Ok</span>(IcebergTableProvider {
+<a href=#95 id=95 data-nosnippet>95</a>            catalog,
+<a href=#96 id=96 data-nosnippet>96</a>            table_ident,
+<a href=#97 id=97 data-nosnippet>97</a>            schema,
+<a href=#98 id=98 data-nosnippet>98</a>        })
+<a href=#99 id=99 data-nosnippet>99</a>    }
+<a href=#100 id=100 data-nosnippet>100</a>
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>metadata_table(
+<a href=#102 id=102 data-nosnippet>102</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#103 id=103 data-nosnippet>103</a>        r#type: MetadataTableType,
+<a href=#104 id=104 data-nosnippet>104</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;IcebergMetadataTableProvider&gt; {
+<a href=#105 id=105 data-nosnippet>105</a>        <span class="comment">// Load fresh table metadata for metadata table access
+<a href=#106 id=106 data-nosnippet>106</a>        </span><span class="kw">let </span>table = <span class="self">self</span>.catalog.load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="prelude-val">Ok</span>(IcebergMetadataTableProvider { table, r#type })
+<a href=#108 id=108 data-nosnippet>108</a>    }
+<a href=#109 id=109 data-nosnippet>109</a>}
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a><span class="attr">#[async_trait]
+<a href=#112 id=112 data-nosnippet>112</a></span><span class="kw">impl </span>TableProvider <span class="kw">for </span>IcebergTableProvider {
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="self">self
+<a href=#115 id=115 data-nosnippet>115</a>    </span>}
+<a href=#116 id=116 data-nosnippet>116</a>
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowSchemaRef {
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">self</span>.schema.clone()
+<a href=#119 id=119 data-nosnippet>119</a>    }
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">fn </span>table_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableType {
+<a href=#122 id=122 data-nosnippet>122</a>        TableType::Base
+<a href=#123 id=123 data-nosnippet>123</a>    }
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">async fn </span>scan(
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#127 id=127 data-nosnippet>127</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
+<a href=#128 id=128 data-nosnippet>128</a>        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+<a href=#129 id=129 data-nosnippet>129</a>        filters: <span class="kw-2">&amp;</span>[Expr],
+<a href=#130 id=130 data-nosnippet>130</a>        _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#131 id=131 data-nosnippet>131</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="comment">// Load fresh table metadata from catalog
+<a href=#133 id=133 data-nosnippet>133</a>        </span><span class="kw">let </span>table = <span class="self">self
+<a href=#134 id=134 data-nosnippet>134</a>            </span>.catalog
+<a href=#135 id=135 data-nosnippet>135</a>            .load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident)
+<a href=#136 id=136 data-nosnippet>136</a>            .<span class="kw">await
+<a href=#137 id=137 data-nosnippet>137</a>            </span>.map_err(to_datafusion_error)<span class="question-mark">?</span>;
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>        <span class="comment">// Create scan with fresh metadata (always use current snapshot)
+<a href=#140 id=140 data-nosnippet>140</a>        </span><span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
+<a href=#141 id=141 data-nosnippet>141</a>            table,
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="prelude-val">None</span>, <span class="comment">// Always use current snapshot for catalog-backed provider
+<a href=#143 id=143 data-nosnippet>143</a>            </span><span class="self">self</span>.schema.clone(),
+<a href=#144 id=144 data-nosnippet>144</a>            projection,
+<a href=#145 id=145 data-nosnippet>145</a>            filters,
+<a href=#146 id=146 data-nosnippet>146</a>        )))
+<a href=#147 id=147 data-nosnippet>147</a>    }
+<a href=#148 id=148 data-nosnippet>148</a>
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>supports_filters_pushdown(
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#151 id=151 data-nosnippet>151</a>        filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
+<a href=#152 id=152 data-nosnippet>152</a>    ) -&gt; DFResult&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt; {
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="comment">// Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
+<a href=#154 id=154 data-nosnippet>154</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[TableProviderFilterPushDown::Inexact; filters.len()])
+<a href=#155 id=155 data-nosnippet>155</a>    }
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a>    <span class="kw">async fn </span>insert_into(
+<a href=#158 id=158 data-nosnippet>158</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#159 id=159 data-nosnippet>159</a>        state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
+<a href=#160 id=160 data-nosnippet>160</a>        input: Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;,
+<a href=#161 id=161 data-nosnippet>161</a>        _insert_op: InsertOp,
+<a href=#162 id=162 data-nosnippet>162</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
+<a href=#163 id=163 data-nosnippet>163</a>        <span class="comment">// Load fresh table metadata from catalog
+<a href=#164 id=164 data-nosnippet>164</a>        </span><span class="kw">let </span>table = <span class="self">self
+<a href=#165 id=165 data-nosnippet>165</a>            </span>.catalog
+<a href=#166 id=166 data-nosnippet>166</a>            .load_table(<span class="kw-2">&amp;</span><span class="self">self</span>.table_ident)
+<a href=#167 id=167 data-nosnippet>167</a>            .<span class="kw">await
+<a href=#168 id=168 data-nosnippet>168</a>            </span>.map_err(to_datafusion_error)<span class="question-mark">?</span>;
 <a href=#169 id=169 data-nosnippet>169</a>
-<a href=#170 id=170 data-nosnippet>170</a>        <span class="comment">// Step 1: Project partition values for partitioned tables
-<a href=#171 id=171 data-nosnippet>171</a>        </span><span class="kw">let </span>plan_with_partition = <span class="kw">if </span>!partition_spec.is_unpartitioned() {
-<a href=#172 id=172 data-nosnippet>172</a>            project_with_partition(input, <span class="kw-2">&amp;</span>table)<span class="question-mark">?
-<a href=#173 id=173 data-nosnippet>173</a>        </span>} <span class="kw">else </span>{
-<a href=#174 id=174 data-nosnippet>174</a>            input
-<a href=#175 id=175 data-nosnippet>175</a>        };
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>        <span class="comment">// Step 2: Repartition for parallel processing
-<a href=#178 id=178 data-nosnippet>178</a>        </span><span class="kw">let </span>target_partitions =
-<a href=#179 id=179 data-nosnippet>179</a>            NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
-<a href=#180 id=180 data-nosnippet>180</a>                DataFusionError::Configuration(
-<a href=#181 id=181 data-nosnippet>181</a>                    <span class="string">"target_partitions must be greater than 0"</span>.to_string(),
-<a href=#182 id=182 data-nosnippet>182</a>                )
-<a href=#183 id=183 data-nosnippet>183</a>            })<span class="question-mark">?</span>;
-<a href=#184 id=184 data-nosnippet>184</a>
-<a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">let </span>repartitioned_plan =
-<a href=#186 id=186 data-nosnippet>186</a>            repartition(plan_with_partition, table.metadata_ref(), target_partitions)<span class="question-mark">?</span>;
-<a href=#187 id=187 data-nosnippet>187</a>
-<a href=#188 id=188 data-nosnippet>188</a>        <span class="kw">let </span>write_plan = Arc::new(IcebergWriteExec::new(
-<a href=#189 id=189 data-nosnippet>189</a>            table.clone(),
-<a href=#190 id=190 data-nosnippet>190</a>            repartitioned_plan,
-<a href=#191 id=191 data-nosnippet>191</a>            <span class="self">self</span>.schema.clone(),
-<a href=#192 id=192 data-nosnippet>192</a>        ));
-<a href=#193 id=193 data-nosnippet>193</a>
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="comment">// Merge the outputs of write_plan into one so we can commit all files together
-<a href=#195 id=195 data-nosnippet>195</a>        </span><span class="kw">let </span>coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>        <span class="prelude-val">Ok</span>(Arc::new(IcebergCommitExec::new(
-<a href=#198 id=198 data-nosnippet>198</a>            table,
-<a href=#199 id=199 data-nosnippet>199</a>            <span class="self">self</span>.catalog.clone(),
-<a href=#200 id=200 data-nosnippet>200</a>            coalesce_partitions,
-<a href=#201 id=201 data-nosnippet>201</a>            <span class="self">self</span>.schema.clone(),
-<a href=#202 id=202 data-nosnippet>202</a>        )))
-<a href=#203 id=203 data-nosnippet>203</a>    }
-<a href=#204 id=204 data-nosnippet>204</a>}
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a><span class="doccomment">/// Static table provider for read-only snapshot access.
-<a href=#207 id=207 data-nosnippet>207</a>///
-<a href=#208 id=208 data-nosnippet>208</a>/// This provider holds a cached table instance and does not refresh metadata or support
-<a href=#209 id=209 data-nosnippet>209</a>/// write operations. Use this for consistent analytical queries, time-travel scenarios,
-<a href=#210 id=210 data-nosnippet>210</a>/// or when you want to avoid catalog overhead.
-<a href=#211 id=211 data-nosnippet>211</a>///
-<a href=#212 id=212 data-nosnippet>212</a>/// For catalog-backed tables with write support and automatic refresh, use
-<a href=#213 id=213 data-nosnippet>213</a>/// [`IcebergTableProvider`] instead.
-<a href=#214 id=214 data-nosnippet>214</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#215 id=215 data-nosnippet>215</a></span><span class="kw">pub struct </span>IcebergStaticTableProvider {
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// The static table instance (never refreshed)
-<a href=#217 id=217 data-nosnippet>217</a>    </span>table: Table,
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="doccomment">/// Optional snapshot ID for this static view
-<a href=#219 id=219 data-nosnippet>219</a>    </span>snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="doccomment">/// A reference-counted arrow `Schema`
-<a href=#221 id=221 data-nosnippet>221</a>    </span>schema: ArrowSchemaRef,
-<a href=#222 id=222 data-nosnippet>222</a>}
-<a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a><span class="kw">impl </span>IcebergStaticTableProvider {
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="doccomment">/// Creates a static provider from a table instance.
-<a href=#226 id=226 data-nosnippet>226</a>    ///
-<a href=#227 id=227 data-nosnippet>227</a>    /// Uses the table's current snapshot for all queries. Does not support write operations.
-<a href=#228 id=228 data-nosnippet>228</a>    </span><span class="kw">pub async fn </span>try_new_from_table(table: Table) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
-<a href=#230 id=230 data-nosnippet>230</a>        <span class="prelude-val">Ok</span>(IcebergStaticTableProvider {
-<a href=#231 id=231 data-nosnippet>231</a>            table,
-<a href=#232 id=232 data-nosnippet>232</a>            snapshot_id: <span class="prelude-val">None</span>,
-<a href=#233 id=233 data-nosnippet>233</a>            schema,
-<a href=#234 id=234 data-nosnippet>234</a>        })
-<a href=#235 id=235 data-nosnippet>235</a>    }
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">let </span>partition_spec = table.metadata().default_partition_spec();
+<a href=#171 id=171 data-nosnippet>171</a>
+<a href=#172 id=172 data-nosnippet>172</a>        <span class="comment">// Step 1: Project partition values for partitioned tables
+<a href=#173 id=173 data-nosnippet>173</a>        </span><span class="kw">let </span>plan_with_partition = <span class="kw">if </span>!partition_spec.is_unpartitioned() {
+<a href=#174 id=174 data-nosnippet>174</a>            project_with_partition(input, <span class="kw-2">&amp;</span>table)<span class="question-mark">?
+<a href=#175 id=175 data-nosnippet>175</a>        </span>} <span class="kw">else </span>{
+<a href=#176 id=176 data-nosnippet>176</a>            input
+<a href=#177 id=177 data-nosnippet>177</a>        };
+<a href=#178 id=178 data-nosnippet>178</a>
+<a href=#179 id=179 data-nosnippet>179</a>        <span class="comment">// Step 2: Repartition for parallel processing
+<a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">let </span>target_partitions =
+<a href=#181 id=181 data-nosnippet>181</a>            NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
+<a href=#182 id=182 data-nosnippet>182</a>                DataFusionError::Configuration(
+<a href=#183 id=183 data-nosnippet>183</a>                    <span class="string">"target_partitions must be greater than 0"</span>.to_string(),
+<a href=#184 id=184 data-nosnippet>184</a>                )
+<a href=#185 id=185 data-nosnippet>185</a>            })<span class="question-mark">?</span>;
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="kw">let </span>repartitioned_plan =
+<a href=#188 id=188 data-nosnippet>188</a>            repartition(plan_with_partition, table.metadata_ref(), target_partitions)<span class="question-mark">?</span>;
+<a href=#189 id=189 data-nosnippet>189</a>
+<a href=#190 id=190 data-nosnippet>190</a>        <span class="comment">// Apply sort node when it's not fanout mode
+<a href=#191 id=191 data-nosnippet>191</a>        </span><span class="kw">let </span>fanout_enabled = table
+<a href=#192 id=192 data-nosnippet>192</a>            .metadata()
+<a href=#193 id=193 data-nosnippet>193</a>            .properties()
+<a href=#194 id=194 data-nosnippet>194</a>            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
+<a href=#195 id=195 data-nosnippet>195</a>            .map(|value| {
+<a href=#196 id=196 data-nosnippet>196</a>                value
+<a href=#197 id=197 data-nosnippet>197</a>                    .parse::&lt;bool&gt;()
+<a href=#198 id=198 data-nosnippet>198</a>                    .map_err(|e| {
+<a href=#199 id=199 data-nosnippet>199</a>                        Error::new(
+<a href=#200 id=200 data-nosnippet>200</a>                            ErrorKind::DataInvalid,
+<a href=#201 id=201 data-nosnippet>201</a>                            <span class="macro">format!</span>(
+<a href=#202 id=202 data-nosnippet>202</a>                                <span class="string">"Invalid value for {}, expected 'true' or 'false'"</span>,
+<a href=#203 id=203 data-nosnippet>203</a>                                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
+<a href=#204 id=204 data-nosnippet>204</a>                            ),
+<a href=#205 id=205 data-nosnippet>205</a>                        )
+<a href=#206 id=206 data-nosnippet>206</a>                        .with_source(e)
+<a href=#207 id=207 data-nosnippet>207</a>                    })
+<a href=#208 id=208 data-nosnippet>208</a>                    .map_err(to_datafusion_error)
+<a href=#209 id=209 data-nosnippet>209</a>            })
+<a href=#210 id=210 data-nosnippet>210</a>            .transpose()<span class="question-mark">?
+<a href=#211 id=211 data-nosnippet>211</a>            </span>.unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>write_input = <span class="kw">if </span>fanout_enabled {
+<a href=#214 id=214 data-nosnippet>214</a>            repartitioned_plan
+<a href=#215 id=215 data-nosnippet>215</a>        } <span class="kw">else </span>{
+<a href=#216 id=216 data-nosnippet>216</a>            sort_by_partition(repartitioned_plan)<span class="question-mark">?
+<a href=#217 id=217 data-nosnippet>217</a>        </span>};
+<a href=#218 id=218 data-nosnippet>218</a>
+<a href=#219 id=219 data-nosnippet>219</a>        <span class="kw">let </span>write_plan = Arc::new(IcebergWriteExec::new(
+<a href=#220 id=220 data-nosnippet>220</a>            table.clone(),
+<a href=#221 id=221 data-nosnippet>221</a>            write_input,
+<a href=#222 id=222 data-nosnippet>222</a>            <span class="self">self</span>.schema.clone(),
+<a href=#223 id=223 data-nosnippet>223</a>        ));
+<a href=#224 id=224 data-nosnippet>224</a>
+<a href=#225 id=225 data-nosnippet>225</a>        <span class="comment">// Merge the outputs of write_plan into one so we can commit all files together
+<a href=#226 id=226 data-nosnippet>226</a>        </span><span class="kw">let </span>coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
+<a href=#227 id=227 data-nosnippet>227</a>
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="prelude-val">Ok</span>(Arc::new(IcebergCommitExec::new(
+<a href=#229 id=229 data-nosnippet>229</a>            table,
+<a href=#230 id=230 data-nosnippet>230</a>            <span class="self">self</span>.catalog.clone(),
+<a href=#231 id=231 data-nosnippet>231</a>            coalesce_partitions,
+<a href=#232 id=232 data-nosnippet>232</a>            <span class="self">self</span>.schema.clone(),
+<a href=#233 id=233 data-nosnippet>233</a>        )))
+<a href=#234 id=234 data-nosnippet>234</a>    }
+<a href=#235 id=235 data-nosnippet>235</a>}
 <a href=#236 id=236 data-nosnippet>236</a>
-<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// Creates a static provider for a specific table snapshot.
-<a href=#238 id=238 data-nosnippet>238</a>    ///
-<a href=#239 id=239 data-nosnippet>239</a>    /// Queries the specified snapshot for all operations. Useful for time-travel queries.
-<a href=#240 id=240 data-nosnippet>240</a>    /// Does not support write operations.
-<a href=#241 id=241 data-nosnippet>241</a>    </span><span class="kw">pub async fn </span>try_new_from_table_snapshot(table: Table, snapshot_id: i64) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">let </span>snapshot = table
-<a href=#243 id=243 data-nosnippet>243</a>            .metadata()
-<a href=#244 id=244 data-nosnippet>244</a>            .snapshot_by_id(snapshot_id)
-<a href=#245 id=245 data-nosnippet>245</a>            .ok_or_else(|| {
-<a href=#246 id=246 data-nosnippet>246</a>                Error::new(
-<a href=#247 id=247 data-nosnippet>247</a>                    ErrorKind::Unexpected,
-<a href=#248 id=248 data-nosnippet>248</a>                    <span class="macro">format!</span>(
-<a href=#249 id=249 data-nosnippet>249</a>                        <span class="string">"snapshot id {snapshot_id} not found in table {}"</span>,
-<a href=#250 id=250 data-nosnippet>250</a>                        table.identifier().name()
-<a href=#251 id=251 data-nosnippet>251</a>                    ),
-<a href=#252 id=252 data-nosnippet>252</a>                )
-<a href=#253 id=253 data-nosnippet>253</a>            })<span class="question-mark">?</span>;
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>table_schema = snapshot.schema(table.metadata())<span class="question-mark">?</span>;
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(<span class="kw-2">&amp;</span>table_schema)<span class="question-mark">?</span>);
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="prelude-val">Ok</span>(IcebergStaticTableProvider {
-<a href=#257 id=257 data-nosnippet>257</a>            table,
-<a href=#258 id=258 data-nosnippet>258</a>            snapshot_id: <span class="prelude-val">Some</span>(snapshot_id),
-<a href=#259 id=259 data-nosnippet>259</a>            schema,
-<a href=#260 id=260 data-nosnippet>260</a>        })
-<a href=#261 id=261 data-nosnippet>261</a>    }
-<a href=#262 id=262 data-nosnippet>262</a>}
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a><span class="attr">#[async_trait]
-<a href=#265 id=265 data-nosnippet>265</a></span><span class="kw">impl </span>TableProvider <span class="kw">for </span>IcebergStaticTableProvider {
-<a href=#266 id=266 data-nosnippet>266</a>    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="self">self
-<a href=#268 id=268 data-nosnippet>268</a>    </span>}
-<a href=#269 id=269 data-nosnippet>269</a>
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowSchemaRef {
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="self">self</span>.schema.clone()
-<a href=#272 id=272 data-nosnippet>272</a>    }
-<a href=#273 id=273 data-nosnippet>273</a>
-<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">fn </span>table_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableType {
-<a href=#275 id=275 data-nosnippet>275</a>        TableType::Base
-<a href=#276 id=276 data-nosnippet>276</a>    }
-<a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">async fn </span>scan(
-<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#280 id=280 data-nosnippet>280</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
-<a href=#281 id=281 data-nosnippet>281</a>        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
-<a href=#282 id=282 data-nosnippet>282</a>        filters: <span class="kw-2">&amp;</span>[Expr],
-<a href=#283 id=283 data-nosnippet>283</a>        _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#284 id=284 data-nosnippet>284</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
-<a href=#285 id=285 data-nosnippet>285</a>        <span class="comment">// Use cached table (no refresh)
-<a href=#286 id=286 data-nosnippet>286</a>        </span><span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="self">self</span>.table.clone(),
-<a href=#288 id=288 data-nosnippet>288</a>            <span class="self">self</span>.snapshot_id,
-<a href=#289 id=289 data-nosnippet>289</a>            <span class="self">self</span>.schema.clone(),
-<a href=#290 id=290 data-nosnippet>290</a>            projection,
-<a href=#291 id=291 data-nosnippet>291</a>            filters,
-<a href=#292 id=292 data-nosnippet>292</a>        )))
-<a href=#293 id=293 data-nosnippet>293</a>    }
+<a href=#237 id=237 data-nosnippet>237</a><span class="doccomment">/// Static table provider for read-only snapshot access.
+<a href=#238 id=238 data-nosnippet>238</a>///
+<a href=#239 id=239 data-nosnippet>239</a>/// This provider holds a cached table instance and does not refresh metadata or support
+<a href=#240 id=240 data-nosnippet>240</a>/// write operations. Use this for consistent analytical queries, time-travel scenarios,
+<a href=#241 id=241 data-nosnippet>241</a>/// or when you want to avoid catalog overhead.
+<a href=#242 id=242 data-nosnippet>242</a>///
+<a href=#243 id=243 data-nosnippet>243</a>/// For catalog-backed tables with write support and automatic refresh, use
+<a href=#244 id=244 data-nosnippet>244</a>/// [`IcebergTableProvider`] instead.
+<a href=#245 id=245 data-nosnippet>245</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#246 id=246 data-nosnippet>246</a></span><span class="kw">pub struct </span>IcebergStaticTableProvider {
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="doccomment">/// The static table instance (never refreshed)
+<a href=#248 id=248 data-nosnippet>248</a>    </span>table: Table,
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// Optional snapshot ID for this static view
+<a href=#250 id=250 data-nosnippet>250</a>    </span>snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="doccomment">/// A reference-counted arrow `Schema`
+<a href=#252 id=252 data-nosnippet>252</a>    </span>schema: ArrowSchemaRef,
+<a href=#253 id=253 data-nosnippet>253</a>}
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a><span class="kw">impl </span>IcebergStaticTableProvider {
+<a href=#256 id=256 data-nosnippet>256</a>    <span class="doccomment">/// Creates a static provider from a table instance.
+<a href=#257 id=257 data-nosnippet>257</a>    ///
+<a href=#258 id=258 data-nosnippet>258</a>    /// Uses the table's current snapshot for all queries. Does not support write operations.
+<a href=#259 id=259 data-nosnippet>259</a>    </span><span class="kw">pub async fn </span>try_new_from_table(table: Table) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="prelude-val">Ok</span>(IcebergStaticTableProvider {
+<a href=#262 id=262 data-nosnippet>262</a>            table,
+<a href=#263 id=263 data-nosnippet>263</a>            snapshot_id: <span class="prelude-val">None</span>,
+<a href=#264 id=264 data-nosnippet>264</a>            schema,
+<a href=#265 id=265 data-nosnippet>265</a>        })
+<a href=#266 id=266 data-nosnippet>266</a>    }
+<a href=#267 id=267 data-nosnippet>267</a>
+<a href=#268 id=268 data-nosnippet>268</a>    <span class="doccomment">/// Creates a static provider for a specific table snapshot.
+<a href=#269 id=269 data-nosnippet>269</a>    ///
+<a href=#270 id=270 data-nosnippet>270</a>    /// Queries the specified snapshot for all operations. Useful for time-travel queries.
+<a href=#271 id=271 data-nosnippet>271</a>    /// Does not support write operations.
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">pub async fn </span>try_new_from_table_snapshot(table: Table, snapshot_id: i64) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>snapshot = table
+<a href=#274 id=274 data-nosnippet>274</a>            .metadata()
+<a href=#275 id=275 data-nosnippet>275</a>            .snapshot_by_id(snapshot_id)
+<a href=#276 id=276 data-nosnippet>276</a>            .ok_or_else(|| {
+<a href=#277 id=277 data-nosnippet>277</a>                Error::new(
+<a href=#278 id=278 data-nosnippet>278</a>                    ErrorKind::Unexpected,
+<a href=#279 id=279 data-nosnippet>279</a>                    <span class="macro">format!</span>(
+<a href=#280 id=280 data-nosnippet>280</a>                        <span class="string">"snapshot id {snapshot_id} not found in table {}"</span>,
+<a href=#281 id=281 data-nosnippet>281</a>                        table.identifier().name()
+<a href=#282 id=282 data-nosnippet>282</a>                    ),
+<a href=#283 id=283 data-nosnippet>283</a>                )
+<a href=#284 id=284 data-nosnippet>284</a>            })<span class="question-mark">?</span>;
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw">let </span>table_schema = snapshot.schema(table.metadata())<span class="question-mark">?</span>;
+<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(<span class="kw-2">&amp;</span>table_schema)<span class="question-mark">?</span>);
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="prelude-val">Ok</span>(IcebergStaticTableProvider {
+<a href=#288 id=288 data-nosnippet>288</a>            table,
+<a href=#289 id=289 data-nosnippet>289</a>            snapshot_id: <span class="prelude-val">Some</span>(snapshot_id),
+<a href=#290 id=290 data-nosnippet>290</a>            schema,
+<a href=#291 id=291 data-nosnippet>291</a>        })
+<a href=#292 id=292 data-nosnippet>292</a>    }
+<a href=#293 id=293 data-nosnippet>293</a>}
 <a href=#294 id=294 data-nosnippet>294</a>
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">fn </span>supports_filters_pushdown(
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#297 id=297 data-nosnippet>297</a>        filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
-<a href=#298 id=298 data-nosnippet>298</a>    ) -&gt; DFResult&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt; {
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="comment">// Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
-<a href=#300 id=300 data-nosnippet>300</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[TableProviderFilterPushDown::Inexact; filters.len()])
-<a href=#301 id=301 data-nosnippet>301</a>    }
-<a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">async fn </span>insert_into(
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#305 id=305 data-nosnippet>305</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
-<a href=#306 id=306 data-nosnippet>306</a>        _input: Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;,
-<a href=#307 id=307 data-nosnippet>307</a>        _insert_op: InsertOp,
-<a href=#308 id=308 data-nosnippet>308</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="prelude-val">Err</span>(to_datafusion_error(Error::new(
-<a href=#310 id=310 data-nosnippet>310</a>            ErrorKind::FeatureUnsupported,
-<a href=#311 id=311 data-nosnippet>311</a>            <span class="string">"Write operations are not supported on IcebergStaticTableProvider. \
-<a href=#312 id=312 data-nosnippet>312</a>             Use IcebergTableProvider with a catalog for write support."
-<a href=#313 id=313 data-nosnippet>313</a>                </span>.to_string(),
-<a href=#314 id=314 data-nosnippet>314</a>        )))
-<a href=#315 id=315 data-nosnippet>315</a>    }
-<a href=#316 id=316 data-nosnippet>316</a>}
-<a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a><span class="attr">#[cfg(test)]
-<a href=#319 id=319 data-nosnippet>319</a></span><span class="kw">mod </span>tests {
-<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">use </span>std::collections::HashMap;
-<a href=#321 id=321 data-nosnippet>321</a>    <span class="kw">use </span>std::sync::Arc;
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="kw">use </span>datafusion::common::Column;
-<a href=#324 id=324 data-nosnippet>324</a>    <span class="kw">use </span>datafusion::prelude::SessionContext;
-<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">use </span>iceberg::io::FileIO;
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">use </span>iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">use </span>iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">use </span>iceberg::table::{StaticTable, Table};
-<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">use </span>iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
-<a href=#330 id=330 data-nosnippet>330</a>    <span class="kw">use </span>tempfile::TempDir;
-<a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#295 id=295 data-nosnippet>295</a><span class="attr">#[async_trait]
+<a href=#296 id=296 data-nosnippet>296</a></span><span class="kw">impl </span>TableProvider <span class="kw">for </span>IcebergStaticTableProvider {
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">fn </span>as_any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">dyn </span>Any {
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="self">self
+<a href=#299 id=299 data-nosnippet>299</a>    </span>}
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowSchemaRef {
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="self">self</span>.schema.clone()
+<a href=#303 id=303 data-nosnippet>303</a>    }
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">fn </span>table_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableType {
+<a href=#306 id=306 data-nosnippet>306</a>        TableType::Base
+<a href=#307 id=307 data-nosnippet>307</a>    }
+<a href=#308 id=308 data-nosnippet>308</a>
+<a href=#309 id=309 data-nosnippet>309</a>    <span class="kw">async fn </span>scan(
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#311 id=311 data-nosnippet>311</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
+<a href=#312 id=312 data-nosnippet>312</a>        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+<a href=#313 id=313 data-nosnippet>313</a>        filters: <span class="kw-2">&amp;</span>[Expr],
+<a href=#314 id=314 data-nosnippet>314</a>        _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#315 id=315 data-nosnippet>315</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="comment">// Use cached table (no refresh)
+<a href=#317 id=317 data-nosnippet>317</a>        </span><span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
+<a href=#318 id=318 data-nosnippet>318</a>            <span class="self">self</span>.table.clone(),
+<a href=#319 id=319 data-nosnippet>319</a>            <span class="self">self</span>.snapshot_id,
+<a href=#320 id=320 data-nosnippet>320</a>            <span class="self">self</span>.schema.clone(),
+<a href=#321 id=321 data-nosnippet>321</a>            projection,
+<a href=#322 id=322 data-nosnippet>322</a>            filters,
+<a href=#323 id=323 data-nosnippet>323</a>        )))
+<a href=#324 id=324 data-nosnippet>324</a>    }
+<a href=#325 id=325 data-nosnippet>325</a>
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">fn </span>supports_filters_pushdown(
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#328 id=328 data-nosnippet>328</a>        filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
+<a href=#329 id=329 data-nosnippet>329</a>    ) -&gt; DFResult&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt; {
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="comment">// Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
+<a href=#331 id=331 data-nosnippet>331</a>        </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[TableProviderFilterPushDown::Inexact; filters.len()])
+<a href=#332 id=332 data-nosnippet>332</a>    }
 <a href=#333 id=333 data-nosnippet>333</a>
-<a href=#334 id=334 data-nosnippet>334</a>    <span class="kw">async fn </span>get_test_table_from_metadata_file() -&gt; Table {
-<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
-<a href=#337 id=337 data-nosnippet>337</a>            <span class="string">"{}/tests/test_data/{}"</span>,
-<a href=#338 id=338 data-nosnippet>338</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#339 id=339 data-nosnippet>339</a>            metadata_file_name
-<a href=#340 id=340 data-nosnippet>340</a>        );
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>metadata_file_path)
-<a href=#342 id=342 data-nosnippet>342</a>            .unwrap()
-<a href=#343 id=343 data-nosnippet>343</a>            .build()
-<a href=#344 id=344 data-nosnippet>344</a>            .unwrap();
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="kw">let </span>static_table =
-<a href=#347 id=347 data-nosnippet>347</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
-<a href=#348 id=348 data-nosnippet>348</a>                .<span class="kw">await
-<a href=#349 id=349 data-nosnippet>349</a>                </span>.unwrap();
-<a href=#350 id=350 data-nosnippet>350</a>        static_table.into_table()
-<a href=#351 id=351 data-nosnippet>351</a>    }
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">async fn </span>get_test_catalog_and_table() -&gt; (Arc&lt;<span class="kw">dyn </span>Catalog&gt;, NamespaceIdent, String, TempDir) {
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">let </span>warehouse_path = temp_dir.path().to_str().unwrap().to_string();
-<a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">let </span>catalog = MemoryCatalogBuilder::default()
-<a href=#358 id=358 data-nosnippet>358</a>            .load(
-<a href=#359 id=359 data-nosnippet>359</a>                <span class="string">"memory"</span>,
-<a href=#360 id=360 data-nosnippet>360</a>                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
-<a href=#361 id=361 data-nosnippet>361</a>            )
-<a href=#362 id=362 data-nosnippet>362</a>            .<span class="kw">await
-<a href=#363 id=363 data-nosnippet>363</a>            </span>.unwrap();
-<a href=#364 id=364 data-nosnippet>364</a>
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_ns"</span>.to_string());
-<a href=#366 id=366 data-nosnippet>366</a>        catalog
-<a href=#367 id=367 data-nosnippet>367</a>            .create_namespace(<span class="kw-2">&amp;</span>namespace, HashMap::new())
-<a href=#368 id=368 data-nosnippet>368</a>            .<span class="kw">await
-<a href=#369 id=369 data-nosnippet>369</a>            </span>.unwrap();
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>schema = Schema::builder()
-<a href=#372 id=372 data-nosnippet>372</a>            .with_schema_id(<span class="number">0</span>)
-<a href=#373 id=373 data-nosnippet>373</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#374 id=374 data-nosnippet>374</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#375 id=375 data-nosnippet>375</a>                NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#376 id=376 data-nosnippet>376</a>            ])
-<a href=#377 id=377 data-nosnippet>377</a>            .build()
-<a href=#378 id=378 data-nosnippet>378</a>            .unwrap();
-<a href=#379 id=379 data-nosnippet>379</a>
-<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
-<a href=#381 id=381 data-nosnippet>381</a>            .name(<span class="string">"test_table"</span>.to_string())
-<a href=#382 id=382 data-nosnippet>382</a>            .location(<span class="macro">format!</span>(<span class="string">"{warehouse_path}/test_table"</span>))
-<a href=#383 id=383 data-nosnippet>383</a>            .schema(schema)
-<a href=#384 id=384 data-nosnippet>384</a>            .properties(HashMap::new())
-<a href=#385 id=385 data-nosnippet>385</a>            .build();
-<a href=#386 id=386 data-nosnippet>386</a>
-<a href=#387 id=387 data-nosnippet>387</a>        catalog
-<a href=#388 id=388 data-nosnippet>388</a>            .create_table(<span class="kw-2">&amp;</span>namespace, table_creation)
-<a href=#389 id=389 data-nosnippet>389</a>            .<span class="kw">await
-<a href=#390 id=390 data-nosnippet>390</a>            </span>.unwrap();
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a>        (
-<a href=#393 id=393 data-nosnippet>393</a>            Arc::new(catalog),
-<a href=#394 id=394 data-nosnippet>394</a>            namespace,
-<a href=#395 id=395 data-nosnippet>395</a>            <span class="string">"test_table"</span>.to_string(),
-<a href=#396 id=396 data-nosnippet>396</a>            temp_dir,
-<a href=#397 id=397 data-nosnippet>397</a>        )
-<a href=#398 id=398 data-nosnippet>398</a>    }
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>    <span class="comment">// Tests for IcebergStaticTableProvider
-<a href=#401 id=401 data-nosnippet>401</a>
-<a href=#402 id=402 data-nosnippet>402</a>    </span><span class="attr">#[tokio::test]
-<a href=#403 id=403 data-nosnippet>403</a>    </span><span class="kw">async fn </span>test_static_provider_from_table() {
-<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
-<a href=#406 id=406 data-nosnippet>406</a>            .<span class="kw">await
-<a href=#407 id=407 data-nosnippet>407</a>            </span>.unwrap();
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#409 id=409 data-nosnippet>409</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+<a href=#334 id=334 data-nosnippet>334</a>    <span class="kw">async fn </span>insert_into(
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#336 id=336 data-nosnippet>336</a>        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
+<a href=#337 id=337 data-nosnippet>337</a>        _input: Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;,
+<a href=#338 id=338 data-nosnippet>338</a>        _insert_op: InsertOp,
+<a href=#339 id=339 data-nosnippet>339</a>    ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="prelude-val">Err</span>(to_datafusion_error(Error::new(
+<a href=#341 id=341 data-nosnippet>341</a>            ErrorKind::FeatureUnsupported,
+<a href=#342 id=342 data-nosnippet>342</a>            <span class="string">"Write operations are not supported on IcebergStaticTableProvider. \
+<a href=#343 id=343 data-nosnippet>343</a>             Use IcebergTableProvider with a catalog for write support."
+<a href=#344 id=344 data-nosnippet>344</a>                </span>.to_string(),
+<a href=#345 id=345 data-nosnippet>345</a>        )))
+<a href=#346 id=346 data-nosnippet>346</a>    }
+<a href=#347 id=347 data-nosnippet>347</a>}
+<a href=#348 id=348 data-nosnippet>348</a>
+<a href=#349 id=349 data-nosnippet>349</a><span class="attr">#[cfg(test)]
+<a href=#350 id=350 data-nosnippet>350</a></span><span class="kw">mod </span>tests {
+<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">use </span>std::collections::HashMap;
+<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">use </span>std::sync::Arc;
+<a href=#353 id=353 data-nosnippet>353</a>
+<a href=#354 id=354 data-nosnippet>354</a>    <span class="kw">use </span>datafusion::common::Column;
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="kw">use </span>datafusion::physical_plan::ExecutionPlan;
+<a href=#356 id=356 data-nosnippet>356</a>    <span class="kw">use </span>datafusion::prelude::SessionContext;
+<a href=#357 id=357 data-nosnippet>357</a>    <span class="kw">use </span>iceberg::io::FileIO;
+<a href=#358 id=358 data-nosnippet>358</a>    <span class="kw">use </span>iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">use </span>iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="kw">use </span>iceberg::table::{StaticTable, Table};
+<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">use </span>iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+<a href=#362 id=362 data-nosnippet>362</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#363 id=363 data-nosnippet>363</a>
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">async fn </span>get_test_table_from_metadata_file() -&gt; Table {
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
+<a href=#369 id=369 data-nosnippet>369</a>            <span class="string">"{}/tests/test_data/{}"</span>,
+<a href=#370 id=370 data-nosnippet>370</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#371 id=371 data-nosnippet>371</a>            metadata_file_name
+<a href=#372 id=372 data-nosnippet>372</a>        );
+<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>metadata_file_path)
+<a href=#374 id=374 data-nosnippet>374</a>            .unwrap()
+<a href=#375 id=375 data-nosnippet>375</a>            .build()
+<a href=#376 id=376 data-nosnippet>376</a>            .unwrap();
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>static_table =
+<a href=#379 id=379 data-nosnippet>379</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
+<a href=#380 id=380 data-nosnippet>380</a>                .<span class="kw">await
+<a href=#381 id=381 data-nosnippet>381</a>                </span>.unwrap();
+<a href=#382 id=382 data-nosnippet>382</a>        static_table.into_table()
+<a href=#383 id=383 data-nosnippet>383</a>    }
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>    <span class="kw">async fn </span>get_test_catalog_and_table() -&gt; (Arc&lt;<span class="kw">dyn </span>Catalog&gt;, NamespaceIdent, String, TempDir) {
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">let </span>warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>catalog = MemoryCatalogBuilder::default()
+<a href=#390 id=390 data-nosnippet>390</a>            .load(
+<a href=#391 id=391 data-nosnippet>391</a>                <span class="string">"memory"</span>,
+<a href=#392 id=392 data-nosnippet>392</a>                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+<a href=#393 id=393 data-nosnippet>393</a>            )
+<a href=#394 id=394 data-nosnippet>394</a>            .<span class="kw">await
+<a href=#395 id=395 data-nosnippet>395</a>            </span>.unwrap();
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_ns"</span>.to_string());
+<a href=#398 id=398 data-nosnippet>398</a>        catalog
+<a href=#399 id=399 data-nosnippet>399</a>            .create_namespace(<span class="kw-2">&amp;</span>namespace, HashMap::new())
+<a href=#400 id=400 data-nosnippet>400</a>            .<span class="kw">await
+<a href=#401 id=401 data-nosnippet>401</a>            </span>.unwrap();
+<a href=#402 id=402 data-nosnippet>402</a>
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="kw">let </span>schema = Schema::builder()
+<a href=#404 id=404 data-nosnippet>404</a>            .with_schema_id(<span class="number">0</span>)
+<a href=#405 id=405 data-nosnippet>405</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#406 id=406 data-nosnippet>406</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#407 id=407 data-nosnippet>407</a>                NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#408 id=408 data-nosnippet>408</a>            ])
+<a href=#409 id=409 data-nosnippet>409</a>            .build()
 <a href=#410 id=410 data-nosnippet>410</a>            .unwrap();
-<a href=#411 id=411 data-nosnippet>411</a>        <span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM mytable"</span>).<span class="kw">await</span>.unwrap();
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">let </span>df_schema = df.schema();
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>df_columns = df_schema.fields();
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="macro">assert_eq!</span>(df_columns.len(), <span class="number">3</span>);
-<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">let </span>x_column = df_columns.first().unwrap();
-<a href=#416 id=416 data-nosnippet>416</a>        <span class="kw">let </span>column_data = <span class="macro">format!</span>(
-<a href=#417 id=417 data-nosnippet>417</a>            <span class="string">"{:?}:{:?}"</span>,
-<a href=#418 id=418 data-nosnippet>418</a>            x_column.name(),
-<a href=#419 id=419 data-nosnippet>419</a>            x_column.data_type().to_string()
-<a href=#420 id=420 data-nosnippet>420</a>        );
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="macro">assert_eq!</span>(column_data, <span class="string">"\"x\":\"Int64\""</span>);
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>has_column = df_schema.has_column(<span class="kw-2">&amp;</span>Column::from_name(<span class="string">"z"</span>));
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="macro">assert!</span>(has_column);
-<a href=#424 id=424 data-nosnippet>424</a>    }
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a>    <span class="attr">#[tokio::test]
-<a href=#427 id=427 data-nosnippet>427</a>    </span><span class="kw">async fn </span>test_static_provider_from_snapshot() {
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
-<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
-<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>table_provider =
-<a href=#431 id=431 data-nosnippet>431</a>            IcebergStaticTableProvider::try_new_from_table_snapshot(table.clone(), snapshot_id)
-<a href=#432 id=432 data-nosnippet>432</a>                .<span class="kw">await
-<a href=#433 id=433 data-nosnippet>433</a>                </span>.unwrap();
-<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#435 id=435 data-nosnippet>435</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
-<a href=#436 id=436 data-nosnippet>436</a>            .unwrap();
-<a href=#437 id=437 data-nosnippet>437</a>        <span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM mytable"</span>).<span class="kw">await</span>.unwrap();
-<a href=#438 id=438 data-nosnippet>438</a>        <span class="kw">let </span>df_schema = df.schema();
-<a href=#439 id=439 data-nosnippet>439</a>        <span class="kw">let </span>df_columns = df_schema.fields();
-<a href=#440 id=440 data-nosnippet>440</a>        <span class="macro">assert_eq!</span>(df_columns.len(), <span class="number">3</span>);
-<a href=#441 id=441 data-nosnippet>441</a>        <span class="kw">let </span>x_column = df_columns.first().unwrap();
-<a href=#442 id=442 data-nosnippet>442</a>        <span class="kw">let </span>column_data = <span class="macro">format!</span>(
-<a href=#443 id=443 data-nosnippet>443</a>            <span class="string">"{:?}:{:?}"</span>,
-<a href=#444 id=444 data-nosnippet>444</a>            x_column.name(),
-<a href=#445 id=445 data-nosnippet>445</a>            x_column.data_type().to_string()
-<a href=#446 id=446 data-nosnippet>446</a>        );
-<a href=#447 id=447 data-nosnippet>447</a>        <span class="macro">assert_eq!</span>(column_data, <span class="string">"\"x\":\"Int64\""</span>);
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span>has_column = df_schema.has_column(<span class="kw-2">&amp;</span>Column::from_name(<span class="string">"z"</span>));
-<a href=#449 id=449 data-nosnippet>449</a>        <span class="macro">assert!</span>(has_column);
-<a href=#450 id=450 data-nosnippet>450</a>    }
-<a href=#451 id=451 data-nosnippet>451</a>
-<a href=#452 id=452 data-nosnippet>452</a>    <span class="attr">#[tokio::test]
-<a href=#453 id=453 data-nosnippet>453</a>    </span><span class="kw">async fn </span>test_static_provider_rejects_writes() {
-<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
-<a href=#455 id=455 data-nosnippet>455</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
-<a href=#456 id=456 data-nosnippet>456</a>            .<span class="kw">await
-<a href=#457 id=457 data-nosnippet>457</a>            </span>.unwrap();
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#459 id=459 data-nosnippet>459</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
-<a href=#460 id=460 data-nosnippet>460</a>            .unwrap();
-<a href=#461 id=461 data-nosnippet>461</a>
-<a href=#462 id=462 data-nosnippet>462</a>        <span class="comment">// Attempt to insert into the static provider should fail
-<a href=#463 id=463 data-nosnippet>463</a>        </span><span class="kw">let </span>result = ctx.sql(<span class="string">"INSERT INTO mytable VALUES (1, 2, 3)"</span>).<span class="kw">await</span>;
-<a href=#464 id=464 data-nosnippet>464</a>
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="comment">// The error should occur during planning or execution
-<a href=#466 id=466 data-nosnippet>466</a>        // We expect an error indicating write operations are not supported
-<a href=#467 id=467 data-nosnippet>467</a>        </span><span class="macro">assert!</span>(
-<a href=#468 id=468 data-nosnippet>468</a>            result.is_err() || {
-<a href=#469 id=469 data-nosnippet>469</a>                <span class="kw">let </span>df = result.unwrap();
-<a href=#470 id=470 data-nosnippet>470</a>                df.collect().<span class="kw">await</span>.is_err()
-<a href=#471 id=471 data-nosnippet>471</a>            }
-<a href=#472 id=472 data-nosnippet>472</a>        );
-<a href=#473 id=473 data-nosnippet>473</a>    }
-<a href=#474 id=474 data-nosnippet>474</a>
-<a href=#475 id=475 data-nosnippet>475</a>    <span class="attr">#[tokio::test]
-<a href=#476 id=476 data-nosnippet>476</a>    </span><span class="kw">async fn </span>test_static_provider_scan() {
-<a href=#477 id=477 data-nosnippet>477</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
-<a href=#478 id=478 data-nosnippet>478</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
-<a href=#479 id=479 data-nosnippet>479</a>            .<span class="kw">await
-<a href=#480 id=480 data-nosnippet>480</a>            </span>.unwrap();
-<a href=#481 id=481 data-nosnippet>481</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#482 id=482 data-nosnippet>482</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
-<a href=#483 id=483 data-nosnippet>483</a>            .unwrap();
-<a href=#484 id=484 data-nosnippet>484</a>
-<a href=#485 id=485 data-nosnippet>485</a>        <span class="comment">// Test that scan operations work correctly
-<a href=#486 id=486 data-nosnippet>486</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT count(*) FROM mytable"</span>).<span class="kw">await</span>.unwrap();
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>;
-<a href=#488 id=488 data-nosnippet>488</a>        <span class="macro">assert!</span>(physical_plan.is_ok());
-<a href=#489 id=489 data-nosnippet>489</a>    }
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>    <span class="comment">// Tests for IcebergTableProvider
-<a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>    </span><span class="attr">#[tokio::test]
-<a href=#494 id=494 data-nosnippet>494</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_creation() {
-<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
+<a href=#413 id=413 data-nosnippet>413</a>            .name(<span class="string">"test_table"</span>.to_string())
+<a href=#414 id=414 data-nosnippet>414</a>            .location(<span class="macro">format!</span>(<span class="string">"{warehouse_path}/test_table"</span>))
+<a href=#415 id=415 data-nosnippet>415</a>            .schema(schema)
+<a href=#416 id=416 data-nosnippet>416</a>            .properties(HashMap::new())
+<a href=#417 id=417 data-nosnippet>417</a>            .build();
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>        catalog
+<a href=#420 id=420 data-nosnippet>420</a>            .create_table(<span class="kw-2">&amp;</span>namespace, table_creation)
+<a href=#421 id=421 data-nosnippet>421</a>            .<span class="kw">await
+<a href=#422 id=422 data-nosnippet>422</a>            </span>.unwrap();
+<a href=#423 id=423 data-nosnippet>423</a>
+<a href=#424 id=424 data-nosnippet>424</a>        (
+<a href=#425 id=425 data-nosnippet>425</a>            Arc::new(catalog),
+<a href=#426 id=426 data-nosnippet>426</a>            namespace,
+<a href=#427 id=427 data-nosnippet>427</a>            <span class="string">"test_table"</span>.to_string(),
+<a href=#428 id=428 data-nosnippet>428</a>            temp_dir,
+<a href=#429 id=429 data-nosnippet>429</a>        )
+<a href=#430 id=430 data-nosnippet>430</a>    }
+<a href=#431 id=431 data-nosnippet>431</a>
+<a href=#432 id=432 data-nosnippet>432</a>    <span class="comment">// Tests for IcebergStaticTableProvider
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a>    </span><span class="attr">#[tokio::test]
+<a href=#435 id=435 data-nosnippet>435</a>    </span><span class="kw">async fn </span>test_static_provider_from_table() {
+<a href=#436 id=436 data-nosnippet>436</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
+<a href=#437 id=437 data-nosnippet>437</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+<a href=#438 id=438 data-nosnippet>438</a>            .<span class="kw">await
+<a href=#439 id=439 data-nosnippet>439</a>            </span>.unwrap();
+<a href=#440 id=440 data-nosnippet>440</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#441 id=441 data-nosnippet>441</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+<a href=#442 id=442 data-nosnippet>442</a>            .unwrap();
+<a href=#443 id=443 data-nosnippet>443</a>        <span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM mytable"</span>).<span class="kw">await</span>.unwrap();
+<a href=#444 id=444 data-nosnippet>444</a>        <span class="kw">let </span>df_schema = df.schema();
+<a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">let </span>df_columns = df_schema.fields();
+<a href=#446 id=446 data-nosnippet>446</a>        <span class="macro">assert_eq!</span>(df_columns.len(), <span class="number">3</span>);
+<a href=#447 id=447 data-nosnippet>447</a>        <span class="kw">let </span>x_column = df_columns.first().unwrap();
+<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span>column_data = <span class="macro">format!</span>(
+<a href=#449 id=449 data-nosnippet>449</a>            <span class="string">"{:?}:{:?}"</span>,
+<a href=#450 id=450 data-nosnippet>450</a>            x_column.name(),
+<a href=#451 id=451 data-nosnippet>451</a>            x_column.data_type().to_string()
+<a href=#452 id=452 data-nosnippet>452</a>        );
+<a href=#453 id=453 data-nosnippet>453</a>        <span class="macro">assert_eq!</span>(column_data, <span class="string">"\"x\":\"Int64\""</span>);
+<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">let </span>has_column = df_schema.has_column(<span class="kw-2">&amp;</span>Column::from_name(<span class="string">"z"</span>));
+<a href=#455 id=455 data-nosnippet>455</a>        <span class="macro">assert!</span>(has_column);
+<a href=#456 id=456 data-nosnippet>456</a>    }
+<a href=#457 id=457 data-nosnippet>457</a>
+<a href=#458 id=458 data-nosnippet>458</a>    <span class="attr">#[tokio::test]
+<a href=#459 id=459 data-nosnippet>459</a>    </span><span class="kw">async fn </span>test_static_provider_from_snapshot() {
+<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
+<a href=#461 id=461 data-nosnippet>461</a>        <span class="kw">let </span>snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw">let </span>table_provider =
+<a href=#463 id=463 data-nosnippet>463</a>            IcebergStaticTableProvider::try_new_from_table_snapshot(table.clone(), snapshot_id)
+<a href=#464 id=464 data-nosnippet>464</a>                .<span class="kw">await
+<a href=#465 id=465 data-nosnippet>465</a>                </span>.unwrap();
+<a href=#466 id=466 data-nosnippet>466</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#467 id=467 data-nosnippet>467</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+<a href=#468 id=468 data-nosnippet>468</a>            .unwrap();
+<a href=#469 id=469 data-nosnippet>469</a>        <span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM mytable"</span>).<span class="kw">await</span>.unwrap();
+<a href=#470 id=470 data-nosnippet>470</a>        <span class="kw">let </span>df_schema = df.schema();
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="kw">let </span>df_columns = df_schema.fields();
+<a href=#472 id=472 data-nosnippet>472</a>        <span class="macro">assert_eq!</span>(df_columns.len(), <span class="number">3</span>);
+<a href=#473 id=473 data-nosnippet>473</a>        <span class="kw">let </span>x_column = df_columns.first().unwrap();
+<a href=#474 id=474 data-nosnippet>474</a>        <span class="kw">let </span>column_data = <span class="macro">format!</span>(
+<a href=#475 id=475 data-nosnippet>475</a>            <span class="string">"{:?}:{:?}"</span>,
+<a href=#476 id=476 data-nosnippet>476</a>            x_column.name(),
+<a href=#477 id=477 data-nosnippet>477</a>            x_column.data_type().to_string()
+<a href=#478 id=478 data-nosnippet>478</a>        );
+<a href=#479 id=479 data-nosnippet>479</a>        <span class="macro">assert_eq!</span>(column_data, <span class="string">"\"x\":\"Int64\""</span>);
+<a href=#480 id=480 data-nosnippet>480</a>        <span class="kw">let </span>has_column = df_schema.has_column(<span class="kw-2">&amp;</span>Column::from_name(<span class="string">"z"</span>));
+<a href=#481 id=481 data-nosnippet>481</a>        <span class="macro">assert!</span>(has_column);
+<a href=#482 id=482 data-nosnippet>482</a>    }
+<a href=#483 id=483 data-nosnippet>483</a>
+<a href=#484 id=484 data-nosnippet>484</a>    <span class="attr">#[tokio::test]
+<a href=#485 id=485 data-nosnippet>485</a>    </span><span class="kw">async fn </span>test_static_provider_rejects_writes() {
+<a href=#486 id=486 data-nosnippet>486</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
+<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+<a href=#488 id=488 data-nosnippet>488</a>            .<span class="kw">await
+<a href=#489 id=489 data-nosnippet>489</a>            </span>.unwrap();
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#491 id=491 data-nosnippet>491</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+<a href=#492 id=492 data-nosnippet>492</a>            .unwrap();
+<a href=#493 id=493 data-nosnippet>493</a>
+<a href=#494 id=494 data-nosnippet>494</a>        <span class="comment">// Attempt to insert into the static provider should fail
+<a href=#495 id=495 data-nosnippet>495</a>        </span><span class="kw">let </span>result = ctx.sql(<span class="string">"INSERT INTO mytable VALUES (1, 2, 3)"</span>).<span class="kw">await</span>;
 <a href=#496 id=496 data-nosnippet>496</a>
-<a href=#497 id=497 data-nosnippet>497</a>        <span class="comment">// Test creating a catalog-backed provider
-<a href=#498 id=498 data-nosnippet>498</a>        </span><span class="kw">let </span>provider =
-<a href=#499 id=499 data-nosnippet>499</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-<a href=#500 id=500 data-nosnippet>500</a>                .<span class="kw">await
-<a href=#501 id=501 data-nosnippet>501</a>                </span>.unwrap();
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>        <span class="comment">// Verify the schema is loaded correctly
-<a href=#504 id=504 data-nosnippet>504</a>        </span><span class="kw">let </span>schema = provider.schema();
-<a href=#505 id=505 data-nosnippet>505</a>        <span class="macro">assert_eq!</span>(schema.fields().len(), <span class="number">2</span>);
-<a href=#506 id=506 data-nosnippet>506</a>        <span class="macro">assert_eq!</span>(schema.field(<span class="number">0</span>).name(), <span class="string">"id"</span>);
-<a href=#507 id=507 data-nosnippet>507</a>        <span class="macro">assert_eq!</span>(schema.field(<span class="number">1</span>).name(), <span class="string">"name"</span>);
-<a href=#508 id=508 data-nosnippet>508</a>    }
-<a href=#509 id=509 data-nosnippet>509</a>
-<a href=#510 id=510 data-nosnippet>510</a>    <span class="attr">#[tokio::test]
-<a href=#511 id=511 data-nosnippet>511</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_scan() {
-<a href=#512 id=512 data-nosnippet>512</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
-<a href=#513 id=513 data-nosnippet>513</a>
-<a href=#514 id=514 data-nosnippet>514</a>        <span class="kw">let </span>provider =
-<a href=#515 id=515 data-nosnippet>515</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-<a href=#516 id=516 data-nosnippet>516</a>                .<span class="kw">await
-<a href=#517 id=517 data-nosnippet>517</a>                </span>.unwrap();
-<a href=#518 id=518 data-nosnippet>518</a>
-<a href=#519 id=519 data-nosnippet>519</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#520 id=520 data-nosnippet>520</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
-<a href=#521 id=521 data-nosnippet>521</a>            .unwrap();
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="comment">// The error should occur during planning or execution
+<a href=#498 id=498 data-nosnippet>498</a>        // We expect an error indicating write operations are not supported
+<a href=#499 id=499 data-nosnippet>499</a>        </span><span class="macro">assert!</span>(
+<a href=#500 id=500 data-nosnippet>500</a>            result.is_err() || {
+<a href=#501 id=501 data-nosnippet>501</a>                <span class="kw">let </span>df = result.unwrap();
+<a href=#502 id=502 data-nosnippet>502</a>                df.collect().<span class="kw">await</span>.is_err()
+<a href=#503 id=503 data-nosnippet>503</a>            }
+<a href=#504 id=504 data-nosnippet>504</a>        );
+<a href=#505 id=505 data-nosnippet>505</a>    }
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a>    <span class="attr">#[tokio::test]
+<a href=#508 id=508 data-nosnippet>508</a>    </span><span class="kw">async fn </span>test_static_provider_scan() {
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+<a href=#511 id=511 data-nosnippet>511</a>            .<span class="kw">await
+<a href=#512 id=512 data-nosnippet>512</a>            </span>.unwrap();
+<a href=#513 id=513 data-nosnippet>513</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#514 id=514 data-nosnippet>514</a>        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+<a href=#515 id=515 data-nosnippet>515</a>            .unwrap();
+<a href=#516 id=516 data-nosnippet>516</a>
+<a href=#517 id=517 data-nosnippet>517</a>        <span class="comment">// Test that scan operations work correctly
+<a href=#518 id=518 data-nosnippet>518</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT count(*) FROM mytable"</span>).<span class="kw">await</span>.unwrap();
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>;
+<a href=#520 id=520 data-nosnippet>520</a>        <span class="macro">assert!</span>(physical_plan.is_ok());
+<a href=#521 id=521 data-nosnippet>521</a>    }
 <a href=#522 id=522 data-nosnippet>522</a>
-<a href=#523 id=523 data-nosnippet>523</a>        <span class="comment">// Test that scan operations work correctly
-<a href=#524 id=524 data-nosnippet>524</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM test_table"</span>).<span class="kw">await</span>.unwrap();
-<a href=#525 id=525 data-nosnippet>525</a>
-<a href=#526 id=526 data-nosnippet>526</a>        <span class="comment">// Verify the schema in the query result
-<a href=#527 id=527 data-nosnippet>527</a>        </span><span class="kw">let </span>df_schema = df.schema();
-<a href=#528 id=528 data-nosnippet>528</a>        <span class="macro">assert_eq!</span>(df_schema.fields().len(), <span class="number">2</span>);
-<a href=#529 id=529 data-nosnippet>529</a>        <span class="macro">assert_eq!</span>(df_schema.field(<span class="number">0</span>).name(), <span class="string">"id"</span>);
-<a href=#530 id=530 data-nosnippet>530</a>        <span class="macro">assert_eq!</span>(df_schema.field(<span class="number">1</span>).name(), <span class="string">"name"</span>);
-<a href=#531 id=531 data-nosnippet>531</a>
-<a href=#532 id=532 data-nosnippet>532</a>        <span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>;
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="macro">assert!</span>(physical_plan.is_ok());
-<a href=#534 id=534 data-nosnippet>534</a>    }
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>    <span class="attr">#[tokio::test]
-<a href=#537 id=537 data-nosnippet>537</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_insert() {
-<a href=#538 id=538 data-nosnippet>538</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
-<a href=#539 id=539 data-nosnippet>539</a>
-<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span>provider =
-<a href=#541 id=541 data-nosnippet>541</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-<a href=#542 id=542 data-nosnippet>542</a>                .<span class="kw">await
-<a href=#543 id=543 data-nosnippet>543</a>                </span>.unwrap();
-<a href=#544 id=544 data-nosnippet>544</a>
-<a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#546 id=546 data-nosnippet>546</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
-<a href=#547 id=547 data-nosnippet>547</a>            .unwrap();
-<a href=#548 id=548 data-nosnippet>548</a>
-<a href=#549 id=549 data-nosnippet>549</a>        <span class="comment">// Test that insert operations work correctly
-<a href=#550 id=550 data-nosnippet>550</a>        </span><span class="kw">let </span>result = ctx.sql(<span class="string">"INSERT INTO test_table VALUES (1, 'test')"</span>).<span class="kw">await</span>;
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="comment">// Insert should succeed (or at least not fail during planning)
-<a href=#553 id=553 data-nosnippet>553</a>        </span><span class="macro">assert!</span>(result.is_ok());
+<a href=#523 id=523 data-nosnippet>523</a>    <span class="comment">// Tests for IcebergTableProvider
+<a href=#524 id=524 data-nosnippet>524</a>
+<a href=#525 id=525 data-nosnippet>525</a>    </span><span class="attr">#[tokio::test]
+<a href=#526 id=526 data-nosnippet>526</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_creation() {
+<a href=#527 id=527 data-nosnippet>527</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
+<a href=#528 id=528 data-nosnippet>528</a>
+<a href=#529 id=529 data-nosnippet>529</a>        <span class="comment">// Test creating a catalog-backed provider
+<a href=#530 id=530 data-nosnippet>530</a>        </span><span class="kw">let </span>provider =
+<a href=#531 id=531 data-nosnippet>531</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#532 id=532 data-nosnippet>532</a>                .<span class="kw">await
+<a href=#533 id=533 data-nosnippet>533</a>                </span>.unwrap();
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="comment">// Verify the schema is loaded correctly
+<a href=#536 id=536 data-nosnippet>536</a>        </span><span class="kw">let </span>schema = provider.schema();
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="macro">assert_eq!</span>(schema.fields().len(), <span class="number">2</span>);
+<a href=#538 id=538 data-nosnippet>538</a>        <span class="macro">assert_eq!</span>(schema.field(<span class="number">0</span>).name(), <span class="string">"id"</span>);
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="macro">assert_eq!</span>(schema.field(<span class="number">1</span>).name(), <span class="string">"name"</span>);
+<a href=#540 id=540 data-nosnippet>540</a>    }
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a>    <span class="attr">#[tokio::test]
+<a href=#543 id=543 data-nosnippet>543</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_scan() {
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
+<a href=#545 id=545 data-nosnippet>545</a>
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="kw">let </span>provider =
+<a href=#547 id=547 data-nosnippet>547</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#548 id=548 data-nosnippet>548</a>                .<span class="kw">await
+<a href=#549 id=549 data-nosnippet>549</a>                </span>.unwrap();
+<a href=#550 id=550 data-nosnippet>550</a>
+<a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#552 id=552 data-nosnippet>552</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
+<a href=#553 id=553 data-nosnippet>553</a>            .unwrap();
 <a href=#554 id=554 data-nosnippet>554</a>
-<a href=#555 id=555 data-nosnippet>555</a>        <span class="comment">// Try to execute the insert plan
-<a href=#556 id=556 data-nosnippet>556</a>        </span><span class="kw">let </span>df = result.unwrap();
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw">let </span>execution_result = df.collect().<span class="kw">await</span>;
-<a href=#558 id=558 data-nosnippet>558</a>
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="comment">// The execution should succeed
-<a href=#560 id=560 data-nosnippet>560</a>        </span><span class="macro">assert!</span>(execution_result.is_ok());
-<a href=#561 id=561 data-nosnippet>561</a>    }
-<a href=#562 id=562 data-nosnippet>562</a>
-<a href=#563 id=563 data-nosnippet>563</a>    <span class="attr">#[tokio::test]
-<a href=#564 id=564 data-nosnippet>564</a>    </span><span class="kw">async fn </span>test_physical_input_schema_consistent_with_logical_input_schema() {
-<a href=#565 id=565 data-nosnippet>565</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
-<a href=#566 id=566 data-nosnippet>566</a>
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="kw">let </span>provider =
-<a href=#568 id=568 data-nosnippet>568</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-<a href=#569 id=569 data-nosnippet>569</a>                .<span class="kw">await
-<a href=#570 id=570 data-nosnippet>570</a>                </span>.unwrap();
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="comment">// Test that scan operations work correctly
+<a href=#556 id=556 data-nosnippet>556</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM test_table"</span>).<span class="kw">await</span>.unwrap();
+<a href=#557 id=557 data-nosnippet>557</a>
+<a href=#558 id=558 data-nosnippet>558</a>        <span class="comment">// Verify the schema in the query result
+<a href=#559 id=559 data-nosnippet>559</a>        </span><span class="kw">let </span>df_schema = df.schema();
+<a href=#560 id=560 data-nosnippet>560</a>        <span class="macro">assert_eq!</span>(df_schema.fields().len(), <span class="number">2</span>);
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="macro">assert_eq!</span>(df_schema.field(<span class="number">0</span>).name(), <span class="string">"id"</span>);
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="macro">assert_eq!</span>(df_schema.field(<span class="number">1</span>).name(), <span class="string">"name"</span>);
+<a href=#563 id=563 data-nosnippet>563</a>
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>;
+<a href=#565 id=565 data-nosnippet>565</a>        <span class="macro">assert!</span>(physical_plan.is_ok());
+<a href=#566 id=566 data-nosnippet>566</a>    }
+<a href=#567 id=567 data-nosnippet>567</a>
+<a href=#568 id=568 data-nosnippet>568</a>    <span class="attr">#[tokio::test]
+<a href=#569 id=569 data-nosnippet>569</a>    </span><span class="kw">async fn </span>test_catalog_backed_provider_insert() {
+<a href=#570 id=570 data-nosnippet>570</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
 <a href=#571 id=571 data-nosnippet>571</a>
-<a href=#572 id=572 data-nosnippet>572</a>        <span class="kw">let </span>ctx = SessionContext::new();
-<a href=#573 id=573 data-nosnippet>573</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
-<a href=#574 id=574 data-nosnippet>574</a>            .unwrap();
-<a href=#575 id=575 data-nosnippet>575</a>
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="comment">// Create a query plan
-<a href=#577 id=577 data-nosnippet>577</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT id, name FROM test_table"</span>).<span class="kw">await</span>.unwrap();
-<a href=#578 id=578 data-nosnippet>578</a>
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="comment">// Get logical schema before consuming df
-<a href=#580 id=580 data-nosnippet>580</a>        </span><span class="kw">let </span>logical_schema = df.schema().clone();
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="comment">// Get physical plan (this consumes df)
-<a href=#583 id=583 data-nosnippet>583</a>        </span><span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>.unwrap();
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">let </span>physical_schema = physical_plan.schema();
-<a href=#585 id=585 data-nosnippet>585</a>
-<a href=#586 id=586 data-nosnippet>586</a>        <span class="comment">// Verify that logical and physical schemas are consistent
-<a href=#587 id=587 data-nosnippet>587</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#588 id=588 data-nosnippet>588</a>            logical_schema.fields().len(),
-<a href=#589 id=589 data-nosnippet>589</a>            physical_schema.fields().len()
-<a href=#590 id=590 data-nosnippet>590</a>        );
-<a href=#591 id=591 data-nosnippet>591</a>
-<a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">for </span>(logical_field, physical_field) <span class="kw">in </span>logical_schema
-<a href=#593 id=593 data-nosnippet>593</a>            .fields()
-<a href=#594 id=594 data-nosnippet>594</a>            .iter()
-<a href=#595 id=595 data-nosnippet>595</a>            .zip(physical_schema.fields().iter())
-<a href=#596 id=596 data-nosnippet>596</a>        {
-<a href=#597 id=597 data-nosnippet>597</a>            <span class="macro">assert_eq!</span>(logical_field.name(), physical_field.name());
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="macro">assert_eq!</span>(logical_field.data_type(), physical_field.data_type());
-<a href=#599 id=599 data-nosnippet>599</a>        }
-<a href=#600 id=600 data-nosnippet>600</a>    }
-<a href=#601 id=601 data-nosnippet>601</a>}</code></pre></div></section></main></body></html>
+<a href=#572 id=572 data-nosnippet>572</a>        <span class="kw">let </span>provider =
+<a href=#573 id=573 data-nosnippet>573</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#574 id=574 data-nosnippet>574</a>                .<span class="kw">await
+<a href=#575 id=575 data-nosnippet>575</a>                </span>.unwrap();
+<a href=#576 id=576 data-nosnippet>576</a>
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#578 id=578 data-nosnippet>578</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
+<a href=#579 id=579 data-nosnippet>579</a>            .unwrap();
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>        <span class="comment">// Test that insert operations work correctly
+<a href=#582 id=582 data-nosnippet>582</a>        </span><span class="kw">let </span>result = ctx.sql(<span class="string">"INSERT INTO test_table VALUES (1, 'test')"</span>).<span class="kw">await</span>;
+<a href=#583 id=583 data-nosnippet>583</a>
+<a href=#584 id=584 data-nosnippet>584</a>        <span class="comment">// Insert should succeed (or at least not fail during planning)
+<a href=#585 id=585 data-nosnippet>585</a>        </span><span class="macro">assert!</span>(result.is_ok());
+<a href=#586 id=586 data-nosnippet>586</a>
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="comment">// Try to execute the insert plan
+<a href=#588 id=588 data-nosnippet>588</a>        </span><span class="kw">let </span>df = result.unwrap();
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">let </span>execution_result = df.collect().<span class="kw">await</span>;
+<a href=#590 id=590 data-nosnippet>590</a>
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="comment">// The execution should succeed
+<a href=#592 id=592 data-nosnippet>592</a>        </span><span class="macro">assert!</span>(execution_result.is_ok());
+<a href=#593 id=593 data-nosnippet>593</a>    }
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>    <span class="attr">#[tokio::test]
+<a href=#596 id=596 data-nosnippet>596</a>    </span><span class="kw">async fn </span>test_physical_input_schema_consistent_with_logical_input_schema() {
+<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().<span class="kw">await</span>;
+<a href=#598 id=598 data-nosnippet>598</a>
+<a href=#599 id=599 data-nosnippet>599</a>        <span class="kw">let </span>provider =
+<a href=#600 id=600 data-nosnippet>600</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#601 id=601 data-nosnippet>601</a>                .<span class="kw">await
+<a href=#602 id=602 data-nosnippet>602</a>                </span>.unwrap();
+<a href=#603 id=603 data-nosnippet>603</a>
+<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#605 id=605 data-nosnippet>605</a>        ctx.register_table(<span class="string">"test_table"</span>, Arc::new(provider))
+<a href=#606 id=606 data-nosnippet>606</a>            .unwrap();
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="comment">// Create a query plan
+<a href=#609 id=609 data-nosnippet>609</a>        </span><span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT id, name FROM test_table"</span>).<span class="kw">await</span>.unwrap();
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="comment">// Get logical schema before consuming df
+<a href=#612 id=612 data-nosnippet>612</a>        </span><span class="kw">let </span>logical_schema = df.schema().clone();
+<a href=#613 id=613 data-nosnippet>613</a>
+<a href=#614 id=614 data-nosnippet>614</a>        <span class="comment">// Get physical plan (this consumes df)
+<a href=#615 id=615 data-nosnippet>615</a>        </span><span class="kw">let </span>physical_plan = df.create_physical_plan().<span class="kw">await</span>.unwrap();
+<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span>physical_schema = physical_plan.schema();
+<a href=#617 id=617 data-nosnippet>617</a>
+<a href=#618 id=618 data-nosnippet>618</a>        <span class="comment">// Verify that logical and physical schemas are consistent
+<a href=#619 id=619 data-nosnippet>619</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#620 id=620 data-nosnippet>620</a>            logical_schema.fields().len(),
+<a href=#621 id=621 data-nosnippet>621</a>            physical_schema.fields().len()
+<a href=#622 id=622 data-nosnippet>622</a>        );
+<a href=#623 id=623 data-nosnippet>623</a>
+<a href=#624 id=624 data-nosnippet>624</a>        <span class="kw">for </span>(logical_field, physical_field) <span class="kw">in </span>logical_schema
+<a href=#625 id=625 data-nosnippet>625</a>            .fields()
+<a href=#626 id=626 data-nosnippet>626</a>            .iter()
+<a href=#627 id=627 data-nosnippet>627</a>            .zip(physical_schema.fields().iter())
+<a href=#628 id=628 data-nosnippet>628</a>        {
+<a href=#629 id=629 data-nosnippet>629</a>            <span class="macro">assert_eq!</span>(logical_field.name(), physical_field.name());
+<a href=#630 id=630 data-nosnippet>630</a>            <span class="macro">assert_eq!</span>(logical_field.data_type(), physical_field.data_type());
+<a href=#631 id=631 data-nosnippet>631</a>        }
+<a href=#632 id=632 data-nosnippet>632</a>    }
+<a href=#633 id=633 data-nosnippet>633</a>
+<a href=#634 id=634 data-nosnippet>634</a>    <span class="kw">async fn </span>get_partitioned_test_catalog_and_table(
+<a href=#635 id=635 data-nosnippet>635</a>        fanout_enabled: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#636 id=636 data-nosnippet>636</a>    ) -&gt; (Arc&lt;<span class="kw">dyn </span>Catalog&gt;, NamespaceIdent, String, TempDir) {
+<a href=#637 id=637 data-nosnippet>637</a>        <span class="kw">use </span>iceberg::spec::{Transform, UnboundPartitionSpec};
+<a href=#638 id=638 data-nosnippet>638</a>
+<a href=#639 id=639 data-nosnippet>639</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+<a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">let </span>warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+<a href=#641 id=641 data-nosnippet>641</a>
+<a href=#642 id=642 data-nosnippet>642</a>        <span class="kw">let </span>catalog = MemoryCatalogBuilder::default()
+<a href=#643 id=643 data-nosnippet>643</a>            .load(
+<a href=#644 id=644 data-nosnippet>644</a>                <span class="string">"memory"</span>,
+<a href=#645 id=645 data-nosnippet>645</a>                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+<a href=#646 id=646 data-nosnippet>646</a>            )
+<a href=#647 id=647 data-nosnippet>647</a>            .<span class="kw">await
+<a href=#648 id=648 data-nosnippet>648</a>            </span>.unwrap();
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_ns"</span>.to_string());
+<a href=#651 id=651 data-nosnippet>651</a>        catalog
+<a href=#652 id=652 data-nosnippet>652</a>            .create_namespace(<span class="kw-2">&amp;</span>namespace, HashMap::new())
+<a href=#653 id=653 data-nosnippet>653</a>            .<span class="kw">await
+<a href=#654 id=654 data-nosnippet>654</a>            </span>.unwrap();
+<a href=#655 id=655 data-nosnippet>655</a>
+<a href=#656 id=656 data-nosnippet>656</a>        <span class="kw">let </span>schema = Schema::builder()
+<a href=#657 id=657 data-nosnippet>657</a>            .with_schema_id(<span class="number">0</span>)
+<a href=#658 id=658 data-nosnippet>658</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#659 id=659 data-nosnippet>659</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#660 id=660 data-nosnippet>660</a>                NestedField::required(<span class="number">2</span>, <span class="string">"category"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#661 id=661 data-nosnippet>661</a>            ])
+<a href=#662 id=662 data-nosnippet>662</a>            .build()
+<a href=#663 id=663 data-nosnippet>663</a>            .unwrap();
+<a href=#664 id=664 data-nosnippet>664</a>
+<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>partition_spec = UnboundPartitionSpec::builder()
+<a href=#666 id=666 data-nosnippet>666</a>            .with_spec_id(<span class="number">0</span>)
+<a href=#667 id=667 data-nosnippet>667</a>            .add_partition_field(<span class="number">2</span>, <span class="string">"category"</span>, Transform::Identity)
+<a href=#668 id=668 data-nosnippet>668</a>            .unwrap()
+<a href=#669 id=669 data-nosnippet>669</a>            .build();
+<a href=#670 id=670 data-nosnippet>670</a>
+<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span><span class="kw-2">mut </span>properties = HashMap::new();
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(enabled) = fanout_enabled {
+<a href=#673 id=673 data-nosnippet>673</a>            properties.insert(
+<a href=#674 id=674 data-nosnippet>674</a>                iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
+<a href=#675 id=675 data-nosnippet>675</a>                    .to_string(),
+<a href=#676 id=676 data-nosnippet>676</a>                enabled.to_string(),
+<a href=#677 id=677 data-nosnippet>677</a>            );
+<a href=#678 id=678 data-nosnippet>678</a>        }
+<a href=#679 id=679 data-nosnippet>679</a>
+<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
+<a href=#681 id=681 data-nosnippet>681</a>            .name(<span class="string">"partitioned_table"</span>.to_string())
+<a href=#682 id=682 data-nosnippet>682</a>            .location(<span class="macro">format!</span>(<span class="string">"{warehouse_path}/partitioned_table"</span>))
+<a href=#683 id=683 data-nosnippet>683</a>            .schema(schema)
+<a href=#684 id=684 data-nosnippet>684</a>            .partition_spec(partition_spec)
+<a href=#685 id=685 data-nosnippet>685</a>            .properties(properties)
+<a href=#686 id=686 data-nosnippet>686</a>            .build();
+<a href=#687 id=687 data-nosnippet>687</a>
+<a href=#688 id=688 data-nosnippet>688</a>        catalog
+<a href=#689 id=689 data-nosnippet>689</a>            .create_table(<span class="kw-2">&amp;</span>namespace, table_creation)
+<a href=#690 id=690 data-nosnippet>690</a>            .<span class="kw">await
+<a href=#691 id=691 data-nosnippet>691</a>            </span>.unwrap();
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>        (
+<a href=#694 id=694 data-nosnippet>694</a>            Arc::new(catalog),
+<a href=#695 id=695 data-nosnippet>695</a>            namespace,
+<a href=#696 id=696 data-nosnippet>696</a>            <span class="string">"partitioned_table"</span>.to_string(),
+<a href=#697 id=697 data-nosnippet>697</a>            temp_dir,
+<a href=#698 id=698 data-nosnippet>698</a>        )
+<a href=#699 id=699 data-nosnippet>699</a>    }
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>    <span class="doccomment">/// Helper to check if a plan contains a SortExec node
+<a href=#702 id=702 data-nosnippet>702</a>    </span><span class="kw">fn </span>plan_contains_sort(plan: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;) -&gt; bool {
+<a href=#703 id=703 data-nosnippet>703</a>        <span class="kw">if </span>plan.name() == <span class="string">"SortExec" </span>{
+<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#705 id=705 data-nosnippet>705</a>        }
+<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">for </span>child <span class="kw">in </span>plan.children() {
+<a href=#707 id=707 data-nosnippet>707</a>            <span class="kw">if </span>plan_contains_sort(child) {
+<a href=#708 id=708 data-nosnippet>708</a>                <span class="kw">return </span><span class="bool-val">true</span>;
+<a href=#709 id=709 data-nosnippet>709</a>            }
+<a href=#710 id=710 data-nosnippet>710</a>        }
+<a href=#711 id=711 data-nosnippet>711</a>        <span class="bool-val">false
+<a href=#712 id=712 data-nosnippet>712</a>    </span>}
+<a href=#713 id=713 data-nosnippet>713</a>
+<a href=#714 id=714 data-nosnippet>714</a>    <span class="attr">#[tokio::test]
+<a href=#715 id=715 data-nosnippet>715</a>    </span><span class="kw">async fn </span>test_insert_plan_fanout_enabled_no_sort() {
+<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">use </span>datafusion::datasource::TableProvider;
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="kw">use </span>datafusion::logical_expr::dml::InsertOp;
+<a href=#718 id=718 data-nosnippet>718</a>        <span class="kw">use </span>datafusion::physical_plan::empty::EmptyExec;
+<a href=#719 id=719 data-nosnippet>719</a>
+<a href=#720 id=720 data-nosnippet>720</a>        <span class="comment">// When fanout is enabled (default), no sort node should be added
+<a href=#721 id=721 data-nosnippet>721</a>        </span><span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) =
+<a href=#722 id=722 data-nosnippet>722</a>            get_partitioned_test_catalog_and_table(<span class="prelude-val">Some</span>(<span class="bool-val">true</span>)).<span class="kw">await</span>;
+<a href=#723 id=723 data-nosnippet>723</a>
+<a href=#724 id=724 data-nosnippet>724</a>        <span class="kw">let </span>provider =
+<a href=#725 id=725 data-nosnippet>725</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#726 id=726 data-nosnippet>726</a>                .<span class="kw">await
+<a href=#727 id=727 data-nosnippet>727</a>                </span>.unwrap();
+<a href=#728 id=728 data-nosnippet>728</a>
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>input_schema = provider.schema();
+<a href=#731 id=731 data-nosnippet>731</a>        <span class="kw">let </span>input = Arc::new(EmptyExec::new(input_schema)) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;;
+<a href=#732 id=732 data-nosnippet>732</a>
+<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">let </span>state = ctx.state();
+<a href=#734 id=734 data-nosnippet>734</a>        <span class="kw">let </span>insert_plan = provider
+<a href=#735 id=735 data-nosnippet>735</a>            .insert_into(<span class="kw-2">&amp;</span>state, input, InsertOp::Append)
+<a href=#736 id=736 data-nosnippet>736</a>            .<span class="kw">await
+<a href=#737 id=737 data-nosnippet>737</a>            </span>.unwrap();
+<a href=#738 id=738 data-nosnippet>738</a>
+<a href=#739 id=739 data-nosnippet>739</a>        <span class="comment">// With fanout enabled, there should be no SortExec in the plan
+<a href=#740 id=740 data-nosnippet>740</a>        </span><span class="macro">assert!</span>(
+<a href=#741 id=741 data-nosnippet>741</a>            !plan_contains_sort(<span class="kw-2">&amp;</span>insert_plan),
+<a href=#742 id=742 data-nosnippet>742</a>            <span class="string">"Plan should NOT contain SortExec when fanout is enabled"
+<a href=#743 id=743 data-nosnippet>743</a>        </span>);
+<a href=#744 id=744 data-nosnippet>744</a>    }
+<a href=#745 id=745 data-nosnippet>745</a>
+<a href=#746 id=746 data-nosnippet>746</a>    <span class="attr">#[tokio::test]
+<a href=#747 id=747 data-nosnippet>747</a>    </span><span class="kw">async fn </span>test_insert_plan_fanout_disabled_has_sort() {
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">use </span>datafusion::datasource::TableProvider;
+<a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">use </span>datafusion::logical_expr::dml::InsertOp;
+<a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">use </span>datafusion::physical_plan::empty::EmptyExec;
+<a href=#751 id=751 data-nosnippet>751</a>
+<a href=#752 id=752 data-nosnippet>752</a>        <span class="comment">// When fanout is disabled, a sort node should be added
+<a href=#753 id=753 data-nosnippet>753</a>        </span><span class="kw">let </span>(catalog, namespace, table_name, _temp_dir) =
+<a href=#754 id=754 data-nosnippet>754</a>            get_partitioned_test_catalog_and_table(<span class="prelude-val">Some</span>(<span class="bool-val">false</span>)).<span class="kw">await</span>;
+<a href=#755 id=755 data-nosnippet>755</a>
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">let </span>provider =
+<a href=#757 id=757 data-nosnippet>757</a>            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+<a href=#758 id=758 data-nosnippet>758</a>                .<span class="kw">await
+<a href=#759 id=759 data-nosnippet>759</a>                </span>.unwrap();
+<a href=#760 id=760 data-nosnippet>760</a>
+<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">let </span>ctx = SessionContext::new();
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>input_schema = provider.schema();
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">let </span>input = Arc::new(EmptyExec::new(input_schema)) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;;
+<a href=#764 id=764 data-nosnippet>764</a>
+<a href=#765 id=765 data-nosnippet>765</a>        <span class="kw">let </span>state = ctx.state();
+<a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">let </span>insert_plan = provider
+<a href=#767 id=767 data-nosnippet>767</a>            .insert_into(<span class="kw-2">&amp;</span>state, input, InsertOp::Append)
+<a href=#768 id=768 data-nosnippet>768</a>            .<span class="kw">await
+<a href=#769 id=769 data-nosnippet>769</a>            </span>.unwrap();
+<a href=#770 id=770 data-nosnippet>770</a>
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="comment">// With fanout disabled, there should be a SortExec in the plan
+<a href=#772 id=772 data-nosnippet>772</a>        </span><span class="macro">assert!</span>(
+<a href=#773 id=773 data-nosnippet>773</a>            plan_contains_sort(<span class="kw-2">&amp;</span>insert_plan),
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="string">"Plan should contain SortExec when fanout is disabled"
+<a href=#775 id=775 data-nosnippet>775</a>        </span>);
+<a href=#776 id=776 data-nosnippet>776</a>    }
+<a href=#777 id=777 data-nosnippet>777</a>}</code></pre></div></section></main></body></html>
