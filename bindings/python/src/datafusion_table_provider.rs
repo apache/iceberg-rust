@@ -19,6 +19,9 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
+use datafusion::prelude::SessionContext;
+use datafusion_execution::TaskContextProvider;
+use datafusion_ffi::execution::FFI_TaskContextProvider;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use iceberg::TableIdent;
 use iceberg::io::FileIO;
@@ -87,7 +90,17 @@ impl PyIcebergDataFusionTable {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let capsule_name = CString::new("datafusion_table_provider").unwrap();
 
-        let ffi_provider = FFI_TableProvider::new(self.inner.clone(), false, Some(runtime()));
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider: Arc<dyn TaskContextProvider> = ctx;
+        let ffi_task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+
+        let ffi_provider = FFI_TableProvider::new(
+            self.inner.clone(),
+            false,
+            Some(runtime()),
+            ffi_task_ctx_provider,
+            None,
+        );
 
         PyCapsule::new(py, ffi_provider, Some(capsule_name))
     }
