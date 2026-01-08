@@ -53,13 +53,7 @@ mod tests {
     async fn get_file_io_gcs() -> FileIO {
         set_up();
 
-        let ip = DOCKER_COMPOSE_ENV
-            .read()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .get_container_ip("gcs-server");
-        let addr = SocketAddr::new(ip, FAKE_GCS_PORT);
+        let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), FAKE_GCS_PORT);
 
         // A bucket must exist for FileIO
         create_bucket(FAKE_GCS_BUCKET, addr.to_string())
