@@ -38,3 +38,6 @@ default information_schema routines VIEW
 default information_schema schemata VIEW
 default information_schema tables VIEW
 default information_schema views VIEW
+default parent_ns.child_ns t BASE TABLE
+default parent_ns.child_ns t$manifests BASE TABLE
+default parent_ns.child_ns t$snapshots BASE TABLE
