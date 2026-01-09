@@ -21,12 +21,15 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
-use datafusion::common::Result as DFResult;
+use datafusion::common::{DataFusionError, Result as DFResult};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ColumnarValue, ExecutionPlan};
-use iceberg::arrow::{PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator};
+use iceberg::arrow::{
+    PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator, schema_to_arrow_schema,
+    strip_metadata_from_schema,
+};
 use iceberg::spec::PartitionSpec;
 use iceberg::table::Table;
 
@@ -58,8 +61,24 @@ pub fn project_with_partition(
     }
 
     let input_schema = input.schema();
-    // TODO: Validate that input_schema matches the Iceberg table schema.
-    // See: https://github.com/apache/iceberg-rust/issues/1752
+
+    // Validate that input_schema matches the Iceberg table schema
+    // Strip metadata from both schemas before comparison to ignore metadata differences
+    let expected_arrow_schema =
+        schema_to_arrow_schema(table_schema.as_ref()).map_err(to_datafusion_error)?;
+    let input_schema_cleaned =
+        strip_metadata_from_schema(&input_schema).map_err(to_datafusion_error)?;
+    let expected_schema_cleaned =
+        strip_metadata_from_schema(&expected_arrow_schema).map_err(to_datafusion_error)?;
+
+    if input_schema_cleaned != expected_schema_cleaned {
+        return Err(DataFusionError::Plan(format!(
+            "Input schema does not match Iceberg table schema.\n\
+             Expected schema: {expected_schema_cleaned}\n\
+             Input schema: {input_schema_cleaned}"
+        )));
+    }
+
     let calculator =
         PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
             .map_err(to_datafusion_error)?;
@@ -172,7 +191,7 @@ impl std::hash::Hash for PartitionExpr {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
-    use datafusion::arrow::datatypes::{Field, Fields};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields};
     use datafusion::physical_plan::empty::EmptyExec;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Transform, Type};
 
@@ -376,5 +395,196 @@ mod tests {
 
         assert_eq!(city_partition.value(0), "New York");
         assert_eq!(city_partition.value(1), "Los Angeles");
+    }
+
+    #[test]
+    fn test_schema_validation_matching_schemas() {
+        use iceberg::TableIdent;
+        use iceberg::io::FileIO;
+        use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+            .add_partition_field("id", "id_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = iceberg::spec::SortOrder::builder()
+            .build(&table_schema)
+            .unwrap();
+
+        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
+            (*table_schema).clone(),
+            partition_spec,
+            sort_order,
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let table_metadata = table_metadata_builder.build().unwrap();
+
+        // Create Arrow schema matching the table schema
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(arrow_schema));
+
+        let table = iceberg::table::Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .metadata_location("/test/metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        let result = project_with_partition(input, &table);
+        assert!(result.is_ok(), "Schema validation should pass");
+    }
+
+    #[test]
+    fn test_schema_validation_mismatched_schemas() {
+        use iceberg::TableIdent;
+        use iceberg::io::FileIO;
+        use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+            .add_partition_field("id", "id_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = iceberg::spec::SortOrder::builder()
+            .build(&table_schema)
+            .unwrap();
+
+        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
+            (*table_schema).clone(),
+            partition_spec,
+            sort_order,
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let table_metadata = table_metadata_builder.build().unwrap();
+
+        // Create Arrow schema with different field name (mismatched)
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("different_name", DataType::Utf8, false), // Wrong field name
+        ]));
+
+        let input = Arc::new(EmptyExec::new(arrow_schema));
+
+        let table = iceberg::table::Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .metadata_location("/test/metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        let result = project_with_partition(input, &table);
+        assert!(
+            result.is_err(),
+            "Schema validation should fail for mismatched schemas"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Input schema does not match Iceberg table schema")
+        );
+    }
+
+    #[test]
+    fn test_schema_validation_with_metadata_differences() {
+        use std::collections::HashMap;
+
+        use iceberg::TableIdent;
+        use iceberg::io::FileIO;
+        use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+            .add_partition_field("id", "id_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = iceberg::spec::SortOrder::builder()
+            .build(&table_schema)
+            .unwrap();
+
+        let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
+            (*table_schema).clone(),
+            partition_spec,
+            sort_order,
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let table_metadata = table_metadata_builder.build().unwrap();
+
+        // Create Arrow schema with metadata (should be ignored in comparison)
+        let mut metadata = HashMap::new();
+        metadata.insert("extra".to_string(), "metadata".to_string());
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(metadata.clone()),
+            Field::new("name", DataType::Utf8, false).with_metadata(metadata),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(arrow_schema));
+
+        let table = iceberg::table::Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .metadata_location("/test/metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        let result = project_with_partition(input, &table);
+        assert!(
+            result.is_ok(),
+            "Schema validation should pass even with metadata differences"
+        );
     }
 }
