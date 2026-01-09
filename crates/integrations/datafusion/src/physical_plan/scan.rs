@@ -51,6 +51,8 @@ pub struct IcebergTableScan {
     projection: Option<Vec<String>>,
     /// Filters to apply to the table scan
     predicates: Option<Predicate>,
+    /// Optional limit on the number of rows to return
+    limit: Option<usize>,
 }
 
 impl IcebergTableScan {
@@ -61,6 +63,7 @@ impl IcebergTableScan {
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
+        limit: Option<usize>,
     ) -> Self {
         let output_schema = match projection {
             None => schema.clone(),
@@ -76,6 +79,7 @@ impl IcebergTableScan {
             plan_properties,
             projection,
             predicates,
+            limit,
         }
     }
 
@@ -93,6 +97,10 @@ impl IcebergTableScan {
 
     pub fn predicates(&self) -> Option<&Predicate> {
         self.predicates.as_ref()
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
     }
 
     /// Computes [`PlanProperties`] used in query optimization.
@@ -146,9 +154,29 @@ impl ExecutionPlan for IcebergTableScan {
         );
         let stream = futures::stream::once(fut).try_flatten();
 
+        // Apply limit if specified
+        let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
+            if let Some(limit) = self.limit {
+                let mut remaining = limit;
+                Box::pin(stream.try_filter_map(move |batch| {
+                    futures::future::ready(if remaining == 0 {
+                        Ok(None)
+                    } else if batch.num_rows() <= remaining {
+                        remaining -= batch.num_rows();
+                        Ok(Some(batch))
+                    } else {
+                        let limited_batch = batch.slice(0, remaining);
+                        remaining = 0;
+                        Ok(Some(limited_batch))
+                    })
+                }))
+            } else {
+                Box::pin(stream)
+            };
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            stream,
+            limited_stream,
         )))
     }
 }

@@ -506,6 +506,19 @@ impl TableMetadata {
 
     /// If the default sort order is unsorted but the sort order is not present, add it
     fn try_normalize_sort_order(&mut self) -> Result<()> {
+        // Validate that sort order ID 0 (reserved for unsorted) has no fields
+        if let Some(sort_order) = self.sort_order_by_id(SortOrder::UNSORTED_ORDER_ID)
+            && !sort_order.fields.is_empty()
+        {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Sort order ID {} is reserved for unsorted order",
+                    SortOrder::UNSORTED_ORDER_ID
+                ),
+            ));
+        }
+
         if self.sort_order_by_id(self.default_sort_order_id).is_some() {
             return Ok(());
         }
@@ -3794,5 +3807,58 @@ mod tests {
         assert!(final_metadata.name_exists_in_any_schema("deprecated_field")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("new_field")); // only in current schema
         assert!(!final_metadata.name_exists_in_any_schema("never_existed"));
+    }
+
+    #[test]
+    fn test_invalid_sort_order_id_zero_with_fields() {
+        let metadata = r#"
+        {
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 111,
+            "last-updated-ms": 1600000000000,
+            "last-column-id": 3,
+            "current-schema-id": 1,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 1,
+                    "fields": [
+                        {"id": 1, "name": "x", "required": true, "type": "long"},
+                        {"id": 2, "name": "y", "required": true, "type": "long"}
+                    ]
+                }
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [{"spec-id": 0, "fields": []}],
+            "last-partition-id": 999,
+            "default-sort-order-id": 0,
+            "sort-orders": [
+                {
+                    "order-id": 0,
+                    "fields": [
+                        {
+                            "transform": "identity",
+                            "source-id": 1,
+                            "direction": "asc",
+                            "null-order": "nulls-first"
+                        }
+                    ]
+                }
+            ],
+            "properties": {},
+            "current-snapshot-id": -1,
+            "snapshots": []
+        }
+        "#;
+
+        let result: Result<TableMetadata, serde_json::Error> = serde_json::from_str(metadata);
+
+        // Should fail because sort order ID 0 is reserved for unsorted order and cannot have fields
+        assert!(
+            result.is_err(),
+            "Parsing should fail for sort order ID 0 with fields"
+        );
     }
 }
