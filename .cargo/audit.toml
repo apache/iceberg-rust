@@ -25,4 +25,15 @@ ignore = [
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
   "RUSTSEC-2024-0388",
+  # `paste` is unmaintained; consider using an alternative
+  #
+  # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
+  "RUSTSEC-2024-0436",
+  # `rustls-pemfile` is unmaintained
+  #
+  # Introduced by object_store, see https://github.com/apache/arrow-rs-object-store/issues/564
+  "RUSTSEC-2025-0134",
+
+  # Tracked here: https://github.com/paupino/rust-decimal/issues/766
+  "RUSTSEC-2026-0001",
 ]
