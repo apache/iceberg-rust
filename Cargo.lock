@@ -3525,6 +3525,7 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dashmap",
  "datafusion",
  "expect-test",
  "futures",
