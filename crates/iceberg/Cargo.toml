@@ -86,6 +86,7 @@ serde_with = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
+typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zstd = { workspace = true }
