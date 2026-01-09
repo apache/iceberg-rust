@@ -29,8 +29,7 @@ use crate::arrow::{
 use crate::delete_file_index::DeleteFileIndex;
 use crate::io::FileIO;
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_UNDERSCORE_POS, get_metadata_field_id,
-    is_metadata_column_name,
+    RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS, get_metadata_field_id, is_metadata_column_name,
 };
 use crate::scan::DeleteFileContext;
 use crate::scan::cache::ExpressionEvaluatorCache;
@@ -62,6 +61,7 @@ pub struct IncrementalTableScanBuilder<'a> {
     // None means scan to the current/last snapshot
     to_snapshot_id: Option<i64>,
     batch_size: Option<usize>,
+    case_sensitive: bool,
     concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
@@ -80,6 +80,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
             from_snapshot_id,
             to_snapshot_id,
             batch_size: None,
+            case_sensitive: true,
             concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
@@ -190,7 +191,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
         });
 
         // Add _pos column
-        columns.push(RESERVED_COL_NAME_UNDERSCORE_POS.to_string());
+        columns.push(RESERVED_COL_NAME_POS.to_string());
 
         self.column_names = Some(columns);
         self
@@ -226,6 +227,12 @@ impl<'a> IncrementalTableScanBuilder<'a> {
         self
     }
 
+    /// Set whether column names should be matched case-sensitively.
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+
     /// Build the incremental table scan.
     pub fn build(self) -> Result<IncrementalTableScan> {
         let metadata = self.table.metadata();
@@ -245,7 +252,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Snapshot with id {} not found", to_snapshot_id),
+                    format!("Snapshot with id {to_snapshot_id} not found"),
                 )
             })?
             .clone();
@@ -258,7 +265,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
             let _ = metadata.snapshot_by_id(from_id).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Snapshot with id {} not found", from_id),
+                    format!("Snapshot with id {from_id} not found"),
                 )
             })?;
             Some(from_id)
@@ -287,7 +294,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Snapshot with id {} not found", from_snapshot_id),
+                    format!("Snapshot with id {from_snapshot_id} not found"),
                 )
             })?
             .clone();
@@ -311,10 +318,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
                 if schema.field_by_name(column_name).is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "Column {} not found in table. Schema: {}",
-                            column_name, schema
-                        ),
+                        format!("Column {column_name} not found in table. Schema: {schema}"),
                     ));
                 }
             }
@@ -340,10 +344,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "Column {} not found in table. Schema: {}",
-                        column_name, schema
-                    ),
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
                 )
             })?;
 
@@ -354,8 +355,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
                     Error::new(
                         ErrorKind::FeatureUnsupported,
                         format!(
-                            "Column {} is not a direct child of schema but a nested field, which is not supported now. Schema: {}",
-                            column_name, schema
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
                         ),
                     )
                 })?;
@@ -375,6 +375,7 @@ impl<'a> IncrementalTableScanBuilder<'a> {
                 self.table.file_io().clone(),
                 self.concurrency_limit_data_files,
             ),
+            case_sensitive: self.case_sensitive,
         };
 
         Ok(IncrementalTableScan {
@@ -511,7 +512,7 @@ impl IncrementalTableScan {
             Err(e) => {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    format!("Failed to load positional deletes: {}", e),
+                    format!("Failed to load positional deletes: {e}"),
                 ));
             }
         };
@@ -624,7 +625,7 @@ impl IncrementalTableScan {
                 state.remove_delete_vector(&path).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
-                        format!("DeleteVector for path {} not found", path),
+                        format!("DeleteVector for path {path} not found"),
                     )
                 })
             })?;

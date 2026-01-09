@@ -93,10 +93,10 @@ impl Iterator for DeleteVectorIterator<'_> {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(inner) = &mut self.inner {
-            if let Some(inner_next) = inner.bitmap_iter.next() {
-                return Some(u64::from(inner.high_bits) << 32 | u64::from(inner_next));
-            }
+        if let Some(inner) = &mut self.inner
+            && let Some(inner_next) = inner.bitmap_iter.next()
+        {
+            return Some(u64::from(inner.high_bits) << 32 | u64::from(inner_next));
         }
 
         if let Some((high_bits, next_bitmap)) = self.outer.next() {

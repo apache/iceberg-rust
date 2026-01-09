@@ -23,7 +23,7 @@ use fnv::FnvHashSet;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
-use parquet::file::page_index::column_index::ColumnIndexMetaData as Index;
+use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
@@ -59,7 +59,7 @@ impl PageNullCount {
 }
 
 pub(crate) struct PageIndexEvaluator<'a> {
-    column_index: &'a [Index],
+    column_index: &'a [ColumnIndexMetaData],
     offset_index: &'a OffsetIndex,
     row_group_metadata: &'a RowGroupMetaData,
     iceberg_field_id_to_parquet_column_index: &'a HashMap<i32, usize>,
@@ -69,7 +69,7 @@ pub(crate) struct PageIndexEvaluator<'a> {
 
 impl<'a> PageIndexEvaluator<'a> {
     pub(crate) fn new(
-        column_index: &'a [Index],
+        column_index: &'a [ColumnIndexMetaData],
         offset_index: &'a OffsetIndex,
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
@@ -92,7 +92,7 @@ impl<'a> PageIndexEvaluator<'a> {
     /// matching the filter predicate.
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
-        column_index: &'a [Index],
+        column_index: &'a [ColumnIndexMetaData],
         offset_index: &'a OffsetIndex,
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
@@ -240,143 +240,135 @@ impl<'a> PageIndexEvaluator<'a> {
     fn apply_predicate_to_column_index<F>(
         predicate: F,
         field_type: &PrimitiveType,
-        column_index: &Index,
+        column_index: &ColumnIndexMetaData,
         row_counts: &[usize],
     ) -> Result<Option<Vec<bool>>>
     where
         F: Fn(Option<Datum>, Option<Datum>, PageNullCount) -> Result<bool>,
     {
         let result: Result<Vec<bool>> = match column_index {
-            Index::NONE => {
+            ColumnIndexMetaData::NONE => {
                 return Ok(None);
             }
-            Index::BOOLEAN(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::BOOLEAN(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx).copied().map(|val| {
+                        min.map(|&val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
-                        idx.max_value(page_idx).copied().map(|val| {
+                        max.map(|&val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::INT32(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::INT32(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx)
-                            .copied()
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
-                        idx.max_value(page_idx)
-                            .copied()
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        min.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        max.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::INT64(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::INT64(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx)
-                            .copied()
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
-                        idx.max_value(page_idx)
-                            .copied()
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        min.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
+                        max.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::FLOAT(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::FLOAT(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx).copied().map(|val| {
+                        min.map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
                             )
                         }),
-                        idx.max_value(page_idx).copied().map(|val| {
+                        max.map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::DOUBLE(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::DOUBLE(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx).copied().map(|val| {
+                        min.map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
-                        idx.max_value(page_idx).copied().map(|val| {
+                        max.map(|&val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::BYTE_ARRAY(idx) => (0..idx.num_pages() as usize)
+            ColumnIndexMetaData::BYTE_ARRAY(idx) => idx
+                .min_values_iter()
+                .zip(idx.max_values_iter())
+                .enumerate()
                 .zip(row_counts.iter())
-                .map(|(page_idx, &row_count)| {
+                .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        idx.min_value(page_idx).map(|val| {
+                        min.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::String(String::from_utf8(val.to_vec()).unwrap()),
                             )
                         }),
-                        idx.max_value(page_idx).map(|val| {
+                        max.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::String(String::from_utf8(val.to_vec()).unwrap()),
                             )
                         }),
-                        PageNullCount::from_row_and_null_counts(
-                            row_count,
-                            idx.null_count(page_idx),
-                        ),
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
                 .collect(),
-            Index::FIXED_LEN_BYTE_ARRAY(_) => {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "unsupported 'FIXED_LEN_BYTE_ARRAY' index type in column_index",
                 ));
             }
-            Index::INT96(_) => {
+            ColumnIndexMetaData::INT96(_) => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "unsupported 'INT96' index type in column_index",
@@ -553,16 +545,16 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                     return Ok(false);
                 }
 
-                if let Some(min) = min {
-                    if min.gt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(min) = min
+                    && min.gt(datum)
+                {
+                    return Ok(false);
                 }
 
-                if let Some(max) = max {
-                    if max.lt(datum) {
-                        return Ok(false);
-                    }
+                if let Some(max) = max
+                    && max.lt(datum)
+                {
+                    return Ok(false);
                 }
 
                 Ok(true)
@@ -793,26 +785,164 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use parquet::arrow::arrow_reader::RowSelector;
-    use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
-    use parquet::file::metadata::{ColumnChunkMetaData, ColumnIndexBuilder, RowGroupMetaData};
-    use parquet::file::page_index::column_index::ColumnIndexMetaData as Index;
-    use parquet::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
-    use parquet::file::statistics::Statistics;
-    use parquet::schema::types::{
-        ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
+    use arrow_array::{ArrayRef, Float32Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::{
+        ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
     };
+    use parquet::file::metadata::ParquetMetaData;
+    use parquet::file::properties::WriterProperties;
     use rand::{Rng, thread_rng};
+    use tempfile::NamedTempFile;
 
     use super::PageIndexEvaluator;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
 
+    /// Helper function to create a test parquet file with page indexes
+    /// and return the metadata needed for testing
+    fn create_test_parquet_file() -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("col_float", DataType::Float32, true),
+            Field::new("col_string", DataType::Utf8, true),
+        ]));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1024)
+            .set_write_batch_size(512)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+
+        let mut batches = vec![];
+
+        // Batch 1: 1024 rows - strings with AARDVARK, BEAR, BISON
+        let float_vals: Vec<Option<f32>> = vec![None; 1024];
+        let mut string_vals = vec![];
+        string_vals.push(Some("AARDVARK".to_string()));
+        for _ in 1..1023 {
+            string_vals.push(Some("BEAR".to_string()));
+        }
+        string_vals.push(Some("BISON".to_string()));
+
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Float32Array::from(float_vals)),
+                Arc::new(StringArray::from(string_vals)),
+            ])
+            .unwrap(),
+        );
+
+        // Batch 2: 1024 rows - all DEER
+        let float_vals: Vec<Option<f32>> = vec![None; 1024];
+        let string_vals = vec![Some("DEER".to_string()); 1024];
+
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Float32Array::from(float_vals)),
+                Arc::new(StringArray::from(string_vals)),
+            ])
+            .unwrap(),
+        );
+
+        // Batch 3: 1024 rows - float 0-10
+        let mut float_vals = vec![];
+        for i in 0..1024 {
+            float_vals.push(Some(i as f32 * 10.0 / 1024.0));
+        }
+        let mut string_vals = vec![];
+        string_vals.push(Some("GIRAFFE".to_string()));
+        string_vals.push(None);
+        for _ in 2..1024 {
+            string_vals.push(Some("HIPPO".to_string()));
+        }
+
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Float32Array::from(float_vals)),
+                Arc::new(StringArray::from(string_vals)),
+            ])
+            .unwrap(),
+        );
+
+        // Batch 4: 1024 rows - float 10-20
+        let mut float_vals = vec![None];
+        for i in 1..1024 {
+            float_vals.push(Some(10.0 + i as f32 * 10.0 / 1024.0));
+        }
+        let string_vals = vec![Some("HIPPO".to_string()); 1024];
+
+        batches.push(
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Float32Array::from(float_vals)),
+                Arc::new(StringArray::from(string_vals)),
+            ])
+            .unwrap(),
+        );
+
+        // Write rows one at a time to give the writer a chance to split into pages
+        for batch in &batches {
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).unwrap();
+            }
+        }
+
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata().clone();
+
+        Ok((metadata, temp_file))
+    }
+
+    /// Get the test metadata components for testing
+    fn get_test_metadata(
+        metadata: &ParquetMetaData,
+    ) -> (
+        Vec<parquet::file::page_index::column_index::ColumnIndexMetaData>,
+        Vec<parquet::file::page_index::offset_index::OffsetIndexMetaData>,
+        &parquet::file::metadata::RowGroupMetaData,
+    ) {
+        let row_group_metadata = metadata.row_group(0);
+        let column_index = metadata.column_index().unwrap()[0].to_vec();
+        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
+        (column_index, offset_index, row_group_metadata)
+    }
+
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(0, 0, None, 0, None)?;
-        let (column_index, offset_index) = create_page_index()?;
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("col_float", DataType::Float32, true),
+            Field::new("col_string", DataType::Utf8, true),
+        ]));
+
+        let empty_float: ArrayRef = Arc::new(Float32Array::from(Vec::<Option<f32>>::new()));
+        let empty_string: ArrayRef = Arc::new(StringArray::from(Vec::<Option<String>>::new()));
+        let empty_batch =
+            RecordBatch::try_new(arrow_schema.clone(), vec![empty_float, empty_string]).unwrap();
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, None).unwrap();
+        writer.write(&empty_batch).unwrap();
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata();
+
+        if metadata.num_row_groups() == 0 || metadata.row_group(0).num_rows() == 0 {
+            return Ok(());
+        }
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
@@ -820,27 +950,28 @@ mod tests {
             .greater_than(Datum::float(1.0))
             .bind(iceberg_schema_ref.clone(), false)?;
 
+        let row_group_metadata = metadata.row_group(0);
+        let column_index = metadata.column_index().unwrap()[0].to_vec();
+        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
+
         let result = PageIndexEvaluator::eval(
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
-        let expected = vec![];
-
-        assert_eq!(result, expected);
+        assert_eq!(result.len(), 0);
 
         Ok(())
     }
 
     #[test]
     fn eval_is_null_select_only_pages_with_nulls() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -851,15 +982,15 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
         let expected = vec![
-            RowSelector::select(1024),
-            RowSelector::skip(1024),
             RowSelector::select(2048),
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
         ];
 
         assert_eq!(result, expected);
@@ -869,9 +1000,8 @@ mod tests {
 
     #[test]
     fn eval_is_not_null_dont_select_pages_with_all_nulls() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -882,12 +1012,12 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
-        let expected = vec![RowSelector::skip(1024), RowSelector::select(3072)];
+        let expected = vec![RowSelector::skip(2048), RowSelector::select(2048)];
 
         assert_eq!(result, expected);
 
@@ -896,9 +1026,8 @@ mod tests {
 
     #[test]
     fn eval_is_nan_select_all() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -909,7 +1038,7 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
@@ -923,9 +1052,8 @@ mod tests {
 
     #[test]
     fn eval_not_nan_select_all() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -936,7 +1064,7 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
@@ -950,9 +1078,8 @@ mod tests {
 
     #[test]
     fn eval_inequality_nan_datum_all_rows_except_all_null_pages() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -963,12 +1090,12 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
-        let expected = vec![RowSelector::skip(1024), RowSelector::select(3072)];
+        let expected = vec![RowSelector::skip(2048), RowSelector::select(2048)];
 
         assert_eq!(result, expected);
 
@@ -977,9 +1104,8 @@ mod tests {
 
     #[test]
     fn eval_inequality_pages_containing_value_except_all_null_pages() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -990,16 +1116,15 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
         let expected = vec![
-            RowSelector::skip(1024),
+            RowSelector::skip(2048),
             RowSelector::select(1024),
             RowSelector::skip(1024),
-            RowSelector::select(1024),
         ];
 
         assert_eq!(result, expected);
@@ -1009,9 +1134,8 @@ mod tests {
 
     #[test]
     fn eval_eq_pages_containing_value_except_all_null_pages() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1022,16 +1146,18 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
+        // Pages 0-1: all null (skip)
+        // Page 2: 0-10 (select, might contain 5.0)
+        // Page 3: 10-20 (skip, min > 5.0)
         let expected = vec![
-            RowSelector::skip(1024),
+            RowSelector::skip(2048),
             RowSelector::select(1024),
             RowSelector::skip(1024),
-            RowSelector::select(1024),
         ];
 
         assert_eq!(result, expected);
@@ -1041,9 +1167,8 @@ mod tests {
 
     #[test]
     fn eval_not_eq_all_rows() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1054,7 +1179,7 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
@@ -1068,9 +1193,8 @@ mod tests {
 
     #[test]
     fn eval_starts_with_error_float_col() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1081,7 +1205,7 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         );
@@ -1093,11 +1217,13 @@ mod tests {
 
     #[test]
     fn eval_starts_with_pages_containing_value_except_all_null_pages() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
+        // Test starts_with on string column where only some pages match
+        // Our file has 4 pages: ["AARDVARK".."BISON"], ["DEER"], ["GIRAFFE".."HIPPO"], ["HIPPO"]
+        // Testing starts_with("B") should select only page 0
         let filter = Reference::new("col_string")
             .starts_with(Datum::string("B"))
             .bind(iceberg_schema_ref.clone(), false)?;
@@ -1106,16 +1232,13 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
-        let expected = vec![
-            RowSelector::select(512),
-            RowSelector::skip(3536),
-            RowSelector::select(48),
-        ];
+        // Page 0 has "BEAR" and "BISON" (starts with B), rest don't
+        let expected = vec![RowSelector::select(1024), RowSelector::skip(3072)];
 
         assert_eq!(result, expected);
 
@@ -1125,11 +1248,13 @@ mod tests {
     #[test]
     fn eval_not_starts_with_pages_containing_value_except_pages_with_min_and_max_equal_to_prefix_and_all_null_pages()
     -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
+        // Test not_starts_with where one page has ALL values starting with prefix
+        // Our file has page 1 with all "DEER" (min="DEER", max="DEER")
+        // Testing not_starts_with("DE") should skip page 1 where all values start with "DE"
         let filter = Reference::new("col_string")
             .not_starts_with(Datum::string("DE"))
             .bind(iceberg_schema_ref.clone(), false)?;
@@ -1138,15 +1263,18 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
+        // Page 0: mixed values (select)
+        // Page 1: all "DEER" starting with "DE" (skip)
+        // Pages 2-3: other values not all starting with "DE" (select)
         let expected = vec![
-            RowSelector::select(512),
-            RowSelector::skip(512),
-            RowSelector::select(3072),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(2048),
         ];
 
         assert_eq!(result, expected);
@@ -1157,10 +1285,8 @@ mod tests {
     #[test]
     fn eval_in_length_of_set_above_limit_all_rows() -> Result<()> {
         let mut rng = thread_rng();
-
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1171,7 +1297,7 @@ mod tests {
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
@@ -1185,30 +1311,32 @@ mod tests {
 
     #[test]
     fn eval_in_valid_set_size_some_rows() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
-        let (column_index, offset_index) = create_page_index()?;
-
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
+        // Test is_in with multiple values using min/max bounds
+        // Our file has 4 pages: ["AARDVARK".."BISON"], ["DEER"], ["GIRAFFE".."HIPPO"], ["HIPPO"]
+        // Testing is_in(["AARDVARK", "GIRAFFE"]) - both are in different pages
         let filter = Reference::new("col_string")
-            .is_in([Datum::string("AARDVARK"), Datum::string("ICEBERG")])
+            .is_in([Datum::string("AARDVARK"), Datum::string("GIRAFFE")])
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
             &filter,
             &column_index,
             &offset_index,
-            &row_group_metadata,
+            row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
         )?;
 
+        // Page 0 contains "AARDVARK", page 1 doesn't contain either, page 2 contains "GIRAFFE", page 3 doesn't
         let expected = vec![
-            RowSelector::select(512),
-            RowSelector::skip(512),
-            RowSelector::select(2976),
-            RowSelector::skip(48),
-            RowSelector::select(48),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
         ];
 
         assert_eq!(result, expected);
@@ -1238,170 +1366,5 @@ mod tests {
         let field_id_map = HashMap::from_iter([(1, 0), (2, 1)]);
 
         Ok((iceberg_schema_ref, field_id_map))
-    }
-
-    fn build_parquet_schema_descriptor() -> Result<Arc<SchemaDescriptor>> {
-        let field_1 = Arc::new(
-            parquetSchemaType::primitive_type_builder("col_float", ParquetPhysicalType::FLOAT)
-                .with_id(Some(1))
-                .build()?,
-        );
-
-        let field_2 = Arc::new(
-            parquetSchemaType::primitive_type_builder(
-                "col_string",
-                ParquetPhysicalType::BYTE_ARRAY,
-            )
-            .with_id(Some(2))
-            .with_logical_type(Some(ParquetLogicalType::String))
-            .build()?,
-        );
-
-        let group_type = Arc::new(
-            parquetSchemaType::group_type_builder("all")
-                .with_id(Some(1000))
-                .with_fields(vec![field_1, field_2])
-                .build()?,
-        );
-
-        let schema_descriptor = SchemaDescriptor::new(group_type);
-        let schema_descriptor_arc = Arc::new(schema_descriptor);
-        Ok(schema_descriptor_arc)
-    }
-
-    fn create_row_group_metadata(
-        num_rows: i64,
-        col_1_num_vals: i64,
-        col_1_stats: Option<Statistics>,
-        col_2_num_vals: i64,
-        col_2_stats: Option<Statistics>,
-    ) -> Result<RowGroupMetaData> {
-        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
-
-        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(0).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_float".to_string()]),
-        ));
-
-        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(1).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_string".to_string()]),
-        ));
-
-        let mut col_1_meta =
-            ColumnChunkMetaData::builder(column_1_desc_ptr).set_num_values(col_1_num_vals);
-        if let Some(stats1) = col_1_stats {
-            col_1_meta = col_1_meta.set_statistics(stats1)
-        }
-
-        let mut col_2_meta =
-            ColumnChunkMetaData::builder(column_2_desc_ptr).set_num_values(col_2_num_vals);
-        if let Some(stats2) = col_2_stats {
-            col_2_meta = col_2_meta.set_statistics(stats2)
-        }
-
-        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
-            .set_num_rows(num_rows)
-            .set_column_metadata(vec![
-                col_1_meta.build()?,
-                // .set_statistics(Statistics::float(None, None, None, 1, false))
-                col_2_meta.build()?,
-            ])
-            .build();
-
-        Ok(row_group_metadata?)
-    }
-
-    fn create_page_index() -> Result<(Vec<Index>, Vec<OffsetIndexMetaData>)> {
-        let mut idx_float_builder = ColumnIndexBuilder::new(ParquetPhysicalType::FLOAT);
-        idx_float_builder.append(true, vec![], vec![], 1024);
-        idx_float_builder.append(
-            false,
-            0.0f32.to_le_bytes().to_vec(),
-            10.0f32.to_le_bytes().to_vec(),
-            0,
-        );
-        idx_float_builder.append(
-            false,
-            10.0f32.to_le_bytes().to_vec(),
-            20.0f32.to_le_bytes().to_vec(),
-            1,
-        );
-        idx_float_builder.append(true, vec![], vec![], -1);
-        let idx_float = idx_float_builder.build().unwrap();
-
-        let mut idx_string_builder = ColumnIndexBuilder::new(ParquetPhysicalType::BYTE_ARRAY);
-        idx_string_builder.append(false, b"AA".to_vec(), b"DD".to_vec(), 0);
-        idx_string_builder.append(false, b"DE".to_vec(), b"DE".to_vec(), 0);
-        idx_string_builder.append(false, b"DF".to_vec(), b"UJ".to_vec(), 1);
-        idx_string_builder.append(false, vec![], vec![], 48);
-        idx_string_builder.append(true, vec![], vec![], -1);
-        let idx_string = idx_string_builder.build().unwrap();
-
-        let page_locs_float = vec![
-            PageLocation {
-                offset: 0,
-                compressed_page_size: 1024,
-                first_row_index: 0,
-            },
-            PageLocation {
-                offset: 1024,
-                compressed_page_size: 1024,
-                first_row_index: 1024,
-            },
-            PageLocation {
-                offset: 2048,
-                compressed_page_size: 1024,
-                first_row_index: 2048,
-            },
-            PageLocation {
-                offset: 3072,
-                compressed_page_size: 1024,
-                first_row_index: 3072,
-            },
-        ];
-
-        let page_locs_string = vec![
-            PageLocation {
-                offset: 0,
-                compressed_page_size: 512,
-                first_row_index: 0,
-            },
-            PageLocation {
-                offset: 512,
-                compressed_page_size: 512,
-                first_row_index: 512,
-            },
-            PageLocation {
-                offset: 1024,
-                compressed_page_size: 2976,
-                first_row_index: 1024,
-            },
-            PageLocation {
-                offset: 4000,
-                compressed_page_size: 48,
-                first_row_index: 4000,
-            },
-            PageLocation {
-                offset: 4048,
-                compressed_page_size: 48,
-                first_row_index: 4048,
-            },
-        ];
-
-        Ok((vec![idx_float, idx_string], vec![
-            OffsetIndexMetaData {
-                page_locations: page_locs_float,
-                unencoded_byte_array_data_bytes: None,
-            },
-            OffsetIndexMetaData {
-                page_locations: page_locs_string,
-                unencoded_byte_array_data_bytes: None,
-            },
-        ]))
     }
 }

@@ -347,14 +347,14 @@ async fn test_metadata_table() -> Result<()> {
     check_record_batches(
         snapshots,
         expect![[r#"
-            Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
-            Field { name: "operation", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
-            Field { name: "manifest_list", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
-            Field { name: "summary", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#]],
+            Field { "committed_at": Timestamp(µs, "+00:00"), metadata: {"PARQUET:field_id": "1"} },
+            Field { "snapshot_id": Int64, metadata: {"PARQUET:field_id": "2"} },
+            Field { "parent_id": nullable Int64, metadata: {"PARQUET:field_id": "3"} },
+            Field { "operation": nullable Utf8, metadata: {"PARQUET:field_id": "4"} },
+            Field { "manifest_list": nullable Utf8, metadata: {"PARQUET:field_id": "5"} },
+            Field { "summary": nullable Map("key_value": non-null Struct("key": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "value": Utf8, metadata: {"PARQUET:field_id": "8"}), unsorted), metadata: {"PARQUET:field_id": "6"} }"#]],
         expect![[r#"
-            committed_at: PrimitiveArray<Timestamp(Microsecond, Some("+00:00"))>
+            committed_at: PrimitiveArray<Timestamp(µs, "+00:00")>
             [
             ],
             snapshot_id: PrimitiveArray<Int64>
@@ -386,18 +386,18 @@ async fn test_metadata_table() -> Result<()> {
     check_record_batches(
         manifests,
         expect![[r#"
-            Field { name: "content", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "14"} },
-            Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "length", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "partition_spec_id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
-            Field { name: "added_snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
-            Field { name: "added_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
-            Field { name: "existing_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} },
-            Field { name: "deleted_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} },
-            Field { name: "added_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "15"} },
-            Field { name: "existing_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "16"} },
-            Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "17"} },
-            Field { name: "partition_summaries", data_type: List(Field { name: "item", data_type: Struct([Field { name: "contains_null", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }, Field { name: "contains_nan", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "11"} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "12"} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "13"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }"#]],
+            Field { "content": Int32, metadata: {"PARQUET:field_id": "14"} },
+            Field { "path": Utf8, metadata: {"PARQUET:field_id": "1"} },
+            Field { "length": Int64, metadata: {"PARQUET:field_id": "2"} },
+            Field { "partition_spec_id": Int32, metadata: {"PARQUET:field_id": "3"} },
+            Field { "added_snapshot_id": Int64, metadata: {"PARQUET:field_id": "4"} },
+            Field { "added_data_files_count": Int32, metadata: {"PARQUET:field_id": "5"} },
+            Field { "existing_data_files_count": Int32, metadata: {"PARQUET:field_id": "6"} },
+            Field { "deleted_data_files_count": Int32, metadata: {"PARQUET:field_id": "7"} },
+            Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
+            Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
+            Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
+            Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
         expect![[r#"
             content: PrimitiveArray<Int32>
             [
@@ -492,10 +492,6 @@ async fn test_insert_into() -> Result<()> {
         .unwrap();
     assert_eq!(rows_inserted.value(0), 2);
 
-    // Refresh context to avoid getting stale table
-    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
-    ctx.register_catalog("catalog", catalog);
-
     // Query the table to verify the inserted data
     let df = ctx
         .sql("SELECT * FROM catalog.test_insert_into.my_table")
@@ -508,8 +504,8 @@ async fn test_insert_into() -> Result<()> {
     check_record_batches(
         batches,
         expect![[r#"
-            Field { name: "foo1", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "foo2", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} }"#]],
+            Field { "foo1": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "foo2": Utf8, metadata: {"PARQUET:field_id": "2"} }"#]],
         expect![[r#"
             foo1: PrimitiveArray<Int32>
             [
@@ -650,10 +646,6 @@ async fn test_insert_into_nested() -> Result<()> {
         .unwrap();
     assert_eq!(rows_inserted.value(0), 2);
 
-    // Refresh context to avoid getting stale table
-    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
-    ctx.register_catalog("catalog", catalog);
-
     // Query the table to verify the inserted data
     let df = ctx
         .sql("SELECT * FROM catalog.test_insert_nested.nested_table ORDER BY id")
@@ -666,9 +658,9 @@ async fn test_insert_into_nested() -> Result<()> {
     check_record_batches(
         batches,
         expect![[r#"
-            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "profile", data_type: Struct([Field { name: "address", data_type: Struct([Field { name: "street", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} }, Field { name: "contact", data_type: Struct([Field { name: "email", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }, Field { name: "phone", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }"#]],
+            Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "name": Utf8, metadata: {"PARQUET:field_id": "2"} },
+            Field { "profile": nullable Struct("address": Struct("street": non-null Utf8, metadata: {"PARQUET:field_id": "6"}, "city": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "zip": non-null Int32, metadata: {"PARQUET:field_id": "8"}), metadata: {"PARQUET:field_id": "4"}, "contact": Struct("email": Utf8, metadata: {"PARQUET:field_id": "9"}, "phone": Utf8, metadata: {"PARQUET:field_id": "10"}), metadata: {"PARQUET:field_id": "5"}), metadata: {"PARQUET:field_id": "3"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
@@ -687,7 +679,7 @@ async fn test_insert_into_nested() -> Result<()> {
               valid,
             ]
             [
-            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]))
+            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, metadata: {"PARQUET:field_id": "8"} }]))
             StructArray
             -- validity:
             [
@@ -714,7 +706,7 @@ async fn test_insert_into_nested() -> Result<()> {
               95113,
             ]
             ]
-            -- child 1: "contact" (Struct([Field { name: "email", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }, Field { name: "phone", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }]))
+            -- child 1: "contact" (Struct([Field { name: "email", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "9"} }, Field { name: "phone", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "10"} }]))
             StructArray
             -- validity:
             [
@@ -765,13 +757,13 @@ async fn test_insert_into_nested() -> Result<()> {
     check_record_batches(
         batches,
         expect![[r#"
-            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "name", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "catalog.test_insert_nested.nested_table.profile[address][street]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} },
-            Field { name: "catalog.test_insert_nested.nested_table.profile[address][city]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} },
-            Field { name: "catalog.test_insert_nested.nested_table.profile[address][zip]", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} },
-            Field { name: "catalog.test_insert_nested.nested_table.profile[contact][email]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} },
-            Field { name: "catalog.test_insert_nested.nested_table.profile[contact][phone]", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }"#]],
+            Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "name": Utf8, metadata: {"PARQUET:field_id": "2"} },
+            Field { "catalog.test_insert_nested.nested_table.profile[address][street]": nullable Utf8, metadata: {"PARQUET:field_id": "6"} },
+            Field { "catalog.test_insert_nested.nested_table.profile[address][city]": nullable Utf8, metadata: {"PARQUET:field_id": "7"} },
+            Field { "catalog.test_insert_nested.nested_table.profile[address][zip]": nullable Int32, metadata: {"PARQUET:field_id": "8"} },
+            Field { "catalog.test_insert_nested.nested_table.profile[contact][email]": nullable Utf8, metadata: {"PARQUET:field_id": "9"} },
+            Field { "catalog.test_insert_nested.nested_table.profile[contact][phone]": nullable Utf8, metadata: {"PARQUET:field_id": "10"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
@@ -880,10 +872,6 @@ async fn test_insert_into_partitioned() -> Result<()> {
         .unwrap();
     assert_eq!(rows_inserted.value(0), 5);
 
-    // Refresh catalog to get updated table
-    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
-    ctx.register_catalog("catalog", catalog);
-
     // Query the table to verify data
     let df = ctx
         .sql("SELECT * FROM catalog.test_partitioned_write.partitioned_table ORDER BY id")
@@ -896,9 +884,9 @@ async fn test_insert_into_partitioned() -> Result<()> {
     check_record_batches(
         batches,
         expect![[r#"
-            Field { name: "id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-            Field { name: "category", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-            Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }"#]],
+            Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "category": Utf8, metadata: {"PARQUET:field_id": "2"} },
+            Field { "value": Utf8, metadata: {"PARQUET:field_id": "3"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
@@ -935,25 +923,22 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let file_io = table.file_io();
 
     // List files under each expected partition path
-    let electronics_path = format!("{}/data/category=electronics", table_location);
-    let books_path = format!("{}/data/category=books", table_location);
-    let clothing_path = format!("{}/data/category=clothing", table_location);
+    let electronics_path = format!("{table_location}/data/category=electronics");
+    let books_path = format!("{table_location}/data/category=books");
+    let clothing_path = format!("{table_location}/data/category=clothing");
 
     // Verify partition directories exist and contain data files
     assert!(
         file_io.exists(&electronics_path).await?,
-        "Expected partition directory: {}",
-        electronics_path
+        "Expected partition directory: {electronics_path}"
     );
     assert!(
         file_io.exists(&books_path).await?,
-        "Expected partition directory: {}",
-        books_path
+        "Expected partition directory: {books_path}"
     );
     assert!(
         file_io.exists(&clothing_path).await?,
-        "Expected partition directory: {}",
-        clothing_path
+        "Expected partition directory: {clothing_path}"
     );
 
     Ok(())

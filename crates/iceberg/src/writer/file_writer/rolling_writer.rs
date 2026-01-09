@@ -103,15 +103,15 @@ where
     }
 
     /// Build a new [`RollingFileWriter`].
-    pub fn build(self) -> RollingFileWriter<B, L, F> {
+    pub fn build(&self) -> RollingFileWriter<B, L, F> {
         RollingFileWriter {
             inner: None,
-            inner_builder: self.inner_builder,
+            inner_builder: self.inner_builder.clone(),
             target_file_size: self.target_file_size,
             data_file_builders: vec![],
-            file_io: self.file_io,
-            location_generator: self.location_generator,
-            file_name_generator: self.file_name_generator,
+            file_io: self.file_io.clone(),
+            location_generator: self.location_generator.clone(),
+            file_name_generator: self.file_name_generator.clone(),
         }
     }
 }
@@ -192,25 +192,23 @@ where
             // initialize inner writer
             self.inner = Some(
                 self.inner_builder
-                    .clone()
                     .build(self.new_output_file(partition_key)?)
                     .await?,
             );
         }
 
-        if self.should_roll() {
-            if let Some(inner) = self.inner.take() {
-                // close the current writer, roll to a new file
-                self.data_file_builders.extend(inner.close().await?);
+        if self.should_roll()
+            && let Some(inner) = self.inner.take()
+        {
+            // close the current writer, roll to a new file
+            self.data_file_builders.extend(inner.close().await?);
 
-                // start a new writer
-                self.inner = Some(
-                    self.inner_builder
-                        .clone()
-                        .build(self.new_output_file(partition_key)?)
-                        .await?,
-                );
-            }
+            // start a new writer
+            self.inner = Some(
+                self.inner_builder
+                    .build(self.new_output_file(partition_key)?)
+                    .await?,
+            );
         }
 
         // write the input

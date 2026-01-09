@@ -18,26 +18,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions,
-    RunArray, StringArray, StructArray,
-};
-use arrow_buffer::NullBuffer;
+use arrow_array::{Array as ArrowArray, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_cast::cast;
 use arrow_schema::{
     DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema_to_arrow_schema;
+use crate::arrow::value::create_primitive_array_repeated;
+use crate::arrow::{datum_to_arrow_type, schema_to_arrow_schema};
 use crate::metadata_columns::get_metadata_field;
 use crate::spec::{
-    Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
+    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
 };
 use crate::{Error, ErrorKind, Result};
 
-/// Build a map of field ID to constant value for identity-partitioned fields.
+/// Build a map of field ID to constant value (as Datum) for identity-partitioned fields.
 ///
 /// Implements Iceberg spec "Column Projection" rule #1: use partition metadata constants
 /// only for identity-transformed fields. Non-identity transforms (bucket, truncate, year, etc.)
@@ -54,20 +50,61 @@ use crate::{Error, ErrorKind, Result};
 fn constants_map(
     partition_spec: &PartitionSpec,
     partition_data: &Struct,
-) -> HashMap<i32, PrimitiveLiteral> {
+    schema: &IcebergSchema,
+) -> Result<HashMap<i32, Datum>> {
     let mut constants = HashMap::new();
 
     for (pos, field) in partition_spec.fields().iter().enumerate() {
         // Only identity transforms should use constant values from partition metadata
         if matches!(field.transform, Transform::Identity) {
+            // Get the field from schema to extract its type
+            let iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("Field {} not found in schema", field.source_id),
+            ))?;
+
+            // Ensure the field type is primitive
+            let prim_type = match &*iceberg_field.field_type {
+                crate::spec::Type::Primitive(prim_type) => prim_type,
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Partition field {} has non-primitive type {:?}",
+                            field.source_id, iceberg_field.field_type
+                        ),
+                    ));
+                }
+            };
+
             // Get the partition value for this field
-            if let Some(Literal::Primitive(value)) = &partition_data[pos] {
-                constants.insert(field.source_id, value.clone());
+            // Handle both None (null) and Some(Literal::Primitive) cases
+            match &partition_data[pos] {
+                None => {
+                    // Skip null partition values - they will be resolved as null per Iceberg spec rule #4.
+                    // When a partition value is null, we don't add it to the constants map,
+                    // allowing downstream column resolution to handle it correctly.
+                    continue;
+                }
+                Some(Literal::Primitive(value)) => {
+                    // Create a Datum from the primitive type and value
+                    let datum = Datum::new(prim_type.clone(), value.clone());
+                    constants.insert(field.source_id, datum);
+                }
+                Some(literal) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Partition field {} has non-primitive value: {:?}",
+                            field.source_id, literal
+                        ),
+                    ));
+                }
             }
         }
     }
 
-    constants
+    Ok(constants)
 }
 
 /// Indicates how a particular column in a processed RecordBatch should
@@ -153,7 +190,7 @@ enum SchemaComparison {
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    constant_fields: HashMap<i32, (DataType, PrimitiveLiteral)>,
+    constant_fields: HashMap<i32, Datum>,
     virtual_fields: HashMap<i32, FieldRef>,
 }
 
@@ -175,11 +212,10 @@ impl RecordBatchTransformerBuilder {
     ///
     /// # Arguments
     /// * `field_id` - The field ID to associate with the constant
-    /// * `value` - The constant value for this field
-    pub(crate) fn with_constant(mut self, field_id: i32, value: PrimitiveLiteral) -> Result<Self> {
-        let arrow_type = RecordBatchTransformer::primitive_literal_to_arrow_type(&value)?;
-        self.constant_fields.insert(field_id, (arrow_type, value));
-        Ok(self)
+    /// * `datum` - The constant value (with type) for this field
+    pub(crate) fn with_constant(mut self, field_id: i32, datum: Datum) -> Self {
+        self.constant_fields.insert(field_id, datum);
+        self
     }
 
     /// Add a virtual field for a specific field ID.
@@ -213,13 +249,13 @@ impl RecordBatchTransformerBuilder {
         partition_spec: Arc<PartitionSpec>,
         partition_data: Struct,
     ) -> Result<Self> {
-        // Compute partition constants for identity-transformed fields
-        let partition_constants = constants_map(&partition_spec, &partition_data);
+        // Compute partition constants for identity-transformed fields (already returns Datum)
+        let partition_constants =
+            constants_map(&partition_spec, &partition_data, &self.snapshot_schema)?;
 
-        // Add partition constants to constant_fields (compute REE types from literals)
-        for (field_id, value) in partition_constants {
-            let arrow_type = RecordBatchTransformer::primitive_literal_to_arrow_type(&value)?;
-            self.constant_fields.insert(field_id, (arrow_type, value));
+        // Add partition constants to constant_fields
+        for (field_id, datum) in partition_constants {
+            self.constant_fields.insert(field_id, datum);
         }
 
         Ok(self)
@@ -270,10 +306,10 @@ impl RecordBatchTransformerBuilder {
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    // Pre-computed constant field information: field_id -> (arrow_type, value)
+    // Pre-computed constant field information: field_id -> Datum
     // Includes both virtual/metadata fields (like _file) and identity-partitioned fields
-    // Avoids type conversions during batch processing
-    constant_fields: HashMap<i32, (DataType, PrimitiveLiteral)>,
+    // Datum holds both the Iceberg type and the value
+    constant_fields: HashMap<i32, Datum>,
     // Virtual fields are metadata fields that are not present in the snapshot schema,
     // but are present in the source schema (arrow reader produces them)
     // Map from field_id to FieldRef
@@ -339,7 +375,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
-        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
+        constant_fields: &HashMap<i32, Datum>,
         virtual_fields: &HashMap<i32, FieldRef>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
@@ -356,23 +392,38 @@ impl RecordBatchTransformer {
                     return Ok(Arc::clone(virtual_field));
                 }
 
-                // Check if this is a constant field (metadata/virtual or partition)
+                // Check if this is a constant field
                 if constant_fields.contains_key(field_id) {
                     // For metadata/virtual fields (like _file), get name from metadata_columns
                     // For partition fields, get name from schema (they exist in schema)
-                    if let Ok(field) = get_metadata_field(*field_id) {
-                        // This is a metadata/virtual field - use the predefined field
-                        Ok(field)
+                    if let Ok(iceberg_field) = get_metadata_field(*field_id) {
+                        // This is a metadata/virtual field - convert Iceberg field to Arrow
+                        let datum = constant_fields.get(field_id).ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "constant field not found",
+                        ))?;
+                        let arrow_type = datum_to_arrow_type(datum);
+                        let arrow_field =
+                            Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
+                                .with_metadata(HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    iceberg_field.id.to_string(),
+                                )]));
+                        Ok(Arc::new(arrow_field))
                     } else {
                         // This is a partition constant field (exists in schema but uses constant value)
                         let field = &field_id_to_mapped_schema_map
                             .get(field_id)
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                             .0;
-                        let (arrow_type, _) = constant_fields.get(field_id).unwrap();
+                        let datum = constant_fields.get(field_id).ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "constant field not found",
+                        ))?;
+                        let arrow_type = datum_to_arrow_type(datum);
                         // Use the type from constant_fields (REE for constants)
                         let constant_field =
-                            Field::new(field.name(), arrow_type.clone(), field.is_nullable())
+                            Field::new(field.name(), arrow_type, field.is_nullable())
                                 .with_metadata(field.metadata().clone());
                         Ok(Arc::new(constant_field))
                     }
@@ -456,7 +507,7 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
-        constant_fields: &HashMap<i32, (DataType, PrimitiveLiteral)>,
+        constant_fields: &HashMap<i32, Datum>,
         virtual_fields: &HashMap<i32, FieldRef>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
@@ -469,10 +520,11 @@ impl RecordBatchTransformer {
                 // Constant fields always use their pre-computed constant values, regardless of whether
                 // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
                 // is authoritative and should be preferred over file data.
-                if let Some((arrow_type, value)) = constant_fields.get(field_id) {
+                if let Some(datum) = constant_fields.get(field_id) {
+                    let arrow_type = datum_to_arrow_type(datum);
                     return Ok(ColumnSource::Add {
-                        value: Some(value.clone()),
-                        target_type: arrow_type.clone(),
+                        value: Some(datum.literal().clone()),
+                        target_type: arrow_type,
                     });
                 }
 
@@ -574,7 +626,7 @@ impl RecordBatchTransformer {
                 let this_field_id = field_id_str.parse().map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {}", e),
+                        format!("field id not parseable as an i32: {e}"),
                     )
                 })?;
 
@@ -621,246 +673,17 @@ impl RecordBatchTransformer {
         prim_lit: &Option<PrimitiveLiteral>,
         num_rows: usize,
     ) -> Result<ArrayRef> {
-        // Check if this is a RunEndEncoded type (for constant fields)
+        // For constant columns, create repeated arrays instead of Run-End Encoded arrays
+        // This avoids the overhead of REE for columns that are entirely constant
         if let DataType::RunEndEncoded(_, values_field) = target_type {
-            // Helper to create a Run-End Encoded array
-            let create_ree_array = |values_array: ArrayRef| -> Result<ArrayRef> {
-                let run_ends = if num_rows == 0 {
-                    Int32Array::from(Vec::<i32>::new())
-                } else {
-                    Int32Array::from(vec![num_rows as i32])
-                };
-                Ok(Arc::new(
-                    RunArray::try_new(&run_ends, &values_array).map_err(|e| {
-                        Error::new(
-                            ErrorKind::Unexpected,
-                            "Failed to create RunArray for constant value",
-                        )
-                        .with_source(e)
-                    })?,
-                ))
-            };
-
-            // Create the values array based on the literal value
-            let values_array: ArrayRef = match (values_field.data_type(), prim_lit) {
-                (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
-                    Arc::new(BooleanArray::from(vec![*v]))
-                }
-                (DataType::Boolean, None) => {
-                    Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
-                }
-                (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
-                    Arc::new(Int32Array::from(vec![*v]))
-                }
-                (DataType::Int32, None) => Arc::new(Int32Array::from(vec![Option::<i32>::None])),
-                (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
-                    Arc::new(Date32Array::from(vec![*v]))
-                }
-                (DataType::Date32, None) => Arc::new(Date32Array::from(vec![Option::<i32>::None])),
-                (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
-                    Arc::new(Int64Array::from(vec![*v]))
-                }
-                (DataType::Int64, None) => Arc::new(Int64Array::from(vec![Option::<i64>::None])),
-                (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
-                    Arc::new(Float32Array::from(vec![v.0]))
-                }
-                (DataType::Float32, None) => {
-                    Arc::new(Float32Array::from(vec![Option::<f32>::None]))
-                }
-                (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
-                    Arc::new(Float64Array::from(vec![v.0]))
-                }
-                (DataType::Float64, None) => {
-                    Arc::new(Float64Array::from(vec![Option::<f64>::None]))
-                }
-                (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
-                    Arc::new(StringArray::from(vec![v.as_str()]))
-                }
-                (DataType::Utf8, None) => Arc::new(StringArray::from(vec![Option::<&str>::None])),
-                (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
-                    Arc::new(BinaryArray::from_vec(vec![v.as_slice()]))
-                }
-                (DataType::Binary, None) => {
-                    Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                }
-                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(v))) => {
-                    Arc::new(arrow_array::Decimal128Array::from(vec![{ *v }]))
-                }
-                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(v))) => {
-                    Arc::new(arrow_array::Decimal128Array::from(vec![*v as i128]))
-                }
-                (DataType::Decimal128(_, _), None) => {
-                    Arc::new(arrow_array::Decimal128Array::from(vec![
-                        Option::<i128>::None,
-                    ]))
-                }
-                (DataType::Struct(fields), None) => {
-                    // Create a single-element StructArray with nulls
-                    let null_arrays: Vec<ArrayRef> = fields
-                        .iter()
-                        .map(|f| {
-                            // Recursively create null arrays for struct fields
-                            // For primitive fields in structs, use simple null arrays (not REE within struct)
-                            match f.data_type() {
-                                DataType::Boolean => {
-                                    Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
-                                        as ArrayRef
-                                }
-                                DataType::Int32 | DataType::Date32 => {
-                                    Arc::new(Int32Array::from(vec![Option::<i32>::None]))
-                                }
-                                DataType::Int64 => {
-                                    Arc::new(Int64Array::from(vec![Option::<i64>::None]))
-                                }
-                                DataType::Float32 => {
-                                    Arc::new(Float32Array::from(vec![Option::<f32>::None]))
-                                }
-                                DataType::Float64 => {
-                                    Arc::new(Float64Array::from(vec![Option::<f64>::None]))
-                                }
-                                DataType::Utf8 => {
-                                    Arc::new(StringArray::from(vec![Option::<&str>::None]))
-                                }
-                                DataType::Binary => {
-                                    Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                                }
-                                _ => panic!("Unsupported struct field type: {:?}", f.data_type()),
-                            }
-                        })
-                        .collect();
-                    Arc::new(arrow_array::StructArray::new(
-                        fields.clone(),
-                        null_arrays,
-                        Some(arrow_buffer::NullBuffer::new_null(1)),
-                    ))
-                }
-                _ => {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "Unsupported constant type combination: {:?} with {:?}",
-                            values_field.data_type(),
-                            prim_lit
-                        ),
-                    ));
-                }
-            };
-
-            // Wrap in Run-End Encoding
-            create_ree_array(values_array)
+            // Extract the values type from the RunEndEncoded wrapper
+            // and create a repeated array instead of REE
+            let values_type = values_field.data_type();
+            create_primitive_array_repeated(values_type, prim_lit, num_rows)
         } else {
             // Non-REE type (simple arrays for non-constant fields)
-            Ok(match (target_type, prim_lit) {
-                (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
-                    Arc::new(BooleanArray::from(vec![*value; num_rows]))
-                }
-                (DataType::Boolean, None) => {
-                    let vals: Vec<Option<bool>> = vec![None; num_rows];
-                    Arc::new(BooleanArray::from(vals))
-                }
-                (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
-                    Arc::new(Int32Array::from(vec![*value; num_rows]))
-                }
-                (DataType::Int32, None) => {
-                    let vals: Vec<Option<i32>> = vec![None; num_rows];
-                    Arc::new(Int32Array::from(vals))
-                }
-                (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
-                    Arc::new(Date32Array::from(vec![*value; num_rows]))
-                }
-                (DataType::Date32, None) => {
-                    let vals: Vec<Option<i32>> = vec![None; num_rows];
-                    Arc::new(Date32Array::from(vals))
-                }
-                (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
-                    Arc::new(Int64Array::from(vec![*value; num_rows]))
-                }
-                (DataType::Int64, None) => {
-                    let vals: Vec<Option<i64>> = vec![None; num_rows];
-                    Arc::new(Int64Array::from(vals))
-                }
-                (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
-                    Arc::new(Float32Array::from(vec![value.0; num_rows]))
-                }
-                (DataType::Float32, None) => {
-                    let vals: Vec<Option<f32>> = vec![None; num_rows];
-                    Arc::new(Float32Array::from(vals))
-                }
-                (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
-                    Arc::new(Float64Array::from(vec![value.0; num_rows]))
-                }
-                (DataType::Float64, None) => {
-                    let vals: Vec<Option<f64>> = vec![None; num_rows];
-                    Arc::new(Float64Array::from(vals))
-                }
-                (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
-                    Arc::new(StringArray::from(vec![value.clone(); num_rows]))
-                }
-                (DataType::Utf8, None) => {
-                    let vals: Vec<Option<String>> = vec![None; num_rows];
-                    Arc::new(StringArray::from(vals))
-                }
-                (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
-                    Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
-                }
-                (DataType::Binary, None) => {
-                    let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
-                    Arc::new(BinaryArray::from_opt_vec(vals))
-                }
-                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
-                    Arc::new(Decimal128Array::from(vec![*value; num_rows]))
-                }
-                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::UInt128(value))) => {
-                    Arc::new(Decimal128Array::from(vec![*value as i128; num_rows]))
-                }
-                (DataType::Decimal128(_, _), None) => {
-                    let vals: Vec<Option<i128>> = vec![None; num_rows];
-                    Arc::new(Decimal128Array::from(vals))
-                }
-                (DataType::Struct(fields), None) => {
-                    // Create a StructArray filled with nulls
-                    let null_arrays: Vec<ArrayRef> = fields
-                        .iter()
-                        .map(|field| Self::create_column(field.data_type(), &None, num_rows))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    Arc::new(StructArray::new(
-                        fields.clone(),
-                        null_arrays,
-                        Some(NullBuffer::new_null(num_rows)),
-                    ))
-                }
-                (DataType::Null, _) => Arc::new(NullArray::new(num_rows)),
-                (dt, _) => {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!("unexpected target column type {}", dt),
-                    ));
-                }
-            })
+            create_primitive_array_repeated(target_type, prim_lit, num_rows)
         }
-    }
-
-    /// Converts a PrimitiveLiteral to its corresponding Arrow DataType.
-    /// This is used for constant fields to determine the Arrow type.
-    fn primitive_literal_to_arrow_type(literal: &PrimitiveLiteral) -> Result<DataType> {
-        Ok(match literal {
-            PrimitiveLiteral::Boolean(_) => DataType::Boolean,
-            PrimitiveLiteral::Int(_) => DataType::Int32,
-            PrimitiveLiteral::Long(_) => DataType::Int64,
-            PrimitiveLiteral::Float(_) => DataType::Float32,
-            PrimitiveLiteral::Double(_) => DataType::Float64,
-            PrimitiveLiteral::String(_) => DataType::Utf8,
-            PrimitiveLiteral::Binary(_) => DataType::Binary,
-            PrimitiveLiteral::Int128(_) => DataType::Decimal128(38, 0),
-            PrimitiveLiteral::UInt128(_) => DataType::Decimal128(38, 0),
-            PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Cannot create arrow type for AboveMax/BelowMin literal",
-                ));
-            }
-        })
     }
 }
 
@@ -1811,5 +1634,74 @@ mod test {
         // For null REE arrays, we still use the helper which handles extraction
         assert_eq!(get_string_value(result.column(4).as_ref(), 0), "");
         assert_eq!(get_string_value(result.column(4).as_ref(), 1), "");
+    }
+
+    /// Test handling of null values in identity-partitioned columns.
+    ///
+    /// Reproduces TestPartitionValues.testNullPartitionValue() from iceberg-java, which
+    /// writes records where the partition column has null values. Before the fix in #1922,
+    /// this would error with "Partition field X has null value for identity transform".
+    #[test]
+    fn null_identity_partition_value() {
+        use crate::spec::{Struct, Transform};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("data", "data", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition has null value for the data column
+        let partition_data = Struct::from_iter(vec![None]);
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            true,
+            "1",
+        )]));
+
+        let projected_field_ids = [1, 2];
+
+        let mut transformer = RecordBatchTransformerBuilder::new(schema, &projected_field_ids)
+            .with_partition(partition_spec, partition_data)
+            .expect("Should handle null partition values")
+            .build();
+
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 3);
+
+        let id_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.values(), &[1, 2, 3]);
+
+        // Partition column with null value should produce nulls
+        let data_col = result.column(1);
+        assert!(data_col.is_null(0));
+        assert!(data_col.is_null(1));
+        assert!(data_col.is_null(2));
     }
 }

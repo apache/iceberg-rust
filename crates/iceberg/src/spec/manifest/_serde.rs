@@ -22,7 +22,7 @@ use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
 use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, metadata_columns};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV2 {
@@ -153,7 +153,7 @@ impl DataFileSerde {
             lower_bounds: Some(to_bytes_entry(value.lower_bounds)?),
             upper_bounds: Some(to_bytes_entry(value.upper_bounds)?),
             key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
-            split_offsets: Some(value.split_offsets),
+            split_offsets: value.split_offsets,
             equality_ids: value.equality_ids,
             sort_order_id: value.sort_order_id,
             first_row_id: value.first_row_id,
@@ -222,7 +222,7 @@ impl DataFileSerde {
                 .transpose()?
                 .unwrap_or_default(),
             key_metadata: self.key_metadata.map(|v| v.to_vec()),
-            split_offsets: self.split_offsets.unwrap_or_default(),
+            split_offsets: self.split_offsets,
             equality_ids: self.equality_ids,
             sort_order_id: self.sort_order_id,
             partition_spec_id,
@@ -245,8 +245,12 @@ struct BytesEntry {
 fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32, Datum>, Error> {
     let mut m = HashMap::with_capacity(v.len());
     for entry in v {
-        // We ignore the entry if the field is not found in the schema, due to schema evolution.
-        if let Some(field) = schema.field_by_id(entry.key) {
+        // First try to find the field in the schema, or check if it's a reserved metadata field
+        let field = schema
+            .field_by_id(entry.key)
+            .or_else(|| metadata_columns::get_metadata_field(entry.key).ok());
+
+        if let Some(field) = field {
             let data_type = field
                 .field_type
                 .as_primitive_type()
@@ -259,6 +263,7 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
                 .clone();
             m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
         }
+        // We ignore the entry if the field is not found in schema or metadata columns (schema evolution).
     }
     Ok(m)
 }
@@ -380,7 +385,7 @@ mod tests {
             lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
             upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
             key_metadata: None,
-            split_offsets: vec![4],
+            split_offsets: Some(vec![4]),
             equality_ids: None,
             sort_order_id: Some(0),
             partition_spec_id: 0,
@@ -589,5 +594,36 @@ mod tests {
         assert_eq!(data_file.record_count, 500);
         assert_eq!(data_file.file_size_in_bytes, 2048);
         assert_eq!(data_file.partition_spec_id, 0);
+    }
+
+    #[test]
+    fn test_parse_bytes_entry_with_metadata_column() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_POS;
+        use crate::spec::manifest::_serde::{BytesEntry, parse_bytes_entry};
+
+        // Create a minimal schema that doesn't include the _pos metadata column
+        let test_schema = schema();
+
+        // Create a BytesEntry with the _pos field ID (reserved metadata field)
+        // The _pos field is a Long (i64) in the metadata column definition
+        let pos_value: i64 = 42;
+        let bytes_entry = BytesEntry {
+            key: RESERVED_FIELD_ID_POS,
+            value: serde_bytes::ByteBuf::from(pos_value.to_le_bytes().to_vec()),
+        };
+
+        // Parse the bytes entry - should use metadata column definition for _pos
+        let result = parse_bytes_entry(vec![bytes_entry], &test_schema).unwrap();
+
+        // Verify that the _pos field was parsed correctly using metadata column definition
+        assert!(
+            result.contains_key(&RESERVED_FIELD_ID_POS),
+            "_pos metadata field should be parsed"
+        );
+        assert_eq!(
+            result.get(&RESERVED_FIELD_ID_POS),
+            Some(&Datum::long(pos_value)),
+            "_pos should be parsed as long with correct value"
+        );
     }
 }

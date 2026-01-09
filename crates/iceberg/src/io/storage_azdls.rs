@@ -118,14 +118,14 @@ fn find_sas_token(
     let find_with_prefix = |prefix: &str| {
         properties
             .iter()
-            .filter(|(key, _)| key.as_str() == prefix || key.starts_with(&format!("{}.", prefix)))
+            .filter(|(key, _)| key.as_str() == prefix || key.starts_with(&format!("{prefix}.")))
             .min_by_key(|(key, _)| key.len())
             .map(|(_, value)| value.strip_prefix('?').unwrap_or(value).to_string())
     };
 
     // Try account-specific prefix first if account name is known, then fall back to base
     if let Some(account) = account_name {
-        let account_prefix = format!("{}.{}", ADLS_SAS_TOKEN, account);
+        let account_prefix = format!("{ADLS_SAS_TOKEN}.{account}");
         if let Some(token) = find_with_prefix(&account_prefix) {
             return Some(token);
         }
@@ -204,7 +204,7 @@ impl FromStr for AzureStorageScheme {
             "wasbs" => Ok(AzureStorageScheme::Wasbs),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Unexpected Azure Storage scheme: {}", s),
+                format!("Unexpected Azure Storage scheme: {s}"),
             )),
         }
     }
@@ -517,11 +517,11 @@ mod tests {
             let config = azdls_config_parse(properties);
             match expected {
                 Some(expected_config) => {
-                    assert!(config.is_ok(), "Test case {} failed: {:?}", name, config);
-                    assert_eq!(config.unwrap(), expected_config, "Test case: {}", name);
+                    assert!(config.is_ok(), "Test case {name} failed: {config:?}");
+                    assert_eq!(config.unwrap(), expected_config, "Test case: {name}");
                 }
                 None => {
-                    assert!(config.is_err(), "Test case {} expected error.", name);
+                    assert!(config.is_err(), "Test case {name} expected error.");
                 }
             }
         }
@@ -629,14 +629,14 @@ mod tests {
             let result = azdls_create_operator(input.0, &input.1, &input.2);
             match expected {
                 Some((expected_filesystem, expected_path)) => {
-                    assert!(result.is_ok(), "Test case {} failed: {:?}", name, result);
+                    assert!(result.is_ok(), "Test case {name} failed: {result:?}");
 
                     let (op, relative_path) = result.unwrap();
                     assert_eq!(op.info().name(), expected_filesystem);
                     assert_eq!(relative_path, expected_path);
                 }
                 None => {
-                    assert!(result.is_err(), "Test case {} expected error.", name);
+                    assert!(result.is_err(), "Test case {name} expected error.");
                 }
             }
         }
@@ -677,11 +677,11 @@ mod tests {
             let result = input.parse::<AzureStoragePath>();
             match expected {
                 Some(expected_path) => {
-                    assert!(result.is_ok(), "Test case {} failed: {:?}", name, result);
-                    assert_eq!(result.unwrap(), expected_path, "Test case: {}", name);
+                    assert!(result.is_ok(), "Test case {name} failed: {result:?}");
+                    assert_eq!(result.unwrap(), expected_path, "Test case: {name}");
                 }
                 None => {
-                    assert!(result.is_err(), "Test case {} expected error.", name);
+                    assert!(result.is_err(), "Test case {name} expected error.");
                 }
             }
         }
@@ -727,7 +727,7 @@ mod tests {
 
         for (name, path, expected) in test_cases {
             let endpoint = path.as_endpoint();
-            assert_eq!(endpoint, expected, "Test case: {}", name);
+            assert_eq!(endpoint, expected, "Test case: {name}");
         }
     }
 }

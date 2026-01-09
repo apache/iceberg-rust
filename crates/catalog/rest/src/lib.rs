@@ -57,3 +57,4 @@ mod types;
 
 pub use catalog::*;
 pub use client::CustomAuthenticator;
+pub use types::*;

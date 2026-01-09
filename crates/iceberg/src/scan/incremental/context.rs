@@ -55,6 +55,9 @@ pub(crate) struct IncrementalPlanContext {
 
     /// The caching delete file loader to use for the scan.
     pub caching_delete_file_loader: CachingDeleteFileLoader,
+
+    /// Whether to match column names case-sensitively.
+    pub case_sensitive: bool,
 }
 
 impl IncrementalPlanContext {
@@ -123,6 +126,7 @@ impl IncrementalPlanContext {
                 field_ids: self.field_ids.clone(),
                 expression_evaluator_cache: self.expression_evaluator_cache.clone(),
                 delete_file_index: delete_file_idx.clone(),
+                case_sensitive: self.case_sensitive,
                 filter_fn: filter_fn.clone(),
             };
 

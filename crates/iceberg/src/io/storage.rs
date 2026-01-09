@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(any(
+    feature = "storage-s3",
+    feature = "storage-gcs",
+    feature = "storage-oss",
+    feature = "storage-azdls",
+))]
 use std::sync::Arc;
 
 use opendal::layers::RetryLayer;
@@ -71,6 +77,7 @@ impl Storage {
     /// Convert iceberg config to opendal config.
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> crate::Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
+        let _ = (&props, &extensions);
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {
@@ -127,6 +134,7 @@ impl Storage {
         path: &'a impl AsRef<str>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
+        let _ = path;
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
             Storage::Memory(op) => {
@@ -175,7 +183,7 @@ impl Storage {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {}, should start with {}", path, prefix),
+                        format!("Invalid gcs url: {path}, should start with {prefix}"),
                     ))
                 }
             }
@@ -190,7 +198,7 @@ impl Storage {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid oss url: {}, should start with {}", path, prefix),
+                        format!("Invalid oss url: {path}, should start with {prefix}"),
                     ))
                 }
             }
