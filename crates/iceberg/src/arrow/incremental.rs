@@ -30,12 +30,13 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{ArrowReader, StreamsInto};
 use crate::delete_vector::DeleteVector;
 use crate::io::FileIO;
-use crate::metadata_columns::{RESERVED_FIELD_ID_UNDERSCORE_POS, row_pos_field};
+use crate::metadata_columns::{RESERVED_FIELD_ID_POS, row_pos_field};
 use crate::runtime::spawn;
 use crate::scan::ArrowRecordBatchStream;
 use crate::scan::incremental::{
     AppendedFileScanTask, DeleteScanTask, IncrementalFileScanTaskStreams,
 };
+use crate::spec::{Datum, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 /// Default batch size for incremental delete operations.
@@ -65,10 +66,7 @@ async fn process_incremental_append_task(
     let mut virtual_columns = Vec::new();
 
     // Check if _pos column is requested and add it as a virtual column
-    let has_pos_column = task
-        .base
-        .project_field_ids
-        .contains(&RESERVED_FIELD_ID_UNDERSCORE_POS);
+    let has_pos_column = task.base.project_field_ids.contains(&RESERVED_FIELD_ID_POS);
     if has_pos_column {
         // Add _pos as a virtual column to be produced by the Parquet reader
         virtual_columns.push(Arc::clone(row_pos_field()));
@@ -102,12 +100,13 @@ async fn process_incremental_append_task(
     // RecordBatchTransformer performs any transformations required on the RecordBatches
     // that come back from the file, such as type promotion, default column insertion,
     // column re-ordering, and virtual field addition (like _file)
+    let datum = Datum::new(
+        PrimitiveType::String,
+        crate::spec::PrimitiveLiteral::String(task.base.data_file_path.clone()),
+    );
     let mut record_batch_transformer_builder =
         RecordBatchTransformerBuilder::new(task.schema_ref(), &task.base.project_field_ids)
-            .with_constant(
-                crate::metadata_columns::RESERVED_FIELD_ID_FILE,
-                crate::spec::PrimitiveLiteral::String(task.base.data_file_path.clone()),
-            )?;
+            .with_constant(crate::metadata_columns::RESERVED_FIELD_ID_FILE, datum);
 
     if has_pos_column {
         record_batch_transformer_builder =
@@ -184,7 +183,7 @@ fn process_incremental_delete_task(
     // Create schema with _file column first, then pos (Int64)
     let schema = Arc::new(ArrowSchema::new(vec![
         Arc::clone(crate::metadata_columns::file_path_field()),
-        Arc::clone(crate::metadata_columns::pos_field()),
+        Arc::clone(crate::metadata_columns::pos_field_arrow()),
     ]));
 
     let treemap = delete_vector.inner;
@@ -206,7 +205,7 @@ fn process_incremental_deleted_file_task(
     // Create schema with _file column first, then pos (Int64)
     let schema = Arc::new(ArrowSchema::new(vec![
         Arc::clone(crate::metadata_columns::file_path_field()),
-        Arc::clone(crate::metadata_columns::pos_field()),
+        Arc::clone(crate::metadata_columns::pos_field_arrow()),
     ]));
 
     // Create a stream of position values from 0 to total_records-1 (0-indexed)

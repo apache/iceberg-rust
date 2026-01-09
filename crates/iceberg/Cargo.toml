@@ -29,7 +29,7 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [features]
-default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
+default = ["storage-memory", "storage-fs", "storage-s3"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
 storage-azdls = ["opendal/services-azdls"]
@@ -39,8 +39,6 @@ storage-memory = ["opendal/services-memory"]
 storage-oss = ["opendal/services-oss"]
 storage-s3 = ["opendal/services-s3", "reqsign"]
 
-smol = ["dep:smol"]
-tokio = ["tokio/rt-multi-thread"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -85,7 +83,6 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
-smol = { workspace = true, optional = true }
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }

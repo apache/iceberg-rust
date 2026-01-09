@@ -104,6 +104,9 @@ pub struct FileScanTask {
     #[serde(serialize_with = "serialize_not_implemented")]
     #[serde(deserialize_with = "deserialize_not_implemented")]
     pub name_mapping: Option<Arc<NameMapping>>,
+
+    /// Whether this scan task should treat column names as case-sensitive when binding predicates.
+    pub case_sensitive: bool,
 }
 
 impl FileScanTask {

@@ -511,8 +511,7 @@ async fn test_authenticator_token_refresh() {
     let count = *token_request_count.lock().unwrap();
     assert!(
         count >= 2,
-        "Authenticator should have been called at least twice, but was called {} times",
-        count
+        "Authenticator should have been called at least twice, but was called {count} times"
     );
 }
 

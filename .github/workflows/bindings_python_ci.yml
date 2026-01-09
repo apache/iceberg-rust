@@ -41,10 +41,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # check-rust:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Check format
+  #       working-directory: "bindings/python"
+  #       run: cargo fmt --all -- --check
+  #     - name: Check clippy
+  #       working-directory: "bindings/python"
+  #       run: cargo clippy --all-targets --all-features -- -D warnings
+
   check-python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"
@@ -60,3 +71,41 @@ jobs:
         working-directory: "bindings/python"
         run: |
           uvx ruff check .
+
+  # test:
+  #   runs-on: ${{ matrix.os }}
+  #   strategy:
+  #     matrix:
+  #       os:
+  #         - ubuntu-latest
+  #         - macos-latest
+  #         - windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - uses: actions/setup-python@v6
+  #       with:
+  #         python-version: 3.12
+  #     - uses: PyO3/maturin-action@v1
+  #       with:
+  #         working-directory: "bindings/python"
+  #         command: build
+  #         args: --out dist --sdist
+  #     - uses: astral-sh/setup-uv@v7
+  #       with:
+  #         version: "0.9.3"
+  #         enable-cache: true
+  #     - name: Sync dependencies
+  #       working-directory: "bindings/python"
+  #       shell: bash
+  #       run: |
+  #         make install
+  #     - name: Install built wheel
+  #       working-directory: "bindings/python"
+  #       shell: bash
+  #       run: |
+  #         uv pip install --reinstall dist/pyiceberg_core-*.whl
+  #     - name: Run tests
+  #       working-directory: "bindings/python"
+  #       shell: bash
+  #       run: |
+  #         make test

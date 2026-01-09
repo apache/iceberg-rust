@@ -447,7 +447,7 @@ fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &
     let avro_value = Value::Bytes(input_bytes);
     let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
     let result = raw_literal.try_into(expected_type);
-    assert!(result.is_err(), "Expected error but got: {:?}", result);
+    assert!(result.is_err(), "Expected error but got: {result:?}");
 }
 
 #[test]
@@ -1291,6 +1291,31 @@ fn test_iceberg_float_order() {
     ];
 
     assert_eq!(double_sorted, double_expected);
+}
+
+#[test]
+fn test_negative_zero_less_than_positive_zero() {
+    {
+        let neg_zero = Datum::float(-0.0);
+        let pos_zero = Datum::float(0.0);
+
+        assert_eq!(
+            neg_zero.partial_cmp(&pos_zero),
+            Some(std::cmp::Ordering::Less),
+            "IEEE 754 totalOrder requires -0.0 < +0.0 on F32"
+        );
+    }
+
+    {
+        let neg_zero = Datum::double(-0.0);
+        let pos_zero = Datum::double(0.0);
+
+        assert_eq!(
+            neg_zero.partial_cmp(&pos_zero),
+            Some(std::cmp::Ordering::Less),
+            "IEEE 754 totalOrder requires -0.0 < +0.0 on F64"
+        );
+    }
 }
 
 /// Test Date deserialization from JSON as number (days since epoch).

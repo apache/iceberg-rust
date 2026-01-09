@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -107,7 +107,7 @@ jobs:
           command: sdist
           args: -o dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-sdist
           path: bindings/python/dist
@@ -128,7 +128,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -159,7 +159,7 @@ jobs:
           command: build
           args: --release -o dist
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: bindings/python/dist
@@ -178,7 +178,7 @@ jobs:
 
     steps:
       - name: Download all the dists
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: wheels-*
           merge-multiple: true

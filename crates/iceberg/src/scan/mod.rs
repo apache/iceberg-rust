@@ -21,9 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
-
 pub mod incremental;
-
 mod task;
 
 use std::sync::Arc;
@@ -40,8 +38,7 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_UNDERSCORE_POS, get_metadata_field_id,
-    is_metadata_column_name,
+    RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS, get_metadata_field_id, is_metadata_column_name,
 };
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
@@ -206,7 +203,7 @@ impl<'a> TableScanBuilder<'a> {
         });
 
         // Add _pos column
-        columns.push(RESERVED_COL_NAME_UNDERSCORE_POS.to_string());
+        columns.push(RESERVED_COL_NAME_POS.to_string());
 
         self.column_names = Some(columns);
         self
@@ -681,7 +678,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
-    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_UNDERSCORE_POS};
+    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
@@ -1262,6 +1259,97 @@ pub mod tests {
                 // writer must be closed to write footer
                 writer.close().unwrap();
             }
+        }
+
+        pub async fn setup_deadlock_manifests(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let _parent_snapshot = current_snapshot
+                .parent_snapshot(self.table.metadata())
+                .unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            // 1. Write DATA manifest with MULTIPLE entries to fill buffer
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            // Add 10 data entries
+            for i in 0..10 {
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(
+                                DataFileBuilder::default()
+                                    .partition_spec_id(0)
+                                    .content(DataContentType::Data)
+                                    .file_path(format!("{}/{}.parquet", &self.table_location, i))
+                                    .file_format(DataFileFormat::Parquet)
+                                    .file_size_in_bytes(100)
+                                    .record_count(1)
+                                    .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                    .key_metadata(None)
+                                    .build()
+                                    .unwrap(),
+                            )
+                            .build(),
+                    )
+                    .unwrap();
+            }
+            let data_manifest = writer.write_manifest_file().await.unwrap();
+
+            // 2. Write DELETE manifest
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_deletes();
+
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::PositionDeletes)
+                                .file_path(format!("{}/del.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let delete_manifest = writer.write_manifest_file().await.unwrap();
+
+            // Write to manifest list - DATA FIRST then DELETE
+            // This order is crucial for reproduction
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_manifest, delete_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
         }
     }
 
@@ -1887,6 +1975,7 @@ pub mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
         test_fn(task);
 
@@ -1904,6 +1993,7 @@ pub mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
         test_fn(task);
     }
@@ -1942,7 +2032,7 @@ pub mod tests {
             "_file column should be present in the batch"
         );
 
-        // Verify the _file column contains a file path (simple StringArray)
+        // Verify the _file column contains a file path (non-REE StringArray)
         let file_col = file_col.unwrap();
         assert_eq!(
             file_col.data_type(),
@@ -1955,8 +2045,7 @@ pub mod tests {
         let file_path = string_array.value(0);
         assert!(
             file_path.ends_with(".parquet"),
-            "File path should end with .parquet, got: {}",
-            file_path
+            "File path should end with .parquet, got: {file_path}"
         );
     }
 
@@ -2058,8 +2147,7 @@ pub mod tests {
         for path in &file_paths {
             assert!(
                 path.ends_with(".parquet"),
-                "All file paths should end with .parquet, got: {}",
-                path
+                "All file paths should end with .parquet, got: {path}"
             );
         }
     }
@@ -2214,7 +2302,7 @@ pub mod tests {
         let table_scan = fixture
             .table
             .scan()
-            .select(["x", RESERVED_COL_NAME_UNDERSCORE_POS])
+            .select(["x", RESERVED_COL_NAME_POS])
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
@@ -2231,7 +2319,7 @@ pub mod tests {
         assert_eq!(x_arr.value(0), 1);
 
         // Verify the _pos column exists
-        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS);
+        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_POS);
         assert!(
             pos_col.is_some(),
             "_pos column should be present in the batch"
@@ -2256,9 +2344,7 @@ pub mod tests {
             assert_eq!(
                 pos_array.value(i),
                 i as i64,
-                "Row {} should have position {}",
-                i,
-                i
+                "Row {i} should have position {i}"
             );
         }
 
@@ -2279,7 +2365,7 @@ pub mod tests {
         assert_eq!(batches[0].num_columns(), 2);
 
         // Verify the _pos column exists
-        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS);
+        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_POS);
         assert!(
             pos_col.is_some(),
             "_pos column should be present when using with_pos_column()"
@@ -2300,9 +2386,7 @@ pub mod tests {
             assert_eq!(
                 pos_array.value(i),
                 i as i64,
-                "Row {} should have position {}",
-                i,
-                i
+                "Row {i} should have position {i}"
             );
         }
     }
@@ -2318,12 +2402,7 @@ pub mod tests {
         let table_scan = fixture
             .table
             .scan()
-            .select([
-                "x",
-                RESERVED_COL_NAME_FILE,
-                "y",
-                RESERVED_COL_NAME_UNDERSCORE_POS,
-            ])
+            .select(["x", RESERVED_COL_NAME_FILE, "y", RESERVED_COL_NAME_POS])
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
@@ -2345,7 +2424,7 @@ pub mod tests {
         assert_eq!(schema.field(2).name(), "y", "Column 2 should be y");
         assert_eq!(
             schema.field(3).name(),
-            RESERVED_COL_NAME_UNDERSCORE_POS,
+            RESERVED_COL_NAME_POS,
             "Column 3 should be _pos"
         );
 
@@ -2371,18 +2450,14 @@ pub mod tests {
         );
 
         // Verify _pos column has valid sequential data
-        let pos_col = batches[0]
-            .column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS)
-            .unwrap();
+        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_POS).unwrap();
         let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
         assert_eq!(pos_array.value(0), 0, "First row should have position 0");
         for i in 1..pos_array.len().min(10) {
             assert_eq!(
                 pos_array.value(i),
                 i as i64,
-                "Row {} should have position {}",
-                i,
-                i
+                "Row {i} should have position {i}"
             );
         }
 
@@ -2390,12 +2465,7 @@ pub mod tests {
         let table_scan = fixture
             .table
             .scan()
-            .select([
-                "x",
-                RESERVED_COL_NAME_UNDERSCORE_POS,
-                "y",
-                RESERVED_COL_NAME_FILE,
-            ])
+            .select(["x", RESERVED_COL_NAME_POS, "y", RESERVED_COL_NAME_FILE])
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
@@ -2411,7 +2481,7 @@ pub mod tests {
         assert_eq!(schema.field(0).name(), "x", "Column 0 should be x");
         assert_eq!(
             schema.field(1).name(),
-            RESERVED_COL_NAME_UNDERSCORE_POS,
+            RESERVED_COL_NAME_POS,
             "Column 1 should be _pos"
         );
         assert_eq!(schema.field(2).name(), "y", "Column 2 should be y");
@@ -2422,9 +2492,7 @@ pub mod tests {
         );
 
         // Verify data is still correct
-        let pos_col = batches[0]
-            .column_by_name(RESERVED_COL_NAME_UNDERSCORE_POS)
-            .unwrap();
+        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_POS).unwrap();
         let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
         assert_eq!(pos_array.value(0), 0, "First row should have position 0");
 
@@ -2440,12 +2508,7 @@ pub mod tests {
         let table_scan = fixture
             .table
             .scan()
-            .select([
-                RESERVED_COL_NAME_FILE,
-                RESERVED_COL_NAME_UNDERSCORE_POS,
-                "x",
-                "y",
-            ])
+            .select([RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS, "x", "y"])
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
@@ -2462,42 +2525,69 @@ pub mod tests {
         );
         assert_eq!(
             schema.field(1).name(),
-            RESERVED_COL_NAME_UNDERSCORE_POS,
+            RESERVED_COL_NAME_POS,
             "Column 1 should be _pos"
         );
         assert_eq!(schema.field(2).name(), "x", "Column 2 should be x");
         assert_eq!(schema.field(3).name(), "y", "Column 3 should be y");
 
-        // Test 4: Both at the end
+        // Verify data types
+        assert_eq!(
+            schema.field(0).data_type(),
+            &arrow_schema::DataType::Utf8,
+            "_file column should use Utf8 type"
+        );
+        assert_eq!(
+            schema.field(1).data_type(),
+            &arrow_schema::DataType::Int64,
+            "_pos column should use Int64 type"
+        );
+
+        // Verify data is correct
+        let file_col = batches[0].column_by_name(RESERVED_COL_NAME_FILE).unwrap();
+        let file_array = file_col.as_string::<i32>();
+        let file_path = file_array.value(0);
+        assert!(
+            file_path.ends_with(".parquet"),
+            "File path should end with .parquet"
+        );
+
+        let pos_col = batches[0].column_by_name(RESERVED_COL_NAME_POS).unwrap();
+        let pos_array = pos_col.as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(pos_array.value(0), 0, "First row should have position 0");
+    }
+
+    #[tokio::test]
+    async fn test_scan_deadlock() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+
+        // Create table scan with concurrency limit 1
+        // This sets channel size to 1.
+        // Data manifest has 10 entries -> will block producer.
+        // Delete manifest is 2nd in list -> won't be processed.
+        // Consumer 2 (Data) not started -> blocked.
+        // Consumer 1 (Delete) waiting -> blocked.
         let table_scan = fixture
             .table
             .scan()
-            .select([
-                "x",
-                "y",
-                RESERVED_COL_NAME_UNDERSCORE_POS,
-                RESERVED_COL_NAME_FILE,
-            ])
-            .with_row_selection_enabled(true)
+            .with_concurrency_limit(1)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
-        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        // This should timeout/hang if deadlock exists
+        // We can use tokio::time::timeout
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            table_scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+        })
+        .await;
 
-        assert_eq!(batches[0].num_columns(), 4);
-        let schema = batches[0].schema();
-        assert_eq!(schema.field(0).name(), "x", "Column 0 should be x");
-        assert_eq!(schema.field(1).name(), "y", "Column 1 should be y");
-        assert_eq!(
-            schema.field(2).name(),
-            RESERVED_COL_NAME_UNDERSCORE_POS,
-            "Column 2 should be _pos"
-        );
-        assert_eq!(
-            schema.field(3).name(),
-            RESERVED_COL_NAME_FILE,
-            "Column 3 should be _file"
-        );
+        // Assert it finished (didn't timeout)
+        assert!(result.is_ok(), "Scan timed out - deadlock detected");
     }
 }

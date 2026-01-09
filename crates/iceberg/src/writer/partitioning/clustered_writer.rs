@@ -118,7 +118,6 @@ where
             // Create a new writer for the new partition
             self.current_writer = Some(
                 self.inner_builder
-                    .clone()
                     .build(Some(partition_key.clone()))
                     .await?,
             );

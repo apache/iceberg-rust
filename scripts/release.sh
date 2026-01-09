@@ -25,6 +25,12 @@ else
 	echo "var is set to '$ICEBERG_VERSION'"
 fi
 
+# Validate version format (e.g., 1.0.0)
+if [[ ! "$ICEBERG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "Error: ICEBERG_VERSION ($ICEBERG_VERSION) must be in the format: <number>.<number>.<number>"
+	exit 1
+fi
+
 # tar source code
 release_version=${ICEBERG_VERSION}
 # rc versions

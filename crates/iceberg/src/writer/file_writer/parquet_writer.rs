@@ -78,11 +78,11 @@ impl ParquetWriterBuilder {
 impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
+    async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
-            writer_properties: self.props,
+            writer_properties: self.props.clone(),
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
@@ -412,13 +412,13 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
-            .split_offsets(
+            .split_offsets(Some(
                 metadata
                     .row_groups()
                     .iter()
                     .filter_map(|group| group.file_offset())
                     .collect(),
-            );
+            ));
 
         Ok(builder)
     }

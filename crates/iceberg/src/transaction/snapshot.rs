@@ -34,13 +34,53 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
+/// A trait that defines how different table operations produce new snapshots.
+///
+/// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
+/// based on the type of operation being performed (e.g., `Append`, `Overwrite`, `Delete`, etc.).
+/// Each operation type implements this trait to specify:
+/// - Which operation type to record in the snapshot summary
+/// - Which existing manifest files should be included in the new snapshot
+/// - Which manifest entries should be marked as deleted
+///
+/// # When it accomplishes
+///
+/// This trait is used during the snapshot creation process in [`SnapshotProducer::commit()`]:
+///
+/// 1. **Operation Type Recording**: The `operation()` method determines which operation type
+///    (e.g., `Operation::Append`, `Operation::Overwrite`) is recorded in the snapshot summary.
+///    This metadata helps track what kind of change was made to the table.
+///
+/// 2. **Manifest File Selection**: The `existing_manifest()` method determines which existing
+///    manifest files from the current snapshot should be carried forward to the new snapshot.
+///    For example:
+///    - An `Append` operation typically includes all existing manifests plus new ones
+///    - An `Overwrite` operation might exclude manifests for partitions being overwritten
+///
+/// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
+///    operations to specify which manifest entries should be marked as deleted.
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
+    /// Returns the operation type that will be recorded in the snapshot summary.
+    ///
+    /// This determines what kind of operation is being performed (e.g., `Append`, `Overwrite`),
+    /// which is stored in the snapshot metadata for tracking and auditing purposes.
     fn operation(&self) -> Operation;
+
+    /// Returns manifest entries that should be marked as deleted in the new snapshot.
     #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
+
+    /// Returns existing manifest files that should be included in the new snapshot.
+    ///
+    /// This method determines which manifest files from the current snapshot should be
+    /// carried forward to the new snapshot. The selection depends on the operation type:
+    ///
+    /// - **Append operations**: Typically include all existing manifests
+    /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
+    /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
@@ -236,13 +276,13 @@ impl<'a> SnapshotProducer<'a> {
                     "Partition field should only be primitive type.",
                 )
             })?;
-            if let Some(value) = value {
-                if !field.compatible(&value.as_primitive_literal().unwrap()) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Partition value is not compatible partition type",
-                    ));
-                }
+            if let Some(value) = value
+                && !field.compatible(&value.as_primitive_literal().unwrap())
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Partition value is not compatible partition type",
+                ));
             }
         }
         Ok(())

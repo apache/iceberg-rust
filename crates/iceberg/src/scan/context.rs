@@ -38,18 +38,19 @@ pub(crate) type ManifestEntryFilterFn = dyn Fn(&ManifestEntryRef) -> bool + Send
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
-    pub manifest_file: ManifestFile,
+    pub(crate) manifest_file: ManifestFile,
 
-    pub sender: Sender<ManifestEntryContext>,
+    pub(crate) sender: Sender<ManifestEntryContext>,
 
-    pub field_ids: Arc<Vec<i32>>,
-    pub bound_predicates: Option<Arc<BoundPredicates>>,
-    pub object_cache: Arc<ObjectCache>,
-    pub snapshot_schema: SchemaRef,
-    pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    pub delete_file_index: DeleteFileIndex,
+    pub(crate) field_ids: Arc<Vec<i32>>,
+    pub(crate) bound_predicates: Option<Arc<BoundPredicates>>,
+    pub(crate) object_cache: Arc<ObjectCache>,
+    pub(crate) snapshot_schema: SchemaRef,
+    pub(crate) expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    pub(crate) delete_file_index: DeleteFileIndex,
+    pub(crate) case_sensitive: bool,
 
-    pub filter_fn: Option<Arc<ManifestEntryFilterFn>>,
+    pub(crate) filter_fn: Option<Arc<ManifestEntryFilterFn>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -63,6 +64,7 @@ pub(crate) struct ManifestEntryContext {
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
+    pub case_sensitive: bool,
 }
 
 impl ManifestFileContext {
@@ -79,7 +81,7 @@ impl ManifestFileContext {
             expression_evaluator_cache,
             delete_file_index,
             filter_fn,
-            ..
+            case_sensitive,
         } = self;
 
         let filter_fn = filter_fn.unwrap_or_else(|| Arc::new(|_| true));
@@ -96,6 +98,7 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
+                case_sensitive,
             };
 
             sender
@@ -142,6 +145,7 @@ impl ManifestEntryContext {
             partition_spec: None,
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
+            case_sensitive: self.case_sensitive,
         })
     }
 }
@@ -201,8 +205,19 @@ impl PlanContext {
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let manifest_files = manifest_list.entries().iter();
+        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        // Sort manifest files to process delete manifests first.
+        // This avoids a deadlock where the producer blocks on sending data manifest entries
+        // (because the data channel is full) while the delete manifest consumer is waiting
+        // for delete manifest entries (which haven't been produced yet).
+        // By processing delete manifests first, we ensure the delete consumer can finish,
+        // which then allows the data consumer to start draining the data channel.
+        manifest_files.sort_by_key(|m| match m.content {
+            ManifestContentType::Deletes => 0,
+            ManifestContentType::Data => 1,
+        });
 
+        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
@@ -237,7 +252,6 @@ impl PlanContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
-                None,
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -252,7 +266,6 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
-        filter_fn: Option<Arc<ManifestEntryFilterFn>>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -275,7 +288,8 @@ impl PlanContext {
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
-            filter_fn,
+            case_sensitive: self.case_sensitive,
+            filter_fn: None,
         }
     }
 }
