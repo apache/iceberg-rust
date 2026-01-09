@@ -61,6 +61,8 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Compression codec for Avro files (manifests, manifest lists)
     pub avro_compression_codec: Codec,
+    /// Whether to use `FanoutWriter` for partitioned tables.
+    pub write_datafusion_fanout_enabled: bool,
 }
 
 impl TableProperties {
@@ -157,6 +159,12 @@ impl TableProperties {
 
     /// Compression level for Avro files
     pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
+
+    /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
+    /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
+    /// Default value for fanout writer enabled
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -218,6 +226,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 // Convert to Codec
                 avro_util::codec_from_str(Some(&codec_name), level)
             },
+            write_datafusion_fanout_enabled: parse_property(
+                props,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
+            )?,
         })
     }
 }
@@ -257,6 +270,11 @@ mod tests {
         assert_eq!(
             table_properties.avro_compression_codec,
             Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
+        // Test datafusion fanout writer default
+        assert_eq!(
+            table_properties.write_datafusion_fanout_enabled,
+            TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT
         );
     }
 
