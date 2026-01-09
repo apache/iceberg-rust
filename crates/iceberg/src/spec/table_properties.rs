@@ -58,6 +58,8 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Compression codec for metadata files (JSON), None means no compression
     pub metadata_compression_codec: Option<String>,
+    /// Whether to use `FanoutWriter` for partitioned tables.
+    pub write_datafusion_fanout_enabled: bool,
 }
 
 impl TableProperties {
@@ -151,6 +153,11 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+    /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
+    /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
+    /// Default value for fanout writer enabled
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -195,6 +202,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                     "none" | "" => None,
                     codec => Some(codec.to_string()),
                 }),
+            write_datafusion_fanout_enabled: parse_property(
+                props,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
+            )?,
         })
     }
 }

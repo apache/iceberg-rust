@@ -54,6 +54,7 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -250,12 +251,20 @@ impl ArrowReader {
             initial_stream_builder
         };
 
+        // Filter out metadata fields for Parquet projection (they don't exist in files)
+        let project_field_ids_without_metadata: Vec<i32> = task
+            .project_field_ids
+            .iter()
+            .filter(|&&id| !is_metadata_field(id))
+            .copied()
+            .collect();
+
         // Create projection mask based on field IDs
         // - If file has embedded IDs: field-ID-based projection (missing_field_ids=false)
         // - If name mapping applied: field-ID-based projection (missing_field_ids=true but IDs now match)
         // - If fallback IDs: position-based projection (missing_field_ids=true)
         let projection_mask = Self::get_arrow_projection_mask(
-            &task.project_field_ids,
+            &project_field_ids_without_metadata,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
@@ -266,16 +275,23 @@ impl ArrowReader {
             record_batch_stream_builder.with_projection(projection_mask.clone());
 
         // RecordBatchTransformer performs any transformations required on the RecordBatches
-        // that come back from the file, such as type promotion, default column insertion
-        // and column re-ordering.
+        // that come back from the file, such as type promotion, default column insertion,
+        // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
             RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        // Add the _file metadata column if it's in the projected fields
+        if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
+            let file_datum = Datum::string(task.data_file_path.clone());
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
 
         if let (Some(partition_spec), Some(partition_data)) =
             (task.partition_spec.clone(), task.partition.clone())
         {
             record_batch_transformer_builder =
-                record_batch_transformer_builder.with_partition(partition_spec, partition_data);
+                record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();
@@ -416,7 +432,10 @@ impl ArrowReader {
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Ok(batch) => {
+                        // Process the record batch (type promotion, column reordering, virtual fields, etc.)
+                        record_batch_transformer.process_record_batch(batch)
+                    }
                     Err(err) => Err(err.into()),
                 });
 
@@ -485,10 +504,10 @@ impl ArrowReader {
                     // we need to call next() to update the cache with the newly positioned value.
                     delete_vector_iter.advance_to(next_row_group_base_idx);
                     // Only update the cache if the cached value is stale (in the skipped range)
-                    if let Some(cached_idx) = next_deleted_row_idx_opt {
-                        if cached_idx < next_row_group_base_idx {
-                            next_deleted_row_idx_opt = delete_vector_iter.next();
-                        }
+                    if let Some(cached_idx) = next_deleted_row_idx_opt
+                        && cached_idx < next_row_group_base_idx
+                    {
+                        next_deleted_row_idx_opt = delete_vector_iter.next();
                     }
 
                     // still increment the current page base index but then skip to the next row group
@@ -842,10 +861,10 @@ impl ArrowReader {
         };
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
-        if let Some(selected_row_groups) = selected_row_groups {
-            if selected_row_groups.is_empty() {
-                return Ok(RowSelection::from(Vec::new()));
-            }
+        if let Some(selected_row_groups) = selected_row_groups
+            && selected_row_groups.is_empty()
+        {
+            return Ok(RowSelection::from(Vec::new()));
         }
 
         let mut selected_row_groups_idx = 0;
@@ -878,10 +897,10 @@ impl ArrowReader {
 
             results.push(selections_for_page);
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                if selected_row_groups_idx == selected_row_groups.len() {
-                    break;
-                }
+            if let Some(selected_row_groups) = selected_row_groups
+                && selected_row_groups_idx == selected_row_groups.len()
+            {
+                break;
             }
         }
 
@@ -1012,14 +1031,13 @@ fn apply_name_mapping_to_arrow_schema(
 
             let mut metadata = field.metadata().clone();
 
-            if let Some(mapped_field) = mapped_field_opt {
-                if let Some(field_id) = mapped_field.field_id() {
-                    // Field found in mapping with a field_id → assign it
-                    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
-                }
-                // If field_id is None, leave the field without an ID (will be filtered by projection)
+            if let Some(mapped_field) = mapped_field_opt
+                && let Some(field_id) = mapped_field.field_id()
+            {
+                // Field found in mapping with a field_id → assign it
+                metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
             }
-            // If field not found in mapping, leave it without an ID (will be filtered by projection)
+            // If field_id is None, leave the field without an ID (will be filtered by projection)
 
             Field::new(field.name(), field.data_type().clone(), field.is_nullable())
                 .with_metadata(metadata)
@@ -1896,7 +1914,7 @@ message schema {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
             err.to_string(),
-            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+            "DataInvalid => Unsupported Arrow data type: Duration(µs)".to_string()
         );
 
         // Omitting field c2, we still get an error due to c3 being selected
@@ -2064,6 +2082,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2122,7 +2141,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer =
             ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
 
@@ -2303,7 +2322,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_path = format!("{}/multi_row_group.parquet", &table_location);
+        let file_path = format!("{table_location}/multi_row_group.parquet");
 
         // Force each batch into its own row group for testing byte range filtering.
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
@@ -2385,6 +2404,7 @@ message schema {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         // Task 2: read the second and third row groups
@@ -2401,6 +2421,7 @@ message schema {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2507,7 +2528,7 @@ message schema {
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
-        let file = File::create(format!("{}/old_file.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/old_file.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -2528,6 +2549,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2613,7 +2635,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -2647,7 +2669,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -2699,6 +2721,7 @@ message schema {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2712,15 +2735,14 @@ message schema {
         // Step 4: Verify we got 199 rows (not 200)
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
 
-        println!("Total rows read: {}", total_rows);
+        println!("Total rows read: {total_rows}");
         println!("Expected: 199 rows (deleted row 199 which had id=200)");
 
         // This assertion will FAIL before the fix and PASS after the fix
         assert_eq!(
             total_rows, 199,
-            "Expected 199 rows after deleting row 199, but got {} rows. \
-             The bug causes position deletes in later row groups to be ignored.",
-            total_rows
+            "Expected 199 rows after deleting row 199, but got {total_rows} rows. \
+             The bug causes position deletes in later row groups to be ignored."
         );
 
         // Verify the deleted row (id=200) is not present
@@ -2807,7 +2829,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -2841,7 +2863,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -2917,6 +2939,7 @@ message schema {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2931,16 +2954,15 @@ message schema {
         // Row group 1 has 100 rows (ids 101-200), minus 1 delete (id=200) = 99 rows
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
 
-        println!("Total rows read from row group 1: {}", total_rows);
+        println!("Total rows read from row group 1: {total_rows}");
         println!("Expected: 99 rows (row group 1 has 100 rows, 1 delete at position 199)");
 
         // This assertion will FAIL before the fix and PASS after the fix
         assert_eq!(
             total_rows, 99,
-            "Expected 99 rows from row group 1 after deleting position 199, but got {} rows. \
+            "Expected 99 rows from row group 1 after deleting position 199, but got {total_rows} rows. \
              The bug causes position deletes to be lost when advance_to() is followed by next() \
-             when skipping unselected row groups.",
-            total_rows
+             when skipping unselected row groups."
         );
 
         // Verify the deleted row (id=200) is not present
@@ -3029,7 +3051,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -3063,7 +3085,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 0 (id=1, first row in row group 0)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -3128,6 +3150,7 @@ message schema {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3209,7 +3232,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3222,7 +3245,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
@@ -3231,6 +3254,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3306,7 +3330,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3319,7 +3343,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 3],
@@ -3328,6 +3352,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3392,7 +3417,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3405,7 +3430,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
@@ -3414,6 +3439,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3480,7 +3506,7 @@ message schema {
             .set_max_row_group_size(2)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
 
         // Write 6 rows in 3 batches (will create 3 row groups)
@@ -3505,7 +3531,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
@@ -3514,6 +3540,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3546,7 +3573,7 @@ message schema {
         assert_eq!(all_values.len(), 6);
 
         for i in 0..6 {
-            assert_eq!(all_names[i], format!("name_{}", i));
+            assert_eq!(all_names[i], format!("name_{i}"));
             assert_eq!(all_values[i], i as i32);
         }
     }
@@ -3621,7 +3648,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3634,7 +3661,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
@@ -3643,6 +3670,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3718,7 +3746,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -3730,7 +3758,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 5, 2],
@@ -3739,6 +3767,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3820,7 +3849,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -3839,7 +3868,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
@@ -3848,6 +3877,7 @@ message schema {
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3978,7 +4008,7 @@ message schema {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/data.parquet", table_location),
+                data_file_path: format!("{table_location}/data.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
@@ -3987,6 +4017,7 @@ message schema {
                 partition: Some(partition_data),
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;

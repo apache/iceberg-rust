@@ -244,6 +244,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: Default::default(),
             if_not_exists: Default::default(),
+            or_replace: false,
             temporary: false,
             definition: Default::default(),
             unbounded: Default::default(),

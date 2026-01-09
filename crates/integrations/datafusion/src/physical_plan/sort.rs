@@ -42,9 +42,6 @@ use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
 /// # Returns
 /// * `Ok(Arc<dyn ExecutionPlan>)` - A SortExec that sorts by partition values
 /// * `Err` - If the partition column is not found
-///
-/// TODO remove dead_code mark when integrating with insert_into
-#[allow(dead_code)]
 pub(crate) fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
 
@@ -53,8 +50,7 @@ pub(crate) fn sort_by_partition(input: Arc<dyn ExecutionPlan>) -> DFResult<Arc<d
         .column_with_name(PROJECTED_PARTITION_VALUE_COLUMN)
         .ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "Partition column '{}' not found in schema. Ensure the plan has been extended with partition values using project_with_partition.",
-                PROJECTED_PARTITION_VALUE_COLUMN
+                "Partition column '{PROJECTED_PARTITION_VALUE_COLUMN}' not found in schema. Ensure the plan has been extended with partition values using project_with_partition."
             ))
         })?;
 

@@ -166,36 +166,16 @@ impl<'de> Deserialize<'de> for Datum {
 
 // Compare following iceberg float ordering rules:
 //  -NaN < -Infinity < -value < -0 < 0 < value < Infinity < NaN
-fn iceberg_float_cmp<T: Float>(a: T, b: T) -> Option<Ordering> {
-    if a.is_nan() && b.is_nan() {
-        return match (a.is_sign_negative(), b.is_sign_negative()) {
-            (true, false) => Some(Ordering::Less),
-            (false, true) => Some(Ordering::Greater),
-            _ => Some(Ordering::Equal),
-        };
-    }
+fn iceberg_float_cmp_f32(a: OrderedFloat<f32>, b: OrderedFloat<f32>) -> Option<Ordering> {
+    Some(a.total_cmp(&b))
+}
 
-    if a.is_nan() {
-        return Some(if a.is_sign_negative() {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        });
-    }
-
-    if b.is_nan() {
-        return Some(if b.is_sign_negative() {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        });
-    }
-
-    a.partial_cmp(&b)
+fn iceberg_float_cmp_f64(a: OrderedFloat<f64>, b: OrderedFloat<f64>) -> Option<Ordering> {
+    Some(a.total_cmp(&b))
 }
 
 impl PartialOrd for Datum {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (&self.literal, &other.literal, &self.r#type, &other.r#type) {
             // generate the arm with same type and same literal
             (
@@ -221,13 +201,13 @@ impl PartialOrd for Datum {
                 PrimitiveLiteral::Float(other_val),
                 PrimitiveType::Float,
                 PrimitiveType::Float,
-            ) => iceberg_float_cmp(*val, *other_val),
+            ) => iceberg_float_cmp_f32(*val, *other_val),
             (
                 PrimitiveLiteral::Double(val),
                 PrimitiveLiteral::Double(other_val),
                 PrimitiveType::Double,
                 PrimitiveType::Double,
-            ) => iceberg_float_cmp(*val, *other_val),
+            ) => iceberg_float_cmp_f64(*val, *other_val),
             (
                 PrimitiveLiteral::Int(val),
                 PrimitiveLiteral::Int(other_val),

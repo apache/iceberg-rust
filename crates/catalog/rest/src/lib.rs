@@ -56,3 +56,4 @@ mod client;
 mod types;
 
 pub use catalog::*;
+pub use types::*;

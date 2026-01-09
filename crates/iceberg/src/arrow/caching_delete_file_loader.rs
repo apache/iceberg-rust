@@ -23,7 +23,7 @@ use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use futures::{StreamExt, TryStreamExt};
 use tokio::sync::oneshot::{Receiver, channel};
 
-use super::delete_filter::DeleteFilter;
+use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
@@ -42,13 +42,20 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) struct CachingDeleteFileLoader {
     basic_delete_file_loader: BasicDeleteFileLoader,
     concurrency_limit_data_files: usize,
+    /// Shared filter state to allow caching loaded deletes across multiple
+    /// calls to `load_deletes` (e.g., across multiple file scan tasks).
+    delete_filter: DeleteFilter,
 }
 
 // Intermediate context during processing of a delete file task.
 enum DeleteFileContext {
     // TODO: Delete Vector loader from Puffin files
     ExistingEqDel,
-    PosDels(ArrowRecordBatchStream),
+    ExistingPosDel,
+    PosDels {
+        file_path: String,
+        stream: ArrowRecordBatchStream,
+    },
     FreshEqDel {
         batch_stream: ArrowRecordBatchStream,
         equality_ids: HashSet<i32>,
@@ -59,8 +66,12 @@ enum DeleteFileContext {
 // Final result of the processing of a delete file task before
 // results are fully merged into the DeleteFileManager's state
 enum ParsedDeleteFileContext {
-    DelVecs(HashMap<String, DeleteVector>),
+    DelVecs {
+        file_path: String,
+        results: HashMap<String, DeleteVector>,
+    },
     EqDel,
+    ExistingPosDel,
 }
 
 #[allow(unused_variables)]
@@ -69,6 +80,7 @@ impl CachingDeleteFileLoader {
         CachingDeleteFileLoader {
             basic_delete_file_loader: BasicDeleteFileLoader::new(file_io),
             concurrency_limit_data_files,
+            delete_filter: DeleteFilter::default(),
         }
     }
 
@@ -142,7 +154,6 @@ impl CachingDeleteFileLoader {
         schema: SchemaRef,
     ) -> Receiver<Result<DeleteFilter>> {
         let (tx, rx) = channel();
-        let del_filter = DeleteFilter::default();
 
         let stream_items = delete_file_entries
             .iter()
@@ -150,14 +161,14 @@ impl CachingDeleteFileLoader {
                 (
                     t.clone(),
                     self.basic_delete_file_loader.clone(),
-                    del_filter.clone(),
+                    self.delete_filter.clone(),
                     schema.clone(),
                 )
             })
             .collect::<Vec<_>>();
         let task_stream = futures::stream::iter(stream_items);
 
-        let del_filter = del_filter.clone();
+        let del_filter = self.delete_filter.clone();
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let basic_delete_file_loader = self.basic_delete_file_loader.clone();
         crate::runtime::spawn(async move {
@@ -165,7 +176,7 @@ impl CachingDeleteFileLoader {
                 let mut del_filter = del_filter;
                 let basic_delete_file_loader = basic_delete_file_loader.clone();
 
-                let results: Vec<ParsedDeleteFileContext> = task_stream
+                let mut results_stream = task_stream
                     .map(move |(task, file_io, del_filter, schema)| {
                         let basic_delete_file_loader = basic_delete_file_loader.clone();
                         async move {
@@ -181,15 +192,16 @@ impl CachingDeleteFileLoader {
                     .map(move |ctx| {
                         Ok(async { Self::parse_file_content_for_task(ctx.await?).await })
                     })
-                    .try_buffer_unordered(concurrency_limit_data_files)
-                    .try_collect::<Vec<_>>()
-                    .await?;
+                    .try_buffer_unordered(concurrency_limit_data_files);
 
-                for item in results {
-                    if let ParsedDeleteFileContext::DelVecs(hash_map) = item {
-                        for (data_file_path, delete_vector) in hash_map.into_iter() {
+                while let Some(item) = results_stream.next().await {
+                    let item = item?;
+                    if let ParsedDeleteFileContext::DelVecs { file_path, results } = item {
+                        for (data_file_path, delete_vector) in results.into_iter() {
                             del_filter.upsert_delete_vector(data_file_path, delete_vector);
                         }
+                        // Mark the positional delete file as fully loaded so waiters can proceed
+                        del_filter.finish_pos_del_load(&file_path);
                     }
                 }
 
@@ -210,11 +222,24 @@ impl CachingDeleteFileLoader {
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
         match task.file_type {
-            DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
-                basic_delete_file_loader
-                    .parquet_to_batch_stream(&task.file_path)
-                    .await?,
-            )),
+            DataContentType::PositionDeletes => {
+                match del_filter.try_start_pos_del_load(&task.file_path) {
+                    PosDelLoadAction::AlreadyLoaded => Ok(DeleteFileContext::ExistingPosDel),
+                    PosDelLoadAction::WaitFor(notify) => {
+                        // Positional deletes are accessed synchronously by ArrowReader.
+                        // We must wait here to ensure the data is ready before returning,
+                        // otherwise ArrowReader might get an empty/partial result.
+                        notify.notified().await;
+                        Ok(DeleteFileContext::ExistingPosDel)
+                    }
+                    PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
+                        file_path: task.file_path.clone(),
+                        stream: basic_delete_file_loader
+                            .parquet_to_batch_stream(&task.file_path)
+                            .await?,
+                    }),
+                }
+            }
 
             DataContentType::EqualityDeletes => {
                 let Some(notify) = del_filter.try_start_eq_del_load(&task.file_path) else {
@@ -255,10 +280,13 @@ impl CachingDeleteFileLoader {
     ) -> Result<ParsedDeleteFileContext> {
         match ctx {
             DeleteFileContext::ExistingEqDel => Ok(ParsedDeleteFileContext::EqDel),
-            DeleteFileContext::PosDels(batch_stream) => {
-                let del_vecs =
-                    Self::parse_positional_deletes_record_batch_stream(batch_stream).await?;
-                Ok(ParsedDeleteFileContext::DelVecs(del_vecs))
+            DeleteFileContext::ExistingPosDel => Ok(ParsedDeleteFileContext::ExistingPosDel),
+            DeleteFileContext::PosDels { file_path, stream } => {
+                let del_vecs = Self::parse_positional_deletes_record_batch_stream(stream).await?;
+                Ok(ParsedDeleteFileContext::DelVecs {
+                    file_path,
+                    results: del_vecs,
+                })
             }
             DeleteFileContext::FreshEqDel {
                 sender,
@@ -330,7 +358,7 @@ impl CachingDeleteFileLoader {
         mut stream: ArrowRecordBatchStream,
         equality_ids: HashSet<i32>,
     ) -> Result<Predicate> {
-        let mut result_predicate = AlwaysTrue;
+        let mut row_predicates = Vec::new();
         let mut batch_schema_iceberg: Option<Schema> = None;
         let accessor = EqDelRecordBatchPartnerAccessor;
 
@@ -374,10 +402,29 @@ impl CachingDeleteFileLoader {
                         row_predicate = row_predicate.and(cell_predicate)
                     }
                 }
-                result_predicate = result_predicate.and(row_predicate.not());
+                row_predicates.push(row_predicate.not().rewrite_not());
             }
         }
-        Ok(result_predicate.rewrite_not())
+
+        // All row predicates are combined to a single predicate by creating a balanced binary tree.
+        // Using a simple fold would result in a deeply nested predicate that can cause a stack overflow.
+        while row_predicates.len() > 1 {
+            let mut next_level = Vec::with_capacity(row_predicates.len().div_ceil(2));
+            let mut iter = row_predicates.into_iter();
+            while let Some(p1) = iter.next() {
+                if let Some(p2) = iter.next() {
+                    next_level.push(p1.and(p2));
+                } else {
+                    next_level.push(p1);
+                }
+            }
+            row_predicates = next_level;
+        }
+
+        match row_predicates.pop() {
+            Some(p) => Ok(p),
+            None => Ok(AlwaysTrue),
+        }
     }
 }
 
@@ -892,6 +939,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            case_sensitive: false,
         };
 
         // Load the deletes - should handle both types without error
@@ -911,5 +959,91 @@ mod tests {
             "Failed to build equality delete predicate: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_large_equality_delete_batch_stack_overflow() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        // Create a large batch of equality deletes
+        let num_rows = 20_000;
+        let col_y_vals: Vec<i64> = (0..num_rows).collect();
+        let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("y", arrow_schema::DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let record_batch = RecordBatch::try_new(schema.clone(), vec![col_y]).unwrap();
+
+        // Write to file
+        let path = format!("{}/large-eq-deletes.parquet", &table_location);
+        let file = File::create(&path).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&record_batch).unwrap();
+        writer.close().unwrap();
+
+        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let record_batch_stream = basic_delete_file_loader
+            .parquet_to_batch_stream(&path)
+            .await
+            .expect("could not get batch stream");
+
+        let eq_ids = HashSet::from_iter(vec![2]);
+
+        let result = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            record_batch_stream,
+            eq_ids,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_caching_delete_file_loader_caches_results() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path();
+        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+
+        let file_scan_tasks = setup(table_location);
+
+        // Load deletes for the first time
+        let delete_filter_1 = delete_file_loader
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Load deletes for the second time (same task/files)
+        let delete_filter_2 = delete_file_loader
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let dv1 = delete_filter_1
+            .get_delete_vector(&file_scan_tasks[0])
+            .unwrap();
+        let dv2 = delete_filter_2
+            .get_delete_vector(&file_scan_tasks[0])
+            .unwrap();
+
+        // Verify that the delete vectors point to the same memory location,
+        // confirming that the second load reused the result from the first.
+        assert!(Arc::ptr_eq(&dv1, &dv2));
     }
 }
