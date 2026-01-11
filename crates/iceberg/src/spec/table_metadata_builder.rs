@@ -902,12 +902,11 @@ impl TableMetadataBuilder {
             .fields
             .into_iter()
             .map(|mut field| {
-                if field.field_id.is_none() {
-                    if let Some(&existing_field_id) =
+                if field.field_id.is_none()
+                    && let Some(&existing_field_id) =
                         equivalent_field_ids.get(&(field.source_id, &field.transform))
-                    {
-                        field.field_id = Some(existing_field_id);
-                    }
+                {
+                    field.field_id = Some(existing_field_id);
                 }
                 field
             })
