@@ -509,12 +509,12 @@ pub(crate) mod _serde {
                             ))
                         }
                     }
-                    Type::Primitive(PrimitiveType::Geometry { .. }) => {
-                        Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec()))))
-                    }
-                    Type::Primitive(PrimitiveType::Geography { .. }) => {
-                        Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec()))))
-                    }
+                    Type::Primitive(PrimitiveType::Geometry { .. }) => Ok(Some(
+                        Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec())),
+                    )),
+                    Type::Primitive(PrimitiveType::Geography { .. }) => Ok(Some(
+                        Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec())),
+                    )),
                     _ => Err(invalid_err("bytes")),
                 },
                 RawLiteralEnum::List(v) => match ty {

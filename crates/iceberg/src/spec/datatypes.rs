@@ -431,9 +431,7 @@ where S: Serializer {
 }
 
 fn deserialize_geography<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
     if s == "geography" {
         return Ok(PrimitiveType::Geography {
