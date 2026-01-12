@@ -247,6 +247,40 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Geometry type
+    Geometry {
+        /// CRS
+        crs: String,
+    },
+    /// Geography type
+    Geography {
+        /// CRS
+        crs: String,
+        /// Edge algorithm
+        algorithm: EdgeAlgorithm,
+    },
+}
+
+/// Edge algorithm for geography type.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeAlgorithm {
+    /// Planar
+    Planar,
+    /// Spherical
+    Spherical,
+    /// Vincenty
+    Vincenty,
+}
+
+impl fmt::Display for EdgeAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            EdgeAlgorithm::Planar => write!(f, "planar"),
+            EdgeAlgorithm::Spherical => write!(f, "spherical"),
+            EdgeAlgorithm::Vincenty => write!(f, "vincenty"),
+        }
+    }
 }
 
 impl PrimitiveType {
@@ -270,6 +304,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geometry { .. }, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geography { .. }, PrimitiveLiteral::Binary(_))
         )
     }
 }
@@ -298,6 +334,10 @@ impl<'de> Deserialize<'de> for PrimitiveType {
             deserialize_decimal(s.into_deserializer())
         } else if s.starts_with("fixed") {
             deserialize_fixed(s.into_deserializer())
+        } else if s.starts_with("geometry") {
+            deserialize_geometry(s.into_deserializer())
+        } else if s.starts_with("geography") {
+            deserialize_geography(s.into_deserializer())
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
@@ -312,6 +352,10 @@ impl Serialize for PrimitiveType {
                 serialize_decimal(precision, scale, serializer)
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
+            PrimitiveType::Geometry { crs } => serialize_geometry(crs, serializer),
+            PrimitiveType::Geography { crs, algorithm } => {
+                serialize_geography(crs, algorithm, serializer)
+            }
             _ => PrimitiveType::serialize(self, serializer),
         }
     }
@@ -361,6 +405,88 @@ where S: Serializer {
     serializer.serialize_str(&format!("fixed[{value}]"))
 }
 
+fn deserialize_geometry<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "geometry" {
+        return Ok(PrimitiveType::Geometry {
+            crs: "OGC:CRS84".to_string(),
+        });
+    }
+    let crs = s
+        .trim_start_matches(r"geometry(")
+        .trim_end_matches(')')
+        .to_owned();
+
+    Ok(PrimitiveType::Geometry { crs })
+}
+
+fn serialize_geometry<S>(crs: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if crs == "OGC:CRS84" {
+        serializer.serialize_str("geometry")
+    } else {
+        serializer.serialize_str(&format!("geometry({crs})"))
+    }
+}
+
+fn deserialize_geography<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "geography" {
+        return Ok(PrimitiveType::Geography {
+            crs: "OGC:CRS84".to_string(),
+            algorithm: EdgeAlgorithm::Spherical,
+        });
+    }
+    let params = s.trim_start_matches(r"geography(").trim_end_matches(')');
+
+    if let Some((crs, algorithm)) = params.split_once(',') {
+        let algorithm = match algorithm.trim().to_lowercase().as_str() {
+            "planar" => EdgeAlgorithm::Planar,
+            "spherical" => EdgeAlgorithm::Spherical,
+            "vincenty" => EdgeAlgorithm::Vincenty,
+            _ => {
+                return Err(D::Error::custom(format!(
+                    "Invalid edge algorithm: {algorithm}"
+                )));
+            }
+        };
+        Ok(PrimitiveType::Geography {
+            crs: crs.trim().to_string(),
+            algorithm,
+        })
+    } else {
+        Ok(PrimitiveType::Geography {
+            crs: params.trim().to_string(),
+            algorithm: EdgeAlgorithm::Spherical,
+        })
+    }
+}
+
+fn serialize_geography<S>(
+    crs: &str,
+    algorithm: &EdgeAlgorithm,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if crs == "OGC:CRS84" && matches!(algorithm, EdgeAlgorithm::Spherical) {
+        serializer.serialize_str("geography")
+    } else if matches!(algorithm, EdgeAlgorithm::Spherical) {
+        serializer.serialize_str(&format!("geography({crs})"))
+    } else {
+        serializer.serialize_str(&format!("geography({crs}, {algorithm})"))
+    }
+}
+
 impl fmt::Display for PrimitiveType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -382,6 +508,22 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Geometry { crs } => {
+                if crs == "OGC:CRS84" {
+                    write!(f, "geometry")
+                } else {
+                    write!(f, "geometry({crs})")
+                }
+            }
+            PrimitiveType::Geography { crs, algorithm } => {
+                if crs == "OGC:CRS84" && matches!(algorithm, EdgeAlgorithm::Spherical) {
+                    write!(f, "geography")
+                } else if matches!(algorithm, EdgeAlgorithm::Spherical) {
+                    write!(f, "geography({crs})")
+                } else {
+                    write!(f, "geography({crs}, {algorithm})")
+                }
+            }
         }
     }
 }
@@ -1184,6 +1326,76 @@ mod tests {
     }
 
     #[test]
+    fn geometry_geography_type_serde() {
+        let pairs = vec![
+            (
+                "geometry",
+                PrimitiveType::Geometry {
+                    crs: "OGC:CRS84".to_string(),
+                },
+                None,
+            ),
+            (
+                "geometry(EPSG:4326)",
+                PrimitiveType::Geometry {
+                    crs: "EPSG:4326".to_string(),
+                },
+                None,
+            ),
+            (
+                "geography",
+                PrimitiveType::Geography {
+                    crs: "OGC:CRS84".to_string(),
+                    algorithm: EdgeAlgorithm::Spherical,
+                },
+                None,
+            ),
+            (
+                "geography(EPSG:4326)",
+                PrimitiveType::Geography {
+                    crs: "EPSG:4326".to_string(),
+                    algorithm: EdgeAlgorithm::Spherical,
+                },
+                None,
+            ),
+            (
+                "geography(EPSG:4326, planar)",
+                PrimitiveType::Geography {
+                    crs: "EPSG:4326".to_string(),
+                    algorithm: EdgeAlgorithm::Planar,
+                },
+                None,
+            ),
+            (
+                "geography(EPSG:4326, spherical)",
+                PrimitiveType::Geography {
+                    crs: "EPSG:4326".to_string(),
+                    algorithm: EdgeAlgorithm::Spherical,
+                },
+                Some("geography(EPSG:4326)"),
+            ),
+            (
+                "geography(EPSG:4326, vincenty)",
+                PrimitiveType::Geography {
+                    crs: "EPSG:4326".to_string(),
+                    algorithm: EdgeAlgorithm::Vincenty,
+                },
+                None,
+            ),
+        ];
+
+        for (json, expected_type, expected_json) in pairs {
+            let json_input = format!("\"{}\"", json);
+            let desered_type: PrimitiveType = serde_json::from_str(&json_input).unwrap();
+            assert_eq!(desered_type, expected_type);
+
+            let sered_json = serde_json::to_string(&expected_type).unwrap();
+            let expected_output = expected_json.unwrap_or(json);
+            assert_eq!(sered_json, format!("\"{}\"", expected_output));
+        }
+    }
+
+    #[test]
     fn test_primitive_type_compatible() {
         let pairs = vec![
             (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(true)),
@@ -1210,6 +1422,19 @@ mod tests {
             ),
             (PrimitiveType::Fixed(8), PrimitiveLiteral::Binary(vec![1])),
             (PrimitiveType::Binary, PrimitiveLiteral::Binary(vec![1])),
+            (
+                PrimitiveType::Geometry {
+                    crs: "OGC:CRS84".to_string(),
+                },
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
+            (
+                PrimitiveType::Geography {
+                    crs: "OGC:CRS84".to_string(),
+                    algorithm: EdgeAlgorithm::Spherical,
+                },
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
