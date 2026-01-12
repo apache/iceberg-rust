@@ -122,7 +122,10 @@ impl SchemaVisitor for HiveSchemaBuilder {
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
+            PrimitiveType::Timestamptz
+            | PrimitiveType::TimestamptzNs
+            | PrimitiveType::Geometry { .. }
+            | PrimitiveType::Geography { .. } => {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     format!("Conversion from {p:?} is not supported"),
