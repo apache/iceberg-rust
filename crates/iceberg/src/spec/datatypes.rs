@@ -406,9 +406,7 @@ where S: Serializer {
 }
 
 fn deserialize_geometry<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
     if s == "geometry" {
         return Ok(PrimitiveType::Geometry {
@@ -424,9 +422,7 @@ where
 }
 
 fn serialize_geometry<S>(crs: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
+where S: Serializer {
     if crs == "OGC:CRS84" {
         serializer.serialize_str("geometry")
     } else {
