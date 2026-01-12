@@ -1439,4 +1439,3 @@ fn test_date_from_json_as_number() {
 
     // Both formats should produce the same Literal value
 }
-
