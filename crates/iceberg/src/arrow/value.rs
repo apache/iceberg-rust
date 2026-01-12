@@ -624,6 +624,7 @@ pub fn arrow_primitive_to_literal(
 ///
 /// This is used for creating constant arrays (Run-End Encoded arrays) where we need
 /// a single value that represents all rows.
+#[allow(dead_code)]
 pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
     prim_lit: &Option<PrimitiveLiteral>,

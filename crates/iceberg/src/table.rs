@@ -24,6 +24,7 @@ use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::scan::TableScanBuilder;
+use crate::scan::incremental::IncrementalTableScanBuilder;
 use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
@@ -222,6 +223,19 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+
+    /// Creates an incremental table scan between two snapshots.
+    ///
+    /// # Arguments
+    /// * `from_snapshot_id` - Starting snapshot ID. If None, scans from the root (oldest) snapshot.
+    /// * `to_snapshot_id` - Ending snapshot ID. If None, scans to the current (latest) snapshot.
+    pub fn incremental_scan(
+        &self,
+        from_snapshot_id: Option<i64>,
+        to_snapshot_id: Option<i64>,
+    ) -> IncrementalTableScanBuilder<'_> {
+        IncrementalTableScanBuilder::new(self, from_snapshot_id, to_snapshot_id)
     }
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.

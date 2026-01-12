@@ -1125,6 +1125,32 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
     }
 }
 
+/// Converts a Datum to an Arrow DataType without Run-End Encoding.
+/// For constant fields, this returns the plain Arrow type instead of wrapped in REE.
+pub(crate) fn datum_to_arrow_type(datum: &Datum) -> DataType {
+    // Match on the PrimitiveType from the Datum to determine the Arrow type
+    match datum.data_type() {
+        PrimitiveType::Boolean => DataType::Boolean,
+        PrimitiveType::Int => DataType::Int32,
+        PrimitiveType::Long => DataType::Int64,
+        PrimitiveType::Float => DataType::Float32,
+        PrimitiveType::Double => DataType::Float64,
+        PrimitiveType::Date => DataType::Date32,
+        PrimitiveType::Time => DataType::Int64,
+        PrimitiveType::Timestamp => DataType::Int64,
+        PrimitiveType::Timestamptz => DataType::Int64,
+        PrimitiveType::TimestampNs => DataType::Int64,
+        PrimitiveType::TimestamptzNs => DataType::Int64,
+        PrimitiveType::String => DataType::Utf8,
+        PrimitiveType::Uuid => DataType::Binary,
+        PrimitiveType::Fixed(_) => DataType::Binary,
+        PrimitiveType::Binary => DataType::Binary,
+        PrimitiveType::Decimal { precision, scale } => {
+            DataType::Decimal128(*precision as u8, *scale as i8)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

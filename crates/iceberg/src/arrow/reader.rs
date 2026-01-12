@@ -32,8 +32,9 @@ use arrow_schema::{
 use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
+use futures::channel::mpsc::channel;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
+use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt, try_join};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
@@ -54,7 +55,10 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::metadata_columns::{
+    RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS, is_metadata_field, row_pos_field,
+};
+use crate::runtime::spawn;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
@@ -127,47 +131,104 @@ impl ArrowReaderBuilder {
 /// Reads data from Parquet files
 #[derive(Clone)]
 pub struct ArrowReader {
-    batch_size: Option<usize>,
-    file_io: FileIO,
+    pub(crate) batch_size: Option<usize>,
+    pub(crate) file_io: FileIO,
     delete_file_loader: CachingDeleteFileLoader,
 
     /// the maximum number of data files that can be fetched at the same time
-    concurrency_limit_data_files: usize,
+    pub(crate) concurrency_limit_data_files: usize,
 
-    row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
+    pub(crate) row_group_filtering_enabled: bool,
+    pub(crate) row_selection_enabled: bool,
+}
+
+/// Trait indicating that the implementing type streams into a stream of type `S` using
+/// a reader of type `R`.
+pub trait StreamsInto<R, S = ArrowRecordBatchStream> {
+    /// Stream from the reader and produce a stream of type `S`.
+    fn stream(self, reader: R) -> Result<S>;
+}
+
+/// Helper function to process a stream of record batches and send through a channel.
+/// Handles the Result<Stream> pattern, so callers don't need to match on the stream result.
+/// This pattern is used in both reader.rs and incremental.rs.
+pub(crate) async fn process_record_batch_stream<E, S, T>(
+    record_batch_stream: Result<S>,
+    mut tx: T,
+    error_context: &str,
+) where
+    E: std::error::Error + Send + Sync + 'static,
+    S: Stream<Item = std::result::Result<RecordBatch, E>> + Send + Unpin + 'static,
+    T: SinkExt<Result<RecordBatch>> + Unpin + Send + 'static,
+{
+    match record_batch_stream {
+        Ok(mut stream) => {
+            while let Some(batch_result) = stream.next().await {
+                let batch = batch_result
+                    .map_err(|e| Error::new(ErrorKind::Unexpected, error_context).with_source(e));
+                let _ = tx.send(batch).await;
+            }
+        }
+        Err(e) => {
+            let _ = tx.send(Err(e)).await;
+        }
+    }
 }
 
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
-    /// Returns a stream of Arrow RecordBatches containing the data from the files
+    /// Returns a stream of Arrow RecordBatches containing the data from the files.
+    ///
+    /// This implementation provides both file-level and batch-level parallelism:
+    /// - Multiple files are processed in parallel (IO-heavy operations)
+    /// - Multiple batches are processed in parallel across all files (CPU-heavy operations)
     pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
-        let file_io = self.file_io.clone();
+        let (tx, rx) = channel::<Result<RecordBatch>>(self.concurrency_limit_data_files);
+
+        let file_io = self.file_io;
         let batch_size = self.batch_size;
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
+        let delete_file_loader = self.delete_file_loader;
 
-        let stream = tasks
-            .map_ok(move |task| {
-                let file_io = file_io.clone();
+        // Outer spawn for coordination - runs the entire processing pipeline in background
+        spawn(async move {
+            let _ = tasks
+                .try_for_each_concurrent(concurrency_limit_data_files, |task| {
+                    let file_io = file_io.clone();
+                    let delete_file_loader = delete_file_loader.clone();
+                    let tx = tx.clone();
 
-                Self::process_file_scan_task(
-                    task,
-                    batch_size,
-                    file_io,
-                    self.delete_file_loader.clone(),
-                    row_group_filtering_enabled,
-                    row_selection_enabled,
-                )
-            })
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
-            })
-            .try_buffer_unordered(concurrency_limit_data_files)
-            .try_flatten_unordered(concurrency_limit_data_files);
+                    async move {
+                        // Inner spawn for IO-heavy file operations (parallel file processing)
+                        spawn(async move {
+                            let record_batch_stream = Self::process_file_scan_task(
+                                task,
+                                batch_size,
+                                file_io,
+                                delete_file_loader,
+                                row_group_filtering_enabled,
+                                row_selection_enabled,
+                            )
+                            .await;
 
-        Ok(Box::pin(stream) as ArrowRecordBatchStream)
+                            process_record_batch_stream(
+                                record_batch_stream,
+                                tx,
+                                "failed to read record batch",
+                            )
+                            .await;
+                        })
+                        .await;
+
+                        Ok(())
+                    }
+                })
+                .await;
+        });
+
+        Ok(Box::pin(rx) as ArrowRecordBatchStream)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -185,13 +246,22 @@ impl ArrowReader {
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
+        let mut virtual_columns = Vec::new();
+
+        // Check if _pos column is requested and prepare virtual columns
+        let has_pos_column = task.project_field_ids.contains(&RESERVED_FIELD_ID_POS);
+        if has_pos_column {
+            // Add _pos as a virtual column to be produced by the Parquet reader
+            virtual_columns.push(Arc::clone(row_pos_field()));
+        }
+
         // Migrated tables lack field IDs, requiring us to inspect the schema to choose
         // between field-ID-based or position-based projection
         let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
             should_load_page_index,
-            None,
+            Some(ArrowReaderOptions::new().with_virtual_columns(virtual_columns.clone())?),
         )
         .await?;
 
@@ -237,7 +307,9 @@ impl ArrowReader {
                 add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema())
             };
 
-            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+            let options = ArrowReaderOptions::new()
+                .with_schema(arrow_schema)
+                .with_virtual_columns(virtual_columns.clone())?;
 
             Self::create_parquet_record_batch_stream_builder(
                 &task.data_file_path,
@@ -285,6 +357,12 @@ impl ArrowReader {
             let file_datum = Datum::string(task.data_file_path.clone());
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
+
+        // Add the _pos virtual column if it's requested and produced by Parquet reader
+        if has_pos_column {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_virtual_field(Arc::clone(row_pos_field()))?;
         }
 
         if let (Some(partition_spec), Some(partition_data)) =
@@ -470,7 +548,7 @@ impl ArrowReader {
     /// Using the Parquet page index, we build a `RowSelection` that rejects rows that are indicated
     /// as having been deleted by a positional delete, taking into account any row groups that have
     /// been skipped entirely by the filter predicate
-    fn build_deletes_row_selection(
+    pub(crate) fn build_deletes_row_selection(
         row_group_metadata_list: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
         positional_deletes: &DeleteVector,
@@ -627,7 +705,7 @@ impl ArrowReader {
         }
     }
 
-    fn get_arrow_projection_mask(
+    pub(crate) fn get_arrow_projection_mask(
         field_ids: &[i32],
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,

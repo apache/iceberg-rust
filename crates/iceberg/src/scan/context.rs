@@ -33,20 +33,24 @@ use crate::spec::{
 };
 use crate::{Error, ErrorKind, Result};
 
+pub(crate) type ManifestEntryFilterFn = dyn Fn(&ManifestEntryRef) -> bool + Send + Sync;
+
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
-    manifest_file: ManifestFile,
+    pub(crate) manifest_file: ManifestFile,
 
-    sender: Sender<ManifestEntryContext>,
+    pub(crate) sender: Sender<ManifestEntryContext>,
 
-    field_ids: Arc<Vec<i32>>,
-    bound_predicates: Option<Arc<BoundPredicates>>,
-    object_cache: Arc<ObjectCache>,
-    snapshot_schema: SchemaRef,
-    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: DeleteFileIndex,
-    case_sensitive: bool,
+    pub(crate) field_ids: Arc<Vec<i32>>,
+    pub(crate) bound_predicates: Option<Arc<BoundPredicates>>,
+    pub(crate) object_cache: Arc<ObjectCache>,
+    pub(crate) snapshot_schema: SchemaRef,
+    pub(crate) expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    pub(crate) delete_file_index: DeleteFileIndex,
+    pub(crate) case_sensitive: bool,
+
+    pub(crate) filter_fn: Option<Arc<ManifestEntryFilterFn>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -76,12 +80,15 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
-            ..
+            filter_fn,
+            case_sensitive,
         } = self;
+
+        let filter_fn = filter_fn.unwrap_or_else(|| Arc::new(|_| true));
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
-        for manifest_entry in manifest.entries() {
+        for manifest_entry in manifest.entries().iter().filter(|e| filter_fn(e)) {
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -91,7 +98,7 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
-                case_sensitive: self.case_sensitive,
+                case_sensitive,
             };
 
             sender
@@ -282,6 +289,7 @@ impl PlanContext {
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
             case_sensitive: self.case_sensitive,
+            filter_fn: None,
         }
     }
 }

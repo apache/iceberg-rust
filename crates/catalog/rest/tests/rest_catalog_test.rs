@@ -19,13 +19,19 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 
+use async_trait::async_trait;
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
-use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
-use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
+use iceberg::{
+    Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result as IcebergResult, TableCreation,
+    TableIdent,
+};
+use iceberg_catalog_rest::{
+    CustomAuthenticator, REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder,
+};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -52,7 +58,7 @@ fn after_all() {
     guard.take();
 }
 
-async fn get_catalog() -> RestCatalog {
+async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> RestCatalog {
     set_up();
 
     let rest_catalog_ip = {
@@ -67,7 +73,12 @@ async fn get_catalog() -> RestCatalog {
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
-    RestCatalogBuilder::default()
+    let mut builder = RestCatalogBuilder::default();
+    if let Some(auth) = authenticator {
+        builder = builder.with_token_authenticator(auth);
+    }
+
+    builder
         .load(
             "rest",
             HashMap::from([(
@@ -81,7 +92,7 @@ async fn get_catalog() -> RestCatalog {
 
 #[tokio::test]
 async fn test_get_non_exist_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let result = catalog
         .get_namespace(&NamespaceIdent::from_strs(["test_get_non_exist_namespace"]).unwrap())
@@ -93,7 +104,7 @@ async fn test_get_non_exist_namespace() {
 
 #[tokio::test]
 async fn test_get_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
@@ -123,7 +134,7 @@ async fn test_get_namespace() {
 
 #[tokio::test]
 async fn test_list_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns1 = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_namespace", "ios"]).unwrap(),
@@ -175,7 +186,7 @@ async fn test_list_namespace() {
 
 #[tokio::test]
 async fn test_list_empty_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns_apple = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_empty_namespace", "apple"]).unwrap(),
@@ -209,7 +220,7 @@ async fn test_list_empty_namespace() {
 
 #[tokio::test]
 async fn test_list_root_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns1 = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap(),
@@ -254,7 +265,7 @@ async fn test_list_root_namespace() {
 
 #[tokio::test]
 async fn test_create_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_create_table", "apple", "ios"]).unwrap(),
@@ -309,7 +320,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_update_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_update_table", "apple", "ios"]).unwrap(),
@@ -378,7 +389,7 @@ fn assert_map_contains(map1: &HashMap<String, String>, map2: &HashMap<String, St
 
 #[tokio::test]
 async fn test_list_empty_multi_level_namespace() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     let ns_apple = Namespace::with_properties(
         NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
@@ -416,7 +427,7 @@ async fn test_list_empty_multi_level_namespace() {
 
 #[tokio::test]
 async fn test_register_table() {
-    let catalog = get_catalog().await;
+    let catalog = get_catalog(None).await;
 
     // Create namespace
     let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
@@ -447,5 +458,108 @@ async fn test_register_table() {
     assert_ne!(
         table.identifier().to_string(),
         table_registered.identifier().to_string()
+    );
+}
+
+#[derive(Debug)]
+struct CountingAuthenticator {
+    count: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl CustomAuthenticator for CountingAuthenticator {
+    async fn get_token(&self) -> IcebergResult<String> {
+        let mut c = self.count.lock().unwrap();
+        *c += 1;
+        // Return a unique token each time to ensure dynamic generation
+        Ok(format!("token_{}", *c))
+    }
+}
+
+#[tokio::test]
+async fn test_authenticator_token_refresh() {
+    // Track how many times tokens were requested
+    let token_request_count = Arc::new(Mutex::new(0));
+    let token_request_count_clone = token_request_count.clone();
+
+    let authenticator = Arc::new(CountingAuthenticator {
+        count: token_request_count_clone,
+    });
+
+    let catalog_with_auth = get_catalog(Some(authenticator)).await;
+
+    // Perform multiple operations that should trigger token requests
+    let ns1 = Namespace::with_properties(
+        NamespaceIdent::from_strs(["test_refresh_1"]).unwrap(),
+        HashMap::new(),
+    );
+    catalog_with_auth
+        .create_namespace(ns1.name(), HashMap::new())
+        .await
+        .unwrap();
+
+    let ns2 = Namespace::with_properties(
+        NamespaceIdent::from_strs(["test_refresh_2"]).unwrap(),
+        HashMap::new(),
+    );
+    catalog_with_auth
+        .create_namespace(ns2.name(), HashMap::new())
+        .await
+        .unwrap();
+
+    // Verify authenticator was called multiple times
+    let count = *token_request_count.lock().unwrap();
+    assert!(
+        count >= 2,
+        "Authenticator should have been called at least twice, but was called {count} times"
+    );
+}
+
+#[tokio::test]
+async fn test_authenticator_persists_across_operations() {
+    let operation_count = Arc::new(Mutex::new(0));
+    let operation_count_clone = operation_count.clone();
+
+    let authenticator = Arc::new(CountingAuthenticator {
+        count: operation_count_clone,
+    });
+
+    let catalog_with_auth = get_catalog(Some(authenticator)).await;
+
+    // Create a namespace
+    let ns = Namespace::with_properties(
+        NamespaceIdent::from_strs(["test_persist", "auth"]).unwrap(),
+        HashMap::new(),
+    );
+    catalog_with_auth
+        .create_namespace(ns.name(), HashMap::new())
+        .await
+        .unwrap();
+
+    let count_after_create = *operation_count.lock().unwrap();
+
+    // List the namespace children (should use the same authenticator)
+    // We need to list children of "test_persist" to find "auth"
+    let list_result = catalog_with_auth
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_persist"]).unwrap()))
+        .await
+        .unwrap();
+    assert!(
+        list_result.contains(&NamespaceIdent::from_strs(["test_persist", "auth"]).unwrap()),
+        "Namespace {:?} not found in list {:?}",
+        ns.name(),
+        list_result
+    );
+
+    let count_after_list = *operation_count.lock().unwrap();
+
+    // Verify authenticator was used for both operations
+    assert!(
+        count_after_create > 0,
+        "Authenticator should be used for create"
+    );
+    assert!(
+        count_after_list > count_after_create,
+        "Authenticator should be used for list operation too"
     );
 }

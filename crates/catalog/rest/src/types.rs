@@ -241,6 +241,14 @@ pub struct StorageCredential {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+/// Response containing vended credentials for a table.
+pub struct LoadCredentialsResponse {
+    /// Storage credentials for accessing table data
+    pub storage_credentials: Vec<StorageCredential>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 /// Request to create a new table in a namespace.
 ///
 /// If `stage_create` is false, the table is created immediately.

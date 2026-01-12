@@ -22,9 +22,12 @@
 //! during reading. Examples include the _file column (file path) and future
 //! columns like partition values or row numbers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
 
 use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
 use crate::{Error, ErrorKind, Result};
@@ -332,6 +335,64 @@ pub fn row_id_field() -> &'static NestedFieldRef {
 /// A reference to the _last_updated_sequence_number field definition as an Iceberg NestedField
 pub fn last_updated_sequence_number_field() -> &'static NestedFieldRef {
     &LAST_UPDATED_SEQUENCE_NUMBER_FIELD
+}
+
+/// Lazy-initialized Arrow Field definition for the _pos metadata column.
+/// Used for row position within a file, with RowNumber extension type for Parquet reader.
+static ROW_POS_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
+    Arc::new(
+        Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_POS.to_string(),
+            )]))
+            .with_extension_type(RowNumber),
+    )
+});
+
+/// Returns the Arrow Field definition for the _pos metadata column.
+/// This field is used by the Parquet reader to produce row position data.
+///
+/// # Returns
+/// A reference to the _pos field definition as an Arrow Field
+pub fn row_pos_field() -> &'static Arc<Field> {
+    &ROW_POS_FIELD
+}
+
+/// Lazy-initialized Arrow Field definition for the file_path metadata column.
+/// Used in delete file context for the file path of a deleted file.
+static FILE_PATH_FIELD: Lazy<Arc<Field>> = Lazy::new(|| {
+    Arc::new(
+        Field::new(RESERVED_COL_NAME_DELETE_FILE_PATH, DataType::Utf8, false).with_metadata(
+            HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )]),
+        ),
+    )
+});
+
+/// Returns the Arrow Field definition for file_path in delete context.
+pub fn file_path_field() -> &'static Arc<Field> {
+    &FILE_PATH_FIELD
+}
+
+/// Lazy-initialized Arrow Field definition for the pos metadata column in delete context.
+/// Used in delete file context for the position within a deleted file.
+static POS_FIELD_ARROW: Lazy<Arc<Field>> = Lazy::new(|| {
+    Arc::new(
+        Field::new(RESERVED_COL_NAME_DELETE_FILE_POS, DataType::Int64, false).with_metadata(
+            HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )]),
+        ),
+    )
+});
+
+/// Returns the Arrow Field definition for pos in delete context.
+pub fn pos_field_arrow() -> &'static Arc<Field> {
+    &POS_FIELD_ARROW
 }
 
 /// Creates the Iceberg field definition for the _partition metadata column.
