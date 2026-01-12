@@ -26,7 +26,7 @@ use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, NamespaceIdent, Result, TableCreation, TableIdent};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -147,6 +147,13 @@ impl SchemaProvider for IcebergSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Check if table already exists in local cache
+        if self.tables.contains_key(&name) {
+            return Err(DataFusionError::Execution(format!(
+                "Table '{name}' already exists"
+            )));
+        }
+
         // Convert DataFusion schema to Iceberg schema
         // DataFusion schemas don't have field IDs, so we use the function that assigns them automatically
         let df_schema = table.schema();
@@ -169,6 +176,18 @@ impl SchemaProvider for IcebergSchemaProvider {
             // Create a new runtime handle to execute the async work
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async move {
+                // Check if table already exists in the catalog
+                let table_ident = TableIdent::new(namespace.clone(), name_clone.clone());
+                if catalog
+                    .table_exists(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?
+                {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{name_clone}' already exists in catalog"
+                    )));
+                }
+
                 catalog
                     .create_table(&namespace, table_creation)
                     .await
