@@ -23,10 +23,13 @@ use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
+use datafusion::execution::TaskContext;
+use datafusion::prelude::SessionContext;
+use futures::StreamExt;
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -176,6 +179,11 @@ impl SchemaProvider for IcebergSchemaProvider {
             // Create a new runtime handle to execute the async work
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async move {
+                // Verify the input table is empty - CREATE TABLE only accepts schema definition
+                ensure_table_is_empty(&table)
+                    .await
+                    .map_err(to_datafusion_error)?;
+
                 catalog
                     .create_table(&namespace, table_creation)
                     .await
@@ -202,5 +210,162 @@ impl SchemaProvider for IcebergSchemaProvider {
         futures::executor::block_on(result).map_err(|e| {
             DataFusionError::Execution(format!("Failed to create Iceberg table: {e}"))
         })?
+    }
+}
+
+/// Verifies that a table provider contains no data by scanning with LIMIT 1.
+/// Returns an error if the table has any rows.
+async fn ensure_table_is_empty(table: &Arc<dyn TableProvider>) -> Result<()> {
+    let session_ctx = SessionContext::new();
+    let exec_plan = table
+        .scan(&session_ctx.state(), None, &[], Some(1))
+        .await
+        .map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to scan table: {e}")))?;
+
+    let task_ctx = Arc::new(TaskContext::default());
+    let stream = exec_plan.execute(0, task_ctx).map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            format!("Failed to execute scan: {e}"),
+        )
+    })?;
+
+    let batches: Vec<_> = stream.collect().await;
+    let has_data = batches
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .any(|batch| batch.num_rows() > 0);
+
+    if has_data {
+        return Err(Error::new(
+            ErrorKind::Unexpected,
+            "register_table does not support tables with data.",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    async fn create_test_schema_provider() -> (IcebergSchemaProvider, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+            )
+            .await
+            .unwrap();
+
+        let namespace = NamespaceIdent::new("test_ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let provider = IcebergSchemaProvider::try_new(Arc::new(catalog), namespace)
+            .await
+            .unwrap();
+
+        (provider, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_register_table_with_data_fails() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        // Create a MemTable with data
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+        ])
+        .unwrap();
+
+        let mem_table = MemTable::try_new(arrow_schema, vec![vec![batch]]).unwrap();
+
+        // Attempt to register the table with data - should fail
+        let result = schema_provider.register_table("test_table".to_string(), Arc::new(mem_table));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("register_table does not support tables with data."),
+            "Expected error about tables with data, got: {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_empty_table_succeeds() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        // Create an empty MemTable (schema only, no data rows)
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        // Create an empty batch (0 rows) - MemTable requires at least one partition
+        let empty_batch = RecordBatch::new_empty(arrow_schema.clone());
+        let mem_table = MemTable::try_new(arrow_schema, vec![vec![empty_batch]]).unwrap();
+
+        // Attempt to register the empty table - should succeed
+        let result = schema_provider.register_table("empty_table".to_string(), Arc::new(mem_table));
+
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+
+        // Verify the table was registered
+        assert!(schema_provider.table_exist("empty_table"));
+    }
+
+    #[tokio::test]
+    async fn test_register_duplicate_table_fails() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        // Create empty MemTables
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let empty_batch1 = RecordBatch::new_empty(arrow_schema.clone());
+        let empty_batch2 = RecordBatch::new_empty(arrow_schema.clone());
+        let mem_table1 = MemTable::try_new(arrow_schema.clone(), vec![vec![empty_batch1]]).unwrap();
+        let mem_table2 = MemTable::try_new(arrow_schema, vec![vec![empty_batch2]]).unwrap();
+
+        // Register first table - should succeed
+        let result1 = schema_provider.register_table("dup_table".to_string(), Arc::new(mem_table1));
+        assert!(result1.is_ok());
+
+        // Register second table with same name - should fail
+        let result2 = schema_provider.register_table("dup_table".to_string(), Arc::new(mem_table2));
+        assert!(result2.is_err());
+        let err = result2.unwrap_err();
+        assert!(
+            err.to_string().contains("already exists"),
+            "Expected error about table already existing, got: {err}",
+        );
     }
 }
