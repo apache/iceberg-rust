@@ -72,7 +72,7 @@ use crate::to_datafusion_error;
 ///         .expect("Failed to create table");
 /// }
 /// ```
-/// 
+///
 /// # Example (Static Mode)
 ///
 /// The following example demonstrates how to create an Iceberg external table using SQL in
