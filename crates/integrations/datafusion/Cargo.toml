@@ -40,5 +40,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }
+chrono = { workspace = true }
 parquet = { workspace = true }
 tempfile = { workspace = true }
