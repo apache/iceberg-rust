@@ -333,7 +333,7 @@ mod tests {
         // Attempt to register the empty table - should succeed
         let result = schema_provider.register_table("empty_table".to_string(), Arc::new(mem_table));
 
-        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        assert!(result.is_ok(), "Expected success, got: {result:?}");
 
         // Verify the table was registered
         assert!(schema_provider.table_exist("empty_table"));
