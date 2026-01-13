@@ -3961,7 +3961,7 @@ message schema {
 
         for file_num in 0..3 {
             let id_data = Arc::new(Int32Array::from_iter_values(
-                (file_num * 10..(file_num + 1) * 10).map(|i| i),
+                file_num * 10..(file_num + 1) * 10,
             )) as ArrayRef;
             let file_num_data = Arc::new(Int32Array::from(vec![file_num; 10])) as ArrayRef;
 
