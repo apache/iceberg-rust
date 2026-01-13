@@ -148,26 +148,53 @@ impl ArrowReader {
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
 
-        let stream = tasks
-            .map_ok(move |task| {
-                let file_io = file_io.clone();
+        // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
+        let stream: ArrowRecordBatchStream = if concurrency_limit_data_files == 1 {
+            Box::pin(
+                tasks
+                    .and_then(move |task| {
+                        let file_io = file_io.clone();
 
-                Self::process_file_scan_task(
-                    task,
-                    batch_size,
-                    file_io,
-                    self.delete_file_loader.clone(),
-                    row_group_filtering_enabled,
-                    row_selection_enabled,
-                )
-            })
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
-            })
-            .try_buffer_unordered(concurrency_limit_data_files)
-            .try_flatten_unordered(concurrency_limit_data_files);
+                        Self::process_file_scan_task(
+                            task,
+                            batch_size,
+                            file_io,
+                            self.delete_file_loader.clone(),
+                            row_group_filtering_enabled,
+                            row_selection_enabled,
+                        )
+                    })
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Unexpected, "file scan task generate failed")
+                            .with_source(err)
+                    })
+                    .try_flatten(),
+            )
+        } else {
+            Box::pin(
+                tasks
+                    .map_ok(move |task| {
+                        let file_io = file_io.clone();
 
-        Ok(Box::pin(stream) as ArrowRecordBatchStream)
+                        Self::process_file_scan_task(
+                            task,
+                            batch_size,
+                            file_io,
+                            self.delete_file_loader.clone(),
+                            row_group_filtering_enabled,
+                            row_selection_enabled,
+                        )
+                    })
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Unexpected, "file scan task generate failed")
+                            .with_source(err)
+                    })
+                    .try_buffer_unordered(concurrency_limit_data_files)
+                    .try_flatten_unordered(concurrency_limit_data_files),
+            )
+        };
+
+        Ok(stream)
     }
 
     #[allow(clippy::too_many_arguments)]
