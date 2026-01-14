@@ -404,3 +404,39 @@ async fn test_drop_namespace() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_register_table() -> Result<()> {
+    let catalog = get_catalog().await;
+    let namespace = Namespace::new(NamespaceIdent::new("test_register_table".into()));
+    set_test_namespace(&catalog, namespace.name()).await?;
+
+    // Create a source table to get valid metadata
+    let creation = set_table_creation(None, "source_table")?;
+    let source_table = catalog.create_table(namespace.name(), creation).await?;
+    let metadata_location = source_table
+        .metadata_location()
+        .expect("metadata location should be present")
+        .to_string();
+
+    // Register the same metadata under a new table name
+    let new_ident = TableIdent::new(namespace.name().clone(), "registered_table".into());
+    let registered = catalog
+        .register_table(&new_ident, metadata_location.clone())
+        .await?;
+
+    // Verify the registered table
+    assert_eq!(registered.identifier(), &new_ident);
+    assert_eq!(
+        registered.metadata_location(),
+        Some(metadata_location.as_str())
+    );
+    assert_eq!(registered.metadata(), source_table.metadata());
+
+    // Verify the table is loadable from HMS
+    let loaded = catalog.load_table(&new_ident).await?;
+    assert_eq!(loaded.metadata(), registered.metadata());
+    assert_eq!(loaded.metadata_location(), registered.metadata_location());
+
+    Ok(())
+}
