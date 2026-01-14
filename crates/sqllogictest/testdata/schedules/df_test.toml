@@ -18,13 +18,14 @@
 [engines]
 df = { type = "datafusion" }
 
-[[steps]]
-engine = "df"
-slt = "df_test/show_tables.slt"
-
+# create_table.slt must run first to create tables used by other tests
 [[steps]]
 engine = "df"
 slt = "df_test/create_table.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/show_tables.slt"
 
 [[steps]]
 engine = "df"

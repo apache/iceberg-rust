@@ -190,6 +190,20 @@ impl TableProviderFactory for IcebergTableProviderFactory {
             Some(catalog) => {
                 // Catalog-backed: create IcebergTableProvider
                 let (namespace, name) = parse_table_reference(&table_name_with_ns);
+                let table_ident = TableIdent::new(namespace.clone(), name.clone());
+
+                // Check if table exists before attempting to load
+                if !catalog
+                    .table_exists(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?
+                {
+                    return Err(to_datafusion_error(Error::new(
+                        ErrorKind::TableNotFound,
+                        format!("Table '{table_ident}' not found in catalog"),
+                    )));
+                }
+
                 let provider = IcebergTableProvider::try_new(catalog.clone(), namespace, name)
                     .await
                     .map_err(to_datafusion_error)?;
@@ -557,6 +571,65 @@ mod tests {
                 df.collect().await.is_err()
             },
             "Static provider should reject INSERT"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_factory_with_catalog_returns_error_for_nonexistent_table() {
+        use iceberg::CatalogBuilder;
+        use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+        use tempfile::TempDir;
+
+        // Set up a memory catalog without any tables
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path)]),
+            )
+            .await
+            .unwrap();
+
+        let namespace = iceberg::NamespaceIdent::new("test_ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        // Create factory with catalog
+        let factory = IcebergTableProviderFactory::new_with_catalog(Arc::new(catalog));
+
+        // Create external table command for a non-existent table
+        let cmd = CreateExternalTable {
+            name: TableReference::partial("test_ns", "nonexistent_table"),
+            location: String::new(),
+            schema: Arc::new(DFSchema::empty()),
+            file_type: "iceberg".to_string(),
+            options: Default::default(),
+            table_partition_cols: Default::default(),
+            order_exprs: Default::default(),
+            constraints: Constraints::default(),
+            column_defaults: Default::default(),
+            if_not_exists: Default::default(),
+            or_replace: false,
+            temporary: false,
+            definition: Default::default(),
+            unbounded: Default::default(),
+        };
+
+        let state = SessionStateBuilder::new().build();
+        let result = factory.create(&state, &cmd).await;
+
+        // Should return an error because the table doesn't exist
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("not found"),
+            "Error message should indicate table not found: {}",
+            err_msg
         );
     }
 }
