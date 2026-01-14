@@ -60,3 +60,9 @@ test: doc-test
 
 clean:
 	cargo clean
+
+install-mdbook:
+	cargo install mdbook@0.4.36
+
+site: install-mdbook
+	cd website && mdbook serve
