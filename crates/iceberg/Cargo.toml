@@ -41,6 +41,7 @@ storage-s3 = ["opendal/services-s3", "reqsign"]
 
 
 [dependencies]
+aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
 array-init = { workspace = true }
@@ -88,6 +89,7 @@ tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
