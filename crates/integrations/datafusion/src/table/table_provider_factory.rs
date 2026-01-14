@@ -210,7 +210,7 @@ impl TableProviderFactory for IcebergTableProviderFactory {
                 Ok(Arc::new(provider))
             }
             None => {
-                // Static: create IcebergStaticTableProvider (existing behavior)
+                // Static: create IcebergStaticTableProvider
                 let metadata_file_path = &cmd.location;
                 let options = &cmd.options;
 
@@ -323,6 +323,10 @@ mod tests {
     use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type};
+    use iceberg::{CatalogBuilder, TableCreation};
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -425,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_table_reference_bare() {
+    fn test_parse_table_reference() {
         // Bare name should use "default" namespace
         let table_ref = TableReference::bare("my_table");
         let (namespace, table_name) = parse_table_reference(&table_ref);
@@ -450,11 +454,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_factory_with_catalog_creates_catalog_backed_provider() {
-        use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-        use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-        use iceberg::{CatalogBuilder, TableCreation};
-        use tempfile::TempDir;
-
         // Set up a memory catalog with a test table
         let temp_dir = TempDir::new().unwrap();
         let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
@@ -473,7 +472,7 @@ mod tests {
             .await
             .unwrap();
 
-        let schema = Schema::builder()
+        let schema = IcebergSchema::builder()
             .with_schema_id(0)
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
@@ -576,10 +575,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_factory_with_catalog_returns_error_for_nonexistent_table() {
-        use iceberg::CatalogBuilder;
-        use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-        use tempfile::TempDir;
-
         // Set up a memory catalog without any tables
         let temp_dir = TempDir::new().unwrap();
         let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
