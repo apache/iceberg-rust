@@ -337,6 +337,9 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   tar -xzf apache-iceberg-rust-*.tar.gz
   cd apache-iceberg-rust-*/
+  ```
+  
+  ```bash
   make build && make test
   ```
 * Verify license headers: 
