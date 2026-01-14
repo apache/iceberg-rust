@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::expr::BoundPredicate;
@@ -29,24 +29,6 @@ use crate::spec::{
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
-
-/// Serialization helper that always returns NotImplementedError.
-/// Used for fields that should not be serialized but we want to be explicit about it.
-fn serialize_not_implemented<S, T>(_: &T, _: S) -> std::result::Result<S::Ok, S::Error>
-where S: Serializer {
-    Err(serde::ser::Error::custom(
-        "Serialization not implemented for this field",
-    ))
-}
-
-/// Deserialization helper that always returns NotImplementedError.
-/// Used for fields that should not be deserialized but we want to be explicit about it.
-fn deserialize_not_implemented<'de, D, T>(_: D) -> std::result::Result<T, D::Error>
-where D: serde::Deserializer<'de> {
-    Err(serde::de::Error::custom(
-        "Deserialization not implemented for this field",
-    ))
-}
 
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -92,28 +74,22 @@ pub struct FileScanTask {
     /// Partition data from the manifest entry, used to identify which columns can use
     /// constant values from partition metadata vs. reading from the data file.
     /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
     pub partition: Option<Struct>,
 
     /// The partition spec for this file, used to distinguish identity transforms
     /// (which use partition metadata constants) from non-identity transforms like
     /// bucket/truncate (which must read source columns from the data file).
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
     pub partition_spec: Option<Arc<PartitionSpec>>,
 
     /// Name mapping from table metadata (property: schema.name-mapping.default),
     /// used to resolve field IDs from column names when Parquet files lack field IDs
     /// or have field ID conflicts.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
     pub name_mapping: Option<Arc<NameMapping>>,
 }
 
