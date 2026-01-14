@@ -58,7 +58,7 @@ impl FastAppendAction {
         self
     }
 
-    /// Set whether to check duplicate files
+    /// Set whether to check added data files
     pub fn with_check_added_data_files(mut self, v: bool) -> Self {
         self.check_added_data_files = v;
         self
