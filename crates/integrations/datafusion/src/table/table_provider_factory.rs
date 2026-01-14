@@ -623,8 +623,7 @@ mod tests {
         let err_msg = err.to_string();
         assert!(
             err_msg.contains("not found"),
-            "Error message should indicate table not found: {}",
-            err_msg
+            "Error message should indicate table not found: {err_msg}",
         );
     }
 }
