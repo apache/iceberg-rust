@@ -20,18 +20,18 @@
 use std::str::FromStr;
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes128Gcm, Key, Nonce};
 use zeroize::Zeroizing;
 
 use crate::{Error, ErrorKind, Result};
 
-/// Supported encryption algorithms.
+/// Supported encryption algorithm.
+/// Currently only AES-128-GCM is supported as it's the only algorithm
+/// compatible with arrow-rs Parquet encryption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncryptionAlgorithm {
     /// AES-128 in GCM mode
     Aes128Gcm,
-    /// AES-256 in GCM mode
-    Aes256Gcm,
 }
 
 impl EncryptionAlgorithm {
@@ -39,7 +39,6 @@ impl EncryptionAlgorithm {
     pub fn key_length(&self) -> usize {
         match self {
             Self::Aes128Gcm => 16,
-            Self::Aes256Gcm => 32,
         }
     }
 
@@ -52,7 +51,6 @@ impl EncryptionAlgorithm {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Aes128Gcm => "AES_GCM_128",
-            Self::Aes256Gcm => "AES_GCM_256",
         }
     }
 }
@@ -63,7 +61,6 @@ impl FromStr for EncryptionAlgorithm {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "AES_GCM_128" | "AES128_GCM" => Ok(Self::Aes128Gcm),
-            "AES_GCM_256" | "AES256_GCM" => Ok(Self::Aes256Gcm),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Unsupported encryption algorithm: {s}"),
@@ -147,7 +144,6 @@ impl AesGcmEncryptor {
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
         match self.key.algorithm() {
             EncryptionAlgorithm::Aes128Gcm => self.encrypt_aes128_gcm(plaintext, aad),
-            EncryptionAlgorithm::Aes256Gcm => self.encrypt_aes256_gcm(plaintext, aad),
         }
     }
 
@@ -178,7 +174,6 @@ impl AesGcmEncryptor {
         let encrypted_data = &ciphertext[NONCE_LEN..];
         match self.key.algorithm() {
             EncryptionAlgorithm::Aes128Gcm => self.decrypt_aes128_gcm(nonce, encrypted_data, aad),
-            EncryptionAlgorithm::Aes256Gcm => self.decrypt_aes256_gcm(nonce, encrypted_data, aad),
         }
     }
 
@@ -238,63 +233,6 @@ impl AesGcmEncryptor {
 
         Ok(plaintext)
     }
-
-    fn encrypt_aes256_gcm(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
-        let key = Key::<Aes256Gcm>::from_slice(self.key.as_bytes());
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-        let ciphertext = if let Some(aad) = aad {
-            let payload = Payload {
-                msg: plaintext,
-                aad,
-            };
-            cipher.encrypt(&nonce, payload).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-256-GCM encryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        } else {
-            cipher.encrypt(&nonce, plaintext).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-256-GCM encryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        };
-
-        // Prepend nonce to ciphertext (Java compatible format)
-        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
-        result.extend_from_slice(&nonce);
-        result.extend_from_slice(&ciphertext);
-        Ok(result)
-    }
-
-    fn decrypt_aes256_gcm(
-        &self,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        aad: Option<&[u8]>,
-    ) -> Result<Vec<u8>> {
-        let key = Key::<Aes256Gcm>::from_slice(self.key.as_bytes());
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(nonce);
-
-        let plaintext = if let Some(aad) = aad {
-            let payload = Payload {
-                msg: ciphertext,
-                aad,
-            };
-            cipher.decrypt(nonce, payload).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-256-GCM decryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        } else {
-            cipher.decrypt(nonce, ciphertext).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-256-GCM decryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        };
-
-        Ok(plaintext)
-    }
 }
 
 #[cfg(test)]
@@ -304,9 +242,7 @@ mod tests {
     #[test]
     fn test_encryption_algorithm() {
         assert_eq!(EncryptionAlgorithm::Aes128Gcm.key_length(), 16);
-        assert_eq!(EncryptionAlgorithm::Aes256Gcm.key_length(), 32);
         assert_eq!(EncryptionAlgorithm::Aes128Gcm.nonce_length(), 12);
-        assert_eq!(EncryptionAlgorithm::Aes256Gcm.nonce_length(), 12);
 
         assert_eq!(
             EncryptionAlgorithm::from_str("AES_GCM_128").unwrap(),
@@ -316,19 +252,12 @@ mod tests {
             EncryptionAlgorithm::from_str("AES128_GCM").unwrap(),
             EncryptionAlgorithm::Aes128Gcm
         );
-        assert_eq!(
-            EncryptionAlgorithm::from_str("AES_GCM_256").unwrap(),
-            EncryptionAlgorithm::Aes256Gcm
-        );
-        assert_eq!(
-            EncryptionAlgorithm::from_str("AES256_GCM").unwrap(),
-            EncryptionAlgorithm::Aes256Gcm
-        );
 
         assert!(EncryptionAlgorithm::from_str("INVALID").is_err());
+        assert!(EncryptionAlgorithm::from_str("AES_GCM_256").is_err());
+        assert!(EncryptionAlgorithm::from_str("AES256_GCM").is_err());
 
         assert_eq!(EncryptionAlgorithm::Aes128Gcm.as_str(), "AES_GCM_128");
-        assert_eq!(EncryptionAlgorithm::Aes256Gcm.as_str(), "AES_GCM_256");
     }
 
     #[test]
@@ -337,10 +266,6 @@ mod tests {
         let key1 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
         assert_eq!(key1.as_bytes().len(), 16);
         assert_eq!(key1.algorithm(), EncryptionAlgorithm::Aes128Gcm);
-
-        let key2 = SecureKey::generate(EncryptionAlgorithm::Aes256Gcm);
-        assert_eq!(key2.as_bytes().len(), 32);
-        assert_eq!(key2.algorithm(), EncryptionAlgorithm::Aes256Gcm);
 
         // Test key creation with validation
         let valid_key = vec![0u8; 16];
@@ -373,31 +298,6 @@ mod tests {
 
         // Test with wrong AAD fails
         assert!(encryptor.decrypt(&ciphertext, Some(b"wrong aad")).is_err());
-    }
-
-    #[test]
-    fn test_aes256_gcm_encryption_roundtrip() {
-        let key = SecureKey::generate(EncryptionAlgorithm::Aes256Gcm);
-        let encryptor = AesGcmEncryptor::new(key);
-
-        let plaintext = b"Testing AES-256-GCM encryption";
-        let aad = b"metadata";
-
-        // Test without AAD
-        let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
-        assert!(ciphertext.len() > plaintext.len() + 12); // nonce + tag
-        assert_ne!(&ciphertext[12..], plaintext); // encrypted portion differs
-
-        let decrypted = encryptor.decrypt(&ciphertext, None).unwrap();
-        assert_eq!(decrypted, plaintext);
-
-        // Test with AAD
-        let ciphertext = encryptor.encrypt(plaintext, Some(aad)).unwrap();
-        let decrypted = encryptor.decrypt(&ciphertext, Some(aad)).unwrap();
-        assert_eq!(decrypted, plaintext);
-
-        // Test with wrong AAD fails
-        assert!(encryptor.decrypt(&ciphertext, None).is_err());
     }
 
     #[test]
