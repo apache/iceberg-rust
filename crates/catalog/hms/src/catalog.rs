@@ -332,7 +332,6 @@ impl Catalog for HmsCatalog {
     /// representation and then attempts to update the corresponding namespace
     /// in the Hive Metastore.
     ///
-    /// # Returns
     /// Returns `Ok(())` if the namespace update is successful. If the
     /// namespace cannot be updated due to missing information or an error
     /// during the update process, an `Err(...)` is returned.
