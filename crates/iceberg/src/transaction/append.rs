@@ -32,6 +32,7 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
     check_duplicate: bool,
+    check_added_data_files: bool,
     // below are properties used to create SnapshotProducer when commit
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
@@ -43,6 +44,7 @@ impl FastAppendAction {
     pub(crate) fn new() -> Self {
         Self {
             check_duplicate: true,
+            check_added_data_files: true,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
@@ -53,6 +55,12 @@ impl FastAppendAction {
     /// Set whether to check duplicate files
     pub fn with_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
+        self
+    }
+
+    /// Set whether to check duplicate files
+    pub fn with_check_added_data_files(mut self, v: bool) -> Self {
+        self.check_added_data_files = v;
         self
     }
 
@@ -92,8 +100,10 @@ impl TransactionAction for FastAppendAction {
             self.added_data_files.clone(),
         );
 
-        // validate added files
-        snapshot_producer.validate_added_data_files()?;
+        // Checks added files
+        if self.check_added_data_files {
+            snapshot_producer.validate_added_data_files()?;
+        }
 
         // Checks duplicate files
         if self.check_duplicate {
