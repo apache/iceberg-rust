@@ -886,8 +886,6 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
-        use std::collections::HashMap;
-
         // Build a map of (source_id, transform) -> field_id from existing specs
         let equivalent_field_ids: HashMap<_, _> = self
             .metadata
