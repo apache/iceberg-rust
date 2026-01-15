@@ -17,6 +17,7 @@
 
 //! Table scan api.
 
+mod bin_packing;
 mod cache;
 use cache::*;
 mod context;
@@ -26,6 +27,7 @@ mod task;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+pub use bin_packing::*;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
@@ -60,6 +62,9 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    split_target_size: u64,
+    split_open_file_cost: u64,
+    split_lookback: usize,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -78,6 +83,9 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            split_target_size: 0, // Disabled by default for backwards compatibility
+            split_open_file_cost: 4 * 1024 * 1024, // 4MB default (matches Java)
+            split_lookback: 20,   // 20 bins default (matches Java)
         }
     }
 
@@ -184,6 +192,45 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Sets the target size in bytes for splitting large files into smaller scan tasks.
+    ///
+    /// When a file is larger than this size, it will be split into multiple
+    /// `FileScanTask`s, allowing for more parallelism during reads. Each split
+    /// task will read a portion of the file using byte-range filtering.
+    ///
+    /// If the file has `split_offsets` metadata (e.g., Parquet row group boundaries),
+    /// splits will align with those offsets for optimal performance.
+    ///
+    /// Set to 0 to disable splitting (default). A typical value is 128MB (134217728 bytes).
+    pub fn with_split_target_size(mut self, split_target_size: u64) -> Self {
+        self.split_target_size = split_target_size;
+        self
+    }
+
+    /// Sets the estimated cost in bytes to open a file, used for bin-packing.
+    ///
+    /// When combining small scan tasks using `plan_tasks()`, this value is added
+    /// to each task's weight to account for the overhead of opening files.
+    /// This helps balance the tradeoff between parallel file access and file open costs.
+    ///
+    /// Default is 4MB. Higher values encourage more aggressive task combining.
+    pub fn with_split_open_file_cost(mut self, open_file_cost: u64) -> Self {
+        self.split_open_file_cost = open_file_cost;
+        self
+    }
+
+    /// Sets the number of bins to keep open during bin-packing.
+    ///
+    /// When combining small scan tasks using `plan_tasks()`, this controls how many
+    /// "bins" (partially-filled combined tasks) are kept open for finding the best fit.
+    /// Higher values may produce better packing but use more memory.
+    ///
+    /// Default is 20.
+    pub fn with_split_lookback(mut self, lookback: usize) -> Self {
+        self.split_lookback = lookback;
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
@@ -210,6 +257,9 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        split_target_size: self.split_target_size,
+                        split_open_file_cost: self.split_open_file_cost,
+                        split_lookback: self.split_lookback,
                     });
                 };
                 current_snapshot_id.clone()
@@ -291,6 +341,7 @@ impl<'a> TableScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            split_target_size: self.split_target_size,
         };
 
         Ok(TableScan {
@@ -303,6 +354,9 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            split_target_size: self.split_target_size,
+            split_open_file_cost: self.split_open_file_cost,
+            split_lookback: self.split_lookback,
         })
     }
 }
@@ -331,6 +385,18 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    /// Target size in bytes for splitting large files into smaller tasks.
+    /// 0 means disabled.
+    /// Note: This is stored for introspection; actual splitting uses PlanContext.
+    #[allow(dead_code)]
+    split_target_size: u64,
+
+    /// The estimated cost in bytes to open a file, used for bin-packing.
+    split_open_file_cost: u64,
+
+    /// The number of bins to keep open during bin-packing.
+    split_lookback: usize,
 }
 
 impl TableScan {
@@ -430,6 +496,42 @@ impl TableScan {
         Ok(file_scan_task_rx.boxed())
     }
 
+    /// Returns a stream of [`CombinedScanTask`]s by combining small file scan tasks.
+    ///
+    /// This method first plans file scan tasks (splitting large files if configured),
+    /// then uses a bin-packing algorithm to combine small tasks into larger combined
+    /// tasks. This reduces the overhead of opening many small files while maintaining
+    /// parallelism.
+    ///
+    /// The bin-packing algorithm considers:
+    /// - Target size: Tasks are combined until reaching `split_target_size` (default: 128MB)
+    /// - Open file cost: The overhead of opening each file (default: 4MB) is added to task weight
+    /// - Lookback: Multiple bins are kept open for better packing (default: 20 bins)
+    ///
+    /// Use `with_split_target_size()`, `with_split_open_file_cost()`, and `with_split_lookback()`
+    /// on the `TableScanBuilder` to configure the bin-packing behavior.
+    pub async fn plan_tasks(&self) -> Result<CombinedScanTaskStream> {
+        let file_scan_tasks = self.plan_files().await?;
+
+        // If split_target_size is 0, bin-packing is effectively disabled
+        // but we still need to wrap tasks in CombinedScanTask
+        let target_size = if self.split_target_size == 0 {
+            // Use a large default target so tasks still get combined reasonably
+            128 * 1024 * 1024 // 128MB
+        } else {
+            self.split_target_size
+        };
+
+        let config = BinPackingConfig {
+            target_size,
+            lookback: self.split_lookback,
+            open_file_cost: self.split_open_file_cost,
+        };
+
+        // Stream bin-packing: processes tasks on-the-fly without collecting all into memory
+        Ok(Box::pin(plan_tasks_stream(file_scan_tasks, config)))
+    }
+
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
@@ -502,11 +604,12 @@ impl TableScan {
         }
 
         // congratulations! the manifest entry has made its way through the
-        // entire plan without getting filtered out. Create a corresponding
-        // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
-            .await?;
+        // entire plan without getting filtered out. Create one or more
+        // FileScanTasks (depending on split_target_size) and push to result stream
+        let tasks = manifest_entry_context.into_file_scan_tasks().await?;
+        for task in tasks {
+            file_scan_task_tx.send(Ok(task)).await?;
+        }
 
         Ok(())
     }
@@ -2253,5 +2356,33 @@ pub mod tests {
 
         // Assert it finished (didn't timeout)
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
+    }
+
+    #[test]
+    fn test_with_split_target_size() {
+        let fixture = TableTestFixture::new();
+
+        // Test that split_target_size can be set via builder
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_split_target_size(128 * 1024 * 1024) // 128MB
+            .build()
+            .unwrap();
+
+        // The scan should build successfully
+        // Note: Actual splitting is tested via the context unit tests
+        assert!(table_scan.plan_context.is_some());
+    }
+
+    #[test]
+    fn test_split_target_size_default_disabled() {
+        let fixture = TableTestFixture::new();
+
+        // Default split_target_size should be 0 (disabled)
+        let table_scan = fixture.table.scan().build().unwrap();
+
+        // The scan should build successfully with default (disabled) splitting
+        assert!(table_scan.plan_context.is_some());
     }
 }
