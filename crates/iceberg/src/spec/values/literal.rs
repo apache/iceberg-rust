@@ -500,8 +500,26 @@ impl Literal {
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::UInt128(Uuid::parse_str(&s)?.as_u128()),
                 ))),
-                (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
-                (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
+                (PrimitiveType::Fixed(len), JsonValue::String(s)) => {
+                    let bytes = parse_hex_string(&s)?;
+                    if bytes.len() as u64 != *len {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Fixed literal length {} doesn't match type length {}",
+                                bytes.len(),
+                                len
+                            ),
+                        ));
+                    }
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))))
+                }
+                (PrimitiveType::Binary, JsonValue::String(s))
+                | (PrimitiveType::Geometry { .. }, JsonValue::String(s))
+                | (PrimitiveType::Geography { .. }, JsonValue::String(s)) => {
+                    let bytes = parse_hex_string(&s)?;
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))))
+                }
                 (
                     PrimitiveType::Decimal {
                         precision: _,
@@ -663,7 +681,7 @@ impl Literal {
                 (_, PrimitiveLiteral::Binary(val)) => Ok(JsonValue::String(val.iter().fold(
                     String::new(),
                     |mut acc, x| {
-                        acc.push_str(&format!("{x:x}"));
+                        acc.push_str(&format!("{x:02X}"));
                         acc
                     },
                 ))),
@@ -744,4 +762,19 @@ impl Literal {
             _ => unimplemented!(),
         }
     }
+}
+
+fn parse_hex_string(s: &str) -> Result<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Hex string must have even length",
+        ));
+    }
+
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid hex string").with_source(e))
 }
