@@ -25,7 +25,6 @@ The `iceberg-datafusion` crate provides integration between Apache Iceberg and [
 
 - **SQL DDL/DML**: `CREATE TABLE`, `INSERT INTO`, `SELECT`
 - **Metadata Tables**: Query snapshots and manifests
-- **Partitioned Tables**: Automatic partition routing for writes
 
 ## Dependencies
 
@@ -99,42 +98,12 @@ Available metadata tables:
 - `table$snapshots` - Table snapshot history
 - `table$manifests` - Manifest file information
 
-## Partitioned Tables
-
-### Writing to Partitioned Tables
-
-When inserting into a partitioned table, data is automatically routed to the correct partition directories:
-
-```sql
-INSERT INTO catalog.namespace.partitioned_table VALUES
-    (1, 'electronics', 'laptop'),
-    (2, 'books', 'novel');
--- Data files will be created under:
---   data/category=electronics/
---   data/category=books/
-```
-
-### Write Modes
-
-Two write modes are available for partitioned tables:
-
-| Mode | Property Value | Description |
-|------|---------------|-------------|
-| **Fanout** (default) | `true` | Handles unsorted data, maintains open writers for all partitions |
-| **Clustered** | `false` | Requires sorted input, more memory efficient |
-
-Configure via table property:
-```
-write.datafusion.fanout.enabled = true
-```
-
 ## Configuration Options
 
 These table properties control write behavior. They must be set when creating the table via the Iceberg catalog API, as DataFusion SQL does not support `ALTER TABLE` for property changes.
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `write.datafusion.fanout.enabled` | `true` | Use FanoutWriter (true) or ClusteredWriter (false) for partitioned writes |
 | `write.target-file-size-bytes` | `536870912` (512MB) | Target size for data files |
 | `write.format.default` | `parquet` | Default file format for new data files |
 
