@@ -24,7 +24,6 @@ The `iceberg-datafusion` crate provides integration between Apache Iceberg and [
 ## Features
 
 - **SQL DDL/DML**: `CREATE TABLE`, `INSERT INTO`, `SELECT`
-- **Query Optimization**: Projection, filter, and LIMIT pushdown
 - **Metadata Tables**: Query snapshots and manifests
 - **Partitioned Tables**: Automatic partition routing for writes
 
@@ -100,62 +99,7 @@ Available metadata tables:
 - `table$snapshots` - Table snapshot history
 - `table$manifests` - Manifest file information
 
-## File-Based Access (External Tables)
-
-For reading existing Iceberg tables without a catalog, use `IcebergTableProviderFactory`:
-
-```rust,no_run,noplayground
-{{#rustdoc_include ../../crates/examples/src/datafusion_integration.rs:external_table_setup}}
-```
-
-Then create external tables via SQL:
-
-```sql
-CREATE EXTERNAL TABLE my_table
-STORED AS ICEBERG
-LOCATION '/path/to/iceberg/metadata/v1.metadata.json';
-
-SELECT * FROM my_table;
-```
-
-> **Note**: External tables are read-only. For write operations, use `IcebergCatalogProvider`.
-
-## Table Provider Types
-
-### IcebergTableProvider
-
-- Backed by an Iceberg catalog
-- Automatically refreshes metadata on each operation
-- Supports both read and write operations
-- Use when you need the latest table state or write capability
-
-### IcebergStaticTableProvider
-
-- Fixed table snapshot at construction time
-- No catalog round-trips (better performance)
-- Read-only
-- Use for time-travel queries or when consistency within a query is important
-
 ## Partitioned Tables
-
-### Creating Partitioned Tables
-
-Partitioned tables must be created using the Iceberg catalog API (not SQL):
-
-```rust,no_run
-use iceberg::spec::{Transform, UnboundPartitionSpec};
-
-let partition_spec = UnboundPartitionSpec::builder()
-    .with_spec_id(0)
-    .add_partition_field(column_id, "partition_column", Transform::Identity)?
-    .build();
-```
-
-Supported partition transforms:
-- `Identity` - Partition by exact value
-- `Year`, `Month`, `Day`, `Hour` - Time-based partitioning
-- `Bucket(n)` - Hash partitioning into n buckets
-- `Truncate(width)` - String/number truncation
 
 ### Writing to Partitioned Tables
 
@@ -184,17 +128,9 @@ Configure via table property:
 write.datafusion.fanout.enabled = true
 ```
 
-## Query Optimization
-
-The DataFusion integration supports several query optimizations:
-
-- **Projection Pushdown**: Only reads columns referenced in the query
-- **Filter Pushdown**: Prunes data files using manifest statistics
-- **LIMIT Pushdown**: Reduces the amount of data scanned
-
-These optimizations are applied automatically by the query planner.
-
 ## Configuration Options
+
+These table properties control write behavior. They must be set when creating the table via the Iceberg catalog API, as DataFusion SQL does not support `ALTER TABLE` for property changes.
 
 | Property | Default | Description |
 |----------|---------|-------------|

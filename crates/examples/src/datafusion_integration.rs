@@ -27,10 +27,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::session_state::SessionStateBuilder;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
-use iceberg_datafusion::{IcebergCatalogProvider, IcebergTableProviderFactory};
+use iceberg_datafusion::IcebergCatalogProvider;
 use tempfile::TempDir;
 
 #[tokio::main]
@@ -59,13 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(IcebergCatalogProvider::try_new(Arc::new(iceberg_catalog)).await?);
 
     let ctx = SessionContext::new();
-    ctx.register_catalog("iceberg", catalog_provider);
+    ctx.register_catalog("my_catalog", catalog_provider);
     // ANCHOR_END: catalog_setup
 
     // ANCHOR: create_table
     // Create a table using SQL
     ctx.sql(
-        "CREATE TABLE iceberg.demo.users (
+        "CREATE TABLE my_catalog.demo.users (
             id INT NOT NULL,
             name STRING NOT NULL,
             email STRING
@@ -80,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Insert data into the table
     let result = ctx
         .sql(
-            "INSERT INTO iceberg.demo.users VALUES
+            "INSERT INTO my_catalog.demo.users VALUES
             (1, 'Alice', 'alice@example.com'),
             (2, 'Bob', 'bob@example.com'),
             (3, 'Charlie', NULL)",
@@ -97,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Query the data with filtering
     println!("\nQuerying users with email:");
     let df = ctx
-        .sql("SELECT id, name, email FROM iceberg.demo.users WHERE email IS NOT NULL")
+        .sql("SELECT id, name, email FROM my_catalog.demo.users WHERE email IS NOT NULL")
         .await?;
 
     df.show().await?;
@@ -105,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Query with projection (only specific columns)
     println!("\nQuerying only names:");
     let df = ctx
-        .sql("SELECT name FROM iceberg.demo.users ORDER BY id")
+        .sql("SELECT name FROM my_catalog.demo.users ORDER BY id")
         .await?;
 
     df.show().await?;
@@ -115,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Query the snapshots metadata table
     println!("\nTable snapshots:");
     let df = ctx
-        .sql("SELECT snapshot_id, operation FROM iceberg.demo.users$snapshots")
+        .sql("SELECT snapshot_id, operation FROM my_catalog.demo.users$snapshots")
         .await?;
 
     df.show().await?;
@@ -123,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Query the manifests metadata table
     println!("\nTable manifests:");
     let df = ctx
-        .sql("SELECT path, added_data_files_count FROM iceberg.demo.users$manifests")
+        .sql("SELECT path, added_data_files_count FROM my_catalog.demo.users$manifests")
         .await?;
 
     df.show().await?;
@@ -133,38 +132,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-// ANCHOR: external_table_setup
-/// Example of setting up IcebergTableProviderFactory for external tables.
-///
-/// This allows reading existing Iceberg tables via `CREATE EXTERNAL TABLE` syntax.
-#[allow(dead_code)]
-async fn setup_external_table_support() -> SessionContext {
-    // Create a session state with the Iceberg table factory registered
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-
-    // Register the IcebergTableProviderFactory to handle "ICEBERG" file type
-    state.table_factories_mut().insert(
-        "ICEBERG".to_string(),
-        Arc::new(IcebergTableProviderFactory::new()),
-    );
-
-    SessionContext::new_with_state(state)
-}
-// ANCHOR_END: external_table_setup
-
-// ANCHOR: external_table_query
-/// Example SQL for creating and querying an external Iceberg table.
-///
-/// ```sql
-/// -- Create an external table from an existing Iceberg metadata file
-/// CREATE EXTERNAL TABLE my_table
-/// STORED AS ICEBERG
-/// LOCATION '/path/to/iceberg/metadata/v1.metadata.json';
-///
-/// -- Query the external table
-/// SELECT * FROM my_table WHERE column > 100;
-/// ```
-#[allow(dead_code)]
-fn external_table_sql_example() {}
-// ANCHOR_END: external_table_query

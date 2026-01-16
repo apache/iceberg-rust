@@ -50,6 +50,10 @@ required-features = ["storage-oss"]
 name = "datafusion-integration"
 path = "src/datafusion_integration.rs"
 
+[[example]]
+name = "datafusion-external-table"
+path = "src/datafusion_external_table.rs"
+
 [features]
 default = []
 storage-oss = ["iceberg/storage-oss"]
