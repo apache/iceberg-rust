@@ -52,6 +52,7 @@ pub struct TableProperties {
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
     /// Any other properties that are not explicitly captured in named fields.
+    #[serde(flatten)]
     pub other: HashMap<String, String>,
 }
 

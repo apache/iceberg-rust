@@ -209,12 +209,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let format_version = self.table.metadata().format_version();
 
         // Get typed table properties
-        let table_props = self
-            .table
-            .metadata()
-            .table_properties()
-            .map_err(to_datafusion_error)?;
-
+	let table_props = self.table.metadata().table_properties();
         // Check data file format
         let file_format = DataFileFormat::from_str(&table_props.write_format_default)
             .map_err(to_datafusion_error)?;
