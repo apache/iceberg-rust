@@ -21,8 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
-use datafusion::datasource::MemTable;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::TaskContext;
 use datafusion::prelude::SessionContext;
@@ -153,9 +152,9 @@ impl SchemaProvider for IcebergSchemaProvider {
     ) -> DFResult<Option<Arc<dyn TableProvider>>> {
         // Reject unsupported table types
         if !is_iceberg_or_mem_table(&table) {
-            return Err(DataFusionError::Execution(
-                format!("Cannot register a non-Iceberg table: {table:?}"),
-            ));
+            return Err(DataFusionError::Execution(format!(
+                "Cannot register a non-Iceberg table: {table:?}"
+            )));
         }
 
         // Check if table already exists
