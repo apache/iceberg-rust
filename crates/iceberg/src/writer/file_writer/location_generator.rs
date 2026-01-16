@@ -291,7 +291,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-	    properties: TableProperties::default(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
