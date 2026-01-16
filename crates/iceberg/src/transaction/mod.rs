@@ -163,9 +163,9 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
+        let table_props = self.table.metadata().table_properties();
 
-        let backoff = Self::build_backoff(table_props)?;
+        let backoff = Self::build_backoff(table_props.clone())?;
         let tx = self;
 
         (|mut tx: Transaction| async {

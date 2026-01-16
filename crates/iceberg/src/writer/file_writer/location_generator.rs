@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-
 use crate::Result;
 use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
@@ -146,7 +145,7 @@ pub(crate) mod test {
     use std::sync::Arc;
 
     use uuid::Uuid;
-
+    use crate::spec::TableProperties;
     use super::LocationGenerator;
     use crate::spec::{
         FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
@@ -156,6 +155,7 @@ pub(crate) mod test {
         DefaultLocationGenerator, FileNameGenerator, WRITE_DATA_LOCATION,
         WRITE_FOLDER_STORAGE_LOCATION,
     };
+
 
     #[test]
     fn test_default_location_generate() {
@@ -176,7 +176,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
@@ -200,7 +200,7 @@ pub(crate) mod test {
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
-        table_metadata.properties.insert(
+        table_metadata.properties.other.insert(
             WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
         );
@@ -213,7 +213,7 @@ pub(crate) mod test {
             "s3://data.db/table/data_1/part-00001-test.parquet"
         );
 
-        table_metadata.properties.insert(
+        table_metadata.properties.other.insert(
             WRITE_DATA_LOCATION.to_string(),
             "s3://data.db/table/data_2".to_string(),
         );
@@ -226,7 +226,7 @@ pub(crate) mod test {
             "s3://data.db/table/data_2/part-00002-test.parquet"
         );
 
-        table_metadata.properties.insert(
+        table_metadata.properties.other.insert(
             WRITE_DATA_LOCATION.to_string(),
             // invalid table location
             "s3://data.db/data_3".to_string(),
@@ -291,7 +291,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),

@@ -2384,11 +2384,11 @@ mod tests {
         let updated_table = table_commit.apply(table).unwrap();
 
         assert_eq!(
-            updated_table.metadata().properties.get("prop1").unwrap(),
+            updated_table.metadata().properties.other.get("prop1").unwrap(),
             "v1"
         );
         assert_eq!(
-            updated_table.metadata().properties.get("prop2").unwrap(),
+            updated_table.metadata().properties.other.get("prop2").unwrap(),
             "v2"
         );
 
