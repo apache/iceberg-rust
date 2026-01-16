@@ -110,7 +110,7 @@ impl TableMetadataBuilder {
                 ), // Overwritten immediately by add_default_partition_spec
                 default_partition_type: StructType::new(vec![]),
                 last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
-                properties: HashMap::new(),
+                properties: TableProperties::default(),
                 current_snapshot_id: None,
                 snapshots: HashMap::new(),
                 snapshot_log: vec![],
@@ -272,7 +272,7 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        self.metadata.properties.extend(properties.clone());
+        self.metadata.properties.other.extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
             updates: properties,
         });
@@ -307,7 +307,7 @@ impl TableMetadataBuilder {
         }
 
         for property in &properties {
-            self.metadata.properties.remove(property);
+            self.metadata.properties.other.remove(property);
         }
 
         if !properties.is_empty() {
@@ -1128,6 +1128,7 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
+            .other
             .get(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)

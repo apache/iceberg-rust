@@ -37,11 +37,10 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
-use crate::spec::EncryptedKey;
+use crate::spec::{EncryptedKey, TableProperties};
 use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
@@ -91,7 +90,7 @@ pub struct TableMetadata {
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    pub(crate) properties: HashMap<String, String>,
+    pub(crate) properties: TableProperties,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
     pub(crate) current_snapshot_id: Option<i64>,
@@ -358,16 +357,13 @@ impl TableMetadata {
     /// Returns properties of table.
     #[inline]
     pub fn properties(&self) -> &HashMap<String, String> {
-        &self.properties
+        &self.properties.other
     }
 
     /// Returns typed table properties parsed from the raw properties map with defaults.
-    pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
-        })
+    pub fn table_properties(&self) -> &TableProperties {
+        &self.properties
     }
-
     /// Return location of statistics files.
     #[inline]
     pub fn statistics_iter(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {
@@ -969,7 +965,7 @@ pub(super) mod _serde {
                 default_partition_type,
                 default_spec,
                 last_partition_id: value.last_partition_id,
-                properties: value.properties.unwrap_or_default(),
+                properties: crate::spec::TableProperties::new(value.properties.unwrap_or_default()),
                 current_snapshot_id,
                 snapshots: snapshots
                     .map(|snapshots| {
@@ -1082,7 +1078,7 @@ pub(super) mod _serde {
                 default_partition_type,
                 default_spec,
                 last_partition_id: value.last_partition_id,
-                properties: value.properties.unwrap_or_default(),
+                properties: crate::spec::TableProperties::new(value.properties.unwrap_or_default()),
                 current_snapshot_id,
                 snapshots: snapshots
                     .map(|snapshots| {
@@ -1234,7 +1230,7 @@ pub(super) mod _serde {
                     .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
                 partition_specs,
                 schemas,
-                properties: value.properties.unwrap_or_default(),
+                properties: crate::spec::TableProperties::new(value.properties.unwrap_or_default()),
                 current_snapshot_id,
                 snapshots: value
                     .snapshots
@@ -1361,10 +1357,10 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec.spec_id(),
                 last_partition_id: v.last_partition_id,
-                properties: if v.properties.is_empty() {
+                properties: if v.properties.other.is_empty() {
                     None
                 } else {
-                    Some(v.properties)
+                    Some(v.properties.other.clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshot_log: if v.snapshot_log.is_empty() {
@@ -1430,10 +1426,10 @@ pub(super) mod _serde {
                 ),
                 default_spec_id: Some(v.default_spec.spec_id()),
                 last_partition_id: Some(v.last_partition_id),
-                properties: if v.properties.is_empty() {
+                properties: if v.properties.other.is_empty() {
                     None
                 } else {
-                    Some(v.properties)
+                    Some(v.properties.other.clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {

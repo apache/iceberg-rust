@@ -35,7 +35,7 @@ where
 }
 
 /// TableProperties that contains the properties of a table.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     pub commit_num_retries: usize,
@@ -51,6 +51,8 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
+    /// Any other properties that are not explicitly captured in named fields.
+    pub other: HashMap<String, String>,
 }
 
 impl TableProperties {
@@ -68,6 +70,11 @@ impl TableProperties {
     pub const PROPERTY_UUID: &str = "uuid";
     /// Reserved table property for the total number of snapshots.
     pub const PROPERTY_SNAPSHOT_COUNT: &str = "snapshot-count";
+    /// Creates a new TableProperties from a HashMap of raw strings.
+    pub fn new(props: HashMap<String, String>) -> Self {
+        Self::try_from(&props).unwrap_or_default()
+    }
+
     /// Reserved table property for current snapshot summary.
     pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &str = "current-snapshot-summary";
     /// Reserved table property for current snapshot id.
@@ -187,6 +194,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
+            other: props.clone(),
         })
     }
 }
