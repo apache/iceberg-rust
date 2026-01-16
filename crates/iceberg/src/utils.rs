@@ -241,3 +241,325 @@ pub fn ancestors_between(
             .take_while(move |snapshot| snapshot.snapshot_id() != oldest_snapshot_id),
     )
 }
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use futures::TryStreamExt;
+use futures::stream::{self, StreamExt};
+use itertools::Itertools;
+
+use crate::error::Result;
+use crate::io::FileIO;
+use crate::spec::{ManifestFile, Snapshot};
+
+pub(crate) const DEFAULT_DELETE_CONCURRENCY_LIMIT: usize = 10;
+
+/// Strategy for cleaning up unreachable files after snapshot expiration.
+pub struct ReachableFileCleanupStrategy {
+    file_io: FileIO,
+    concurrency_limit: usize,
+}
+
+impl ReachableFileCleanupStrategy {
+    /// Creates a new cleanup strategy with default concurrency limit.
+    pub fn new(file_io: FileIO) -> Self {
+        Self {
+            file_io,
+            concurrency_limit: DEFAULT_DELETE_CONCURRENCY_LIMIT,
+        }
+    }
+
+    fn collect_expired_snapshots<'a>(
+        &'a self,
+        before_expiration: &'a TableMetadataRef,
+        after_expiration: &'a TableMetadataRef,
+    ) -> (Vec<SnapshotRef>, HashSet<&'a str>) {
+        let mut manifest_lists_to_delete: HashSet<&str> = HashSet::default();
+        let mut expired_snapshots = Vec::default();
+
+        for snapshot in before_expiration.snapshots() {
+            if after_expiration
+                .snapshot_by_id(snapshot.snapshot_id())
+                .is_none()
+            {
+                expired_snapshots.push(snapshot.clone());
+                manifest_lists_to_delete.insert(snapshot.manifest_list());
+            }
+        }
+
+        (expired_snapshots, manifest_lists_to_delete)
+    }
+
+    /// Sets the concurrency limit for file deletion.
+    pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit = limit.max(1);
+        self
+    }
+
+    /// Cleans up files that became unreachable after snapshot expiration.
+    ///
+    /// Compares `before_expiration` and `after_expiration` metadata to identify expired
+    /// snapshots, then deletes their unreferenced data files, manifests, and manifest lists.
+    pub async fn clean_files(
+        &self,
+        before_expiration: &TableMetadataRef,
+        after_expiration: &TableMetadataRef,
+    ) -> Result<()> {
+        let (expired_snapshots, manifest_lists_to_delete) =
+            self.collect_expired_snapshots(before_expiration, after_expiration);
+
+        let deletion_candidates = {
+            let mut deletion_candidates = HashSet::default();
+            // This part can also be parallelized if `load_manifest_list` is a bottleneck
+            // and if the underlying FileIO supports concurrent reads efficiently.
+            for snapshot in expired_snapshots {
+                let manifest_list = snapshot
+                    .load_manifest_list(&self.file_io, before_expiration)
+                    .await?;
+
+                for manifest_file in manifest_list.entries() {
+                    deletion_candidates.insert(manifest_file.clone());
+                }
+            }
+            deletion_candidates
+        };
+
+        if !deletion_candidates.is_empty() {
+            let (manifests_to_delete, referenced_manifests) = self
+                .prune_referenced_manifests(
+                    after_expiration.snapshots(),
+                    after_expiration,
+                    deletion_candidates,
+                )
+                .await?;
+
+            if !manifests_to_delete.is_empty() {
+                let files_to_delete = self
+                    .find_files_to_delete(&manifests_to_delete, &referenced_manifests)
+                    .await?;
+
+                stream::iter(files_to_delete)
+                    .map(|file_path| self.file_io.delete(file_path))
+                    .buffer_unordered(self.concurrency_limit)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+
+                stream::iter(manifests_to_delete)
+                    .map(|manifest_file| self.file_io.delete(manifest_file.manifest_path))
+                    .buffer_unordered(self.concurrency_limit)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+            }
+        }
+
+        let manifest_lists_to_delete = manifest_lists_to_delete
+            .iter()
+            .map(|path| self.file_io.delete(path))
+            .collect_vec();
+
+        stream::iter(manifest_lists_to_delete)
+            .buffer_unordered(self.concurrency_limit)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(())
+    }
+
+    /// Separates manifests into deletable and still-referenced sets.
+    async fn prune_referenced_manifests(
+        &self,
+        snapshots: impl Iterator<Item = &Arc<Snapshot>>,
+        table_meta_data_ref: &TableMetadataRef,
+        mut deletion_candidates: HashSet<ManifestFile>,
+    ) -> Result<(HashSet<ManifestFile>, HashSet<ManifestFile>)> {
+        let mut referenced_manifests = HashSet::default();
+        for snapshot in snapshots {
+            let manifest_list = snapshot
+                .load_manifest_list(&self.file_io, table_meta_data_ref)
+                .await?;
+
+            for manifest_file in manifest_list.entries() {
+                deletion_candidates.remove(manifest_file);
+                referenced_manifests.insert(manifest_file.clone());
+
+                if deletion_candidates.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        Ok((deletion_candidates, referenced_manifests))
+    }
+
+    /// Finds data files that can be safely deleted.
+    async fn find_files_to_delete(
+        &self,
+        manifest_files: &HashSet<ManifestFile>,
+        referenced_manifests: &HashSet<ManifestFile>,
+    ) -> Result<HashSet<String>> {
+        let mut files_to_delete = HashSet::default();
+        for manifest_file in manifest_files {
+            let m = manifest_file.load_manifest(&self.file_io).await?;
+            for entry in m.entries() {
+                files_to_delete.insert(entry.data_file().file_path().to_owned());
+            }
+        }
+
+        if files_to_delete.is_empty() {
+            return Ok(files_to_delete);
+        }
+
+        for manifest_file in referenced_manifests {
+            let m = manifest_file.load_manifest(&self.file_io).await?;
+            for entry in m.entries() {
+                files_to_delete.remove(entry.data_file().file_path());
+            }
+        }
+
+        Ok(files_to_delete)
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use std::collections::HashSet;
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::TableIdent;
+    use crate::io::FileIOBuilder;
+    use crate::spec::TableMetadata;
+    use crate::table::Table;
+
+    #[cfg(test)]
+    fn make_v2_table_with_multi_snapshot() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2ValidMultiSnapshot.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap()
+    }
+
+    #[cfg(test)]
+    fn clone_without_snapshots(
+        metadata: &TableMetadataRef,
+        expired_ids: &HashSet<i64>,
+    ) -> TableMetadataRef {
+        let mut cloned = metadata.as_ref().clone();
+        cloned.snapshots.retain(|id, _| !expired_ids.contains(id));
+        cloned
+            .snapshot_log
+            .retain(|log| !expired_ids.contains(&log.snapshot_id));
+        Arc::new(cloned)
+    }
+
+    #[test]
+    fn test_cleanup_strategy_builder() {
+        let file_io = FileIOBuilder::new("memory").build().unwrap();
+
+        // Test default concurrency limit
+        let strategy = ReachableFileCleanupStrategy::new(file_io.clone());
+        assert_eq!(
+            strategy.concurrency_limit, DEFAULT_DELETE_CONCURRENCY_LIMIT,
+            "Default concurrency limit should be {}",
+            DEFAULT_DELETE_CONCURRENCY_LIMIT
+        );
+
+        // Test custom concurrency limit
+        let custom_limit = 20;
+        let strategy =
+            ReachableFileCleanupStrategy::new(file_io).with_concurrency_limit(custom_limit);
+        assert_eq!(
+            strategy.concurrency_limit, custom_limit,
+            "Custom concurrency limit should be set correctly"
+        );
+    }
+
+    #[test]
+    fn test_expired_snapshot_detection_scenarios() {
+        let table = make_v2_table_with_multi_snapshot();
+        let before_metadata = table.metadata_ref();
+        let strategy =
+            ReachableFileCleanupStrategy::new(FileIOBuilder::new("memory").build().unwrap());
+
+        let mut all_snapshot_ids: Vec<i64> = before_metadata
+            .snapshots()
+            .map(|s| s.snapshot_id())
+            .collect();
+        all_snapshot_ids.sort_unstable();
+        assert!(
+            all_snapshot_ids.len() > 2,
+            "Fixture should provide multiple snapshots to exercise expiration logic"
+        );
+
+        let expired_ids: HashSet<i64> = all_snapshot_ids.iter().take(2).copied().collect();
+        let after_with_expired = clone_without_snapshots(&before_metadata, &expired_ids);
+        assert_eq!(
+            after_with_expired.snapshots().count(),
+            all_snapshot_ids.len() - expired_ids.len(),
+            "After-metadata should retain the non-expired snapshots only"
+        );
+
+        let (expired_snapshots, manifest_lists_to_delete) =
+            strategy.collect_expired_snapshots(&before_metadata, &after_with_expired);
+
+        let expired_ids_found: HashSet<_> =
+            expired_snapshots.iter().map(|s| s.snapshot_id()).collect();
+
+        assert_eq!(
+            expired_ids_found.len(),
+            expired_ids.len(),
+            "The number of expired snapshots should match the removed snapshots"
+        );
+        assert_eq!(
+            manifest_lists_to_delete.len(),
+            expired_ids.len(),
+            "Each expired snapshot must contribute one manifest list"
+        );
+        assert_eq!(
+            expired_ids_found, expired_ids,
+            "Expired snapshot IDs should be identified precisely"
+        );
+        for snapshot in &expired_snapshots {
+            assert!(
+                manifest_lists_to_delete.contains(snapshot.manifest_list()),
+                "Expired snapshots must provide their manifest list for deletion"
+            );
+            assert!(
+                !snapshot.manifest_list().is_empty(),
+                "Manifest list path should not be empty"
+            );
+        }
+
+        let remaining_ids: HashSet<_> = all_snapshot_ids
+            .iter()
+            .copied()
+            .filter(|id| !expired_ids.contains(id))
+            .collect();
+        assert!(
+            remaining_ids.is_disjoint(&expired_ids_found),
+            "Snapshots retained in after-metadata must not be marked expired"
+        );
+
+        let (no_expired, no_manifest_lists) =
+            strategy.collect_expired_snapshots(&before_metadata, &before_metadata);
+        assert!(
+            no_expired.is_empty() && no_manifest_lists.is_empty(),
+            "When after-metadata keeps all snapshots, expired collections should be empty"
+        );
+    }
+}
