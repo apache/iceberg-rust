@@ -1553,6 +1553,7 @@ impl SnapshotLog {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::collections::HashMap;
     use std::fs;
     use std::io::Write as _;
@@ -1573,7 +1574,7 @@ mod tests {
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
         Summary, Transform, Type, UnboundPartitionField,
     };
-    use crate::{ErrorKind, TableCreation};
+    use crate::TableCreation;
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1705,10 +1706,10 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::from_iter(vec![(
-                "commit.retry.num-retries".to_string(),
-                "1".to_string(),
-            )]),
+            properties: TableProperties::new(HashMap::from_iter(vec![(
+    		"commit.retry.num-retries".to_string(),
+    		"1".to_string(),
+	    )])),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -1843,7 +1844,7 @@ mod tests {
             .with_encryption_key_id(Some("key1".to_string()))
             .with_summary(Summary {
                 operation: Operation::Append,
-                additional_properties: HashMap::new(),
+		additional_properties: HashMap::new()
             })
             .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string())
             .with_schema_id(0)
@@ -1881,10 +1882,10 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(1, snapshot.into())]),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::from_iter(vec![(
+            properties: TableProperties::new(HashMap::from_iter(vec![(
                 "commit.retry.num-retries".to_string(),
                 "1".to_string(),
-            )]),
+            )])),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -2040,8 +2041,13 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
-            .with_summary(Summary { operation: Operation::Append, additional_properties: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
-            .build();
+            .with_summary(Summary { operation: Operation::Append, 
+	    additional_properties: HashMap::from_iter(vec![
+    	    ("spark.app.id".to_string(), "local-1662532784305".to_string()), 
+            ("added-data-files".to_string(), "4".to_string()), 
+            ("added-records".to_string(), "4".to_string()), 
+    	    ("added-files-size".to_string(), "6001".to_string()) ]) }) 
+           .build();
 
         let default_partition_type = partition_spec.partition_type(&schema).unwrap();
         let expected = TableMetadata {
@@ -2061,7 +2067,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))]),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
-            properties: HashMap::from_iter(vec![("owner".to_string(), "root".to_string())]),
+	    properties: TableProperties::new(HashMap::from_iter(vec![("owner".to_string(), "root".to_string())])),
             snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
                 timestamp_ms: 1662532818843,
@@ -2160,7 +2166,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -2678,7 +2684,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             statistics: HashMap::from_iter(vec![(3055729675574597004, StatisticsFile {
@@ -2692,7 +2698,7 @@ mod tests {
                     sequence_number: 1,
                     fields: vec![1],
                     r#type: "ndv".to_string(),
-                    properties: HashMap::new(),
+		    properties: HashMap::new(),
                 }],
             })]),
             partition_statistics: HashMap::new(),
@@ -2820,7 +2826,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             statistics: HashMap::new(),
@@ -2946,7 +2952,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3070,7 +3076,7 @@ mod tests {
             ]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![
                 SnapshotLog {
                     snapshot_id: 3051729675574597004,
@@ -3172,7 +3178,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3242,7 +3248,7 @@ mod tests {
             snapshots: HashMap::new(),
             current_snapshot_id: None,
             last_sequence_number: 0,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3506,7 +3512,7 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(table_metadata.properties.len(), 0);
+        assert_eq!(table_metadata.properties.other.len(), 0);
         assert_eq!(
             table_metadata.partition_specs,
             HashMap::from([(
@@ -3890,7 +3896,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+	let props = metadata.table_properties();
 
         assert_eq!(
             props.commit_num_retries,
@@ -3937,41 +3943,10 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
-
-        assert_eq!(props.commit_num_retries, 10);
+	let props = metadata.table_properties();
+        
+	assert_eq!(props.commit_num_retries, 10);
         assert_eq!(props.write_target_file_size_bytes, 1024);
     }
 
-    #[test]
-    fn test_table_properties_with_invalid_value() {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let properties = HashMap::from([(
-            "commit.retry.num-retries".to_string(),
-            "not_a_number".to_string(),
-        )]);
-
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            PartitionSpec::unpartition_spec().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            properties,
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        let err = metadata.table_properties().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid table properties"));
-    }
 }

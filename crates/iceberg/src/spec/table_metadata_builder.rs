@@ -1511,7 +1511,7 @@ mod tests {
         assert_eq!(metadata.snapshots.len(), 0);
         assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
-        assert_eq!(metadata.properties.len(), 0);
+        assert_eq!(metadata.properties.other.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
         assert_eq!(metadata.last_sequence_number, 0);
         assert_eq!(metadata.last_column_id, LAST_ASSIGNED_COLUMN_ID);
@@ -1560,7 +1560,7 @@ mod tests {
         assert_eq!(metadata.snapshots.len(), 0);
         assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
-        assert_eq!(metadata.properties.len(), 0);
+        assert_eq!(metadata.properties.other.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
         assert_eq!(metadata.last_sequence_number, 0);
     }
