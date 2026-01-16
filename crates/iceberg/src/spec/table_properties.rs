@@ -16,21 +16,28 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::str::FromStr;
+
+use crate::error::{Error, ErrorKind, Result};
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
-fn parse_property<T: std::str::FromStr>(
+fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
-) -> Result<T, anyhow::Error>
+) -> Result<T>
 where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
+    <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
-        value
-            .parse::<T>()
-            .map_err(|e| anyhow::anyhow!("Invalid value for {key}: {e}"))
+        value.parse::<T>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
     })
 }
 
@@ -49,6 +56,8 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Compression codec for metadata files (JSON), None means no compression
+    pub metadata_compression_codec: Option<String>,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
 }
@@ -139,6 +148,11 @@ impl TableProperties {
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
+
+    /// Compression codec for metadata files (JSON)
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
+    /// Default metadata compression codec - uncompressed
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
@@ -148,9 +162,9 @@ impl TableProperties {
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     // parse by entry key or use default value
-    type Error = anyhow::Error;
+    type Error = Error;
 
-    fn try_from(props: &HashMap<String, String>) -> Result<Self, Self::Error> {
+    fn try_from(props: &HashMap<String, String>) -> Result<Self> {
         Ok(TableProperties {
             commit_num_retries: parse_property(
                 props,
@@ -182,6 +196,12 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            metadata_compression_codec: props
+                .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+                .and_then(|v| match v.to_lowercase().as_str() {
+                    "none" | "" => None,
+                    codec => Some(codec.to_string()),
+                }),
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
@@ -219,6 +239,64 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+        // Test compression defaults (none means None)
+        assert_eq!(table_properties.metadata_compression_codec, None);
+    }
+
+    #[test]
+    fn test_table_properties_compression() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "gzip".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+    }
+
+    #[test]
+    fn test_table_properties_compression_none() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "none".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.metadata_compression_codec, None);
+    }
+
+    #[test]
+    fn test_table_properties_compression_case_insensitive() {
+        // Test uppercase
+        let props_upper = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "GZIP".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_upper).unwrap();
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+
+        // Test mixed case
+        let props_mixed = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "GzIp".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_mixed).unwrap();
+        assert_eq!(
+            table_properties.metadata_compression_codec,
+            Some("gzip".to_string())
+        );
+
+        // Test "NONE" should also be case-insensitive
+        let props_none_upper = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "NONE".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props_none_upper).unwrap();
+        assert_eq!(table_properties.metadata_compression_codec, None);
     }
 
     #[test]
