@@ -22,9 +22,6 @@ on:
     - cron: "0 0 * * *" # Runs at midnight UTC every day
   workflow_dispatch: # Allows manual triggering
 
-env:
-  rust_msrv: "1.87"
-
 permissions:
   contents: read
 
@@ -88,10 +85,17 @@ jobs:
         with:
           python-version: 3.12
 
+      - name: Get MSRV
+        id: get-msrv
+        run: |
+          msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "msrv=$msrv" >> $GITHUB_OUTPUT
+          echo "MSRV is $msrv"
+
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_msrv }}
+          rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
       - uses: PyO3/maturin-action@v1
         with:

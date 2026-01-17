@@ -24,9 +24,6 @@ on:
       - completed
   workflow_dispatch:
 
-env:
-  rust_msrv: "1.87"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -147,10 +144,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: 3.12
+      - name: Get MSRV
+        id: get-msrv
+        run: |
+          msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "msrv=$msrv" >> $GITHUB_OUTPUT
+          echo "MSRV is $msrv"
+
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_msrv }}
+          rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
