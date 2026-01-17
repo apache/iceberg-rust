@@ -122,6 +122,7 @@ impl SecureKey {
 }
 
 /// AES-GCM encryptor for encrypting and decrypting data.
+#[derive(Debug)]
 pub struct AesGcmEncryptor {
     key: SecureKey,
 }

@@ -25,6 +25,7 @@ use opendal::Operator;
 use url::Url;
 
 use super::storage::Storage;
+use crate::encryption::{AesGcmEncryptor, AesGcmFileRead, EncryptionManager, StandardKeyMetadata};
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -138,6 +139,61 @@ impl FileIO {
             path,
             relative_path_pos,
         })
+    }
+
+    /// Creates an encrypted input file for reading manifest files.
+    ///
+    /// This method deserializes the key metadata, unwraps the encryption key via KMS,
+    /// and creates an input file that transparently decrypts the AGS1-format encrypted stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Absolute path starting with scheme string used to construct `FileIO`
+    /// * `key_metadata` - Serialized StandardKeyMetadata from the manifest file metadata
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No encryption manager is configured
+    /// - Key metadata is invalid
+    /// * KMS unwrap operation fails
+    pub async fn new_encrypted_input(
+        &self,
+        path: impl AsRef<str>,
+        key_metadata: &[u8],
+    ) -> Result<EncryptedInputFile> {
+        let encryption_manager = self
+            .builder
+            .extension::<EncryptionManager>()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "No encryption manager configured for FileIO",
+                )
+            })?;
+
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let path_str = path.as_ref().to_string();
+        let relative_path_pos = path_str.len() - relative_path.len();
+
+        // Prepare decryption: unwrap key from KMS and create encryptor
+        let encryptor = encryption_manager.prepare_decryption(key_metadata).await?;
+
+        // Parse key metadata to get AAD prefix
+        let metadata = StandardKeyMetadata::deserialize(key_metadata)?;
+
+        Ok(EncryptedInputFile {
+            op,
+            path: path_str,
+            relative_path_pos,
+            encryptor,
+            key_metadata: metadata,
+        })
+    }
+
+    /// Returns the encryption manager if one is configured.
+    pub fn encryption_manager(&self) -> Option<Arc<EncryptionManager>> {
+        self.builder.extension::<EncryptionManager>()
     }
 
     /// Creates output file.
@@ -344,6 +400,85 @@ impl InputFile {
     /// For one-time reading, use [`Self::read`] instead.
     pub async fn reader(&self) -> crate::Result<impl FileRead + use<>> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
+    }
+}
+
+/// Encrypted input file for reading AGS1-encrypted manifest files.
+///
+/// This type provides transparent decryption of files encrypted in the AGS1 format.
+/// It wraps the underlying storage operator and an encryptor to decrypt data on-the-fly.
+#[derive(Debug)]
+pub struct EncryptedInputFile {
+    op: Operator,
+    // Absolute path of file
+    path: String,
+    // Relative path of file to uri, starts at [`relative_path_pos`]
+    relative_path_pos: usize,
+    // Encryptor for decryption
+    encryptor: Arc<AesGcmEncryptor>,
+    // Key metadata containing AAD prefix
+    key_metadata: StandardKeyMetadata,
+}
+
+impl EncryptedInputFile {
+    /// Absolute path to root uri.
+    pub fn location(&self) -> &str {
+        &self.path
+    }
+
+    /// Check if file exists.
+    pub async fn exists(&self) -> crate::Result<bool> {
+        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+    }
+
+    /// Fetch and returns metadata of file.
+    ///
+    /// Note: This returns metadata of the *encrypted* file, not the decrypted content.
+    pub async fn metadata(&self) -> crate::Result<FileMetadata> {
+        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
+
+        Ok(FileMetadata {
+            size: meta.content_length(),
+        })
+    }
+
+    /// Read and returns whole decrypted content of file.
+    ///
+    /// This method reads the entire encrypted file and decrypts it transparently.
+    /// For continuous reading, use [`Self::reader`] instead.
+    pub async fn read(&self) -> crate::Result<Bytes> {
+        // Get file metadata to calculate plaintext length
+        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
+        let file_length = meta.content_length();
+
+        // Create a temporary reader to read the header and calculate plaintext length
+        let temp_reader = self.op.reader(&self.path[self.relative_path_pos..]).await?;
+        let plaintext_length =
+            AesGcmFileRead::calculate_plaintext_length_from_file(&temp_reader, file_length).await?;
+
+        let reader = self.reader().await?;
+        // Read all content using the calculated plaintext length
+        reader.read(0..plaintext_length).await
+    }
+
+    /// Creates [`FileRead`] for continuous reading with transparent decryption.
+    ///
+    /// For one-time reading, use [`Self::read`] instead.
+    pub async fn reader(&self) -> crate::Result<Box<dyn FileRead>> {
+        // Get file metadata to determine file size
+        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
+        let file_length = meta.content_length();
+
+        let inner = self.op.reader(&self.path[self.relative_path_pos..]).await?;
+        let encrypted_reader = AesGcmFileRead::new(
+            Box::new(inner),
+            self.encryptor.clone(),
+            &self.key_metadata,
+            file_length,
+        )
+        .await?;
+
+        Ok(Box::new(encrypted_reader))
     }
 }
 
