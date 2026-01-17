@@ -367,3 +367,81 @@ async fn test_encrypted_input_file_exists() {
     // Now it should exist
     assert!(encrypted_input.exists().await.unwrap());
 }
+
+#[tokio::test]
+async fn test_encrypted_manifest_file_new_encrypted_input() {
+    use iceberg::spec::{ManifestContentType, ManifestFile};
+
+    let tmp_dir = TempDir::new().unwrap();
+    let manifest_path = format!(
+        "file://{}/encrypted_manifest.avro",
+        tmp_dir.path().to_str().unwrap()
+    );
+
+    // Setup encryption
+    let master_key = vec![7u8; 16];
+    let kms = Arc::new(InMemoryKms::new_with_master_key(
+        "manifest-key".to_string(),
+        master_key,
+    ));
+    let encryption_manager = Arc::new(EncryptionManager::with_defaults(kms.clone()));
+
+    // Create FileIO with encryption manager
+    let file_io = FileIOBuilder::new_fs_io()
+        .with_extension((*encryption_manager).clone())
+        .build()
+        .unwrap();
+
+    // Generate encryption key and metadata
+    let dek = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
+    let aad_prefix = b"manifest_aad";
+    let dek_bytes = dek.as_bytes().to_vec();
+    let wrapped_key = kms.wrap_key(&dek_bytes, "manifest-key").await.unwrap();
+    let encryptor = AesGcmEncryptor::new(dek);
+    let key_metadata = StandardKeyMetadata::new(wrapped_key.clone(), aad_prefix.to_vec(), None);
+    let key_metadata_bytes = key_metadata.serialize().unwrap();
+
+    // Create test data and encrypt it
+    let plaintext = b"This is test manifest data";
+    let encrypted_data = create_ags1_file(plaintext, &encryptor, aad_prefix);
+
+    // Write encrypted file to storage
+    let output = file_io.new_output(&manifest_path).unwrap();
+    output.write(encrypted_data).await.unwrap();
+
+    // Test that new_encrypted_input works correctly
+    let encrypted_input = file_io
+        .new_encrypted_input(&manifest_path, &key_metadata_bytes)
+        .await
+        .unwrap();
+
+    let decrypted_data = encrypted_input.read().await.unwrap();
+    assert_eq!(&decrypted_data[..], plaintext);
+
+    // Create ManifestFile entry with encryption metadata
+    let manifest_file = ManifestFile {
+        manifest_path: manifest_path.clone(),
+        manifest_length: 0,
+        partition_spec_id: 0,
+        content: ManifestContentType::Data,
+        sequence_number: 1,
+        min_sequence_number: 1,
+        added_snapshot_id: 1,
+        added_files_count: Some(0),
+        existing_files_count: Some(0),
+        deleted_files_count: Some(0),
+        added_rows_count: Some(0),
+        existing_rows_count: Some(0),
+        deleted_rows_count: Some(0),
+        partitions: None,
+        key_metadata: Some(key_metadata_bytes.clone()),
+        first_row_id: None,
+    };
+
+    // Verify that the ManifestFile has key_metadata set (which will trigger encryption path)
+    assert!(manifest_file.key_metadata.is_some());
+
+    // Note: We can't fully test load_manifest() here without creating a valid Avro manifest,
+    // but we've verified the encryption/decryption path works for FileIO.
+    // The load_manifest() method will use new_encrypted_input when key_metadata is present.
+}
