@@ -1553,7 +1553,6 @@ impl SnapshotLog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
     use std::fs;
     use std::io::Write as _;
@@ -1565,7 +1564,8 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, *};
+    use crate::TableCreation;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -1574,7 +1574,6 @@ mod tests {
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
         Summary, Transform, Type, UnboundPartitionField,
     };
-    use crate::TableCreation;
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1707,9 +1706,9 @@ mod tests {
             current_snapshot_id: None,
             last_sequence_number: 1,
             properties: TableProperties::new(HashMap::from_iter(vec![(
-    		"commit.retry.num-retries".to_string(),
-    		"1".to_string(),
-	    )])),
+                "commit.retry.num-retries".to_string(),
+                "1".to_string(),
+            )])),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -2041,8 +2040,7 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
-            .with_summary(Summary { operation: Operation::Append, 
-	    additional_properties: HashMap::from_iter(vec![
+            .with_summary(Summary { operation: Operation::Append,additional_properties: HashMap::from_iter(vec![
     	    ("spark.app.id".to_string(), "local-1662532784305".to_string()), 
             ("added-data-files".to_string(), "4".to_string()), 
             ("added-records".to_string(), "4".to_string()), 
@@ -2698,7 +2696,7 @@ mod tests {
                     sequence_number: 1,
                     fields: vec![1],
                     r#type: "ndv".to_string(),
-		    properties: HashMap::new(),
+                    properties: HashMap::new(),
                 }],
             })]),
             partition_statistics: HashMap::new(),
@@ -3896,7 +3894,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-	let props = metadata.table_properties();
+        let props = metadata.table_properties();
 
         assert_eq!(
             props.commit_num_retries,
@@ -3943,10 +3941,9 @@ mod tests {
         .unwrap()
         .metadata;
 
-	let props = metadata.table_properties();
-        
-	assert_eq!(props.commit_num_retries, 10);
+        let props = metadata.table_properties();
+
+        assert_eq!(props.commit_num_retries, 10);
         assert_eq!(props.write_target_file_size_bytes, 1024);
     }
-
 }
