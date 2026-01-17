@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::catalog::CatalogProvider;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
-use iceberg_datafusion::IcebergCatalogProvider;
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergTableProviderFactory};
 use indicatif::ProgressBar;
 
 use crate::engine::{DatafusionCatalogConfig, EngineRunner, run_slt_with_runner};
@@ -62,11 +63,28 @@ impl DataFusionEngine {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
-        let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog(
-            "default",
-            Self::create_catalog(catalog_config.as_ref()).await?,
+
+        // Create the catalog first so we can share it with the factory
+        let (catalog_provider, iceberg_catalog) =
+            Self::create_catalog(catalog_config.as_ref()).await?;
+
+        // Build session state with the IcebergTableProviderFactory registered
+        let mut state = SessionStateBuilder::new()
+            .with_config(session_config)
+            .with_default_features()
+            .build();
+
+        // Register the IcebergTableProviderFactory with the injected catalog
+        // This enables CREATE EXTERNAL TABLE ... STORED AS ICEBERG to load tables from the catalog
+        state.table_factories_mut().insert(
+            "ICEBERG".to_string(),
+            Arc::new(IcebergTableProviderFactory::new_with_catalog(
+                iceberg_catalog,
+            )),
         );
+
+        let ctx = SessionContext::new_with_state(state);
+        ctx.register_catalog("default", catalog_provider);
 
         Ok(Self {
             test_data_path: PathBuf::from("testdata"),
@@ -76,7 +94,7 @@ impl DataFusionEngine {
 
     async fn create_catalog(
         _catalog_config: Option<&DatafusionCatalogConfig>,
-    ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+    ) -> anyhow::Result<(Arc<dyn CatalogProvider>, Arc<dyn Catalog>)> {
         // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
         // See: https://github.com/apache/iceberg-rust/issues/1780
         let catalog = MemoryCatalogBuilder::default()
@@ -96,14 +114,21 @@ impl DataFusionEngine {
         // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
 
-        Ok(Arc::new(
-            IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
-        ))
+        let catalog_arc = Arc::new(catalog);
+        let catalog_provider =
+            Arc::new(IcebergCatalogProvider::try_new(catalog_arc.clone()).await?);
+
+        Ok((catalog_provider, catalog_arc))
     }
 
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
-    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
+    ///
+    /// This table is created in the Iceberg catalog and can be accessed via:
+    /// 1. `default.default.test_partitioned_table` - auto-registered by IcebergCatalogProvider
+    /// 2. `CREATE EXTERNAL TABLE test_partitioned_table STORED AS ICEBERG LOCATION ''` - loaded via factory
+    ///
+    /// The insert_into.slt tests use approach #2 to demonstrate the CREATE EXTERNAL TABLE feature.
     async fn create_partitioned_table(
         catalog: &impl Catalog,
         namespace: &NamespaceIdent,

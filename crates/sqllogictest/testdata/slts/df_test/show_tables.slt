@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# This test runs after create_table.slt, so it sees all tables created there
+# plus the pre-created test_partitioned_table
+
 query TTTT rowsort
 SHOW TABLES
 ----
@@ -25,9 +28,26 @@ datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
+datafusion public ns_table BASE TABLE
+datafusion public source_table BASE TABLE
+default default empty_table BASE TABLE
+default default empty_table$manifests BASE TABLE
+default default empty_table$snapshots BASE TABLE
+default default ns_table BASE TABLE
+default default ns_table$manifests BASE TABLE
+default default ns_table$snapshots BASE TABLE
+default default nullable_table BASE TABLE
+default default nullable_table$manifests BASE TABLE
+default default nullable_table$snapshots BASE TABLE
+default default source_table BASE TABLE
+default default source_table$manifests BASE TABLE
+default default source_table$snapshots BASE TABLE
 default default test_partitioned_table BASE TABLE
 default default test_partitioned_table$manifests BASE TABLE
 default default test_partitioned_table$snapshots BASE TABLE
+default default typed_table BASE TABLE
+default default typed_table$manifests BASE TABLE
+default default typed_table$snapshots BASE TABLE
 default information_schema columns VIEW
 default information_schema df_settings VIEW
 default information_schema parameters VIEW
