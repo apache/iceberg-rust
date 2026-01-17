@@ -1781,6 +1781,7 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         _options: Option<&'_ ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
+            #[cfg_attr(not(feature = "encryption"), allow(unused_mut))]
             let mut reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 // Set the page policy first because it updates both column and offset policies.
