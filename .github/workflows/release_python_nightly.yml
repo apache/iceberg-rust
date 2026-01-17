@@ -87,10 +87,7 @@ jobs:
 
       - name: Get MSRV
         id: get-msrv
-        run: |
-          msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          echo "msrv=$msrv" >> $GITHUB_OUTPUT
-          echo "MSRV is $msrv"
+        uses: ./.github/actions/get-msrv
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
