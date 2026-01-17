@@ -32,6 +32,7 @@ repository = { workspace = true }
 default = ["storage-memory", "storage-fs", "storage-s3"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
+encryption = ["parquet/encryption"]
 storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
@@ -73,7 +74,7 @@ num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
-parquet = { workspace = true, features = ["async"] }
+parquet = { workspace = true, features = ["async", "encryption"] }
 rand = { workspace = true }
 reqsign = { version = "0.16.3", optional = true, default-features = false }
 reqwest = { workspace = true }

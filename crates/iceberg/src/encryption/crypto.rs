@@ -133,6 +133,14 @@ impl AesGcmEncryptor {
         Self { key }
     }
 
+    /// Returns a reference to the encryption key.
+    ///
+    /// This is primarily used by the Parquet key retriever to extract
+    /// the raw DEK bytes for Parquet's native encryption.
+    pub fn key(&self) -> &SecureKey {
+        &self.key
+    }
+
     /// Encrypts data using AES-GCM.
     ///
     /// # Arguments

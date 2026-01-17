@@ -61,6 +61,13 @@ impl FileIO {
         self.builder
     }
 
+    /// Gets an extension by type from the FileIO.
+    ///
+    /// This is useful for accessing extensions that were added to the FileIO builder.
+    pub fn extension<T: 'static + Send + Sync + Clone>(&self) -> Option<Arc<T>> {
+        self.builder.extension::<T>()
+    }
+
     /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
     /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.

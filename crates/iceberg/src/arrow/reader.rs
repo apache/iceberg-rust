@@ -192,6 +192,7 @@ impl ArrowReader {
             file_io.clone(),
             should_load_page_index,
             None,
+            task.key_metadata.as_deref(),
         )
         .await?;
 
@@ -244,6 +245,7 @@ impl ArrowReader {
                 file_io.clone(),
                 should_load_page_index,
                 Some(options),
+                task.key_metadata.as_deref(),
             )
             .await?
         } else {
@@ -447,16 +449,73 @@ impl ArrowReader {
         file_io: FileIO,
         should_load_page_index: bool,
         arrow_reader_options: Option<ArrowReaderOptions>,
+        key_metadata: Option<&[u8]>,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
+
         let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
             .with_preload_column_index(true)
             .with_preload_offset_index(true)
             .with_preload_page_index(should_load_page_index);
+
+        // Check if file is encrypted but encryption feature is not enabled
+        #[cfg(not(feature = "encryption"))]
+        if key_metadata.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Data file is encrypted but 'encryption' feature is not enabled. \
+                 Please compile with --features encryption to read encrypted Parquet files."
+            ));
+        }
+
+        // If the file is encrypted, configure decryption
+        #[cfg(feature = "encryption")]
+        let parquet_file_reader = if let Some(_key_metadata) = key_metadata {
+            use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
+            use crate::encryption::{EncryptionManager, IcebergKeyRetriever};
+
+            // Get the encryption manager from FileIO
+            let encryption_manager = file_io
+                .extension::<EncryptionManager>()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "EncryptionManager not found in FileIO but data file is encrypted"
+                    )
+                })?;
+
+            // Get or create a tokio runtime handle for the key retriever
+            let runtime = tokio::runtime::Handle::try_current()
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "No tokio runtime found. Encrypted Parquet files require a tokio runtime."
+                    )
+                })?;
+
+            // Create the key retriever
+            let key_retriever = Arc::new(IcebergKeyRetriever::new(
+                encryption_manager,
+                runtime,
+            ));
+
+            // Create file decryption properties using the key retriever
+            let decryption_properties = FileDecryptionProperties::with_key_retriever(
+                key_retriever as Arc<dyn KeyRetriever>
+            ).build()?;
+
+            // Set the decryption properties on the reader
+            parquet_file_reader.with_file_decryption_properties(decryption_properties)
+        } else {
+            parquet_file_reader
+        };
+
+        #[cfg(not(feature = "encryption"))]
+        let _ = key_metadata; // Suppress unused variable warning
 
         // Create the record batch stream builder, which wraps the parquet file reader
         let options = arrow_reader_options.unwrap_or_default();
@@ -1653,6 +1712,8 @@ pub struct ArrowFileReader<R: FileRead> {
     preload_page_index: bool,
     metadata_size_hint: Option<usize>,
     r: R,
+    #[cfg(feature = "encryption")]
+    file_decryption_properties: Option<Arc<parquet::encryption::decrypt::FileDecryptionProperties>>,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
@@ -1665,6 +1726,8 @@ impl<R: FileRead> ArrowFileReader<R> {
             preload_page_index: false,
             metadata_size_hint: None,
             r,
+            #[cfg(feature = "encryption")]
+            file_decryption_properties: None,
         }
     }
 
@@ -1694,6 +1757,16 @@ impl<R: FileRead> ArrowFileReader<R> {
         self.metadata_size_hint = Some(hint);
         self
     }
+
+    /// Set file decryption properties for reading encrypted Parquet files.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        mut self,
+        properties: Arc<parquet::encryption::decrypt::FileDecryptionProperties>,
+    ) -> Self {
+        self.file_decryption_properties = Some(properties);
+        self
+    }
 }
 
 impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
@@ -1712,12 +1785,18 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         _options: Option<&'_ ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let reader = ParquetMetaDataReader::new()
+            let mut reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.metadata_size_hint)
                 // Set the page policy first because it updates both column and offset policies.
                 .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
                 .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
                 .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index));
+
+            #[cfg(feature = "encryption")]
+            {
+                reader = reader.with_decryption_properties(self.file_decryption_properties.clone());
+            }
+
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
@@ -2083,6 +2162,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2405,6 +2485,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            key_metadata: None,
         };
 
         // Task 2: read the second and third row groups
@@ -2422,6 +2503,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            key_metadata: None,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2550,6 +2632,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2722,6 +2805,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+        key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2940,6 +3024,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+        key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3151,6 +3236,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+        key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3255,6 +3341,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3353,6 +3440,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3440,6 +3528,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3541,6 +3630,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3671,6 +3761,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3768,6 +3859,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3878,6 +3970,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -4018,6 +4111,7 @@ message schema {
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
                 case_sensitive: false,
+            key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;

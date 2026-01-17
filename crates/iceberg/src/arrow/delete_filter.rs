@@ -412,6 +412,7 @@ pub(crate) mod tests {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                key_metadata: None,
             },
             FileScanTask {
                 start: 0,
@@ -427,6 +428,7 @@ pub(crate) mod tests {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
+                key_metadata: None,
             },
         ];
 
@@ -482,6 +484,7 @@ pub(crate) mod tests {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: true,
+            key_metadata: None,
         };
 
         let filter = DeleteFilter::default();

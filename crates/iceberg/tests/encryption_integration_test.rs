@@ -445,3 +445,153 @@ async fn test_encrypted_manifest_file_new_encrypted_input() {
     // but we've verified the encryption/decryption path works for FileIO.
     // The load_manifest() method will use new_encrypted_input when key_metadata is present.
 }
+
+#[tokio::test]
+async fn test_end_to_end_encrypted_parquet_read() {
+    use std::collections::HashMap;
+    use std::fs::File;
+
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_array::cast::AsArray;
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use futures::TryStreamExt;
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
+    use parquet::basic::Compression;
+    use parquet::encryption::encrypt::FileEncryptionProperties;
+    use parquet::file::properties::WriterProperties;
+
+    use iceberg::arrow::ArrowReaderBuilder;
+    use iceberg::scan::{FileScanTask, FileScanTaskStream};
+    use iceberg::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+
+    let tmp_dir = TempDir::new().unwrap();
+    let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+    // ===== Setup Encryption =====
+    let master_key = vec![8u8; 16];
+    let kms = Arc::new(InMemoryKms::new_with_master_key(
+        "e2e-test-key".to_string(),
+        master_key.clone(),
+    ));
+    let encryption_manager = Arc::new(EncryptionManager::with_defaults(kms.clone()));
+
+    let file_io = FileIOBuilder::new_fs_io()
+        .with_extension((*encryption_manager).clone())
+        .build()
+        .unwrap();
+
+    // ===== Create Encrypted Parquet File =====
+
+    // 1. Generate DEK and create key metadata for Iceberg
+    let dek = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
+    let dek_bytes = dek.as_bytes().to_vec();
+    let wrapped_key = kms.wrap_key(&dek_bytes, "e2e-test-key").await.unwrap();
+    let key_metadata = StandardKeyMetadata::new(wrapped_key, b"parquet_aad".to_vec(), None);
+    let key_metadata_bytes = key_metadata.serialize().unwrap();
+
+    // 2. Setup Parquet encryption properties
+    // Parquet expects a 256-bit footer key (32 bytes) or 128-bit (16 bytes)
+    // Pass Iceberg's key metadata so it gets passed back to our KeyRetriever
+    let footer_key = dek_bytes.clone();
+    let encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_footer_key_metadata(key_metadata_bytes.clone())
+        .build()
+        .unwrap();
+
+    // 3. Create Arrow schema with field IDs
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([
+            (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+        ])),
+        Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([
+            (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
+        ])),
+    ]));
+
+    // 4. Create test data
+    let test_data = RecordBatch::try_new(
+        arrow_schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave", "Eve"])),
+        ],
+    )
+    .unwrap();
+
+    // 5. Write encrypted Parquet file
+    let parquet_path = format!("{}/encrypted_data.parquet", table_location);
+    let file = File::create(&parquet_path).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .with_file_encryption_properties(encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+    writer.write(&test_data).unwrap();
+    writer.close().unwrap();
+
+    // ===== Setup Iceberg Schema and Read =====
+
+    // 6. Create Iceberg schema
+    let iceberg_schema = Arc::new(
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap(),
+    );
+
+    // 7. Create FileScanTask with encryption metadata
+    let task = FileScanTask {
+        start: 0,
+        length: 0,
+        record_count: Some(5),
+        data_file_path: format!("file://{}", parquet_path),
+        data_file_format: DataFileFormat::Parquet,
+        schema: iceberg_schema.clone(),
+        project_field_ids: vec![1, 2],
+        predicate: None,
+        deletes: vec![],
+        partition: None,
+        partition_spec: None,
+        name_mapping: None,
+        case_sensitive: false,
+        key_metadata: Some(key_metadata_bytes),
+    };
+
+    // 8. Read through ArrowReader
+    let reader = ArrowReaderBuilder::new(file_io).build();
+    let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+
+    let result = reader
+        .read(tasks)
+        .unwrap()
+        .try_collect::<Vec<RecordBatch>>()
+        .await
+        .unwrap();
+
+    // ===== Verify Results =====
+    assert_eq!(result.len(), 1);
+    let batch = &result[0];
+
+    assert_eq!(batch.num_rows(), 5);
+    assert_eq!(batch.num_columns(), 2);
+
+    // Verify ID column
+    let id_col = batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int32Type>();
+    assert_eq!(id_col.values(), &[1, 2, 3, 4, 5]);
+
+    // Verify name column
+    let name_col = batch.column(1).as_string::<i32>();
+    assert_eq!(name_col.value(0), "Alice");
+    assert_eq!(name_col.value(1), "Bob");
+    assert_eq!(name_col.value(2), "Charlie");
+    assert_eq!(name_col.value(3), "Dave");
+    assert_eq!(name_col.value(4), "Eve");
+}

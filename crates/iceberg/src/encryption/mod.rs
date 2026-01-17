@@ -25,6 +25,7 @@ mod crypto;
 mod key_management;
 mod key_metadata;
 mod manager;
+mod parquet_key_retriever;
 mod stream;
 
 pub use cache::KeyCache;
@@ -32,4 +33,5 @@ pub use crypto::{AesGcmEncryptor, EncryptionAlgorithm, SecureKey};
 pub use key_management::{InMemoryKms, KeyManagementClient};
 pub use key_metadata::{EncryptionKeyMetadata, StandardKeyMetadata};
 pub use manager::EncryptionManager;
+pub use parquet_key_retriever::IcebergKeyRetriever;
 pub use stream::AesGcmFileRead;

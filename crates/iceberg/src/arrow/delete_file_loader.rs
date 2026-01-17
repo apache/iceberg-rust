@@ -64,6 +64,7 @@ impl BasicDeleteFileLoader {
             self.file_io.clone(),
             false,
             None,
+            None, // TODO: Add key_metadata support for encrypted delete files
         )
         .await?
         .build()?

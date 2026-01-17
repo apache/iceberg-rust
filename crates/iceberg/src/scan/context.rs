@@ -139,6 +139,7 @@ impl ManifestEntryContext {
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
             case_sensitive: self.case_sensitive,
+            key_metadata: self.manifest_entry.data_file.key_metadata.clone(),
         })
     }
 }
