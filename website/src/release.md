@@ -368,10 +368,6 @@ git push origin "v${iceberg_version}"
 svn mv https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-${release_version} https://dist.apache.org/repos/dist/release/iceberg/apache-iceberg-rust-${iceberg_version} -m "Release Apache Iceberg Rust ${iceberg_version}"
 ```
 
-### Change Iceberg Rust Website download link
-
-Update the download link in `website/src/download.md` to the new release version.
-
 ### Create a GitHub Release
 
 - Click [here](https://github.com/apache/iceberg-rust/releases/new) to create a new release.
