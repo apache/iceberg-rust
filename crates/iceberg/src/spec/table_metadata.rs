@@ -357,7 +357,7 @@ impl TableMetadata {
     /// Returns properties of table.
     #[inline]
     pub fn properties(&self) -> &HashMap<String, String> {
-        &self.properties.other
+        &self.properties.additional_properties
     }
 
     /// Returns typed table properties parsed from the raw properties map with defaults.
@@ -1357,10 +1357,10 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec.spec_id(),
                 last_partition_id: v.last_partition_id,
-                properties: if v.properties.other.is_empty() {
+                properties: if v.properties.additional_properties.is_empty() {
                     None
                 } else {
-                    Some(v.properties.other.clone())
+                    Some(v.properties.additional_properties.clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshot_log: if v.snapshot_log.is_empty() {
@@ -1426,10 +1426,10 @@ pub(super) mod _serde {
                 ),
                 default_spec_id: Some(v.default_spec.spec_id()),
                 last_partition_id: Some(v.last_partition_id),
-                properties: if v.properties.other.is_empty() {
+                properties: if v.properties.additional_properties.is_empty() {
                     None
                 } else {
-                    Some(v.properties.other.clone())
+                    Some(v.properties.additional_properties.clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {
@@ -3510,7 +3510,7 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(table_metadata.properties.other.len(), 0);
+        assert_eq!(table_metadata.properties.additional_properties.len(), 0);
         assert_eq!(
             table_metadata.partition_specs,
             HashMap::from([(

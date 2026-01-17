@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+
 use crate::Result;
 use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
@@ -145,17 +146,16 @@ pub(crate) mod test {
     use std::sync::Arc;
 
     use uuid::Uuid;
-    use crate::spec::TableProperties;
+
     use super::LocationGenerator;
     use crate::spec::{
         FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
-        Struct, StructType, TableMetadata, Transform, Type,
+        Struct, StructType, TableMetadata, TableProperties, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         DefaultLocationGenerator, FileNameGenerator, WRITE_DATA_LOCATION,
         WRITE_FOLDER_STORAGE_LOCATION,
     };
-
 
     #[test]
     fn test_default_location_generate() {
@@ -200,7 +200,7 @@ pub(crate) mod test {
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
-        table_metadata.properties.other.insert(
+        table_metadata.properties.additional_properties.insert(
             WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
         );
@@ -213,7 +213,7 @@ pub(crate) mod test {
             "s3://data.db/table/data_1/part-00001-test.parquet"
         );
 
-        table_metadata.properties.other.insert(
+        table_metadata.properties.additional_properties.insert(
             WRITE_DATA_LOCATION.to_string(),
             "s3://data.db/table/data_2".to_string(),
         );
@@ -226,7 +226,7 @@ pub(crate) mod test {
             "s3://data.db/table/data_2/part-00002-test.parquet"
         );
 
-        table_metadata.properties.other.insert(
+        table_metadata.properties.additional_properties.insert(
             WRITE_DATA_LOCATION.to_string(),
             // invalid table location
             "s3://data.db/data_3".to_string(),

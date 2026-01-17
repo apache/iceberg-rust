@@ -53,7 +53,7 @@ pub struct TableProperties {
     pub write_datafusion_fanout_enabled: bool,
     /// Any other properties that are not explicitly captured in named fields.
     #[serde(flatten)]
-    pub other: HashMap<String, String>,
+    pub additional_properties: HashMap<String, String>,
 }
 
 impl TableProperties {
@@ -195,7 +195,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
-            other: props.clone(),
+            additional_properties: props.clone(),
         })
     }
 }

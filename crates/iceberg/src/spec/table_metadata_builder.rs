@@ -272,7 +272,10 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        self.metadata.properties.other.extend(properties.clone());
+        self.metadata
+            .properties
+            .additional_properties
+            .extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
             updates: properties,
         });
@@ -307,7 +310,10 @@ impl TableMetadataBuilder {
         }
 
         for property in &properties {
-            self.metadata.properties.other.remove(property);
+            self.metadata
+                .properties
+                .additional_properties
+                .remove(property);
         }
 
         if !properties.is_empty() {
@@ -1128,7 +1134,7 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
-            .other
+            .additional_properties
             .get(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
@@ -1511,7 +1517,7 @@ mod tests {
         assert_eq!(metadata.snapshots.len(), 0);
         assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
-        assert_eq!(metadata.properties.other.len(), 0);
+        assert_eq!(metadata.properties.additional_properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
         assert_eq!(metadata.last_sequence_number, 0);
         assert_eq!(metadata.last_column_id, LAST_ASSIGNED_COLUMN_ID);
@@ -1560,7 +1566,7 @@ mod tests {
         assert_eq!(metadata.snapshots.len(), 0);
         assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
-        assert_eq!(metadata.properties.other.len(), 0);
+        assert_eq!(metadata.properties.additional_properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
         assert_eq!(metadata.last_sequence_number, 0);
     }
