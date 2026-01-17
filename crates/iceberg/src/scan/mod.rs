@@ -258,18 +258,6 @@ impl<'a> TableScanBuilder<'a> {
                 )
             })?;
 
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
             field_ids.push(field_id);
         }
 
