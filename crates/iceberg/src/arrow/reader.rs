@@ -468,7 +468,7 @@ impl ArrowReader {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Data file is encrypted but 'encryption' feature is not enabled. \
-                 Please compile with --features encryption to read encrypted Parquet files."
+                 Please compile with --features encryption to read encrypted Parquet files.",
             ));
         }
 
@@ -476,37 +476,33 @@ impl ArrowReader {
         #[cfg(feature = "encryption")]
         let parquet_file_reader = if let Some(_key_metadata) = key_metadata {
             use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
+
             use crate::encryption::{EncryptionManager, IcebergKeyRetriever};
 
             // Get the encryption manager from FileIO
-            let encryption_manager = file_io
-                .extension::<EncryptionManager>()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "EncryptionManager not found in FileIO but data file is encrypted"
-                    )
-                })?;
+            let encryption_manager = file_io.extension::<EncryptionManager>().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "EncryptionManager not found in FileIO but data file is encrypted",
+                )
+            })?;
 
             // Get or create a tokio runtime handle for the key retriever
-            let runtime = tokio::runtime::Handle::try_current()
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "No tokio runtime found. Encrypted Parquet files require a tokio runtime."
-                    )
-                })?;
+            let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "No tokio runtime found. Encrypted Parquet files require a tokio runtime.",
+                )
+            })?;
 
             // Create the key retriever
-            let key_retriever = Arc::new(IcebergKeyRetriever::new(
-                encryption_manager,
-                runtime,
-            ));
+            let key_retriever = Arc::new(IcebergKeyRetriever::new(encryption_manager, runtime));
 
             // Create file decryption properties using the key retriever
             let decryption_properties = FileDecryptionProperties::with_key_retriever(
-                key_retriever as Arc<dyn KeyRetriever>
-            ).build()?;
+                key_retriever as Arc<dyn KeyRetriever>,
+            )
+            .build()?;
 
             // Set the decryption properties on the reader
             parquet_file_reader.with_file_decryption_properties(decryption_properties)
@@ -2632,7 +2628,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2805,7 +2801,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
-        key_metadata: None,
+            key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3024,7 +3020,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
-        key_metadata: None,
+            key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3236,7 +3232,7 @@ message schema {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
-        key_metadata: None,
+            key_metadata: None,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3341,7 +3337,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3440,7 +3436,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3528,7 +3524,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3630,7 +3626,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3761,7 +3757,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3859,7 +3855,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3970,7 +3966,7 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -4111,7 +4107,7 @@ message schema {
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
                 case_sensitive: false,
-            key_metadata: None,
+                key_metadata: None,
             })]
             .into_iter(),
         )) as FileScanTaskStream;

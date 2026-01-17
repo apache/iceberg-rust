@@ -88,10 +88,7 @@ impl EncryptionManager {
     ///
     /// # Returns
     /// An encryptor ready to decrypt the file
-    pub async fn prepare_decryption(
-        &self,
-        key_metadata: &[u8],
-    ) -> Result<Arc<AesGcmEncryptor>> {
+    pub async fn prepare_decryption(&self, key_metadata: &[u8]) -> Result<Arc<AesGcmEncryptor>> {
         // Check cache first
         if let Some(cached) = self.key_cache.get(key_metadata).await {
             return Ok(cached);

@@ -21,13 +21,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use tempfile::TempDir;
-
 use iceberg::encryption::{
-    AesGcmEncryptor, EncryptionAlgorithm, EncryptionManager, InMemoryKms,
-    KeyManagementClient, SecureKey, StandardKeyMetadata,
+    AesGcmEncryptor, EncryptionAlgorithm, EncryptionManager, InMemoryKms, KeyManagementClient,
+    SecureKey, StandardKeyMetadata,
 };
 use iceberg::io::FileIOBuilder;
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_encryption_manager_lifecycle() {
@@ -55,8 +54,7 @@ async fn test_encryption_manager_lifecycle() {
         .unwrap();
 
     // Create key metadata
-    let metadata =
-        StandardKeyMetadata::new(wrapped_key, aad_prefix.to_vec(), Some(1024));
+    let metadata = StandardKeyMetadata::new(wrapped_key, aad_prefix.to_vec(), Some(1024));
     let metadata_bytes = metadata.serialize().unwrap();
 
     // Prepare decryption (should unwrap key and cache it)
@@ -67,13 +65,9 @@ async fn test_encryption_manager_lifecycle() {
 
     // Test encryption round-trip
     let plaintext = b"Hello, encrypted Iceberg!";
-    let ciphertext = encryptor
-        .encrypt(plaintext, Some(aad_prefix))
-        .unwrap();
+    let ciphertext = encryptor.encrypt(plaintext, Some(aad_prefix)).unwrap();
 
-    let decrypted = encryptor
-        .decrypt(&ciphertext, Some(aad_prefix))
-        .unwrap();
+    let decrypted = encryptor.decrypt(&ciphertext, Some(aad_prefix)).unwrap();
 
     assert_eq!(decrypted, plaintext);
 
@@ -100,8 +94,7 @@ async fn test_file_io_encryption_integration() {
         "test-key".to_string(),
         master_key,
     ));
-    let encryption_manager =
-        Arc::new(EncryptionManager::with_defaults(kms.clone()));
+    let encryption_manager = Arc::new(EncryptionManager::with_defaults(kms.clone()));
 
     // Create FileIO with encryption manager
     let file_io = FileIOBuilder::new_fs_io()
@@ -122,8 +115,7 @@ async fn test_file_io_encryption_integration() {
 
     // Create AGS1 encrypted file
     let plaintext = b"This is test data for encryption integration";
-    let encrypted_file_data =
-        create_ags1_file(plaintext, &encryptor, aad_prefix);
+    let encrypted_file_data = create_ags1_file(plaintext, &encryptor, aad_prefix);
 
     // Write encrypted file
     let output = file_io.new_output(&test_file_path).unwrap();
@@ -154,16 +146,10 @@ async fn test_bulk_decryption_preparation() {
     for i in 0..10 {
         let dek = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
         let aad_prefix = format!("aad_{}", i);
-        let wrapped_key = kms
-            .wrap_key(dek.as_bytes(), "bulk-test-key")
-            .await
-            .unwrap();
+        let wrapped_key = kms.wrap_key(dek.as_bytes(), "bulk-test-key").await.unwrap();
 
-        let metadata = StandardKeyMetadata::new(
-            wrapped_key,
-            aad_prefix.as_bytes().to_vec(),
-            Some(1024 * i),
-        );
+        let metadata =
+            StandardKeyMetadata::new(wrapped_key, aad_prefix.as_bytes().to_vec(), Some(1024 * i));
         metadata_list.push(metadata.serialize().unwrap());
     }
 
@@ -205,8 +191,7 @@ async fn test_encryption_manager_extract_aad_prefix() {
     let expected_aad = b"my_aad_prefix";
 
     let wrapped_key = kms.wrap_key(dek.as_bytes(), "test-key").await.unwrap();
-    let metadata =
-        StandardKeyMetadata::new(wrapped_key, expected_aad.to_vec(), Some(2048));
+    let metadata = StandardKeyMetadata::new(wrapped_key, expected_aad.to_vec(), Some(2048));
     let metadata_bytes = metadata.serialize().unwrap();
 
     let extracted_aad = encryption_manager
@@ -288,11 +273,7 @@ async fn test_invalid_key_metadata() {
 }
 
 /// Helper function to create an AGS1-format encrypted file
-fn create_ags1_file(
-    plaintext: &[u8],
-    encryptor: &AesGcmEncryptor,
-    aad_prefix: &[u8],
-) -> Bytes {
+fn create_ags1_file(plaintext: &[u8], encryptor: &AesGcmEncryptor, aad_prefix: &[u8]) -> Bytes {
     use bytes::BytesMut;
 
     const PLAIN_BLOCK_SIZE: usize = 256; // Small for testing
@@ -451,18 +432,17 @@ async fn test_end_to_end_encrypted_parquet_read() {
     use std::collections::HashMap;
     use std::fs::File;
 
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_array::cast::AsArray;
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
+    use iceberg::arrow::ArrowReaderBuilder;
+    use iceberg::scan::{FileScanTask, FileScanTaskStream};
+    use iceberg::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::encryption::encrypt::FileEncryptionProperties;
     use parquet::file::properties::WriterProperties;
-
-    use iceberg::arrow::ArrowReaderBuilder;
-    use iceberg::scan::{FileScanTask, FileScanTaskStream};
-    use iceberg::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
 
     let tmp_dir = TempDir::new().unwrap();
     let table_location = tmp_dir.path().to_str().unwrap().to_string();
@@ -500,22 +480,23 @@ async fn test_end_to_end_encrypted_parquet_read() {
 
     // 3. Create Arrow schema with field IDs
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
-        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([
-            (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
-        ])),
-        Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([
-            (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
-        ])),
+        Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )])),
+        Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )])),
     ]));
 
     // 4. Create test data
-    let test_data = RecordBatch::try_new(
-        arrow_schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
-            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave", "Eve"])),
-        ],
-    )
+    let test_data = RecordBatch::try_new(arrow_schema.clone(), vec![
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+        Arc::new(StringArray::from(vec![
+            "Alice", "Bob", "Charlie", "Dave", "Eve",
+        ])),
+    ])
     .unwrap();
 
     // 5. Write encrypted Parquet file
@@ -601,7 +582,9 @@ async fn test_encrypted_manifest_list_loading() {
     use std::collections::HashMap;
     use std::fs;
 
-    use iceberg::encryption::{EncryptionAlgorithm, EncryptionManager, InMemoryKms, SecureKey, StandardKeyMetadata};
+    use iceberg::encryption::{
+        EncryptionAlgorithm, EncryptionManager, InMemoryKms, SecureKey, StandardKeyMetadata,
+    };
     use iceberg::io::FileIOBuilder;
     use iceberg::spec::{
         EncryptedKey, FormatVersion, ManifestContentType, ManifestFile, ManifestListWriter,
@@ -648,7 +631,9 @@ async fn test_encrypted_manifest_list_loading() {
     let temp_manifest_path = format!("{}/temp-manifest-list.avro", table_location);
     let temp_output = file_io.new_output(&temp_manifest_path).unwrap();
     let mut writer = ManifestListWriter::v2(temp_output, 1, None, 1);
-    writer.add_manifests(vec![manifest_file].into_iter()).unwrap();
+    writer
+        .add_manifests(vec![manifest_file].into_iter())
+        .unwrap();
     writer.close().await.unwrap();
 
     // Read the unencrypted manifest list bytes
@@ -657,10 +642,7 @@ async fn test_encrypted_manifest_list_loading() {
     // ===== Encrypt Manifest List =====
     let dek = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
     let dek_bytes = dek.as_bytes().to_vec();
-    let wrapped_key = kms
-        .wrap_key(&dek_bytes, "manifest-list-key")
-        .await
-        .unwrap();
+    let wrapped_key = kms.wrap_key(&dek_bytes, "manifest-list-key").await.unwrap();
 
     let aad_prefix = b"manifest_list_aad";
     let encryptor = AesGcmEncryptor::new(dek);
@@ -671,7 +653,10 @@ async fn test_encrypted_manifest_list_loading() {
     let encrypted_manifest_list = create_ags1_file(&manifest_list_bytes, &encryptor, aad_prefix);
 
     // Write encrypted manifest list to storage
-    let manifest_list_path = format!("file://{}/metadata/snap-1-manifest-list.avro", table_location);
+    let manifest_list_path = format!(
+        "file://{}/metadata/snap-1-manifest-list.avro",
+        table_location
+    );
     let output = file_io.new_output(&manifest_list_path).unwrap();
     output.write(encrypted_manifest_list).await.unwrap();
 

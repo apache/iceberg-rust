@@ -67,11 +67,7 @@ pub struct StandardKeyMetadata {
 
 impl StandardKeyMetadata {
     /// Creates a new StandardKeyMetadata instance.
-    pub fn new(
-        encryption_key: Vec<u8>,
-        aad_prefix: Vec<u8>,
-        file_length: Option<i64>,
-    ) -> Self {
+    pub fn new(encryption_key: Vec<u8>, aad_prefix: Vec<u8>, file_length: Option<i64>) -> Self {
         Self {
             encryption_key,
             aad_prefix,
@@ -85,7 +81,7 @@ impl StandardKeyMetadata {
     /// to ensure Java compatibility.
     pub fn serialize(&self) -> Result<Vec<u8>> {
         use apache_avro::types::Value;
-        use apache_avro::{to_avro_datum, Schema};
+        use apache_avro::{Schema, to_avro_datum};
 
         let schema_str = r#"{
             "type": "record",
@@ -135,7 +131,7 @@ impl StandardKeyMetadata {
 
     /// Deserializes metadata from Avro bytes format.
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        use apache_avro::{from_avro_datum, Schema};
+        use apache_avro::{Schema, from_avro_datum};
 
         let schema_str = r#"{
             "type": "record",
@@ -244,7 +240,8 @@ mod tests {
         let aad_prefix = b"iceberg_aad_prefix_".to_vec();
         let file_length = Some(1024i64);
 
-        let metadata = StandardKeyMetadata::new(encryption_key.clone(), aad_prefix.clone(), file_length);
+        let metadata =
+            StandardKeyMetadata::new(encryption_key.clone(), aad_prefix.clone(), file_length);
 
         let serialized = metadata.serialize().unwrap();
         let deserialized = StandardKeyMetadata::deserialize(&serialized).unwrap();
@@ -271,11 +268,7 @@ mod tests {
 
     #[test]
     fn test_encryption_key_metadata_trait() {
-        let metadata = StandardKeyMetadata::new(
-            b"key".to_vec(),
-            b"aad".to_vec(),
-            Some(2048),
-        );
+        let metadata = StandardKeyMetadata::new(b"key".to_vec(), b"aad".to_vec(), Some(2048));
 
         let trait_obj: &dyn EncryptionKeyMetadata = &metadata;
         assert_eq!(trait_obj.encryption_key(), b"key");

@@ -43,7 +43,10 @@ impl IcebergKeyRetriever {
     /// # Arguments
     /// * `encryption_manager` - The encryption manager to use for unwrapping keys
     /// * `runtime` - Tokio runtime handle for async operations
-    pub fn new(encryption_manager: Arc<EncryptionManager>, runtime: tokio::runtime::Handle) -> Self {
+    pub fn new(
+        encryption_manager: Arc<EncryptionManager>,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             encryption_manager,
             runtime,
@@ -66,9 +69,7 @@ impl KeyRetriever for IcebergKeyRetriever {
         let result = std::thread::scope(|s| {
             s.spawn(|| {
                 handle.block_on(async move {
-                    encryption_manager
-                        .prepare_decryption(&key_metadata)
-                        .await
+                    encryption_manager.prepare_decryption(&key_metadata).await
                 })
             })
             .join()
@@ -76,7 +77,10 @@ impl KeyRetriever for IcebergKeyRetriever {
         });
 
         let encryptor = result.map_err(|e| {
-            ParquetError::General(format!("Failed to prepare decryption for Parquet file: {}", e))
+            ParquetError::General(format!(
+                "Failed to prepare decryption for Parquet file: {}",
+                e
+            ))
         })?;
 
         // Return the raw DEK bytes that Parquet will use for decryption
@@ -87,7 +91,9 @@ impl KeyRetriever for IcebergKeyRetriever {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encryption::{EncryptionAlgorithm, InMemoryKms, KeyManagementClient, SecureKey, StandardKeyMetadata};
+    use crate::encryption::{
+        EncryptionAlgorithm, InMemoryKms, KeyManagementClient, SecureKey, StandardKeyMetadata,
+    };
 
     #[tokio::test]
     async fn test_key_retriever() {
@@ -114,12 +120,11 @@ mod tests {
 
         // Simulate Parquet calling retrieve_key from a blocking context
         // (Parquet's KeyRetriever trait is sync, so it would call this from a blocking thread)
-        let retrieved_key = tokio::task::spawn_blocking(move || {
-            retriever.retrieve_key(&key_metadata_bytes)
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        let retrieved_key =
+            tokio::task::spawn_blocking(move || retriever.retrieve_key(&key_metadata_bytes))
+                .await
+                .unwrap()
+                .unwrap();
 
         // Verify the retrieved key matches the original DEK
         assert_eq!(retrieved_key, dek_bytes);

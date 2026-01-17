@@ -454,7 +454,11 @@ mod tests {
         }
     }
 
-    fn create_ags1_test_file(plaintext: &[u8], encryptor: &AesGcmEncryptor, aad_prefix: &[u8]) -> Bytes {
+    fn create_ags1_test_file(
+        plaintext: &[u8],
+        encryptor: &AesGcmEncryptor,
+        aad_prefix: &[u8],
+    ) -> Bytes {
         let plain_block_size = 256; // Small blocks for testing
         let mut result = BytesMut::new();
 
@@ -536,9 +540,7 @@ mod tests {
     async fn test_ags1_invalid_header() {
         let invalid_data = Bytes::from("WRONG_HEADER");
         let file_length = invalid_data.len() as u64;
-        let mock_file = Box::new(MockEncryptedFile {
-            data: invalid_data,
-        });
+        let mock_file = Box::new(MockEncryptedFile { data: invalid_data });
 
         let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
         let encryptor = Arc::new(AesGcmEncryptor::new(key));

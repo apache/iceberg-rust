@@ -107,13 +107,10 @@ impl KeyCache {
     pub async fn insert(&self, key_metadata: Vec<u8>, encryptor: Arc<AesGcmEncryptor>) {
         let mut cache = self.cache.write().await;
 
-        cache.put(
-            key_metadata,
-            CachedKey {
-                encryptor,
-                expires_at: Instant::now() + self.ttl,
-            },
-        );
+        cache.put(key_metadata, CachedKey {
+            encryptor,
+            expires_at: Instant::now() + self.ttl,
+        });
     }
 
     /// Removes all expired entries from the cache.

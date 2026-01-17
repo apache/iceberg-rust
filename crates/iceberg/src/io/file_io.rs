@@ -169,15 +169,15 @@ impl FileIO {
         path: impl AsRef<str>,
         key_metadata: &[u8],
     ) -> Result<EncryptedInputFile> {
-        let encryption_manager = self
-            .builder
-            .extension::<EncryptionManager>()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "No encryption manager configured for FileIO",
-                )
-            })?;
+        let encryption_manager =
+            self.builder
+                .extension::<EncryptionManager>()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "No encryption manager configured for FileIO",
+                    )
+                })?;
 
         let (op, relative_path) = self.inner.create_operator(&path)?;
         let path_str = path.as_ref().to_string();

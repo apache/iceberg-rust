@@ -92,14 +92,12 @@ impl InMemoryKms {
     /// Retrieves a master key by ID.
     async fn get_master_key(&self, key_id: &str) -> Result<Vec<u8>> {
         let keys = self.keys.read().await;
-        keys.get(key_id)
-            .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Master key not found: {}", key_id),
-                )
-            })
+        keys.get(key_id).cloned().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Master key not found: {}", key_id),
+            )
+        })
     }
 }
 
@@ -127,7 +125,7 @@ impl KeyManagementClient for InMemoryKms {
                         "Unsupported master key length: {} (expected 16 for AES-128)",
                         master_key_bytes.len()
                     ),
-                ))
+                ));
             }
         };
 
