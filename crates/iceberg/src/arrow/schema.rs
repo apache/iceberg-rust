@@ -1125,6 +1125,170 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
     }
 }
 
+/// A visitor that strips metadata from an Arrow schema.
+///
+/// This visitor recursively removes all metadata from fields at every level of the schema,
+/// including nested struct, list, and map fields. This is useful for schema comparison
+/// where metadata differences should be ignored.
+struct MetadataStripVisitor {
+    /// Stack to track field information during traversal
+    field_stack: Vec<Field>,
+}
+
+impl MetadataStripVisitor {
+    fn new() -> Self {
+        Self {
+            field_stack: Vec::new(),
+        }
+    }
+}
+
+impl ArrowSchemaVisitor for MetadataStripVisitor {
+    type T = Field;
+    type U = ArrowSchema;
+
+    fn before_field(&mut self, field: &Field) -> Result<()> {
+        // Store field name and nullability for later reconstruction
+        self.field_stack.push(Field::new(
+            field.name(),
+            DataType::Null, // Placeholder, will be replaced
+            field.is_nullable(),
+        ));
+        Ok(())
+    }
+
+    fn after_field(&mut self, _field: &Field) -> Result<()> {
+        Ok(())
+    }
+
+    fn schema(&mut self, _schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
+        Ok(ArrowSchema::new(values))
+    }
+
+    fn r#struct(&mut self, _fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
+        // Pop the struct field from the stack
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in struct"))?;
+
+        // Reconstruct struct field without metadata
+        Ok(Field::new(
+            field_info.name(),
+            DataType::Struct(Fields::from(results)),
+            field_info.is_nullable(),
+        ))
+    }
+
+    fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
+        // Pop the list field from the stack
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in list"))?;
+
+        // Reconstruct list field without metadata
+        let list_type = match list {
+            DataType::List(_) => DataType::List(Arc::new(value)),
+            DataType::LargeList(_) => DataType::LargeList(Arc::new(value)),
+            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(Arc::new(value), *size),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Expected list type, got {list}"),
+                ));
+            }
+        };
+
+        Ok(Field::new(
+            field_info.name(),
+            list_type,
+            field_info.is_nullable(),
+        ))
+    }
+
+    fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
+        // Pop the map field from the stack
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in map"))?;
+
+        // Reconstruct the map's struct field (contains key and value)
+        let struct_field = Field::new(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![key_value, value])),
+            false,
+        );
+
+        // Get the sorted flag from the original map type
+        let sorted = match map {
+            DataType::Map(_, sorted) => *sorted,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Expected map type, got {map}"),
+                ));
+            }
+        };
+
+        // Reconstruct map field without metadata
+        Ok(Field::new(
+            field_info.name(),
+            DataType::Map(Arc::new(struct_field), sorted),
+            field_info.is_nullable(),
+        ))
+    }
+
+    fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
+        // Pop the primitive field from the stack
+        let field_info = self.field_stack.pop().ok_or_else(|| {
+            Error::new(ErrorKind::Unexpected, "Field stack underflow in primitive")
+        })?;
+
+        // Return field without metadata
+        Ok(Field::new(
+            field_info.name(),
+            p.clone(),
+            field_info.is_nullable(),
+        ))
+    }
+}
+
+/// Strips all metadata from an Arrow schema and its nested fields.
+///
+/// This function recursively removes metadata from all fields at every level of the schema,
+/// including nested struct, list, and map fields. This is useful for schema comparison
+/// where metadata differences should be ignored.
+///
+/// # Arguments
+/// * `schema` - The Arrow schema to strip metadata from
+///
+/// # Returns
+/// A new Arrow schema with all metadata removed, or an error if the schema structure
+/// is invalid.
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+///
+/// use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+/// use iceberg::arrow::strip_metadata_from_schema;
+///
+/// let mut metadata = HashMap::new();
+/// metadata.insert("key".to_string(), "value".to_string());
+///
+/// let field = Field::new("col1", DataType::Int32, false).with_metadata(metadata);
+/// let schema = ArrowSchema::new(vec![field]);
+///
+/// let stripped = strip_metadata_from_schema(&schema).unwrap();
+/// assert!(stripped.field(0).metadata().is_empty());
+/// ```
+pub fn strip_metadata_from_schema(schema: &ArrowSchema) -> Result<ArrowSchema> {
+    let mut visitor = MetadataStripVisitor::new();
+    visit_schema(schema, &mut visitor)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
