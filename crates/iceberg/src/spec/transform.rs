@@ -47,7 +47,7 @@ use crate::transform::{BoxedTransformFunction, create_transform_function};
 /// predicates and partition predicates.
 ///
 /// All transforms must return `null` for a `null` input value.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Transform {
     /// Source value, unmodified
     ///
