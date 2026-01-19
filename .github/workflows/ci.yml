@@ -40,9 +40,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
-env:
-  rust_msrv: "1.87"
-
 jobs:
   check:
     runs-on: ${{ matrix.os }}
@@ -184,10 +181,13 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get MSRV
+        id: get-msrv
+        uses: ./.github/actions/get-msrv
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_msrv }}
+          rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Check MSRV
