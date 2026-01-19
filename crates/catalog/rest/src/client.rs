@@ -271,7 +271,7 @@ impl HttpClient {
             return middleware_client.execute(request).await.map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    format!("Failed to execute request: {}", e),
+                    format!("Failed to execute request: {e}"),
                 )
                 .with_source(e)
             });
