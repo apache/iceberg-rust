@@ -808,6 +808,55 @@ async fn test_insert_into_nested() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_binary_predicate_pushdown() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("ns".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    // Create a schema with binary type
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Binary)).into(),
+        ])
+        .build()?;
+    let creation = get_table_creation(temp_path(), "binary_table", Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Test binary predicate pushdown using X'...' syntax for binary literals
+    let records = ctx
+        .sql("EXPLAIN select * from catalog.ns.binary_table where data = X'0102'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(1, records.len());
+    let plan = records[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let plan_str = plan.value(1);
+
+    // The key validation: binary predicate should be pushed down to IcebergTableScan
+    // Without binary Datum conversion, this would stay in a FilterExec
+    assert!(
+        plan_str.contains("predicate:[data = ") || plan_str.contains("predicate:[(data = "),
+        "Binary predicate should be pushed down. Plan: {plan_str}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_insert_into_partitioned() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_partitioned_write".to_string());
