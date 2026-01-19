@@ -233,6 +233,8 @@ impl TableMetadataBuilder {
                 }
                 FormatVersion::V3 => {
                     self.metadata.format_version = format_version;
+                    // Set next-row-id to 0 when upgrading to v3 as per Iceberg spec
+                    self.metadata.next_row_id = INITIAL_ROW_ID;
                     self.changes
                         .push(TableUpdate::UpgradeFormatVersion { format_version });
                 }
