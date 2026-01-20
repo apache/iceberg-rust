@@ -36,7 +36,9 @@ pub struct MetadataLocation {
 
 impl MetadataLocation {
     /// Determines the compression suffix from table properties.
-    fn compression_suffix_from_properties(properties: &HashMap<String, String>) -> Result<Option<String>> {
+    fn compression_suffix_from_properties(
+        properties: &HashMap<String, String>,
+    ) -> Result<Option<String>> {
         let codec = MetadataCompressionCodec::compression_codec_from_properties(properties)?;
         Ok(codec.map(|c| c.suffix().to_string()))
     }
@@ -66,7 +68,8 @@ impl MetadataLocation {
             id: Uuid::new_v4(),
             // This will go away https://github.com/apache/iceberg-rust/issues/2028 is resolved, so for now
             // we use a default value.
-            compression_suffix: Self::compression_suffix_from_properties(metadata.properties()).unwrap_or(None),
+            compression_suffix: Self::compression_suffix_from_properties(metadata.properties())
+                .unwrap_or(None),
         }
     }
 
@@ -81,7 +84,9 @@ impl MetadataLocation {
             table_location: current.table_location,
             version: current.version + 1,
             id: Uuid::new_v4(),
-            compression_suffix: Self::compression_suffix_from_properties(new_metadata.properties())?,
+            compression_suffix: Self::compression_suffix_from_properties(
+                new_metadata.properties(),
+            )?,
         };
         Ok(next)
     }

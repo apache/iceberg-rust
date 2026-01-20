@@ -121,7 +121,6 @@ impl MetadataCompressionCodec {
 }
 
 impl TableProperties {
-
     /// Reserved table property for table format version.
     ///
     /// Iceberg will default a new table's format version to the latest stable and recommended
@@ -257,7 +256,8 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
-            metadata_compression_codec: MetadataCompressionCodec::compression_codec_from_properties(props)?,
+            metadata_compression_codec:
+                MetadataCompressionCodec::compression_codec_from_properties(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
