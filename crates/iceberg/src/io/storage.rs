@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 #[cfg(feature = "storage-azblob")]
 use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-azdls")]
@@ -32,7 +34,9 @@ use opendal::{Operator, Scheme};
 
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
-use super::FileIOBuilder;
+use super::{
+    FileIOBuilder, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS, IO_TIMEOUT_SECONDS,
+};
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
 use crate::{Error, ErrorKind};
@@ -130,9 +134,10 @@ impl Storage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    pub(crate) fn create_operator<'a>(
+    pub(crate) fn create_operator_with_config<'a>(
         &self,
         path: &'a impl AsRef<str>,
+        config: &HashMap<String, String>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
@@ -234,9 +239,32 @@ impl Storage {
             )),
         }?;
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // Configure timeout layer for IO operations.
+        let operator = if let Some(timeout_secs) = parse_config::<u64>(config, IO_TIMEOUT_SECONDS)?
+        {
+            operator.layer(TimeoutLayer::new().with_io_timeout(Duration::from_secs(timeout_secs)))
+        } else {
+            operator.layer(TimeoutLayer::new())
+        };
+
+        // Configure retry layer. Transient errors are common for object stores;
+        // however there's no harm in retrying temporary failures for other
+        // storage backends as well.
+        let mut retry_layer = RetryLayer::new();
+
+        if let Some(max_retries) = parse_config::<usize>(config, IO_MAX_RETRIES)? {
+            retry_layer = retry_layer.with_max_times(max_retries);
+        }
+
+        if let Some(min_delay_ms) = parse_config::<u64>(config, IO_RETRY_MIN_DELAY_MS)? {
+            retry_layer = retry_layer.with_min_delay(Duration::from_millis(min_delay_ms));
+        }
+
+        if let Some(max_delay_ms) = parse_config::<u64>(config, IO_RETRY_MAX_DELAY_MS)? {
+            retry_layer = retry_layer.with_max_delay(Duration::from_millis(max_delay_ms));
+        }
+
+        let operator = operator.layer(retry_layer);
 
         Ok((operator, relative_path))
     }
@@ -252,5 +280,22 @@ impl Storage {
             "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
             s => Ok(s.parse::<Scheme>()?),
         }
+    }
+}
+
+fn parse_config<T>(config: &HashMap<String, String>, key: &str) -> crate::Result<Option<T>>
+where T: std::str::FromStr {
+    match config.get(key) {
+        Some(value_str) => match value_str.parse::<T>() {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {}: '{}' cannot be parsed as a positive integer",
+                    key, value_str
+                ),
+            )),
+        },
+        None => Ok(None),
     }
 }
