@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# =============================================================================
+# Test CREATE TABLE (catalog-backed table creation)
+# =============================================================================
+
 # Test CREATE TABLE with explicit schema
 statement ok
 CREATE TABLE default.default.empty_table (id INT NOT NULL, name STRING)
@@ -88,3 +92,79 @@ SELECT * FROM default.default.nullable_table
 ----
 1 Value
 2 NULL
+
+# =============================================================================
+# Test CREATE EXTERNAL TABLE (catalog-backed table loading)
+# =============================================================================
+
+# First, create a table in the catalog that we'll load via CREATE EXTERNAL TABLE
+statement ok
+CREATE TABLE default.default.source_table (id INT NOT NULL, data STRING)
+
+# Insert some data into the source table
+query I
+INSERT INTO default.default.source_table VALUES (1, 'first'), (2, 'second')
+----
+2
+
+# Verify source table data
+query IT rowsort
+SELECT * FROM default.default.source_table
+----
+1 first
+2 second
+
+# Create an external table that loads the existing catalog table
+# The table name in CREATE EXTERNAL TABLE is used to look up the table in the catalog
+# LOCATION is ignored when using catalog-backed factory
+statement ok
+CREATE EXTERNAL TABLE source_table STORED AS ICEBERG LOCATION ''
+
+# Query the external table - should see the same data as the catalog table
+query IT rowsort
+SELECT * FROM source_table
+----
+1 first
+2 second
+
+# Insert data via the external table (catalog-backed providers support writes)
+query I
+INSERT INTO source_table VALUES (3, 'third')
+----
+1
+
+# Verify the insert worked - query via external table
+query IT rowsort
+SELECT * FROM source_table
+----
+1 first
+2 second
+3 third
+
+# Verify the insert is visible via the original catalog table path
+query IT rowsort
+SELECT * FROM default.default.source_table
+----
+1 first
+2 second
+3 third
+
+# Test CREATE EXTERNAL TABLE with namespace-qualified name
+statement ok
+CREATE TABLE default.default.ns_table (value INT NOT NULL)
+
+query I
+INSERT INTO default.default.ns_table VALUES (100), (200)
+----
+2
+
+# Create external table with bare name (uses "default" namespace)
+statement ok
+CREATE EXTERNAL TABLE ns_table STORED AS ICEBERG LOCATION ''
+
+# Query via external table
+query I rowsort
+SELECT * FROM ns_table
+----
+100
+200

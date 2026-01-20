@@ -21,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::TaskContext;
 use datafusion::prelude::SessionContext;
@@ -31,7 +31,7 @@ use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation};
 
-use crate::table::IcebergTableProvider;
+use crate::table::{IcebergStaticTableProvider, IcebergTableProvider};
 use crate::to_datafusion_error;
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
@@ -150,6 +150,13 @@ impl SchemaProvider for IcebergSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Reject unsupported table types
+        if !is_iceberg_or_mem_table(&table) {
+            return Err(DataFusionError::Execution(format!(
+                "Cannot register a non-Iceberg table: {table:?}"
+            )));
+        }
+
         // Check if table already exists
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
@@ -211,6 +218,19 @@ impl SchemaProvider for IcebergSchemaProvider {
             DataFusionError::Execution(format!("Failed to create Iceberg table: {e}"))
         })?
     }
+}
+
+/// Checks if a TableProvider is an Iceberg table (either catalog-backed or static) or a MemTable.
+fn is_iceberg_or_mem_table(table: &Arc<dyn TableProvider>) -> bool {
+    table
+        .as_any()
+        .downcast_ref::<IcebergTableProvider>()
+        .is_some()
+        || table
+            .as_any()
+            .downcast_ref::<IcebergStaticTableProvider>()
+            .is_some()
+        || table.as_any().downcast_ref::<MemTable>().is_some()
 }
 
 /// Verifies that a table provider contains no data by scanning with LIMIT 1.
