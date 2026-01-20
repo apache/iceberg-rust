@@ -34,6 +34,30 @@ use crate::{Error, ErrorKind, Result};
 /// like Cloudlare R2 requires all chunk sizes to be consistent except for the last.
 pub const IO_CHUNK_SIZE: &str = "io.write.chunk-size";
 
+/// Configuration property for setting the timeout duration for IO operations.
+///
+/// This timeout is applied to individual operations like read, write, delete, etc.
+/// Value should be in seconds. If not set, uses OpenDAL's default timeout.
+pub const IO_TIMEOUT_SECONDS: &str = "io.timeout";
+
+/// Configuration property for setting the maximum number of retries for IO operations.
+///
+/// This controls how many times an operation will be retried upon failure.
+/// If not set, uses OpenDAL's default retry count.
+pub const IO_MAX_RETRIES: &str = "io.max-retries";
+
+/// Configuration property for setting the minimum retry delay in milliseconds.
+///
+/// This controls the minimum delay between retry attempts.
+/// If not set, uses OpenDAL's default minimum delay.
+pub const IO_RETRY_MIN_DELAY_MS: &str = "io.retry.min-delay-ms";
+
+/// Configuration property for setting the maximum retry delay in milliseconds.
+///
+/// This controls the maximum delay between retry attempts.
+/// If not set, uses OpenDAL's default maximum delay.
+pub const IO_RETRY_MAX_DELAY_MS: &str = "io.retry.max-delay-ms";
+
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
 /// # Note
@@ -97,7 +121,10 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.inner.delete(path.as_ref()).await
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path, &self.builder.props)?;
+        Ok(op.delete(relative_path).await?)
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -112,7 +139,15 @@ impl FileIO {
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.inner.delete_prefix(path.as_ref()).await
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path, &self.builder.props)?;
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
     }
 
     /// Check file exists.
@@ -121,7 +156,10 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.inner.exists(path.as_ref()).await
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path, &self.builder.props)?;
+        Ok(op.exists(relative_path).await?)
     }
 
     /// Creates input file.
@@ -130,7 +168,16 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.inner.new_input(path.as_ref())
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path, &self.builder.props)?;
+        let path = path.as_ref().to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(InputFile {
+            op,
+            path,
+            relative_path_pos,
+        })
     }
 
     /// Creates output file.
@@ -139,7 +186,9 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path, &self.builder.props)?;
         let path = path.as_ref().to_string();
         let relative_path_pos = path.len() - relative_path.len();
 
@@ -491,7 +540,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::IO_CHUNK_SIZE;
+    use crate::io::{
+        IO_CHUNK_SIZE, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS,
+        IO_TIMEOUT_SECONDS,
+    };
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()

@@ -17,14 +17,16 @@
 
 //! OpenDAL-based storage implementation.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 #[cfg(feature = "storage-azdls")]
 use azdls::AzureStorageScheme;
 use bytes::Bytes;
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 #[cfg(feature = "storage-azblob")]
 use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-azdls")]
@@ -42,7 +44,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{
     FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageConfig, StorageFactory,
+    StorageConfig, StorageFactory, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS,
+    IO_TIMEOUT_SECONDS,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -292,6 +295,17 @@ impl OpenDalStorage {
         &self,
         path: &'a impl AsRef<str>,
     ) -> Result<(Operator, &'a str)> {
+        let config = HashMap::new();
+        self.create_operator_with_config(path, &config)
+    }
+
+    /// Creates operator from path and applies runtime retry/timeout configuration.
+    #[allow(unreachable_code, unused_variables)]
+    pub(crate) fn create_operator_with_config<'a>(
+        &self,
+        path: &'a impl AsRef<str>,
+        config: &HashMap<String, String>,
+    ) -> Result<(Operator, &'a str)> {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
@@ -391,9 +405,29 @@ impl OpenDalStorage {
             }
         };
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // Configure timeout layer for IO operations.
+        let operator = if let Some(timeout_secs) = parse_config::<u64>(config, IO_TIMEOUT_SECONDS)?
+        {
+            operator.layer(TimeoutLayer::new().with_io_timeout(Duration::from_secs(timeout_secs)))
+        } else {
+            operator.layer(TimeoutLayer::new())
+        };
+
+        // Configure retry layer. Transient errors are common for object stores;
+        // however there's no harm in retrying temporary failures for other
+        // storage backends as well.
+        let mut retry_layer = RetryLayer::new();
+        if let Some(max_retries) = parse_config::<usize>(config, IO_MAX_RETRIES)? {
+            retry_layer = retry_layer.with_max_times(max_retries);
+        }
+        if let Some(min_delay_ms) = parse_config::<u64>(config, IO_RETRY_MIN_DELAY_MS)? {
+            retry_layer = retry_layer.with_min_delay(Duration::from_millis(min_delay_ms));
+        }
+        if let Some(max_delay_ms) = parse_config::<u64>(config, IO_RETRY_MAX_DELAY_MS)? {
+            retry_layer = retry_layer.with_max_delay(Duration::from_millis(max_delay_ms));
+        }
+
+        let operator = operator.layer(retry_layer);
         Ok((operator, relative_path))
     }
 
@@ -408,6 +442,25 @@ impl OpenDalStorage {
             "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
             s => Ok(s.parse::<Scheme>()?),
         }
+    }
+}
+
+fn parse_config<T>(config: &HashMap<String, String>, key: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+{
+    match config.get(key) {
+        Some(value_str) => match value_str.parse::<T>() {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {}: '{}' cannot be parsed as a positive integer",
+                    key, value_str
+                ),
+            )),
+        },
+        None => Ok(None),
     }
 }
 
