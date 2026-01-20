@@ -21,11 +21,8 @@ use std::str::FromStr;
 
 use uuid::Uuid;
 
-use crate::spec::{TableMetadata, TableProperties};
+use crate::spec::{MetadataCompressionCodec, TableMetadata};
 use crate::{Error, ErrorKind, Result};
-
-/// The file extension suffix for gzip compressed metadata files
-const GZIP_SUFFIX: &str = ".gz";
 
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
 /// or with compression: `<location>/metadata/<version>-<uuid>.gz.metadata.json`
@@ -39,14 +36,9 @@ pub struct MetadataLocation {
 
 impl MetadataLocation {
     /// Determines the compression suffix from table properties.
-    fn compression_suffix_from_properties(properties: &HashMap<String, String>) -> Option<String> {
-        properties
-            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-            .and_then(|codec| match codec.to_lowercase().as_str() {
-                "gzip" => Some(GZIP_SUFFIX.to_string()),
-                "none" | "" => None,
-                _ => None,
-            })
+    fn compression_suffix_from_properties(properties: &HashMap<String, String>) -> Result<Option<String>> {
+        let codec = MetadataCompressionCodec::compression_codec_from_properties(properties)?;
+        Ok(codec.map(|c| c.suffix().to_string()))
     }
 
     /// Creates a completely new metadata location starting at version 0.
@@ -72,7 +64,9 @@ impl MetadataLocation {
             table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
-            compression_suffix: Self::compression_suffix_from_properties(metadata.properties()),
+            // This will go away https://github.com/apache/iceberg-rust/issues/2028 is resolved, so for now
+            // we use a default value.
+            compression_suffix: Self::compression_suffix_from_properties(metadata.properties()).unwrap_or(None),
         }
     }
 
@@ -87,7 +81,7 @@ impl MetadataLocation {
             table_location: current.table_location,
             version: current.version + 1,
             id: Uuid::new_v4(),
-            compression_suffix: Self::compression_suffix_from_properties(new_metadata.properties()),
+            compression_suffix: Self::compression_suffix_from_properties(new_metadata.properties())?,
         };
         Ok(next)
     }
@@ -125,8 +119,9 @@ impl MetadataLocation {
         ))?;
 
         // Check for compression suffix (e.g., .gz)
-        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(GZIP_SUFFIX) {
-            (s, Some(GZIP_SUFFIX.to_string()))
+        let gzip_suffix = MetadataCompressionCodec::Gzip.suffix();
+        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(gzip_suffix) {
+            (s, Some(gzip_suffix.to_string()))
         } else {
             (stripped, None)
         };
@@ -183,8 +178,7 @@ mod test {
 
     use uuid::Uuid;
 
-    use super::GZIP_SUFFIX;
-    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder};
+    use crate::spec::{MetadataCompressionCodec, Schema, TableMetadata, TableMetadataBuilder};
     use crate::{MetadataLocation, TableCreation};
 
     fn create_test_metadata(properties: HashMap<String, String>) -> TableMetadata {
@@ -271,7 +265,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: Some(GZIP_SUFFIX.to_string()),
+                    compression_suffix: Some(MetadataCompressionCodec::Gzip.suffix().to_string()),
                 }),
             ),
             // Negative version
@@ -382,11 +376,12 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
-        assert_eq!(location.compression_suffix, Some(GZIP_SUFFIX.to_string()));
+        let gzip_suffix = MetadataCompressionCodec::Gzip.suffix();
+        assert_eq!(location.compression_suffix, Some(gzip_suffix.to_string()));
         assert_eq!(
             location.to_string(),
             format!(
-                "/test/table/metadata/00000-{}{GZIP_SUFFIX}.metadata.json",
+                "/test/table/metadata/00000-{}{gzip_suffix}.metadata.json",
                 location.id
             )
         );
@@ -409,11 +404,16 @@ mod test {
         );
         let metadata_gzip_upper = create_test_metadata(props_gzip_upper);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip_upper);
-        assert_eq!(location.compression_suffix, Some(GZIP_SUFFIX.to_string()));
+        assert_eq!(
+            location.compression_suffix,
+            Some(MetadataCompressionCodec::Gzip.suffix().to_string())
+        );
     }
 
     #[test]
     fn test_metadata_next_version_handles_compression() {
+        let gzip_suffix = MetadataCompressionCodec::Gzip.suffix();
+
         // Start with a location without compression
         let props_none = HashMap::new();
         let metadata_none = create_test_metadata(props_none);
@@ -424,7 +424,7 @@ mod test {
         let next_none = MetadataLocation::next_version(&initial_path, &metadata_none).unwrap();
         let next_none_str = next_none.to_string();
         assert!(next_none_str.contains("/test/table/metadata/00001-"));
-        assert!(!next_none_str.contains(&format!("{GZIP_SUFFIX}.")));
+        assert!(!next_none_str.contains(&format!("{gzip_suffix}.")));
         assert!(next_none_str.ends_with(".metadata.json"));
 
         // Update with gzip compression (should become compressed)
@@ -437,7 +437,7 @@ mod test {
         let next_gzip = MetadataLocation::next_version(&initial_path, &metadata_gzip).unwrap();
         let next_gzip_str = next_gzip.to_string();
         assert!(next_gzip_str.contains("/test/table/metadata/00001-"));
-        assert!(next_gzip_str.contains(&format!("{GZIP_SUFFIX}.")));
+        assert!(next_gzip_str.contains(&format!("{gzip_suffix}.")));
         assert!(next_gzip_str.ends_with(".metadata.json"));
 
         // Start with a compressed location
@@ -449,7 +449,7 @@ mod test {
             MetadataLocation::next_version(&initial_gzip_path, &metadata_none).unwrap();
         let next_uncompressed_str = next_uncompressed.to_string();
         assert!(next_uncompressed_str.contains("/test/table/metadata/00001-"));
-        assert!(!next_uncompressed_str.contains(&format!("{GZIP_SUFFIX}.")));
+        assert!(!next_uncompressed_str.contains(&format!("{gzip_suffix}.")));
         assert!(next_uncompressed_str.ends_with(".metadata.json"));
 
         // Update with "none" codec (should be uncompressed)
@@ -464,7 +464,7 @@ mod test {
         assert!(
             !next_explicit_none
                 .to_string()
-                .contains(&format!("{GZIP_SUFFIX}."))
+                .contains(&format!("{gzip_suffix}."))
         );
 
         // Test case insensitivity
@@ -479,7 +479,7 @@ mod test {
         assert!(
             next_gzip_upper
                 .to_string()
-                .contains(&format!("{GZIP_SUFFIX}."))
+                .contains(&format!("{gzip_suffix}."))
         );
     }
 
@@ -513,22 +513,23 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let location_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
+        let gzip_suffix = MetadataCompressionCodec::Gzip.suffix();
         assert_eq!(
             location_gzip.compression_suffix,
-            Some(GZIP_SUFFIX.to_string())
+            Some(gzip_suffix.to_string())
         );
 
         // Update to next version - gzip compression is preserved
         let next_location_gzip = location_gzip.with_next_version();
         assert_eq!(
             next_location_gzip.compression_suffix,
-            Some(GZIP_SUFFIX.to_string())
+            Some(gzip_suffix.to_string())
         );
         assert_eq!(next_location_gzip.version, 1);
         assert_eq!(
             next_location_gzip.to_string(),
             format!(
-                "/test/table/metadata/00001-{}{GZIP_SUFFIX}.metadata.json",
+                "/test/table/metadata/00001-{}{gzip_suffix}.metadata.json",
                 next_location_gzip.id
             )
         );

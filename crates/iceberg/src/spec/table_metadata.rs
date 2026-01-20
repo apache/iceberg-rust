@@ -362,6 +362,18 @@ impl TableMetadata {
         &self.properties
     }
 
+    /// Returns the metadata compression codec from table properties.
+    ///
+    /// Returns `None` if compression is disabled or not configured.
+    /// Returns `Some(MetadataCompressionCodec)` if compression is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compression codec property has an invalid value.
+    pub fn metadata_compression_codec(&self) -> Result<Option<MetadataCompressionCodec>> {
+        MetadataCompressionCodec::compression_codec_from_properties(&self.properties)
+    }
+
     /// Return location of statistics files.
     #[inline]
     pub fn statistics_iter(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {

@@ -70,6 +70,21 @@ pub enum MetadataCompressionCodec {
 }
 
 impl MetadataCompressionCodec {
+    /// Returns the file extension suffix for this compression codec.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iceberg::spec::MetadataCompressionCodec;
+    ///
+    /// assert_eq!(MetadataCompressionCodec::Gzip.suffix(), ".gz");
+    /// ```
+    pub fn suffix(&self) -> &'static str {
+        match self {
+            MetadataCompressionCodec::Gzip => ".gz",
+        }
+    }
+
     /// Parse compression codec from table properties.
     ///
     /// Returns `None` if the property is not set or set to "none" (case-insensitive).
@@ -87,7 +102,7 @@ impl MetadataCompressionCodec {
     ) -> Result<Option<Self>> {
         match props.get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC) {
             Some(v) => match v.to_lowercase().as_str() {
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_NONE | "" => Ok(None),
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT | "" => Ok(None),
                 TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP => {
                     Ok(Some(MetadataCompressionCodec::Gzip))
                 }
@@ -95,7 +110,7 @@ impl MetadataCompressionCodec {
                     ErrorKind::DataInvalid,
                     format!(
                         "Invalid value for Metadata JSON compression value : {v}. Only '{}' and '{}' are supported.",
-                        TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_NONE,
+                        TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT,
                         TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP
                     ),
                 )),
@@ -197,8 +212,6 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
-    /// Metadata compression codec value for none
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_NONE: &str = "none";
     /// Metadata compression codec value for gzip
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_GZIP: &str = "gzip";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
