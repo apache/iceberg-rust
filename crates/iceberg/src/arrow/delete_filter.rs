@@ -480,6 +480,7 @@ pub(crate) mod tests {
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
