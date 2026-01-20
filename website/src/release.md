@@ -325,18 +325,21 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   gpg --verify apache-iceberg-rust-*.tar.gz.asc
   ```
-  Expects: `"apache-iceberg-rust-0.7.0.tar.gz: OK"`
+  Expects: `gpg: Good signature from ...`
 * Verify the checksums: 
   
   ```bash
   shasum -a 512 -c apache-iceberg-rust-*.tar.gz.sha512
   ```
-  Expects: `gpg: Good signature from ...`
+  Expects: `"apache-iceberg-rust-...tar.gz: OK"`
 * Verify build and test:
   
   ```bash
   tar -xzf apache-iceberg-rust-*.tar.gz
   cd apache-iceberg-rust-*/
+  ```
+  
+  ```bash
   make build && make test
   ```
 * Verify license headers: 
@@ -364,10 +367,6 @@ git push origin "v${iceberg_version}"
 ```shell
 svn mv https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-${release_version} https://dist.apache.org/repos/dist/release/iceberg/apache-iceberg-rust-${iceberg_version} -m "Release Apache Iceberg Rust ${iceberg_version}"
 ```
-
-### Change Iceberg Rust Website download link
-
-Update the download link in `website/src/download.md` to the new release version.
 
 ### Create a GitHub Release
 

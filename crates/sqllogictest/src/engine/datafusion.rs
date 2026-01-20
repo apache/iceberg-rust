@@ -27,9 +27,8 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, Unbound
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
-use toml::Table as TomlTable;
 
-use crate::engine::{EngineRunner, run_slt_with_runner};
+use crate::engine::{DatafusionCatalogConfig, EngineRunner, run_slt_with_runner};
 use crate::error::Result;
 
 pub struct DataFusionEngine {
@@ -59,12 +58,15 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
-    pub async fn new(config: TomlTable) -> Result<Self> {
+    pub async fn new(catalog_config: Option<DatafusionCatalogConfig>) -> Result<Self> {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("default", Self::create_catalog(&config).await?);
+        ctx.register_catalog(
+            "default",
+            Self::create_catalog(catalog_config.as_ref()).await?,
+        );
 
         Ok(Self {
             test_data_path: PathBuf::from("testdata"),
@@ -72,9 +74,11 @@ impl DataFusionEngine {
         })
     }
 
-    async fn create_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        // TODO: support dynamic catalog configuration
-        //  See: https://github.com/apache/iceberg-rust/issues/1780
+    async fn create_catalog(
+        _catalog_config: Option<&DatafusionCatalogConfig>,
+    ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+        // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
+        // See: https://github.com/apache/iceberg-rust/issues/1780
         let catalog = MemoryCatalogBuilder::default()
             .load(
                 "memory",
@@ -89,8 +93,7 @@ impl DataFusionEngine {
         let namespace = NamespaceIdent::new("default".to_string());
         catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-        // Create test tables
-        Self::create_unpartitioned_table(&catalog, &namespace).await?;
+        // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
@@ -98,35 +101,9 @@ impl DataFusionEngine {
         ))
     }
 
-    /// Create an unpartitioned test table with id and name columns
-    /// TODO: this can be removed when we support CREATE TABLE
-    async fn create_unpartitioned_table(
-        catalog: &impl Catalog,
-        namespace: &NamespaceIdent,
-    ) -> anyhow::Result<()> {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
-
-        catalog
-            .create_table(
-                namespace,
-                TableCreation::builder()
-                    .name("test_unpartitioned_table".to_string())
-                    .schema(schema)
-                    .build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
-    /// TODO: this can be removed when we support CREATE TABLE
+    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
     async fn create_partitioned_table(
         catalog: &impl Catalog,
         namespace: &NamespaceIdent,

@@ -37,6 +37,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -360,6 +361,13 @@ impl TableMetadata {
         &self.properties
     }
 
+    /// Returns typed table properties parsed from the raw properties map with defaults.
+    pub fn table_properties(&self) -> Result<TableProperties> {
+        TableProperties::try_from(&self.properties).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+        })
+    }
+
     /// Return location of statistics files.
     #[inline]
     pub fn statistics_iter(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {
@@ -506,6 +514,19 @@ impl TableMetadata {
 
     /// If the default sort order is unsorted but the sort order is not present, add it
     fn try_normalize_sort_order(&mut self) -> Result<()> {
+        // Validate that sort order ID 0 (reserved for unsorted) has no fields
+        if let Some(sort_order) = self.sort_order_by_id(SortOrder::UNSORTED_ORDER_ID)
+            && !sort_order.fields.is_empty()
+        {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Sort order ID {} is reserved for unsorted order",
+                    SortOrder::UNSORTED_ORDER_ID
+                ),
+            ));
+        }
+
         if self.sort_order_by_id(self.default_sort_order_id).is_some() {
             return Ok(());
         }
@@ -1548,7 +1569,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
-    use crate::TableCreation;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -1557,6 +1577,7 @@ mod tests {
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
         Summary, Transform, Type, UnboundPartitionField,
     };
+    use crate::{ErrorKind, TableCreation};
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -3794,5 +3815,358 @@ mod tests {
         assert!(final_metadata.name_exists_in_any_schema("deprecated_field")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("new_field")); // only in current schema
         assert!(!final_metadata.name_exists_in_any_schema("never_existed"));
+    }
+
+    #[test]
+    fn test_invalid_sort_order_id_zero_with_fields() {
+        let metadata = r#"
+        {
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 111,
+            "last-updated-ms": 1600000000000,
+            "last-column-id": 3,
+            "current-schema-id": 1,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 1,
+                    "fields": [
+                        {"id": 1, "name": "x", "required": true, "type": "long"},
+                        {"id": 2, "name": "y", "required": true, "type": "long"}
+                    ]
+                }
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [{"spec-id": 0, "fields": []}],
+            "last-partition-id": 999,
+            "default-sort-order-id": 0,
+            "sort-orders": [
+                {
+                    "order-id": 0,
+                    "fields": [
+                        {
+                            "transform": "identity",
+                            "source-id": 1,
+                            "direction": "asc",
+                            "null-order": "nulls-first"
+                        }
+                    ]
+                }
+            ],
+            "properties": {},
+            "current-snapshot-id": -1,
+            "snapshots": []
+        }
+        "#;
+
+        let result: Result<TableMetadata, serde_json::Error> = serde_json::from_str(metadata);
+
+        // Should fail because sort order ID 0 is reserved for unsorted order and cannot have fields
+        assert!(
+            result.is_err(),
+            "Parsing should fail for sort order ID 0 with fields"
+        );
+    }
+
+    #[test]
+    fn test_table_properties_with_defaults() {
+        use crate::spec::TableProperties;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let props = metadata.table_properties().unwrap();
+
+        assert_eq!(
+            props.commit_num_retries,
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
+        assert_eq!(
+            props.write_target_file_size_bytes,
+            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_with_custom_values() {
+        use crate::spec::TableProperties;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let properties = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "10".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "1024".to_string(),
+            ),
+        ]);
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            properties,
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let props = metadata.table_properties().unwrap();
+
+        assert_eq!(props.commit_num_retries, 10);
+        assert_eq!(props.write_target_file_size_bytes, 1024);
+    }
+
+    #[test]
+    fn test_table_properties_with_invalid_value() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let properties = HashMap::from([(
+            "commit.retry.num-retries".to_string(),
+            "not_a_number".to_string(),
+        )]);
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://test/location".to_string(),
+            FormatVersion::V2,
+            properties,
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let err = metadata.table_properties().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Invalid table properties"));
+    }
+
+    #[test]
+    fn test_v2_to_v3_upgrade_preserves_existing_snapshots_without_row_lineage() {
+        // Create a v2 table metadata
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let v2_metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/test/location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Add a v2 snapshot
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(v2_metadata.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("s3://bucket/test/metadata/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::from([(
+                    "added-data-files".to_string(),
+                    "1".to_string(),
+                )]),
+            })
+            .build();
+
+        let v2_with_snapshot = v2_metadata
+            .into_builder(Some("s3://bucket/test/metadata/v00001.json".to_string()))
+            .add_snapshot(snapshot)
+            .unwrap()
+            .set_ref("main", SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Verify v2 serialization works fine
+        let v2_json = serde_json::to_string(&v2_with_snapshot);
+        assert!(v2_json.is_ok(), "v2 serialization should work");
+
+        // Upgrade to v3
+        let v3_metadata = v2_with_snapshot
+            .into_builder(Some("s3://bucket/test/metadata/v00002.json".to_string()))
+            .upgrade_format_version(FormatVersion::V3)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(v3_metadata.format_version, FormatVersion::V3);
+        assert_eq!(v3_metadata.next_row_id, INITIAL_ROW_ID);
+        assert_eq!(v3_metadata.snapshots.len(), 1);
+
+        // Verify the snapshot has no row_range
+        let snapshot = v3_metadata.snapshots.values().next().unwrap();
+        assert!(
+            snapshot.row_range().is_none(),
+            "Snapshot should have no row_range after upgrade"
+        );
+
+        // Try to serialize v3 metadata - this should now work
+        let v3_json = serde_json::to_string(&v3_metadata);
+        assert!(
+            v3_json.is_ok(),
+            "v3 serialization should work for upgraded tables"
+        );
+
+        // Verify we can deserialize it back
+        let deserialized: TableMetadata = serde_json::from_str(&v3_json.unwrap()).unwrap();
+        assert_eq!(deserialized.format_version, FormatVersion::V3);
+        assert_eq!(deserialized.snapshots.len(), 1);
+
+        // Verify the deserialized snapshot still has no row_range
+        let deserialized_snapshot = deserialized.snapshots.values().next().unwrap();
+        assert!(
+            deserialized_snapshot.row_range().is_none(),
+            "Deserialized snapshot should have no row_range"
+        );
+    }
+
+    #[test]
+    fn test_v3_snapshot_with_row_lineage_serialization() {
+        // Create a v3 table metadata
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let v3_metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec().into_unbound(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/test/location".to_string(),
+            FormatVersion::V3,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Add a v3 snapshot with row lineage
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(v3_metadata.last_updated_ms + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("s3://bucket/test/metadata/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::from([(
+                    "added-data-files".to_string(),
+                    "1".to_string(),
+                )]),
+            })
+            .with_row_range(100, 50) // first_row_id=100, added_rows=50
+            .build();
+
+        let v3_with_snapshot = v3_metadata
+            .into_builder(Some("s3://bucket/test/metadata/v00001.json".to_string()))
+            .add_snapshot(snapshot)
+            .unwrap()
+            .set_ref("main", SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        // Verify the snapshot has row_range
+        let snapshot = v3_with_snapshot.snapshots.values().next().unwrap();
+        assert!(
+            snapshot.row_range().is_some(),
+            "Snapshot should have row_range"
+        );
+        let (first_row_id, added_rows) = snapshot.row_range().unwrap();
+        assert_eq!(first_row_id, 100);
+        assert_eq!(added_rows, 50);
+
+        // Serialize v3 metadata - this should work
+        let v3_json = serde_json::to_string(&v3_with_snapshot);
+        assert!(
+            v3_json.is_ok(),
+            "v3 serialization should work for snapshots with row lineage"
+        );
+
+        // Verify we can deserialize it back
+        let deserialized: TableMetadata = serde_json::from_str(&v3_json.unwrap()).unwrap();
+        assert_eq!(deserialized.format_version, FormatVersion::V3);
+        assert_eq!(deserialized.snapshots.len(), 1);
+
+        // Verify the deserialized snapshot has the correct row_range
+        let deserialized_snapshot = deserialized.snapshots.values().next().unwrap();
+        assert!(
+            deserialized_snapshot.row_range().is_some(),
+            "Deserialized snapshot should have row_range"
+        );
+        let (deserialized_first_row_id, deserialized_added_rows) =
+            deserialized_snapshot.row_range().unwrap();
+        assert_eq!(deserialized_first_row_id, 100);
+        assert_eq!(deserialized_added_rows, 50);
     }
 }
