@@ -38,7 +38,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, MetadataCompressionCodec, PartitionSpecRef, PartitionStatisticsFile,
     SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile,
-    StructType, TableProperties,
+    StructType,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -466,7 +466,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression is enabled via table properties
-        let codec = TableProperties::parse_metadata_compression_codec(self.properties())?;
+        let codec = MetadataCompressionCodec::compression_codec_from_properties(self.properties())?;
 
         // Use case-insensitive comparison to match Java implementation
         let (data_to_write, actual_location) = match codec {

@@ -69,29 +69,43 @@ pub enum MetadataCompressionCodec {
     Gzip,
 }
 
-impl TableProperties {
-    /// Parse metadata compression codec from properties.
-    pub(crate) fn parse_metadata_compression_codec(
+impl MetadataCompressionCodec {
+    /// Parse compression codec from table properties.
+    ///
+    /// Returns `None` if the property is not set or set to "none" (case-insensitive).
+    /// Returns `Some(MetadataCompressionCodec::Gzip)` if set to "gzip" (case-insensitive).
+    ///
+    /// # Arguments
+    ///
+    /// * `props` - HashMap containing table properties
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compression codec value is not one of: "none", "gzip" (case-insensitive), or empty string.
+    pub(crate) fn compression_codec_from_properties(
         props: &HashMap<String, String>,
-    ) -> Result<Option<MetadataCompressionCodec>> {
-        match props.get(Self::PROPERTY_METADATA_COMPRESSION_CODEC) {
+    ) -> Result<Option<Self>> {
+        match props.get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC) {
             Some(v) => match v.to_lowercase().as_str() {
-                Self::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT | "" => Ok(None),
-                Self::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP => {
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_NONE | "" => Ok(None),
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP => {
                     Ok(Some(MetadataCompressionCodec::Gzip))
                 }
                 _ => Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Invalid value for Metadata JSON compression value : {v}. Only '{}' and '{}' are supported.",
-                        Self::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT,
-                        Self::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP
+                        TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_NONE,
+                        TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP
                     ),
                 )),
             },
             None => Ok(None),
         }
     }
+}
+
+impl TableProperties {
 
     /// Reserved table property for table format version.
     ///
@@ -183,6 +197,8 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+    /// Metadata compression codec value for none
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_NONE: &str = "none";
     /// Metadata compression codec value for gzip
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_GZIP: &str = "gzip";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
@@ -228,7 +244,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
-            metadata_compression_codec: TableProperties::parse_metadata_compression_codec(props)?,
+            metadata_compression_codec: MetadataCompressionCodec::compression_codec_from_properties(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
