@@ -74,14 +74,14 @@ The features that Iceberg Rust currently supports can be found [here](https://ic
 
 ## Supported Rust Version
 
-Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version).
+Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV (minimum supported rust version).
 At least three months from latest rust release is supported. MSRV is updated when we release iceberg-rust.
 
 Check the current MSRV on [crates.io](https://crates.io/crates/iceberg).
 
 ## Contribute
 
-Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). Iceberg-rust are always open to people who want to use or contribute to it. Here are some ways to get involved.
+Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). Apache Iceberg Rust is always open to people who want to use or contribute to it. Here are some ways to get involved.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
