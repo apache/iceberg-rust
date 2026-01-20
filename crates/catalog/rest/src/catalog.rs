@@ -55,6 +55,14 @@ const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
+/// Google Cloud Storage credentials JSON string, base64 encoded.
+///
+/// E.g. base64::prelude::BASE64_STANDARD.encode(serde_json::to_string(credential).as_bytes())
+pub const GCS_CREDENTIALS_JSON: &str = "gcs.credentials-json";
+
+/// OAuth2 scope for Google Cloud Platform API access.
+pub(crate) const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+
 /// Builder for [`RestCatalog`].
 #[derive(Debug)]
 pub struct RestCatalogBuilder(RestCatalogConfig);
@@ -291,6 +299,29 @@ impl RestCatalogConfig {
         }
 
         params
+    }
+
+    /// Get the GCP service account JSON from the config for BigLake authentication.
+    ///
+    /// Looks for `gcp.service-account` property which should contain the JSON
+    /// content of a service account key file, or a base64-encoded JSON string.
+    pub(crate) fn gcp_credential(&self) -> Option<String> {
+        let value = self.props.get(GCS_CREDENTIALS_JSON)?;
+
+        // Try to decode as base64 first
+        if let Ok(decoded) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value.as_bytes())
+        {
+            if let Ok(json_str) = String::from_utf8(decoded) {
+                // Validate it's valid JSON
+                if serde_json::from_str::<serde_json::Value>(&json_str).is_ok() {
+                    return Some(json_str);
+                }
+            }
+        }
+
+        // Fall back to treating it as plain JSON
+        Some(value.clone())
     }
 
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
@@ -725,7 +756,6 @@ impl Catalog for RestCatalog {
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let context = self.context().await?;
-
         let request = context
             .client
             .request(Method::GET, context.config.table_endpoint(table_ident))

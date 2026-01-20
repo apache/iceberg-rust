@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
+use gcp_auth::TokenProvider;
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
@@ -25,8 +26,8 @@ use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
-use crate::RestCatalogConfig;
 use crate::types::{ErrorResponse, TokenResponse};
+use crate::{GCP_CLOUD_PLATFORM_SCOPE, RestCatalogConfig};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -43,6 +44,8 @@ pub(crate) struct HttpClient {
     extra_headers: HeaderMap,
     /// Extra oauth parameters to be added to each authentication request.
     extra_oauth_params: HashMap<String, String>,
+    /// GCP service account JSON for authentication.
+    gcp_credential: Option<String>,
 }
 
 impl Debug for HttpClient {
@@ -57,14 +60,14 @@ impl Debug for HttpClient {
 impl HttpClient {
     /// Create a new http client.
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
-        let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
-            extra_headers,
+            extra_headers: cfg.extra_headers()?,
             extra_oauth_params: cfg.extra_oauth_params(),
+            gcp_credential: cfg.gcp_credential(),
         })
     }
 
@@ -77,6 +80,7 @@ impl HttpClient {
             .then(|| cfg.extra_headers())
             .transpose()?
             .unwrap_or(self.extra_headers);
+
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
@@ -92,6 +96,7 @@ impl HttpClient {
             } else {
                 self.extra_oauth_params
             },
+            gcp_credential: cfg.gcp_credential().or(self.gcp_credential),
         })
     }
 
@@ -174,6 +179,31 @@ impl HttpClient {
         Ok(auth_res.access_token)
     }
 
+    /// Exchange GCP service account for access token using gcp_auth library.
+    async fn exchange_gcp_credential_for_token(&self) -> Result<String> {
+        let service_account_json = self.gcp_credential.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "GCP service account must be provided for authentication",
+            )
+        })?;
+
+        // Use gcp_auth library to handle authentication
+        let service_account = gcp_auth::CustomServiceAccount::from_json(service_account_json)
+            .map_err(|e| {
+                Error::new(ErrorKind::DataInvalid, "Invalid GCP service account JSON")
+                    .with_source(e)
+            })?;
+
+        // Get access token with cloud-platform scope
+        let scopes = &[GCP_CLOUD_PLATFORM_SCOPE];
+        let token = service_account.token(scopes).await.map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "Failed to get GCP access token").with_source(e)
+        })?;
+
+        Ok(token.as_str().to_string())
+    }
+
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
     pub(crate) async fn invalidate_token(&self) -> Result<()> {
@@ -195,20 +225,22 @@ impl HttpClient {
 
     /// Authenticates the request by adding a bearer token to the authorization header.
     ///
-    /// This method supports three authentication modes:
+    /// This method supports four authentication modes:
     ///
-    /// 1. **No authentication** - Skip authentication when both `credential` and `token` are missing.
+    /// 1. **No authentication** - Skip authentication when no credentials are configured.
     /// 2. **Token authentication** - Use the provided `token` directly for authentication.
     /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it for authentication.
+    /// 4. **GCP Service Account** - Use GCP service account to get access token.
     ///
     /// When both `credential` and `token` are present, `token` takes precedence.
+    /// When GCP service account is present, it takes precedence over credential-based auth.
     ///
     /// # TODO: Support automatic token refreshing.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
         // Clone the token from lock without holding the lock for entire function.
         let token = self.token.lock().await.clone();
 
-        if self.credential.is_none() && token.is_none() {
+        if self.credential.is_none() && token.is_none() && self.gcp_credential.is_none() {
             return Ok(());
         }
 
@@ -216,7 +248,11 @@ impl HttpClient {
         let token = match token {
             Some(token) => token,
             None => {
-                let token = self.exchange_credential_for_token().await?;
+                let token = if self.gcp_credential.is_some() {
+                    self.exchange_gcp_credential_for_token().await?
+                } else {
+                    self.exchange_credential_for_token().await?
+                };
                 // Update token so that we use it for next request instead of
                 // exchanging credential for token from the server again
                 *self.token.lock().await = Some(token.clone());
