@@ -18,17 +18,8 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_date, date_add, expr
 
-# The configuration is important, otherwise we get many small
-# parquet files with a single row. When a positional delete
-# hits the Parquet file with one row, the parquet file gets
-# dropped instead of having a merge-on-read delete file.
-spark = (
-    SparkSession
-        .builder
-        .config("spark.sql.shuffle.partitions", "1")
-        .config("spark.default.parallelism", "1")
-        .getOrCreate()
-)
+# Create SparkSession against the remote Spark Connect server
+spark = SparkSession.builder.remote("sc://spark-iceberg:15002").getOrCreate()
 
 spark.sql(f"""CREATE NAMESPACE IF NOT EXISTS rest.default""")
 
@@ -87,24 +78,25 @@ spark.sql(
 """
 )
 
-spark.sql(
-    f"""
-INSERT INTO rest.default.test_positional_merge_on_read_double_deletes
-VALUES
-    (CAST('2023-03-01' AS date), 1, 'a'),
-    (CAST('2023-03-02' AS date), 2, 'b'),
-    (CAST('2023-03-03' AS date), 3, 'c'),
-    (CAST('2023-03-04' AS date), 4, 'd'),
-    (CAST('2023-03-05' AS date), 5, 'e'),
-    (CAST('2023-03-06' AS date), 6, 'f'),
-    (CAST('2023-03-07' AS date), 7, 'g'),
-    (CAST('2023-03-08' AS date), 8, 'h'),
-    (CAST('2023-03-09' AS date), 9, 'i'),
-    (CAST('2023-03-10' AS date), 10, 'j'),
-    (CAST('2023-03-11' AS date), 11, 'k'),
-    (CAST('2023-03-12' AS date), 12, 'l');
-"""
-)
+# Use coalesce(1) to write all data into a single parquet file.
+# This ensures that deleting individual rows creates positional delete files
+# instead of dropping entire files (which happens when a file has only one row).
+spark.sql("""
+    SELECT * FROM VALUES
+        (CAST('2023-03-01' AS date), 1, 'a'),
+        (CAST('2023-03-02' AS date), 2, 'b'),
+        (CAST('2023-03-03' AS date), 3, 'c'),
+        (CAST('2023-03-04' AS date), 4, 'd'),
+        (CAST('2023-03-05' AS date), 5, 'e'),
+        (CAST('2023-03-06' AS date), 6, 'f'),
+        (CAST('2023-03-07' AS date), 7, 'g'),
+        (CAST('2023-03-08' AS date), 8, 'h'),
+        (CAST('2023-03-09' AS date), 9, 'i'),
+        (CAST('2023-03-10' AS date), 10, 'j'),
+        (CAST('2023-03-11' AS date), 11, 'k'),
+        (CAST('2023-03-12' AS date), 12, 'l')
+    AS t(dt, number, letter)
+""").coalesce(1).writeTo("rest.default.test_positional_merge_on_read_double_deletes").append()
 
 #  Creates two positional deletes that should be merged
 spark.sql(f"DELETE FROM rest.default.test_positional_merge_on_read_double_deletes WHERE number = 9")
