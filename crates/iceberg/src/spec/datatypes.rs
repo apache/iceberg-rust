@@ -95,8 +95,8 @@ pub enum Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Type::Primitive(primitive) => write!(f, "{}", primitive),
-            Type::Struct(s) => write!(f, "{}", s),
+            Type::Primitive(primitive) => write!(f, "{primitive}"),
+            Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
         }
@@ -370,7 +370,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Decimal { precision, scale } => {
-                write!(f, "decimal({},{})", precision, scale)
+                write!(f, "decimal({precision},{scale})")
             }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
@@ -380,7 +380,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::TimestamptzNs => write!(f, "timestamptz_ns"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
-            PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
+            PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
         }
     }
@@ -423,7 +423,14 @@ impl<'de> Deserialize<'de> for StructType {
                 let mut fields = None;
                 while let Some(key) = map.next_key()? {
                     match key {
-                        Field::Type => (),
+                        Field::Type => {
+                            let type_val: String = map.next_value()?;
+                            if type_val != "struct" {
+                                return Err(serde::de::Error::custom(format!(
+                                    "expected type 'struct', got '{type_val}'"
+                                )));
+                            }
+                        }
                         Field::Fields => {
                             if fields.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fields"));
@@ -673,7 +680,7 @@ impl fmt::Display for NestedField {
         }
         write!(f, "{} ", self.field_type)?;
         if let Some(doc) = &self.doc {
-            write!(f, "{}", doc)?;
+            write!(f, "{doc}")?;
         }
         Ok(())
     }
@@ -1207,5 +1214,50 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+    }
+
+    #[test]
+    fn struct_type_with_type_field() {
+        // Test that StructType properly deserializes JSON with "type":"struct" field
+        // This was previously broken because the deserializer wasn't consuming the type field value
+        let json = r#"
+        {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let struct_type: StructType = serde_json::from_str(json)
+            .expect("Should successfully deserialize StructType with type field");
+
+        assert_eq!(struct_type.fields().len(), 1);
+        assert_eq!(struct_type.fields()[0].name, "field1");
+    }
+
+    #[test]
+    fn struct_type_rejects_wrong_type() {
+        // Test that StructType validation rejects incorrect type field values
+        let json = r#"
+        {
+            "type": "list",
+            "fields": [
+                {"id": 1, "name": "field1", "required": true, "type": "string"}
+            ]
+        }
+        "#;
+
+        let result = serde_json::from_str::<StructType>(json);
+        assert!(
+            result.is_err(),
+            "Should reject StructType with wrong type field"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected type 'struct'")
+        );
     }
 }

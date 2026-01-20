@@ -23,13 +23,11 @@ on:
     types:
       - completed
   workflow_dispatch:
-
-env:
-  rust_msrv: "1.87"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}-${{ github.event_name }}
-  cancel-in-progress: true
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v0.4.0 or v0.4.0-rc.1)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -49,12 +47,20 @@ jobs:
       cargo-version: ${{ steps.validate.outputs.cargo-version }}
       is-rc: ${{ steps.validate.outputs.is-rc }}
     steps:
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+
       - name: Validate release tag format
         id: validate
+        # Use input for workflow_dispatch, otherwise use `workflow_run.head_branch`
         # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
         # Valid formats: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
         run: |
-          RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+          else
+            RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
           echo "Validating release tag: $RELEASE_TAG"
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
             echo "❌ Invalid release tag format: $RELEASE_TAG"
@@ -67,6 +73,26 @@ jobs:
           # Strip 'v' prefix for cargo version
           CARGO_VERSION="${RELEASE_TAG#v}"
           echo "Cargo version (without v prefix): $CARGO_VERSION"
+          
+          # For manual triggers, validate that the tag matches the version in Cargo.toml
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Extract base version (without -rc.X suffix) for comparison with Cargo.toml
+            BASE_VERSION="${CARGO_VERSION%-rc.*}"
+            echo "Base version (for Cargo.toml comparison): $BASE_VERSION"
+            
+            # Read version from Cargo.toml and validate it matches
+            CARGO_TOML_VERSION=$(grep '^version = ' bindings/python/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+            echo "Version in bindings/python/Cargo.toml: $CARGO_TOML_VERSION"
+            
+            if [ "$BASE_VERSION" != "$CARGO_TOML_VERSION" ]; then
+              echo "❌ Version mismatch!"
+              echo "   Release tag base version: $BASE_VERSION"
+              echo "   bindings/python/Cargo.toml version: $CARGO_TOML_VERSION"
+              echo "Please ensure the release tag matches the version in Cargo.toml"
+              exit 1
+            fi
+            echo "✅ Version matches bindings/python/Cargo.toml"
+          fi
           
           # Check if this is a release candidate
           if [[ "$RELEASE_TAG" =~ -rc\.[0-9]+$ ]]; then
@@ -85,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-release-tag]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -107,7 +133,7 @@ jobs:
           command: sdist
           args: -o dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-sdist
           path: bindings/python/dist
@@ -128,7 +154,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -146,11 +172,15 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: 3.9
+          python-version: 3.12
+      - name: Get MSRV
+        id: get-msrv
+        uses: ./.github/actions/get-msrv
+
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_msrv }}
+          rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -159,7 +189,7 @@ jobs:
           command: build
           args: --release -o dist
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: bindings/python/dist
@@ -178,14 +208,14 @@ jobs:
 
     steps:
       - name: Download all the dists
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           pattern: wheels-*
           merge-multiple: true
           path: bindings/python/dist
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
         with:
           skip-existing: true
           packages-dir: bindings/python/dist
+          verbose: true

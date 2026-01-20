@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,16 +24,22 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
+    TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
-use typed_builder::TypedBuilder;
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
 };
+
+/// catalog URI
+pub const SQL_CATALOG_PROP_URI: &str = "uri";
+/// catalog warehouse location
+pub const SQL_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// catalog sql bind style
+pub const SQL_CATALOG_PROP_BIND_STYLE: &str = "sql_bind_style";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
 static CATALOG_FIELD_CATALOG_NAME: &str = "catalog_name";
@@ -54,6 +61,126 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+/// Builder for [`SqlCatalog`]
+#[derive(Debug)]
+pub struct SqlCatalogBuilder(SqlCatalogConfig);
+
+impl Default for SqlCatalogBuilder {
+    fn default() -> Self {
+        Self(SqlCatalogConfig {
+            uri: "".to_string(),
+            name: "".to_string(),
+            warehouse_location: "".to_string(),
+            sql_bind_style: SqlBindStyle::DollarNumeric,
+            props: HashMap::new(),
+        })
+    }
+}
+
+impl SqlCatalogBuilder {
+    /// Configure the database URI
+    ///
+    /// If `SQL_CATALOG_PROP_URI` has a value set in `props` during `SqlCatalogBuilder::load`,
+    /// that value takes precedence, and the value specified by this method will not be used.
+    pub fn uri(mut self, uri: impl Into<String>) -> Self {
+        self.0.uri = uri.into();
+        self
+    }
+
+    /// Configure the warehouse location
+    ///
+    /// If `SQL_CATALOG_PROP_WAREHOUSE` has a value set in `props` during `SqlCatalogBuilder::load`,
+    /// that value takes precedence, and the value specified by this method will not be used.
+    pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
+        self.0.warehouse_location = location.into();
+        self
+    }
+
+    /// Configure the bound SQL Statement
+    ///
+    /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
+    /// that value takes precedence, and the value specified by this method will not be used.
+    pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
+        self.0.sql_bind_style = sql_bind_style;
+        self
+    }
+
+    /// Configure the any properties
+    ///
+    /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
+    /// those values will take precedence.
+    pub fn props(mut self, props: HashMap<String, String>) -> Self {
+        for (k, v) in props {
+            self.0.props.insert(k, v);
+        }
+        self
+    }
+
+    /// Set a new property on the property to be configured.
+    /// When multiple methods are executed with the same key,
+    /// the later-set value takes precedence.
+    ///
+    /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
+    /// those values will take precedence.
+    pub fn prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.0.props.insert(key.into(), value.into());
+        self
+    }
+}
+
+impl CatalogBuilder for SqlCatalogBuilder {
+    type C = SqlCatalog;
+
+    fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Self::C>> + Send {
+        let name = name.into();
+
+        for (k, v) in props {
+            self.0.props.insert(k, v);
+        }
+
+        if let Some(uri) = self.0.props.remove(SQL_CATALOG_PROP_URI) {
+            self.0.uri = uri;
+        }
+        if let Some(warehouse_location) = self.0.props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
+            self.0.warehouse_location = warehouse_location;
+        }
+
+        let mut valid_sql_bind_style = true;
+        if let Some(sql_bind_style) = self.0.props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+            if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
+                self.0.sql_bind_style = sql_bind_style;
+            } else {
+                valid_sql_bind_style = false;
+            }
+        }
+
+        async move {
+            if name.trim().is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name cannot be empty",
+                ))
+            } else if !valid_sql_bind_style {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "`{}` values are valid only if they're `{}` or `{}`",
+                        SQL_CATALOG_PROP_BIND_STYLE,
+                        SqlBindStyle::DollarNumeric,
+                        SqlBindStyle::QMark
+                    ),
+                ))
+            } else {
+                SqlCatalog::new(self.0).await
+            }
+        }
+    }
+}
+
 /// A struct representing the SQL catalog configuration.
 ///
 /// This struct contains various parameters that are used to configure a SQL catalog,
@@ -62,14 +189,12 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 /// The options available for this parameter include:
 /// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
 /// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
-#[derive(Debug, TypedBuilder)]
-pub struct SqlCatalogConfig {
+#[derive(Debug)]
+struct SqlCatalogConfig {
     uri: String,
     name: String,
     warehouse_location: String,
-    file_io: FileIO,
     sql_bind_style: SqlBindStyle,
-    #[builder(default)]
     props: HashMap<String, String>,
 }
 
@@ -83,7 +208,7 @@ pub struct SqlCatalog {
     sql_bind_style: SqlBindStyle,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, strum::EnumString, strum::Display)]
 /// Set the SQL parameter bind style to either $1..$N (Postgres style) or ? (SQLite/MySQL/MariaDB)
 pub enum SqlBindStyle {
     /// DollarNumeric uses parameters of the form `$1..$N``, which is the Postgres style
@@ -94,7 +219,8 @@ pub enum SqlBindStyle {
 
 impl SqlCatalog {
     /// Create new sql catalog instance
-    pub async fn new(config: SqlCatalogConfig) -> Result<Self> {
+    async fn new(config: SqlCatalogConfig) -> Result<Self> {
+        let fileio = FileIO::from_path(&config.warehouse_location)?.build()?;
         install_default_drivers();
         let max_connections: u32 = config
             .props
@@ -150,7 +276,7 @@ impl SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
             warehouse_location: config.warehouse_location,
-            fileio: config.file_io,
+            fileio,
             sql_bind_style: config.sql_bind_style,
         })
     }
@@ -284,7 +410,7 @@ impl Catalog for SqlCatalog {
         if exists {
             return Err(Error::new(
                 iceberg::ErrorKind::Unexpected,
-                format!("Namespace {:?} already exists", namespace),
+                format!("Namespace {namespace:?} already exists"),
             ));
         }
 
@@ -765,20 +891,81 @@ impl Catalog for SqlCatalog {
 
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table_ident: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        if self.table_exists(table_ident).await? {
+            return table_already_exists_err(table_ident);
+        }
+
+        let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
+
+        let namespace = table_ident.namespace();
+        let tbl_name = table_ident.name().to_string();
+
+        self.execute(&format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
+             VALUES (?, ?, ?, ?, ?)
+            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
+
+        Ok(Table::builder()
+            .identifier(table_ident.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .file_io(self.fileio.clone())
+            .build()?)
     }
 
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Updating a table is not supported yet",
-        ))
+    /// Updates an existing table within the SQL catalog.
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let table_ident = commit.identifier().clone();
+        let current_table = self.load_table(&table_ident).await?;
+        let current_metadata_location = current_table.metadata_location_result()?.to_string();
+
+        let staged_table = commit.apply(current_table)?;
+        let staged_metadata_location = staged_table.metadata_location_result()?;
+
+        staged_table
+            .metadata()
+            .write_to(staged_table.file_io(), &staged_metadata_location)
+            .await?;
+
+        let update_result = self
+            .execute(
+                &format!(
+                    "UPDATE {CATALOG_TABLE_NAME}
+                     SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?, {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} = ?
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND (
+                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}'
+                        OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                      )
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
+                ),
+                vec![
+                    Some(staged_metadata_location),
+                    Some(current_metadata_location.as_str()),
+                    Some(&self.name),
+                    Some(table_ident.name()),
+                    Some(&table_ident.namespace().join(".")),
+                    Some(current_metadata_location.as_str()),
+                ],
+                None,
+            )
+            .await?;
+
+        if update_result.rows_affected() == 0 {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                format!("Commit conflicted for table: {table_ident}"),
+            )
+            .with_retryable(true));
+        }
+
+        Ok(staged_table)
     }
 }
 
@@ -787,17 +974,20 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::hash::Hash;
 
-    use iceberg::io::FileIOBuilder;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
-    use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
+    use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
     use itertools::Itertools;
     use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
-    use crate::catalog::NAMESPACE_LOCATION_PROPERTY_KEY;
-    use crate::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
+    use crate::catalog::{
+        NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI,
+        SQL_CATALOG_PROP_WAREHOUSE,
+    };
+    use crate::{SqlBindStyle, SqlCatalogBuilder};
 
     const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
@@ -818,15 +1008,18 @@ mod tests {
         let sql_lite_uri = format!("sqlite:{}", temp_path());
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
 
-        let config = SqlCatalogConfig::builder()
-            .uri(sql_lite_uri.to_string())
-            .name("iceberg".to_string())
-            .warehouse_location(warehouse_location)
-            .file_io(FileIOBuilder::new_fs_io().build().unwrap())
-            .sql_bind_style(SqlBindStyle::QMark)
-            .build();
-
-        SqlCatalog::new(config).await.unwrap()
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.to_string()),
+            (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::DollarNumeric.to_string(),
+            ),
+        ]);
+        SqlCatalogBuilder::default()
+            .load("iceberg", props)
+            .await
+            .unwrap()
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -923,6 +1116,203 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone()).await;
         new_sql_catalog(warehouse_loc.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_builder_method() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri.to_string())
+            .warehouse_location(warehouse_location.clone())
+            .sql_bind_style(SqlBindStyle::QMark)
+            .load("iceberg", HashMap::default())
+            .await;
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// Overwriting an sqlite database with a non-existent path causes
+    /// catalog generation to fail
+    #[tokio::test]
+    async fn test_builder_props_non_existent_path_fails() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri)
+            .warehouse_location(warehouse_location)
+            .load(
+                "iceberg",
+                HashMap::from_iter([(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri2)]),
+            )
+            .await;
+        assert!(catalog.is_err());
+    }
+
+    /// Even when an invalid URI is specified in a builder method,
+    /// it can be successfully overridden with a valid URI in props
+    /// for catalog generation to succeed.
+    #[tokio::test]
+    async fn test_builder_props_set_valid_uri() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .uri(sql_lite_uri2)
+            .warehouse_location(warehouse_location)
+            .load(
+                "iceberg",
+                HashMap::from_iter([(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.clone())]),
+            )
+            .await;
+        assert!(catalog.is_ok());
+    }
+
+    /// values assigned via props take precedence
+    #[tokio::test]
+    async fn test_builder_props_take_precedence() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+        let warehouse_location2 = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .warehouse_location(warehouse_location2)
+            .sql_bind_style(SqlBindStyle::DollarNumeric)
+            .load(
+                "iceberg",
+                HashMap::from_iter([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (
+                        SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                        warehouse_location.clone(),
+                    ),
+                    (
+                        SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                        SqlBindStyle::QMark.to_string(),
+                    ),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// values assigned via props take precedence
+    #[tokio::test]
+    async fn test_builder_props_take_precedence_props() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+        let warehouse_location2 = temp_path();
+
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.clone()),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                warehouse_location.clone(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+        ]);
+        let props2 = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri2.clone()),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                warehouse_location2.clone(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::DollarNumeric.to_string(),
+            ),
+        ]);
+
+        let catalog = SqlCatalogBuilder::default()
+            .props(props2)
+            .load("iceberg", props)
+            .await;
+
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// values assigned via props take precedence
+    #[tokio::test]
+    async fn test_builder_props_take_precedence_prop() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        let sql_lite_uri2 = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+        let warehouse_location2 = temp_path();
+
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.clone()),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                warehouse_location.clone(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+        ]);
+
+        let catalog = SqlCatalogBuilder::default()
+            .prop(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri2)
+            .prop(SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location2)
+            .prop(
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::DollarNumeric.to_string(),
+            )
+            .load("iceberg", props)
+            .await;
+
+        assert!(catalog.is_ok());
+
+        let catalog = catalog.unwrap();
+        assert!(catalog.warehouse_location == warehouse_location);
+        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    /// invalid value for `SqlBindStyle` causes catalog creation to fail
+    #[tokio::test]
+    async fn test_builder_props_invalid_bind_style_fails() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let warehouse_location = temp_path();
+
+        let catalog = SqlCatalogBuilder::default()
+            .load(
+                "iceberg",
+                HashMap::from_iter([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
+                    (SQL_CATALOG_PROP_BIND_STYLE.to_string(), "AAA".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(catalog.is_err());
     }
 
     #[tokio::test]
@@ -1263,7 +1653,7 @@ mod tests {
 
         assert_eq!(
             err.message(),
-            format!("No such namespace: {:?}", namespace_ident)
+            format!("No such namespace: {namespace_ident:?}")
         );
     }
 
@@ -1285,7 +1675,7 @@ mod tests {
 
         assert_eq!(
             err.message(),
-            format!("No such namespace: {:?}", namespace_ident)
+            format!("No such namespace: {namespace_ident:?}")
         );
     }
 
@@ -1369,10 +1759,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1390,10 +1777,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1440,10 +1824,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_namespace_ident
-            ),
+            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -1505,10 +1886,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            namespace_location, UUID_REGEX_STR,
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",);
 
         let table = catalog
             .create_table(
@@ -1563,8 +1942,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            nested_namespace_location, UUID_REGEX_STR,
+            "^{nested_namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",
         );
 
         let table = catalog
@@ -1602,10 +1980,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_loc, UUID_REGEX_STR
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{warehouse_loc}/a/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$");
 
         let table = catalog
             .create_table(
@@ -1641,10 +2017,8 @@ mod tests {
         let table_name = "tbl1";
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_loc, UUID_REGEX_STR
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{warehouse_loc}/a/b/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$");
 
         let table = catalog
             .create_table(
@@ -1807,10 +2181,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                non_existent_dst_namespace_ident
-            ),
+            format!("Unexpected => No such namespace: {non_existent_dst_namespace_ident:?}"),
         );
     }
 
@@ -1829,7 +2200,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such table: {:?}", src_table_ident),
+            format!("Unexpected => No such table: {src_table_ident:?}"),
         );
     }
 
@@ -1906,6 +2277,117 @@ mod tests {
         assert_eq!(
             err,
             "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_table_throws_error_if_table_with_same_name_already_exists() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_table(&catalog, &table_ident).await;
+
+        assert_eq!(
+            catalog
+                .register_table(&table_ident, warehouse_loc)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("Unexpected => Table {:?} already exists.", &table_ident)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_table() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let table_name = "abc";
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        let expected_table = catalog
+            .create_table(&namespace_ident, table_creation)
+            .await
+            .unwrap();
+
+        let metadata_location = expected_table
+            .metadata_location()
+            .expect("Expected metadata location to be set")
+            .to_string();
+
+        assert_table_eq(&expected_table, &table_ident, &simple_table_schema());
+
+        let _ = catalog.drop_table(&table_ident).await;
+
+        let table = catalog
+            .register_table(&table_ident, metadata_location.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(table.identifier(), expected_table.identifier());
+        assert_eq!(table.metadata_location(), Some(metadata_location.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        // Create a test namespace and table
+        let namespace_ident = NamespaceIdent::new("ns1".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
+        create_table(&catalog, &table_ident).await;
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+
+        // Store the original metadata location for comparison
+        let original_metadata_location = table.metadata_location().unwrap().to_string();
+
+        // Create a transaction to update the table
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test_property".to_string(), "test_value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        // Commit the transaction to the catalog
+        let updated_table = tx.commit(&catalog).await.unwrap();
+
+        // Verify the update was successful
+        assert_eq!(
+            updated_table.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+        // Verify the metadata location has been updated
+        assert_ne!(
+            updated_table.metadata_location().unwrap(),
+            original_metadata_location.as_str()
+        );
+
+        // Load the table again from the catalog to verify changes were persisted
+        let reloaded = catalog.load_table(&table_ident).await.unwrap();
+
+        // Verify the reloaded table matches the updated table
+        assert_eq!(
+            reloaded.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+        assert_eq!(
+            reloaded.metadata_location(),
+            updated_table.metadata_location()
         );
     }
 }

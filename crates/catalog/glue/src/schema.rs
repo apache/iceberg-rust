@@ -143,7 +143,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
     }
 
     fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
-        Ok(format!("array<{}>", value))
+        Ok(format!("array<{value}>"))
     }
 
     fn map(
@@ -152,7 +152,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         key_value: String,
         value: String,
     ) -> iceberg::Result<String> {
-        Ok(format!("map<{},{}>", key_value, value))
+        Ok(format!("map<{key_value},{value}>"))
     }
 
     fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T> {
@@ -165,19 +165,18 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::TimestamptzNs => "timestamptz_ns".to_string(),
+            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from {p:?} is not supported"),
+                ));
+            }
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
             PrimitiveType::Decimal { precision, scale } => {
-                format!("decimal({},{})", precision, scale)
-            }
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "Conversion from 'Timestamptz' is not supported",
-                ));
+                format!("decimal({precision},{scale})")
             }
         };
 

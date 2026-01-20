@@ -13,47 +13,55 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM python:3.9-bullseye
+ARG BASE_IMAGE_SPARK_VERSION=4.0.1
 
-RUN apt-get -qq update && \
-    apt-get -qq install -y --no-install-recommends sudo curl openjdk-11-jdk && \
-    apt-get -qq clean && \
-    rm -rf /var/lib/apt/lists/*
+FROM apache/spark:${BASE_IMAGE_SPARK_VERSION}
 
-ENV SPARK_HOME=${SPARK_HOME:-"/opt/spark"}
-ENV HADOOP_HOME=${HADOOP_HOME:-"/opt/hadoop"}
-ENV PYTHONPATH=$SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-0.10.9.7-src.zip:$PYTHONPATH
+# Dependency versions - keep these compatible
+ARG ICEBERG_VERSION=1.10.1
+ARG ICEBERG_SPARK_RUNTIME_VERSION=4.0_2.13
+ARG HADOOP_VERSION=3.4.1
+ARG SCALA_VERSION=2.13
+ARG AWS_SDK_VERSION=2.24.6
+ARG MAVEN_MIRROR=https://repo.maven.apache.org/maven2
 
-RUN mkdir -p ${HADOOP_HOME} && mkdir -p ${SPARK_HOME} && mkdir -p /home/iceberg/spark-events
+USER root
 WORKDIR ${SPARK_HOME}
 
-ENV SPARK_VERSION=3.5.6
-ENV ICEBERG_SPARK_RUNTIME_VERSION=3.5_2.12
-ENV ICEBERG_VERSION=1.10.0
+# Install curl for JAR downloads
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN curl --retry 5 -s -C - https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz -o spark-${SPARK_VERSION}-bin-hadoop3.tgz \
- && tar xzf spark-${SPARK_VERSION}-bin-hadoop3.tgz --directory /opt/spark --strip-components 1 \
- && rm -rf spark-${SPARK_VERSION}-bin-hadoop3.tgz
+# Copy configuration (early for better caching)
+COPY --chown=spark:spark spark-defaults.conf ${SPARK_HOME}/conf/
 
-# Download iceberg spark runtime
-RUN curl --retry 5 -s https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}/${ICEBERG_VERSION}/iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}-${ICEBERG_VERSION}.jar -Lo iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}-${ICEBERG_VERSION}.jar \
- && mv iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}-${ICEBERG_VERSION}.jar /opt/spark/jars
+# Create event log directory
+RUN mkdir -p /home/iceberg/spark-events && \
+    chown -R spark:spark /home/iceberg
 
-# Download AWS bundle
-RUN curl --retry 5 -s https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/${ICEBERG_VERSION}/iceberg-aws-bundle-${ICEBERG_VERSION}.jar -Lo /opt/spark/jars/iceberg-aws-bundle-${ICEBERG_VERSION}.jar
+# Required JAR dependencies
+ENV JARS_TO_DOWNLOAD="\
+    org/apache/iceberg/iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}/${ICEBERG_VERSION}/iceberg-spark-runtime-${ICEBERG_SPARK_RUNTIME_VERSION}-${ICEBERG_VERSION}.jar \
+    org/apache/iceberg/iceberg-aws-bundle/${ICEBERG_VERSION}/iceberg-aws-bundle-${ICEBERG_VERSION}.jar \
+    org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar \
+    software/amazon/awssdk/bundle/${AWS_SDK_VERSION}/bundle-${AWS_SDK_VERSION}.jar"
 
-COPY spark-defaults.conf /opt/spark/conf
-ENV PATH="/opt/spark/sbin:/opt/spark/bin:${PATH}"
+# Download JARs with retry logic
+RUN set -e && \
+    cd "${SPARK_HOME}/jars" && \
+    for jar_path in ${JARS_TO_DOWNLOAD}; do \
+        jar_name=$(basename "${jar_path}") && \
+        echo "Downloading ${jar_name}..." && \
+        curl -fsSL --retry 3 --retry-delay 5 \
+             -o "${jar_name}" \
+             "${MAVEN_MIRROR}/${jar_path}" && \
+        echo "✓ Downloaded ${jar_name}"; \
+    done && \
+    chown -R spark:spark "${SPARK_HOME}/jars"
 
-RUN chmod u+x /opt/spark/sbin/* && \
-    chmod u+x /opt/spark/bin/*
+USER spark
+WORKDIR ${SPARK_HOME}
 
-WORKDIR '/home/'
-
-COPY entrypoint.sh .
-COPY provision.py .
-
-HEALTHCHECK --retries=120 --interval=1s \
-  CMD ls /tmp/ready || exit 1
-
-ENTRYPOINT ["./entrypoint.sh"]
+# Start Spark Connect server
+CMD ["sh", "-c", "SPARK_NO_DAEMONIZE=true ${SPARK_HOME}/sbin/start-connect-server.sh"]

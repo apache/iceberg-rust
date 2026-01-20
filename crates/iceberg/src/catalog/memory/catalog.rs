@@ -163,8 +163,12 @@ impl Catalog for MemoryCatalog {
                 let namespaces = root_namespace_state
                     .list_namespaces_under(parent_namespace_ident)?
                     .into_iter()
-                    .map(|name| NamespaceIdent::new(name.to_string()))
-                    .collect_vec();
+                    .map(|name| {
+                        let mut names = parent_namespace_ident.iter().cloned().collect::<Vec<_>>();
+                        names.push(name.to_string());
+                        NamespaceIdent::from_vec(names)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 Ok(namespaces)
             }
@@ -377,7 +381,7 @@ impl Catalog for MemoryCatalog {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
@@ -396,7 +400,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    async fn new_memory_catalog() -> impl Catalog {
+    pub(crate) async fn new_memory_catalog() -> impl Catalog {
         let warehouse_location = temp_path();
         MemoryCatalogBuilder::default()
             .load(
@@ -506,9 +510,7 @@ mod tests {
         let regex = Regex::new(regex_str).unwrap();
         assert!(
             regex.is_match(&actual),
-            "Expected metadata location to match regex, but got location: {} and regex: {}",
-            actual,
-            regex
+            "Expected metadata location to match regex, but got location: {actual} and regex: {regex}"
         )
     }
 
@@ -601,7 +603,7 @@ mod tests {
                 .list_namespaces(Some(&namespace_ident_1))
                 .await
                 .unwrap(),
-            vec![NamespaceIdent::new("b".into())]
+            vec![namespace_ident_2]
         );
     }
 
@@ -630,9 +632,9 @@ mod tests {
                     .unwrap()
             ),
             to_set(vec![
-                NamespaceIdent::new("a".into()),
-                NamespaceIdent::new("b".into()),
-                NamespaceIdent::new("c".into()),
+                namespace_ident_2,
+                namespace_ident_3,
+                namespace_ident_4,
             ])
         );
     }
@@ -888,10 +890,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -975,10 +974,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1058,10 +1054,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1078,10 +1071,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            )
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1168,10 +1158,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            namespace_location, UUID_REGEX_STR,
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",);
 
         let table = catalog
             .create_table(
@@ -1230,8 +1218,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/tbl1/metadata/00000-{}.metadata.json$",
-            nested_namespace_location, UUID_REGEX_STR,
+            "^{nested_namespace_location}/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$",
         );
 
         let table = catalog
@@ -1278,10 +1265,8 @@ mod tests {
 
         let table_name = "tbl1";
         let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-        let expected_table_metadata_location_regex = format!(
-            "^{}/a/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_location, UUID_REGEX_STR
-        );
+        let expected_table_metadata_location_regex =
+            format!("^{warehouse_location}/a/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$");
 
         let table = catalog
             .create_table(
@@ -1335,8 +1320,7 @@ mod tests {
         let expected_table_ident =
             TableIdent::new(nested_namespace_ident.clone(), table_name.into());
         let expected_table_metadata_location_regex = format!(
-            "^{}/a/b/tbl1/metadata/00000-{}.metadata.json$",
-            warehouse_location, UUID_REGEX_STR
+            "^{warehouse_location}/a/b/tbl1/metadata/00000-{UUID_REGEX_STR}.metadata.json$"
         );
 
         let table = catalog
@@ -1499,10 +1483,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            ),
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -1549,10 +1530,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            ),
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -1570,10 +1548,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "TableNotFound => No such table: {:?}",
-                non_existent_table_ident
-            ),
+            format!("TableNotFound => No such table: {non_existent_table_ident:?}"),
         );
     }
 
@@ -1638,10 +1613,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_namespace_ident
-            ),
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -1753,10 +1725,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_src_namespace_ident
-            ),
+            format!("NamespaceNotFound => No such namespace: {non_existent_src_namespace_ident:?}"),
         );
     }
 
@@ -1777,10 +1746,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "NamespaceNotFound => No such namespace: {:?}",
-                non_existent_dst_namespace_ident
-            ),
+            format!("NamespaceNotFound => No such namespace: {non_existent_dst_namespace_ident:?}"),
         );
     }
 
@@ -1798,7 +1764,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("TableNotFound => No such table: {:?}", src_table_ident),
+            format!("TableNotFound => No such table: {src_table_ident:?}"),
         );
     }
 

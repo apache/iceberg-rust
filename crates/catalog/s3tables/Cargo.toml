@@ -21,6 +21,7 @@ homepage = { workspace = true }
 name = "iceberg-catalog-s3tables"
 rust-version = { workspace = true }
 version = { workspace = true }
+readme = "README.md"
 
 categories = ["database"]
 description = "Apache Iceberg Rust S3Tables Catalog"
@@ -29,6 +30,7 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3tables = { workspace = true }

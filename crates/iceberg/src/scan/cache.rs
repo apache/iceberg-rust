@@ -66,7 +66,7 @@ impl PartitionFilterCache {
             .partition_spec_by_id(spec_id)
             .ok_or(Error::new(
                 ErrorKind::Unexpected,
-                format!("Could not find partition spec for id {}", spec_id),
+                format!("Could not find partition spec for id {spec_id}"),
             ))?;
 
         let partition_type = partition_spec.partition_type(schema)?;

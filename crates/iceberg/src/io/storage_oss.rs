@@ -56,7 +56,7 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid oss url: {}, missing bucket", path),
+            format!("Invalid oss url: {path}, missing bucket"),
         )
     })?;
 

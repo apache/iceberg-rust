@@ -127,28 +127,27 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Invalid {}: {}. Expected one of (custom, kms, s3, none)",
-                        S3_SSE_TYPE, sse_type
+                        "Invalid {S3_SSE_TYPE}: {sse_type}. Expected one of (custom, kms, s3, none)"
                     ),
                 ));
             }
         }
     };
 
-    if let Some(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS) {
-        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
-            cfg.allow_anonymous = true;
-        }
+    if let Some(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS)
+        && is_truthy(allow_anonymous.to_lowercase().as_str())
+    {
+        cfg.allow_anonymous = true;
     }
-    if let Some(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA) {
-        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
-            cfg.disable_ec2_metadata = true;
-        }
+    if let Some(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA)
+        && is_truthy(disable_ec2_metadata.to_lowercase().as_str())
+    {
+        cfg.disable_ec2_metadata = true;
     };
-    if let Some(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD) {
-        if is_truthy(disable_config_load.to_lowercase().as_str()) {
-            cfg.disable_config_load = true;
-        }
+    if let Some(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD)
+        && is_truthy(disable_config_load.to_lowercase().as_str())
+    {
+        cfg.disable_config_load = true;
     };
 
     Ok(cfg)
@@ -164,7 +163,7 @@ pub(crate) fn s3_config_build(
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid s3 url: {}, missing bucket", path),
+            format!("Invalid s3 url: {path}, missing bucket"),
         )
     })?;
 

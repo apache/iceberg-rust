@@ -57,14 +57,16 @@ impl IcebergCommitExec {
         input: Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
     ) -> Self {
-        let plan_properties = Self::compute_properties(schema.clone());
+        let count_schema = Self::make_count_schema();
+
+        let plan_properties = Self::compute_properties(Arc::clone(&count_schema));
 
         Self {
             table,
             catalog,
             input,
             schema,
-            count_schema: Self::make_count_schema(),
+            count_schema,
             plan_properties,
         }
     }
@@ -84,7 +86,10 @@ impl IcebergCommitExec {
         let count_array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
         RecordBatch::try_from_iter_with_nullable(vec![("count", count_array, false)]).map_err(|e| {
-            DataFusionError::ArrowError(e, Some("Failed to make count batch!".to_string()))
+            DataFusionError::ArrowError(
+                Box::new(e),
+                Some("Failed to make count batch!".to_string()),
+            )
         })
     }
 
@@ -136,6 +141,14 @@ impl ExecutionPlan for IcebergCommitExec {
         vec![&self.input]
     }
 
+    fn required_input_distribution(&self) -> Vec<datafusion::physical_plan::Distribution> {
+        vec![datafusion::physical_plan::Distribution::SinglePartition; self.children().len()]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -163,8 +176,7 @@ impl ExecutionPlan for IcebergCommitExec {
         // IcebergCommitExec only has one partition (partition 0)
         if partition != 0 {
             return Err(DataFusionError::Internal(format!(
-                "IcebergCommitExec only has one partition, but got partition {}",
-                partition
+                "IcebergCommitExec only has one partition, but got partition {partition}"
             )));
         }
 
@@ -262,14 +274,16 @@ mod tests {
     use std::fmt;
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+    use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt64Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::datasource::MemTable;
     use datafusion::execution::context::TaskContext;
     use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
     use datafusion::physical_plan::common::collect;
     use datafusion::physical_plan::execution_plan::Boundedness;
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+    use datafusion::prelude::*;
     use futures::StreamExt;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
@@ -280,6 +294,7 @@ mod tests {
 
     use super::*;
     use crate::physical_plan::DATA_FILES_COL_NAME;
+    use crate::table::IcebergTableProvider;
 
     // A mock execution plan that returns record batches with serialized data files
     #[derive(Debug)]
@@ -458,6 +473,9 @@ mod tests {
         let commit_exec =
             IcebergCommitExec::new(table.clone(), catalog.clone(), input_exec, arrow_schema);
 
+        // Verify Execution Plan schema matches the count schema
+        assert_eq!(commit_exec.schema(), IcebergCommitExec::make_count_schema());
+
         // Execute the commit exec
         let task_ctx = Arc::new(TaskContext::default());
         let stream = commit_exec.execute(0, task_ctx)?;
@@ -507,6 +525,104 @@ mod tests {
 
         assert!(manifest_files.contains(&"path/to/file1.parquet".to_string()));
         assert!(manifest_files.contains(&"path/to/file2.parquet".to_string()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_execution_partitioned_source() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    HashMap::from([(
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory://root".to_string(),
+                    )]),
+                )
+                .await?,
+        );
+
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        let table_name = "test_table";
+        let table_creation = TableCreation::builder()
+            .name(table_name.to_string())
+            .schema(schema)
+            .location("memory://root/test_table".to_string())
+            .properties(HashMap::new())
+            .build();
+        let _ = catalog.create_table(&namespace, table_creation).await?;
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let batches: Vec<RecordBatch> = (1..4)
+            .map(|idx| {
+                RecordBatch::try_new(arrow_schema.clone(), vec![
+                    Arc::new(Int32Array::from(vec![idx])) as ArrayRef,
+                    Arc::new(StringArray::from(vec![format!("Name{idx}")])) as ArrayRef,
+                ])
+            })
+            .collect::<Result<_, _>>()?;
+
+        // Create DataFusion context with specific partition configuration
+        let mut config = SessionConfig::new();
+        config = config.set_usize("datafusion.execution.target_partitions", 8);
+        let ctx = SessionContext::new_with_config(config);
+
+        // Create multiple partitions - each batch becomes a separate partition
+        let partitions: Vec<Vec<RecordBatch>> =
+            batches.into_iter().map(|batch| vec![batch]).collect();
+        let source_table = Arc::new(MemTable::try_new(Arc::clone(&arrow_schema), partitions)?);
+        ctx.register_table("source_table", source_table)?;
+
+        let iceberg_table_provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            namespace.clone(),
+            table_name.to_string(),
+        )
+        .await?;
+        ctx.register_table("iceberg_table", Arc::new(iceberg_table_provider))?;
+
+        let insert_plan = ctx
+            .sql("INSERT INTO iceberg_table SELECT * FROM source_table")
+            .await?;
+
+        let physical_plan = insert_plan.create_physical_plan().await?;
+
+        let actual_plan = format!(
+            "{}",
+            datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(false)
+        );
+
+        println!("Physical plan:\n{actual_plan}");
+
+        let expected_plan = "\
+IcebergCommitExec: table=test_namespace.test_table
+  CoalescePartitionsExec
+    IcebergWriteExec: table=test_namespace.test_table
+      DataSourceExec: partitions=3, partition_sizes=[1, 1, 1]";
+
+        assert_eq!(
+            actual_plan.trim(),
+            expected_plan.trim(),
+            "Physical plan does not match expected\n\nExpected:\n{}\n\nActual:\n{}",
+            expected_plan.trim(),
+            actual_plan.trim()
+        );
 
         Ok(())
     }

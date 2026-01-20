@@ -200,10 +200,7 @@ impl ViewMetadataBuilder {
         let version = self.metadata.versions.get(&version_id).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set current version to unknown version with id: {}",
-                    version_id
-                ),
+                format!("Cannot set current version to unknown version with id: {version_id}"),
             )
         })?;
 
@@ -433,8 +430,7 @@ impl ViewMetadataBuilder {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
-                    "{} must be positive but was {}",
-                    VIEW_PROPERTY_VERSION_HISTORY_SIZE, num_versions_to_keep
+                    "{VIEW_PROPERTY_VERSION_HISTORY_SIZE} must be positive but was {num_versions_to_keep}"
                 ),
             ));
         }
@@ -482,10 +478,10 @@ impl ViewMetadataBuilder {
         // as it might panic if the metadata is invalid.
         self.metadata.validate()?;
 
-        if let Some(previous) = self.previous_view_version.take() {
-            if !allow_replace_drop_dialects(&self.metadata.properties) {
-                require_no_dialect_dropped(&previous, self.metadata.current_version())?;
-            }
+        if let Some(previous) = self.previous_view_version.take()
+            && !allow_replace_drop_dialects(&self.metadata.properties)
+        {
+            require_no_dialect_dropped(&previous, self.metadata.current_version())?;
         }
 
         let _expired_versions = self.expire_versions();

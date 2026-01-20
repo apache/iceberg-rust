@@ -24,9 +24,11 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use super::_serde::DataFileSerde;
-use super::{Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2};
+use super::{
+    Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
+};
 use crate::error::Result;
-use crate::spec::{Struct, StructType};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
 use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
@@ -49,6 +51,7 @@ pub struct DataFile {
     ///
     /// Partition data tuple, schema based on the partition spec output using
     /// partition field ids for the struct field ids
+    #[builder(default = "Struct::empty()")]
     pub(crate) partition: Struct,
     /// field id: 103
     ///
@@ -124,9 +127,10 @@ pub struct DataFile {
     /// element field id: 133
     ///
     /// Split offsets for the data file. For example, all row group offsets
-    /// in a Parquet file. Must be sorted ascending
+    /// in a Parquet file. Must be sorted ascending. Optional field that
+    /// should be serialized as null when not present.
     #[builder(default)]
-    pub(crate) split_offsets: Vec<i64>,
+    pub(crate) split_offsets: Option<Vec<i64>>,
     /// field id: 135
     /// element field id: 136
     ///
@@ -156,6 +160,7 @@ pub struct DataFile {
     pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
+    #[builder(default = "DEFAULT_PARTITION_SPEC_ID")]
     pub(crate) partition_spec_id: i32,
     /// field id: 143
     ///
@@ -243,8 +248,9 @@ impl DataFile {
     }
     /// Get the split offsets of the data file.
     /// For example, all row group offsets in a Parquet file.
-    pub fn split_offsets(&self) -> &[i64] {
-        &self.split_offsets
+    /// Returns `None` if no split offsets are present.
+    pub fn split_offsets(&self) -> Option<&[i64]> {
+        self.split_offsets.as_deref()
     }
     /// Get the equality ids of the data file.
     /// Field ids used to determine row equality in equality delete files.
@@ -293,6 +299,7 @@ pub fn write_data_files_to_avro<W: Write>(
     let avro_schema = match version {
         FormatVersion::V1 => data_file_schema_v1(partition_type).unwrap(),
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
+        FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
@@ -320,6 +327,7 @@ pub fn read_data_files_from_avro<R: Read>(
     let avro_schema = match version {
         FormatVersion::V1 => data_file_schema_v1(partition_type).unwrap(),
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
+        FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
 
     let reader = AvroReader::with_schema(&avro_schema, reader)?;
@@ -358,7 +366,7 @@ impl TryFrom<i32> for DataContentType {
             2 => Ok(DataContentType::EqualityDeletes),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("data content type {} is invalid", v),
+                format!("data content type {v} is invalid"),
             )),
         }
     }
@@ -388,7 +396,7 @@ impl FromStr for DataFileFormat {
             "puffin" => Ok(Self::Puffin),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Unsupported data file format: {}", s),
+                format!("Unsupported data file format: {s}"),
             )),
         }
     }

@@ -99,6 +99,10 @@ impl IcebergTableScan {
         self.predicates.as_ref()
     }
 
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
     /// Computes [`PlanProperties`] used in query optimization.
     fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
         // TODO:
@@ -151,9 +155,29 @@ impl ExecutionPlan for IcebergTableScan {
         );
         let stream = futures::stream::once(fut).try_flatten();
 
+        // Apply limit if specified
+        let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
+            if let Some(limit) = self.limit {
+                let mut remaining = limit;
+                Box::pin(stream.try_filter_map(move |batch| {
+                    futures::future::ready(if remaining == 0 {
+                        Ok(None)
+                    } else if batch.num_rows() <= remaining {
+                        remaining -= batch.num_rows();
+                        Ok(Some(batch))
+                    } else {
+                        let limited_batch = batch.slice(0, remaining);
+                        remaining = 0;
+                        Ok(Some(limited_batch))
+                    })
+                }))
+            } else {
+                Box::pin(stream)
+            };
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            stream,
+            limited_stream,
         )))
     }
 }
@@ -172,8 +196,8 @@ impl DisplayAs for IcebergTableScan {
                 .map_or(String::new(), |v| v.join(",")),
             self.predicates
                 .clone()
-                .map_or(String::from(""), |p| format!("{}", p)),
-            self.limit.map_or(String::from(""), |p| format!("{}", p)),
+                .map_or(String::from(""), |p| format!("{p}")),
+            self.limit.map_or(String::from(""), |l| format!("{l}")),
         )
     }
 }

@@ -45,10 +45,7 @@ NIGHTLY_VERSION := $(shell awk -F'"' '/^channel/ {print $$2}' rust-toolchain.tom
 MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
 
 check-msrv:
-	@set -e; \
-	trap 'git restore Cargo.lock' EXIT; \
-	cargo +$(NIGHTLY_VERSION) generate-lockfile -Z direct-minimal-versions; \
-	cargo +$(MSRV_VERSION) check --locked --workspace
+	cargo +$(MSRV_VERSION) check --workspace
 
 check: check-fmt check-clippy check-toml cargo-machete
 
@@ -63,3 +60,9 @@ test: doc-test
 
 clean:
 	cargo clean
+
+install-mdbook:
+	cargo install mdbook@0.4.36
+
+site: install-mdbook
+	cd website && mdbook serve

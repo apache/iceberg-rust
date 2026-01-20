@@ -25,6 +25,12 @@ else
 	echo "var is set to '$ICEBERG_VERSION'"
 fi
 
+# Validate version format (e.g., 1.0.0)
+if [[ ! "$ICEBERG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "Error: ICEBERG_VERSION ($ICEBERG_VERSION) must be in the format: <number>.<number>.<number>"
+	exit 1
+fi
+
 # tar source code
 release_version=${ICEBERG_VERSION}
 # rc versions
@@ -47,7 +53,7 @@ python3 ./scripts/dependencies.py check
 
 # Generate and verify artifacts
 echo "> Start package"
-git archive --format=tar.gz --output="dist/apache-iceberg-rust-$release_version-src.tar.gz" --prefix="apache-iceberg-rust-$release_version-src/" --add-file=Cargo.toml "$git_branch"
+git archive --format=tar.gz --output="dist/apache-iceberg-rust-$release_version.tar.gz" --prefix="apache-iceberg-rust-$release_version/" --add-file=Cargo.toml "$git_branch"
 
 cd dist
 

@@ -39,8 +39,9 @@ on:
 jobs:
   security_audit:
     runs-on: ubuntu-latest
+    if: github.repository == 'apache/iceberg-rust'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -48,4 +49,3 @@ jobs:
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ignore: RUSTSEC-2024-0436

@@ -47,7 +47,7 @@ use crate::transform::{BoxedTransformFunction, create_transform_function};
 /// predicates and partition predicates.
 ///
 /// All transforms must return `null` for a `null` input value.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Transform {
     /// Source value, unmodified
     ///
@@ -137,19 +137,17 @@ pub enum Transform {
 impl Transform {
     /// Returns a human-readable String representation of a transformed value.
     pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
-        if let Some(value) = value {
-            if let Some(value) = value.as_primitive_literal() {
-                let field_type = field_type.as_primitive_type().unwrap();
-                let datum = Datum::new(field_type.clone(), value);
-                match self {
-                    Self::Identity => datum.to_human_string(),
-                    Self::Void => "null".to_string(),
-                    _ => {
-                        todo!()
-                    }
-                }
-            } else {
-                "null".to_string()
+        let Some(value) = value else {
+            return "null".to_string();
+        };
+
+        if let Some(value) = value.as_primitive_literal() {
+            let field_type = field_type.as_primitive_type().unwrap();
+            let datum = Datum::new(field_type.clone(), value);
+
+            match self {
+                Self::Void => "null".to_string(),
+                _ => datum.to_human_string(),
             }
         } else {
             "null".to_string()
@@ -713,10 +711,10 @@ impl Transform {
             PredicateOperator::GreaterThan => Some(PredicateOperator::GreaterThanOrEq),
             PredicateOperator::StartsWith => match datum.literal() {
                 PrimitiveLiteral::String(s) => {
-                    if let Some(w) = width {
-                        if s.len() == w as usize {
-                            return Some(PredicateOperator::Eq);
-                        };
+                    if let Some(w) = width
+                        && s.len() == w as usize
+                    {
+                        return Some(PredicateOperator::Eq);
                     };
                     Some(*op)
                 }
@@ -759,47 +757,45 @@ impl Transform {
             _ => false,
         };
 
-        if should_adjust {
-            if let &PrimitiveLiteral::Int(v) = transformed.literal() {
-                match op {
-                    PredicateOperator::LessThan
-                    | PredicateOperator::LessThanOrEq
-                    | PredicateOperator::In => {
-                        if v < 0 {
+        if should_adjust && let &PrimitiveLiteral::Int(v) = transformed.literal() {
+            match op {
+                PredicateOperator::LessThan
+                | PredicateOperator::LessThanOrEq
+                | PredicateOperator::In => {
+                    if v < 0 {
+                        // # TODO
+                        // An ugly hack to fix. Refine the increment and decrement logic later.
+                        match self {
+                            Transform::Day => {
+                                return Some(AdjustedProjection::Single(Datum::date(v + 1)));
+                            }
+                            _ => {
+                                return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                            }
+                        }
+                    };
+                }
+                PredicateOperator::Eq => {
+                    if v < 0 {
+                        let new_set = FnvHashSet::from_iter(vec![
+                            transformed.to_owned(),
                             // # TODO
                             // An ugly hack to fix. Refine the increment and decrement logic later.
-                            match self {
-                                Transform::Day => {
-                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)));
+                            {
+                                match self {
+                                    Transform::Day => Datum::date(v + 1),
+                                    _ => Datum::int(v + 1),
                                 }
-                                _ => {
-                                    return Some(AdjustedProjection::Single(Datum::int(v + 1)));
-                                }
-                            }
-                        };
-                    }
-                    PredicateOperator::Eq => {
-                        if v < 0 {
-                            let new_set = FnvHashSet::from_iter(vec![
-                                transformed.to_owned(),
-                                // # TODO
-                                // An ugly hack to fix. Refine the increment and decrement logic later.
-                                {
-                                    match self {
-                                        Transform::Day => Datum::date(v + 1),
-                                        _ => Datum::int(v + 1),
-                                    }
-                                },
-                            ]);
-                            return Some(AdjustedProjection::Set(new_set));
-                        }
-                    }
-                    _ => {
-                        return None;
+                            },
+                        ]);
+                        return Some(AdjustedProjection::Set(new_set));
                     }
                 }
-            };
-        }
+                _ => {
+                    return None;
+                }
+            }
+        };
         None
     }
 
@@ -896,7 +892,7 @@ impl Transform {
         ) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Expected a numeric literal, got: {:?}", boundary),
+                format!("Expected a numeric literal, got: {boundary:?}"),
             ));
         }
 

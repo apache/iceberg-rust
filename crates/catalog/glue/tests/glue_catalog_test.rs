@@ -91,7 +91,7 @@ async fn get_catalog() -> GlueCatalog {
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}", minio_socket_addr),
+            format!("http://{minio_socket_addr}"),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
@@ -119,7 +119,7 @@ async fn get_catalog() -> GlueCatalog {
     let mut glue_props = HashMap::from([
         (
             GLUE_CATALOG_PROP_URI.to_string(),
-            format!("http://{}", glue_socket_addr),
+            format!("http://{glue_socket_addr}"),
         ),
         (
             GLUE_CATALOG_PROP_WAREHOUSE.to_string(),

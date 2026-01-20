@@ -40,7 +40,7 @@ async fn test_read_table_with_positional_deletes() {
         .unwrap();
 
     let scan = table.scan().build().unwrap();
-    println!("{:?}", scan);
+    println!("{scan:?}");
 
     let plan: Vec<_> = scan
         .plan_files()
@@ -49,7 +49,7 @@ async fn test_read_table_with_positional_deletes() {
         .try_collect()
         .await
         .unwrap();
-    println!("{:?}", plan);
+    println!("{plan:?}");
 
     // Scan plan phase should include delete files in file plan
     // when with_delete_file_processing_enabled == true

@@ -41,9 +41,9 @@ use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
 use crate::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
-    ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
-    RegisterTableRequest, RenameTableRequest,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
+    CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
+    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
 };
 
 /// REST catalog URI
@@ -243,7 +243,7 @@ impl RestCatalogConfig {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
 
@@ -466,13 +466,7 @@ impl Catalog for RestCatalog {
                         deserialize_catalog_response::<ListNamespaceResponse>(http_response)
                             .await?;
 
-                    let ns_identifiers = response
-                        .namespaces
-                        .into_iter()
-                        .map(NamespaceIdent::from_vec)
-                        .collect::<Result<Vec<NamespaceIdent>>>()?;
-
-                    namespaces.extend(ns_identifiers);
+                    namespaces.extend(response.namespaces);
 
                     match response.next_page_token {
                         Some(token) => next_token = Some(token),
@@ -502,9 +496,9 @@ impl Catalog for RestCatalog {
         let request = context
             .client
             .request(Method::POST, context.config.namespaces_endpoint())
-            .json(&NamespaceSerde {
-                namespace: namespace.as_ref().clone(),
-                properties: Some(properties),
+            .json(&CreateNamespaceRequest {
+                namespace: namespace.clone(),
+                properties,
             })
             .build()?;
 
@@ -513,8 +507,8 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::OK => {
                 let response =
-                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
-                Namespace::try_from(response)
+                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                Ok(Namespace::from(response))
             }
             StatusCode::CONFLICT => Err(Error::new(
                 ErrorKind::Unexpected,
@@ -537,8 +531,8 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::OK => {
                 let response =
-                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
-                Namespace::try_from(response)
+                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                Ok(Namespace::from(response))
             }
             StatusCode::NOT_FOUND => Err(Error::new(
                 ErrorKind::Unexpected,
@@ -614,7 +608,7 @@ impl Catalog for RestCatalog {
             match http_response.status() {
                 StatusCode::OK => {
                     let response =
-                        deserialize_catalog_response::<ListTableResponse>(http_response).await?;
+                        deserialize_catalog_response::<ListTablesResponse>(http_response).await?;
 
                     identifiers.extend(response.identifiers);
 
@@ -661,11 +655,7 @@ impl Catalog for RestCatalog {
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
                 stage_create: Some(false),
-                properties: if creation.properties.is_empty() {
-                    None
-                } else {
-                    Some(creation.properties)
-                },
+                properties: creation.properties,
             })
             .build()?;
 
@@ -673,7 +663,7 @@ impl Catalog for RestCatalog {
 
         let response = match http_response.status() {
             StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+                deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
@@ -697,7 +687,6 @@ impl Catalog for RestCatalog {
 
         let config = response
             .config
-            .unwrap_or_default()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
@@ -735,7 +724,7 @@ impl Catalog for RestCatalog {
 
         let response = match http_response.status() {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
-                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+                deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
@@ -748,7 +737,6 @@ impl Catalog for RestCatalog {
 
         let config = response
             .config
-            .unwrap_or_default()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
@@ -861,9 +849,9 @@ impl Catalog for RestCatalog {
 
         let http_response = context.client.query_catalog(request).await?;
 
-        let response: LoadTableResponse = match http_response.status() {
+        let response: LoadTableResult = match http_response.status() {
             StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+                deserialize_catalog_response::<LoadTableResult>(http_response).await?
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
@@ -905,7 +893,7 @@ impl Catalog for RestCatalog {
                 context.config.table_endpoint(commit.identifier()),
             )
             .json(&CommitTableRequest {
-                identifier: commit.identifier().clone(),
+                identifier: Some(commit.identifier().clone()),
                 requirements: commit.take_requirements(),
                 updates: commit.take_updates(),
             })
@@ -1273,7 +1261,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
         assert_eq!(headers, expected_headers);
@@ -1310,7 +1298,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
             ),
             (
                 HeaderName::from_static("customized-header"),
@@ -2428,7 +2416,7 @@ mod tests {
             ))
             .unwrap();
             let reader = BufReader::new(file);
-            let resp = serde_json::from_reader::<_, LoadTableResponse>(reader).unwrap();
+            let resp = serde_json::from_reader::<_, LoadTableResult>(reader).unwrap();
 
             Table::builder()
                 .metadata(resp.metadata)
@@ -2568,7 +2556,7 @@ mod tests {
             ))
             .unwrap();
             let reader = BufReader::new(file);
-            let resp = serde_json::from_reader::<_, LoadTableResponse>(reader).unwrap();
+            let resp = serde_json::from_reader::<_, LoadTableResult>(reader).unwrap();
 
             Table::builder()
                 .metadata(resp.metadata)
