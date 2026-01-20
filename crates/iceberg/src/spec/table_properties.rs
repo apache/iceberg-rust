@@ -57,12 +57,42 @@ pub struct TableProperties {
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
     /// Compression codec for metadata files (JSON), None means no compression
-    pub metadata_compression_codec: Option<String>,
+    pub metadata_compression_codec: Option<MetadataCompressionCodec>,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
 }
 
+/// Compression codec for metadata files (JSON).
+#[derive(Debug, PartialEq)]
+pub enum MetadataCompressionCodec {
+    /// Gzip compression.
+    Gzip,
+}
+
 impl TableProperties {
+    /// Parse metadata compression codec from properties.
+    pub(crate) fn parse_metadata_compression_codec(
+        props: &HashMap<String, String>,
+    ) -> Result<Option<MetadataCompressionCodec>> {
+        match props.get(Self::PROPERTY_METADATA_COMPRESSION_CODEC) {
+            Some(v) => match v.to_lowercase().as_str() {
+                Self::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT | "" => Ok(None),
+                Self::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP => {
+                    Ok(Some(MetadataCompressionCodec::Gzip))
+                }
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Invalid value for Metadata JSON compression value : {v}. Only '{}' and '{}' are supported.",
+                        Self::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT,
+                        Self::PROPERTY_METADATA_COMPRESSION_CODEC_GZIP
+                    ),
+                )),
+            },
+            None => Ok(None),
+        }
+    }
+
     /// Reserved table property for table format version.
     ///
     /// Iceberg will default a new table's format version to the latest stable and recommended
@@ -153,6 +183,8 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+    /// Metadata compression codec value for gzip
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_GZIP: &str = "gzip";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
@@ -196,12 +228,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
-            metadata_compression_codec: props
-                .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-                .and_then(|v| match v.to_lowercase().as_str() {
-                    "none" | "" => None,
-                    codec => Some(codec.to_string()),
-                }),
+            metadata_compression_codec: TableProperties::parse_metadata_compression_codec(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
@@ -252,7 +279,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            Some("gzip".to_string())
+            Some(MetadataCompressionCodec::Gzip)
         );
     }
 
@@ -276,7 +303,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_upper).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            Some("gzip".to_string())
+            Some(MetadataCompressionCodec::Gzip)
         );
 
         // Test mixed case
@@ -287,7 +314,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_mixed).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            Some("gzip".to_string())
+            Some(MetadataCompressionCodec::Gzip)
         );
 
         // Test "NONE" should also be case-insensitive

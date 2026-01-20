@@ -36,9 +36,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
-    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
+    DEFAULT_PARTITION_SPEC_ID, MetadataCompressionCodec, PartitionSpecRef, PartitionStatisticsFile,
+    SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile,
+    StructType, TableProperties,
 };
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -466,14 +466,11 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression is enabled via table properties
-        let codec = self
-            .properties
-            .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-            .map(|s| s.as_str());
+        let codec = TableProperties::parse_metadata_compression_codec(self.properties())?;
 
         // Use case-insensitive comparison to match Java implementation
-        let (data_to_write, actual_location) = match codec.map(|s| s.to_lowercase()).as_deref() {
-            Some("gzip") => {
+        let (data_to_write, actual_location) = match codec {
+            Some(MetadataCompressionCodec::Gzip) => {
                 let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(&json_data).map_err(|e| {
                     Error::new(
@@ -503,13 +500,7 @@ impl TableMetadata {
 
                 (compressed_data, new_location)
             }
-            None | Some("none") | Some("") => (json_data, metadata_location.as_ref().to_string()),
-            Some(other) => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Unsupported metadata compression codec: {other}"),
-                ));
-            }
+            None => (json_data, metadata_location.as_ref().to_string()),
         };
 
         file_io
