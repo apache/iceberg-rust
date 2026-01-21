@@ -107,6 +107,12 @@ pub struct FileScanTask {
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
+
+    /// Encryption key metadata for the data file, if encrypted.
+    /// Contains serialized StandardKeyMetadata used to decrypt the file.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_metadata: Option<Vec<u8>>,
 }
 
 impl FileScanTask {

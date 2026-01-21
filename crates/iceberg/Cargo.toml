@@ -32,6 +32,7 @@ repository = { workspace = true }
 default = ["storage-memory", "storage-fs", "storage-s3"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
+encryption = ["parquet/encryption"]
 storage-azdls = ["opendal/services-azdls"]
 storage-fs = ["opendal/services-fs"]
 storage-gcs = ["opendal/services-gcs"]
@@ -41,6 +42,7 @@ storage-s3 = ["opendal/services-s3", "reqsign"]
 
 
 [dependencies]
+aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
 array-init = { workspace = true }
@@ -65,13 +67,14 @@ flate2 = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+lru = "0.16.3"
 moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
-parquet = { workspace = true, features = ["async"] }
+parquet = { workspace = true, features = ["async", "encryption"] }
 rand = { workspace = true }
 reqsign = { version = "0.16.3", optional = true, default-features = false }
 reqwest = { workspace = true }
@@ -88,6 +91,7 @@ tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]

@@ -845,8 +845,23 @@ impl ManifestFile {
     /// Load [`Manifest`].
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
+    /// If the manifest has encryption key metadata, it will be transparently decrypted.
     pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let avro = file_io.new_input(&self.manifest_path)?.read().await?;
+        // Read the manifest file, using encrypted input if key metadata is present
+        let avro = match &self.key_metadata {
+            Some(key_metadata) => {
+                // Manifest is encrypted - use encrypted input for transparent decryption
+                file_io
+                    .new_encrypted_input(&self.manifest_path, key_metadata)
+                    .await?
+                    .read()
+                    .await?
+            }
+            None => {
+                // Manifest is not encrypted - use regular input
+                file_io.new_input(&self.manifest_path)?.read().await?
+            }
+        };
 
         let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
 

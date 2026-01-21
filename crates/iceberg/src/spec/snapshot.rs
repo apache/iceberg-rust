@@ -207,7 +207,30 @@ impl Snapshot {
         file_io: &FileIO,
         table_metadata: &TableMetadata,
     ) -> Result<ManifestList> {
-        let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
+        // Check if the manifest list is encrypted
+        let manifest_list_content = if let Some(key_id) = &self.encryption_key_id {
+            // Manifest list is encrypted - look up the key metadata
+            let encryption_key = table_metadata.encryption_key(key_id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Encryption key '{}' referenced by snapshot {} not found in table metadata",
+                        key_id, self.snapshot_id
+                    ),
+                )
+            })?;
+
+            // Use encrypted input with the key metadata
+            file_io
+                .new_encrypted_input(&self.manifest_list, encryption_key.encrypted_key_metadata())
+                .await?
+                .read()
+                .await?
+        } else {
+            // Manifest list is not encrypted
+            file_io.new_input(&self.manifest_list)?.read().await?
+        };
+
         ManifestList::parse_with_version(
             &manifest_list_content,
             // TODO: You don't really need the version since you could just project any Avro in
