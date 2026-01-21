@@ -29,3 +29,7 @@ slt = "df_test/create_table.slt"
 [[steps]]
 engine = "df"
 slt = "df_test/insert_into.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/binary_predicate_pushdown.slt"

@@ -212,6 +212,8 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::Float64(Some(v)) => Some(Datum::double(*v)),
         ScalarValue::Utf8(Some(v)) => Some(Datum::string(v.clone())),
         ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
+        ScalarValue::Binary(Some(v)) => Some(Datum::binary(v.clone())),
+        ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
         _ => None,
@@ -428,5 +430,32 @@ mod tests {
         let sql = "ts >= date '2023-01-05T11:00:00'";
         let predicate = convert_to_iceberg_predicate(sql);
         assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_binary() {
+        use datafusion::common::ScalarValue;
+
+        let bytes = vec![1u8, 2u8, 3u8];
+        let datum = super::scalar_value_to_datum(&ScalarValue::Binary(Some(bytes.clone())));
+        assert_eq!(datum, Some(Datum::binary(bytes.clone())));
+
+        let datum = super::scalar_value_to_datum(&ScalarValue::LargeBinary(Some(bytes.clone())));
+        assert_eq!(datum, Some(Datum::binary(bytes)));
+
+        let datum = super::scalar_value_to_datum(&ScalarValue::Binary(None));
+        assert_eq!(datum, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_binary() {
+        let sql = "foo = 1 and bar = X'0102'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        // Binary literals are converted to Datum::binary
+        // Note: SQL literal 1 is converted to Long by DataFusion
+        let expected_predicate = Reference::new("foo")
+            .equal_to(Datum::long(1))
+            .and(Reference::new("bar").equal_to(Datum::binary(vec![1u8, 2u8])));
+        assert_eq!(predicate, expected_predicate);
     }
 }
