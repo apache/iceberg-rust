@@ -95,43 +95,71 @@
 <a href=#95 id=95 data-nosnippet>95</a>
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="comment">// Create partitioned test table (unpartitioned tables are now created via SQL)
 <a href=#97 id=97 data-nosnippet>97</a>        </span><span class="self">Self</span>::create_partitioned_table(<span class="kw-2">&amp;</span>catalog, <span class="kw-2">&amp;</span>namespace).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="prelude-val">Ok</span>(Arc::new(
-<a href=#100 id=100 data-nosnippet>100</a>            IcebergCatalogProvider::try_new(Arc::new(catalog)).<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#101 id=101 data-nosnippet>101</a>        ))
-<a href=#102 id=102 data-nosnippet>102</a>    }
-<a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a>    <span class="doccomment">/// Create a partitioned test table with id, category, and value columns
-<a href=#105 id=105 data-nosnippet>105</a>    /// Partitioned by category using identity transform
-<a href=#106 id=106 data-nosnippet>106</a>    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
-<a href=#107 id=107 data-nosnippet>107</a>    </span><span class="kw">async fn </span>create_partitioned_table(
-<a href=#108 id=108 data-nosnippet>108</a>        catalog: <span class="kw-2">&amp;</span><span class="kw">impl </span>Catalog,
-<a href=#109 id=109 data-nosnippet>109</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
-<a href=#110 id=110 data-nosnippet>110</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>schema = Schema::builder()
-<a href=#112 id=112 data-nosnippet>112</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#113 id=113 data-nosnippet>113</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#114 id=114 data-nosnippet>114</a>                NestedField::required(<span class="number">2</span>, <span class="string">"category"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#115 id=115 data-nosnippet>115</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#116 id=116 data-nosnippet>116</a>            ])
-<a href=#117 id=117 data-nosnippet>117</a>            .build()<span class="question-mark">?</span>;
-<a href=#118 id=118 data-nosnippet>118</a>
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="kw">let </span>partition_spec = UnboundPartitionSpec::builder()
-<a href=#120 id=120 data-nosnippet>120</a>            .with_spec_id(<span class="number">0</span>)
-<a href=#121 id=121 data-nosnippet>121</a>            .add_partition_field(<span class="number">2</span>, <span class="string">"category"</span>, Transform::Identity)<span class="question-mark">?
-<a href=#122 id=122 data-nosnippet>122</a>            </span>.build();
-<a href=#123 id=123 data-nosnippet>123</a>
-<a href=#124 id=124 data-nosnippet>124</a>        catalog
-<a href=#125 id=125 data-nosnippet>125</a>            .create_table(
-<a href=#126 id=126 data-nosnippet>126</a>                namespace,
-<a href=#127 id=127 data-nosnippet>127</a>                TableCreation::builder()
-<a href=#128 id=128 data-nosnippet>128</a>                    .name(<span class="string">"test_partitioned_table"</span>.to_string())
-<a href=#129 id=129 data-nosnippet>129</a>                    .schema(schema)
-<a href=#130 id=130 data-nosnippet>130</a>                    .partition_spec(partition_spec)
-<a href=#131 id=131 data-nosnippet>131</a>                    .build(),
-<a href=#132 id=132 data-nosnippet>132</a>            )
-<a href=#133 id=133 data-nosnippet>133</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#134 id=134 data-nosnippet>134</a>
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="prelude-val">Ok</span>(())
-<a href=#136 id=136 data-nosnippet>136</a>    }
-<a href=#137 id=137 data-nosnippet>137</a>}</code></pre></div></section></main></body></html>
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="self">Self</span>::create_binary_table(<span class="kw-2">&amp;</span>catalog, <span class="kw-2">&amp;</span>namespace).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#99 id=99 data-nosnippet>99</a>
+<a href=#100 id=100 data-nosnippet>100</a>        <span class="prelude-val">Ok</span>(Arc::new(
+<a href=#101 id=101 data-nosnippet>101</a>            IcebergCatalogProvider::try_new(Arc::new(catalog)).<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#102 id=102 data-nosnippet>102</a>        ))
+<a href=#103 id=103 data-nosnippet>103</a>    }
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// Create a partitioned test table with id, category, and value columns
+<a href=#106 id=106 data-nosnippet>106</a>    /// Partitioned by category using identity transform
+<a href=#107 id=107 data-nosnippet>107</a>    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
+<a href=#108 id=108 data-nosnippet>108</a>    </span><span class="kw">async fn </span>create_partitioned_table(
+<a href=#109 id=109 data-nosnippet>109</a>        catalog: <span class="kw-2">&amp;</span><span class="kw">impl </span>Catalog,
+<a href=#110 id=110 data-nosnippet>110</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
+<a href=#111 id=111 data-nosnippet>111</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">let </span>schema = Schema::builder()
+<a href=#113 id=113 data-nosnippet>113</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#114 id=114 data-nosnippet>114</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#115 id=115 data-nosnippet>115</a>                NestedField::required(<span class="number">2</span>, <span class="string">"category"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#116 id=116 data-nosnippet>116</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#117 id=117 data-nosnippet>117</a>            ])
+<a href=#118 id=118 data-nosnippet>118</a>            .build()<span class="question-mark">?</span>;
+<a href=#119 id=119 data-nosnippet>119</a>
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw">let </span>partition_spec = UnboundPartitionSpec::builder()
+<a href=#121 id=121 data-nosnippet>121</a>            .with_spec_id(<span class="number">0</span>)
+<a href=#122 id=122 data-nosnippet>122</a>            .add_partition_field(<span class="number">2</span>, <span class="string">"category"</span>, Transform::Identity)<span class="question-mark">?
+<a href=#123 id=123 data-nosnippet>123</a>            </span>.build();
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>        catalog
+<a href=#126 id=126 data-nosnippet>126</a>            .create_table(
+<a href=#127 id=127 data-nosnippet>127</a>                namespace,
+<a href=#128 id=128 data-nosnippet>128</a>                TableCreation::builder()
+<a href=#129 id=129 data-nosnippet>129</a>                    .name(<span class="string">"test_partitioned_table"</span>.to_string())
+<a href=#130 id=130 data-nosnippet>130</a>                    .schema(schema)
+<a href=#131 id=131 data-nosnippet>131</a>                    .partition_spec(partition_spec)
+<a href=#132 id=132 data-nosnippet>132</a>                    .build(),
+<a href=#133 id=133 data-nosnippet>133</a>            )
+<a href=#134 id=134 data-nosnippet>134</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="prelude-val">Ok</span>(())
+<a href=#137 id=137 data-nosnippet>137</a>    }
+<a href=#138 id=138 data-nosnippet>138</a>
+<a href=#139 id=139 data-nosnippet>139</a>    <span class="doccomment">/// Create a test table with binary type column
+<a href=#140 id=140 data-nosnippet>140</a>    /// Used for testing binary predicate pushdown
+<a href=#141 id=141 data-nosnippet>141</a>    /// TODO: this can be removed when we support CREATE TABLE
+<a href=#142 id=142 data-nosnippet>142</a>    </span><span class="kw">async fn </span>create_binary_table(
+<a href=#143 id=143 data-nosnippet>143</a>        catalog: <span class="kw-2">&amp;</span><span class="kw">impl </span>Catalog,
+<a href=#144 id=144 data-nosnippet>144</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
+<a href=#145 id=145 data-nosnippet>145</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">let </span>schema = Schema::builder()
+<a href=#147 id=147 data-nosnippet>147</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#148 id=148 data-nosnippet>148</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#149 id=149 data-nosnippet>149</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"data"</span>, Type::Primitive(PrimitiveType::Binary)).into(),
+<a href=#150 id=150 data-nosnippet>150</a>            ])
+<a href=#151 id=151 data-nosnippet>151</a>            .build()<span class="question-mark">?</span>;
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a>        catalog
+<a href=#154 id=154 data-nosnippet>154</a>            .create_table(
+<a href=#155 id=155 data-nosnippet>155</a>                namespace,
+<a href=#156 id=156 data-nosnippet>156</a>                TableCreation::builder()
+<a href=#157 id=157 data-nosnippet>157</a>                    .name(<span class="string">"test_binary_table"</span>.to_string())
+<a href=#158 id=158 data-nosnippet>158</a>                    .schema(schema)
+<a href=#159 id=159 data-nosnippet>159</a>                    .build(),
+<a href=#160 id=160 data-nosnippet>160</a>            )
+<a href=#161 id=161 data-nosnippet>161</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#162 id=162 data-nosnippet>162</a>
+<a href=#163 id=163 data-nosnippet>163</a>        <span class="prelude-val">Ok</span>(())
+<a href=#164 id=164 data-nosnippet>164</a>    }
+<a href=#165 id=165 data-nosnippet>165</a>}</code></pre></div></section></main></body></html>
