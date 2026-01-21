@@ -29,11 +29,10 @@ use futures::StreamExt;
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
-use iceberg::TableIdent;
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
@@ -245,9 +244,8 @@ impl SchemaProvider for IcebergSchemaProvider {
             })
         });
 
-        futures::executor::block_on(result).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to drop Iceberg table: {e}"))
-        })?
+        futures::executor::block_on(result)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to drop Iceberg table: {e}")))?
     }
 }
 
