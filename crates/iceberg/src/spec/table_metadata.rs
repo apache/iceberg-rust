@@ -51,6 +51,9 @@ pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 
+static METADATA_FILE_EXTENSION: &str = ".metadata.json";
+static COMPRESSED_METADATA_FILE_EXTENSION: &str = ".gz.metadata.json";
+
 /// Initial row id for row lineage for new v3 tables and older tables upgrading to v3.
 pub const INITIAL_ROW_ID: u64 = 0;
 /// Minimum format version that supports row lineage (v3).
@@ -505,13 +508,13 @@ impl TableMetadata {
 
                 // Modify filename to add .gz before .metadata.json
                 let location = metadata_location.as_ref();
-                let new_location = if location.ends_with(".gz.metadata.json") {
+                let new_location = if location.ends_with(COMPRESSED_METADATA_FILE_EXTENSION) {
                     // File already has the correct compressed naming convention
                     // This check can be removed after the deprecated method for naming is removed,
                     // but provides safety that compressed files have the correct naming convention.
                     location.to_string()
-                } else if location.ends_with(".metadata.json") {
-                    location.replace(".metadata.json", ".gz.metadata.json")
+                } else if location.ends_with(METADATA_FILE_EXTENSION) {
+                    location.replace(METADATA_FILE_EXTENSION, COMPRESSED_METADATA_FILE_EXTENSION)
                 } else {
                     // Location doesn't end with expected pattern, use as-is
                     location.to_string()
