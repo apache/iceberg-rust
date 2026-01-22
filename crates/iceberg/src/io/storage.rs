@@ -72,7 +72,7 @@ use crate::{Error, ErrorKind, Result};
 ///     }
 ///     // ... implement other methods
 /// }
-/// 
+///
 /// TODO remove below when the trait is integrated with FileIO and Catalog
 /// # NOTE
 /// This trait is under heavy development and is not used anywhere as of now
@@ -133,7 +133,7 @@ pub trait Storage: Debug + Send + Sync {
 ///         todo!()
 ///     }
 /// }
-/// 
+///
 /// TODO remove below when the trait is integrated with FileIO and Catalog
 /// # NOTE
 /// This trait is under heavy development and is not used anywhere as of now
