@@ -16,12 +16,6 @@
 // under the License.
 
 use std::fmt::Debug;
-#[cfg(any(
-    feature = "storage-s3",
-    feature = "storage-gcs",
-    feature = "storage-oss",
-    feature = "storage-azdls",
-))]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -64,11 +58,6 @@ use crate::{Error, ErrorKind, Result};
 /// # Example
 ///
 /// ```rust,ignore
-/// use async_trait::async_trait;
-/// use bytes::Bytes;
-/// use iceberg::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage};
-/// use iceberg::Result;
-///
 /// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// struct MyStorage {
 ///     // custom fields
