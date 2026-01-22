@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>futures::future::try_join_all;
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>iceberg::inspect::MetadataTableType;
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, <span class="prelude-ty">Result</span>, TableCreation};
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, <span class="prelude-ty">Result</span>, TableCreation, TableIdent};
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span><span class="kw">crate</span>::table::IcebergTableProvider;
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span><span class="kw">crate</span>::to_datafusion_error;
@@ -211,161 +211,235 @@
 <a href=#211 id=211 data-nosnippet>211</a>            DataFusionError::Execution(<span class="macro">format!</span>(<span class="string">"Failed to create Iceberg table: {e}"</span>))
 <a href=#212 id=212 data-nosnippet>212</a>        })<span class="question-mark">?
 <a href=#213 id=213 data-nosnippet>213</a>    </span>}
-<a href=#214 id=214 data-nosnippet>214</a>}
-<a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a><span class="doccomment">/// Verifies that a table provider contains no data by scanning with LIMIT 1.
-<a href=#217 id=217 data-nosnippet>217</a>/// Returns an error if the table has any rows.
-<a href=#218 id=218 data-nosnippet>218</a></span><span class="kw">async fn </span>ensure_table_is_empty(table: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>TableProvider&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">let </span>session_ctx = SessionContext::new();
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="kw">let </span>exec_plan = table
-<a href=#221 id=221 data-nosnippet>221</a>        .scan(<span class="kw-2">&amp;</span>session_ctx.state(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>[], <span class="prelude-val">Some</span>(<span class="number">1</span>))
-<a href=#222 id=222 data-nosnippet>222</a>        .<span class="kw">await
-<a href=#223 id=223 data-nosnippet>223</a>        </span>.map_err(|e| Error::new(ErrorKind::Unexpected, <span class="macro">format!</span>(<span class="string">"Failed to scan table: {e}"</span>)))<span class="question-mark">?</span>;
-<a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">let </span>task_ctx = Arc::new(TaskContext::default());
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="kw">let </span>stream = exec_plan.execute(<span class="number">0</span>, task_ctx).map_err(|e| {
-<a href=#227 id=227 data-nosnippet>227</a>        Error::new(
-<a href=#228 id=228 data-nosnippet>228</a>            ErrorKind::Unexpected,
-<a href=#229 id=229 data-nosnippet>229</a>            <span class="macro">format!</span>(<span class="string">"Failed to execute scan: {e}"</span>),
-<a href=#230 id=230 data-nosnippet>230</a>        )
-<a href=#231 id=231 data-nosnippet>231</a>    })<span class="question-mark">?</span>;
-<a href=#232 id=232 data-nosnippet>232</a>
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">let </span>batches: Vec&lt;<span class="kw">_</span>&gt; = stream.collect().<span class="kw">await</span>;
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">let </span>has_data = batches
-<a href=#235 id=235 data-nosnippet>235</a>        .into_iter()
-<a href=#236 id=236 data-nosnippet>236</a>        .filter_map(|r| r.ok())
-<a href=#237 id=237 data-nosnippet>237</a>        .any(|batch| batch.num_rows() &gt; <span class="number">0</span>);
-<a href=#238 id=238 data-nosnippet>238</a>
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">if </span>has_data {
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#241 id=241 data-nosnippet>241</a>            ErrorKind::Unexpected,
-<a href=#242 id=242 data-nosnippet>242</a>            <span class="string">"register_table does not support tables with data."</span>,
-<a href=#243 id=243 data-nosnippet>243</a>        ));
-<a href=#244 id=244 data-nosnippet>244</a>    }
-<a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>    <span class="prelude-val">Ok</span>(())
-<a href=#247 id=247 data-nosnippet>247</a>}
-<a href=#248 id=248 data-nosnippet>248</a>
-<a href=#249 id=249 data-nosnippet>249</a><span class="attr">#[cfg(test)]
-<a href=#250 id=250 data-nosnippet>250</a></span><span class="kw">mod </span>tests {
-<a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">use </span>std::collections::HashMap;
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">use </span>std::sync::Arc;
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">use </span>datafusion::arrow::array::{Int32Array, StringArray};
-<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
-<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">use </span>datafusion::arrow::record_batch::RecordBatch;
-<a href=#257 id=257 data-nosnippet>257</a>    <span class="kw">use </span>datafusion::datasource::MemTable;
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="kw">use </span>iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-<a href=#259 id=259 data-nosnippet>259</a>    <span class="kw">use </span>iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">use </span>tempfile::TempDir;
-<a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">async fn </span>create_test_schema_provider() -&gt; (IcebergSchemaProvider, TempDir) {
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>warehouse_path = temp_dir.path().to_str().unwrap().to_string();
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>catalog = MemoryCatalogBuilder::default()
-<a href=#269 id=269 data-nosnippet>269</a>            .load(
-<a href=#270 id=270 data-nosnippet>270</a>                <span class="string">"memory"</span>,
-<a href=#271 id=271 data-nosnippet>271</a>                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
-<a href=#272 id=272 data-nosnippet>272</a>            )
-<a href=#273 id=273 data-nosnippet>273</a>            .<span class="kw">await
-<a href=#274 id=274 data-nosnippet>274</a>            </span>.unwrap();
-<a href=#275 id=275 data-nosnippet>275</a>
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_ns"</span>.to_string());
-<a href=#277 id=277 data-nosnippet>277</a>        catalog
-<a href=#278 id=278 data-nosnippet>278</a>            .create_namespace(<span class="kw-2">&amp;</span>namespace, HashMap::new())
-<a href=#279 id=279 data-nosnippet>279</a>            .<span class="kw">await
-<a href=#280 id=280 data-nosnippet>280</a>            </span>.unwrap();
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">fn </span>deregister_table(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; DFResult&lt;<span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>TableProvider&gt;&gt;&gt; {
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="comment">// Check if table exists
+<a href=#217 id=217 data-nosnippet>217</a>        </span><span class="kw">if </span>!<span class="self">self</span>.table_exist(name) {
+<a href=#218 id=218 data-nosnippet>218</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#219 id=219 data-nosnippet>219</a>        }
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span>catalog = <span class="self">self</span>.catalog.clone();
+<a href=#222 id=222 data-nosnippet>222</a>        <span class="kw">let </span>namespace = <span class="self">self</span>.namespace.clone();
+<a href=#223 id=223 data-nosnippet>223</a>        <span class="kw">let </span>tables = <span class="self">self</span>.tables.clone();
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="kw">let </span>table_name = name.to_string();
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a>        <span class="comment">// Use tokio's spawn_blocking to handle the async work on a blocking thread pool
+<a href=#227 id=227 data-nosnippet>227</a>        </span><span class="kw">let </span>result = tokio::task::spawn_blocking(<span class="kw">move </span>|| {
+<a href=#228 id=228 data-nosnippet>228</a>            <span class="kw">let </span>rt = tokio::runtime::Handle::current();
+<a href=#229 id=229 data-nosnippet>229</a>            rt.block_on(<span class="kw">async move </span>{
+<a href=#230 id=230 data-nosnippet>230</a>                <span class="kw">let </span>table_ident = TableIdent::new(namespace, table_name.clone());
+<a href=#231 id=231 data-nosnippet>231</a>
+<a href=#232 id=232 data-nosnippet>232</a>                <span class="comment">// Drop the table from the Iceberg catalog
+<a href=#233 id=233 data-nosnippet>233</a>                </span>catalog
+<a href=#234 id=234 data-nosnippet>234</a>                    .drop_table(<span class="kw-2">&amp;</span>table_ident)
+<a href=#235 id=235 data-nosnippet>235</a>                    .<span class="kw">await
+<a href=#236 id=236 data-nosnippet>236</a>                    </span>.map_err(to_datafusion_error)<span class="question-mark">?</span>;
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a>                <span class="comment">// Remove from local cache and return the removed provider
+<a href=#239 id=239 data-nosnippet>239</a>                </span><span class="kw">let </span>removed = tables
+<a href=#240 id=240 data-nosnippet>240</a>                    .remove(<span class="kw-2">&amp;</span>table_name)
+<a href=#241 id=241 data-nosnippet>241</a>                    .map(|(<span class="kw">_</span>, table)| table <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>TableProvider&gt;);
+<a href=#242 id=242 data-nosnippet>242</a>
+<a href=#243 id=243 data-nosnippet>243</a>                <span class="prelude-val">Ok</span>(removed)
+<a href=#244 id=244 data-nosnippet>244</a>            })
+<a href=#245 id=245 data-nosnippet>245</a>        });
+<a href=#246 id=246 data-nosnippet>246</a>
+<a href=#247 id=247 data-nosnippet>247</a>        futures::executor::block_on(result)
+<a href=#248 id=248 data-nosnippet>248</a>            .map_err(|e| DataFusionError::Execution(<span class="macro">format!</span>(<span class="string">"Failed to drop Iceberg table: {e}"</span>)))<span class="question-mark">?
+<a href=#249 id=249 data-nosnippet>249</a>    </span>}
+<a href=#250 id=250 data-nosnippet>250</a>}
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a><span class="doccomment">/// Verifies that a table provider contains no data by scanning with LIMIT 1.
+<a href=#253 id=253 data-nosnippet>253</a>/// Returns an error if the table has any rows.
+<a href=#254 id=254 data-nosnippet>254</a></span><span class="kw">async fn </span>ensure_table_is_empty(table: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>TableProvider&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">let </span>session_ctx = SessionContext::new();
+<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">let </span>exec_plan = table
+<a href=#257 id=257 data-nosnippet>257</a>        .scan(<span class="kw-2">&amp;</span>session_ctx.state(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>[], <span class="prelude-val">Some</span>(<span class="number">1</span>))
+<a href=#258 id=258 data-nosnippet>258</a>        .<span class="kw">await
+<a href=#259 id=259 data-nosnippet>259</a>        </span>.map_err(|e| Error::new(ErrorKind::Unexpected, <span class="macro">format!</span>(<span class="string">"Failed to scan table: {e}"</span>)))<span class="question-mark">?</span>;
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">let </span>task_ctx = Arc::new(TaskContext::default());
+<a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">let </span>stream = exec_plan.execute(<span class="number">0</span>, task_ctx).map_err(|e| {
+<a href=#263 id=263 data-nosnippet>263</a>        Error::new(
+<a href=#264 id=264 data-nosnippet>264</a>            ErrorKind::Unexpected,
+<a href=#265 id=265 data-nosnippet>265</a>            <span class="macro">format!</span>(<span class="string">"Failed to execute scan: {e}"</span>),
+<a href=#266 id=266 data-nosnippet>266</a>        )
+<a href=#267 id=267 data-nosnippet>267</a>    })<span class="question-mark">?</span>;
+<a href=#268 id=268 data-nosnippet>268</a>
+<a href=#269 id=269 data-nosnippet>269</a>    <span class="kw">let </span>batches: Vec&lt;<span class="kw">_</span>&gt; = stream.collect().<span class="kw">await</span>;
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">let </span>has_data = batches
+<a href=#271 id=271 data-nosnippet>271</a>        .into_iter()
+<a href=#272 id=272 data-nosnippet>272</a>        .filter_map(|r| r.ok())
+<a href=#273 id=273 data-nosnippet>273</a>        .any(|batch| batch.num_rows() &gt; <span class="number">0</span>);
+<a href=#274 id=274 data-nosnippet>274</a>
+<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">if </span>has_data {
+<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#277 id=277 data-nosnippet>277</a>            ErrorKind::Unexpected,
+<a href=#278 id=278 data-nosnippet>278</a>            <span class="string">"register_table does not support tables with data."</span>,
+<a href=#279 id=279 data-nosnippet>279</a>        ));
+<a href=#280 id=280 data-nosnippet>280</a>    }
 <a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">let </span>provider = IcebergSchemaProvider::try_new(Arc::new(catalog), namespace)
-<a href=#283 id=283 data-nosnippet>283</a>            .<span class="kw">await
-<a href=#284 id=284 data-nosnippet>284</a>            </span>.unwrap();
-<a href=#285 id=285 data-nosnippet>285</a>
-<a href=#286 id=286 data-nosnippet>286</a>        (provider, temp_dir)
-<a href=#287 id=287 data-nosnippet>287</a>    }
-<a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="attr">#[tokio::test]
-<a href=#290 id=290 data-nosnippet>290</a>    </span><span class="kw">async fn </span>test_register_table_with_data_fails() {
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
-<a href=#292 id=292 data-nosnippet>292</a>
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="comment">// Create a MemTable with data
-<a href=#294 id=294 data-nosnippet>294</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#295 id=295 data-nosnippet>295</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
-<a href=#296 id=296 data-nosnippet>296</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>),
-<a href=#297 id=297 data-nosnippet>297</a>        ]));
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span>batch = RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[
-<a href=#300 id=300 data-nosnippet>300</a>            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
-<a href=#301 id=301 data-nosnippet>301</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>])),
-<a href=#302 id=302 data-nosnippet>302</a>        ])
-<a href=#303 id=303 data-nosnippet>303</a>        .unwrap();
-<a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>mem_table = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[batch]]).unwrap();
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="comment">// Attempt to register the table with data - should fail
-<a href=#308 id=308 data-nosnippet>308</a>        </span><span class="kw">let </span>result = schema_provider.register_table(<span class="string">"test_table"</span>.to_string(), Arc::new(mem_table));
-<a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="macro">assert!</span>(result.is_err());
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>err = result.unwrap_err();
-<a href=#312 id=312 data-nosnippet>312</a>        <span class="macro">assert!</span>(
-<a href=#313 id=313 data-nosnippet>313</a>            err.to_string()
-<a href=#314 id=314 data-nosnippet>314</a>                .contains(<span class="string">"register_table does not support tables with data."</span>),
-<a href=#315 id=315 data-nosnippet>315</a>            <span class="string">"Expected error about tables with data, got: {err}"</span>,
-<a href=#316 id=316 data-nosnippet>316</a>        );
-<a href=#317 id=317 data-nosnippet>317</a>    }
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>    <span class="attr">#[tokio::test]
-<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">async fn </span>test_register_empty_table_succeeds() {
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="comment">// Create an empty MemTable (schema only, no data rows)
-<a href=#324 id=324 data-nosnippet>324</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#325 id=325 data-nosnippet>325</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
-<a href=#326 id=326 data-nosnippet>326</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>),
-<a href=#327 id=327 data-nosnippet>327</a>        ]));
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="prelude-val">Ok</span>(())
+<a href=#283 id=283 data-nosnippet>283</a>}
+<a href=#284 id=284 data-nosnippet>284</a>
+<a href=#285 id=285 data-nosnippet>285</a><span class="attr">#[cfg(test)]
+<a href=#286 id=286 data-nosnippet>286</a></span><span class="kw">mod </span>tests {
+<a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">use </span>std::collections::HashMap;
+<a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">use </span>std::sync::Arc;
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">use </span>datafusion::arrow::array::{Int32Array, StringArray};
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema <span class="kw">as </span>ArrowSchema};
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">use </span>datafusion::arrow::record_batch::RecordBatch;
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use </span>datafusion::datasource::MemTable;
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span>iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use </span>iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">use </span>tempfile::TempDir;
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#299 id=299 data-nosnippet>299</a>
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">async fn </span>create_test_schema_provider() -&gt; (IcebergSchemaProvider, TempDir) {
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>catalog = MemoryCatalogBuilder::default()
+<a href=#305 id=305 data-nosnippet>305</a>            .load(
+<a href=#306 id=306 data-nosnippet>306</a>                <span class="string">"memory"</span>,
+<a href=#307 id=307 data-nosnippet>307</a>                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+<a href=#308 id=308 data-nosnippet>308</a>            )
+<a href=#309 id=309 data-nosnippet>309</a>            .<span class="kw">await
+<a href=#310 id=310 data-nosnippet>310</a>            </span>.unwrap();
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>namespace = NamespaceIdent::new(<span class="string">"test_ns"</span>.to_string());
+<a href=#313 id=313 data-nosnippet>313</a>        catalog
+<a href=#314 id=314 data-nosnippet>314</a>            .create_namespace(<span class="kw-2">&amp;</span>namespace, HashMap::new())
+<a href=#315 id=315 data-nosnippet>315</a>            .<span class="kw">await
+<a href=#316 id=316 data-nosnippet>316</a>            </span>.unwrap();
+<a href=#317 id=317 data-nosnippet>317</a>
+<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw">let </span>provider = IcebergSchemaProvider::try_new(Arc::new(catalog), namespace)
+<a href=#319 id=319 data-nosnippet>319</a>            .<span class="kw">await
+<a href=#320 id=320 data-nosnippet>320</a>            </span>.unwrap();
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a>        (provider, temp_dir)
+<a href=#323 id=323 data-nosnippet>323</a>    }
+<a href=#324 id=324 data-nosnippet>324</a>
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="attr">#[tokio::test]
+<a href=#326 id=326 data-nosnippet>326</a>    </span><span class="kw">async fn </span>test_register_table_with_data_fails() {
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
 <a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="comment">// Create an empty batch (0 rows) - MemTable requires at least one partition
-<a href=#330 id=330 data-nosnippet>330</a>        </span><span class="kw">let </span>empty_batch = RecordBatch::new_empty(arrow_schema.clone());
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>mem_table = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch]]).unwrap();
-<a href=#332 id=332 data-nosnippet>332</a>
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="comment">// Attempt to register the empty table - should succeed
-<a href=#334 id=334 data-nosnippet>334</a>        </span><span class="kw">let </span>result = schema_provider.register_table(<span class="string">"empty_table"</span>.to_string(), Arc::new(mem_table));
-<a href=#335 id=335 data-nosnippet>335</a>
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="macro">assert!</span>(result.is_ok(), <span class="string">"Expected success, got: {result:?}"</span>);
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a>        <span class="comment">// Verify the table was registered
-<a href=#339 id=339 data-nosnippet>339</a>        </span><span class="macro">assert!</span>(schema_provider.table_exist(<span class="string">"empty_table"</span>));
-<a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="attr">#[tokio::test]
-<a href=#343 id=343 data-nosnippet>343</a>    </span><span class="kw">async fn </span>test_register_duplicate_table_fails() {
-<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
+<a href=#329 id=329 data-nosnippet>329</a>        <span class="comment">// Create a MemTable with data
+<a href=#330 id=330 data-nosnippet>330</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#331 id=331 data-nosnippet>331</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
+<a href=#332 id=332 data-nosnippet>332</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>),
+<a href=#333 id=333 data-nosnippet>333</a>        ]));
+<a href=#334 id=334 data-nosnippet>334</a>
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>batch = RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[
+<a href=#336 id=336 data-nosnippet>336</a>            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
+<a href=#337 id=337 data-nosnippet>337</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>])),
+<a href=#338 id=338 data-nosnippet>338</a>        ])
+<a href=#339 id=339 data-nosnippet>339</a>        .unwrap();
+<a href=#340 id=340 data-nosnippet>340</a>
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>mem_table = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[batch]]).unwrap();
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="comment">// Attempt to register the table with data - should fail
+<a href=#344 id=344 data-nosnippet>344</a>        </span><span class="kw">let </span>result = schema_provider.register_table(<span class="string">"test_table"</span>.to_string(), Arc::new(mem_table));
 <a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a>        <span class="comment">// Create empty MemTables
-<a href=#347 id=347 data-nosnippet>347</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[Field::new(
-<a href=#348 id=348 data-nosnippet>348</a>            <span class="string">"id"</span>,
-<a href=#349 id=349 data-nosnippet>349</a>            DataType::Int32,
-<a href=#350 id=350 data-nosnippet>350</a>            <span class="bool-val">false</span>,
-<a href=#351 id=351 data-nosnippet>351</a>        )]));
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">let </span>empty_batch1 = RecordBatch::new_empty(arrow_schema.clone());
-<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>empty_batch2 = RecordBatch::new_empty(arrow_schema.clone());
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">let </span>mem_table1 = MemTable::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch1]]).unwrap();
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>mem_table2 = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch2]]).unwrap();
-<a href=#357 id=357 data-nosnippet>357</a>
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="comment">// Register first table - should succeed
-<a href=#359 id=359 data-nosnippet>359</a>        </span><span class="kw">let </span>result1 = schema_provider.register_table(<span class="string">"dup_table"</span>.to_string(), Arc::new(mem_table1));
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="macro">assert!</span>(result1.is_ok());
-<a href=#361 id=361 data-nosnippet>361</a>
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="comment">// Register second table with same name - should fail
-<a href=#363 id=363 data-nosnippet>363</a>        </span><span class="kw">let </span>result2 = schema_provider.register_table(<span class="string">"dup_table"</span>.to_string(), Arc::new(mem_table2));
-<a href=#364 id=364 data-nosnippet>364</a>        <span class="macro">assert!</span>(result2.is_err());
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>err = result2.unwrap_err();
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="macro">assert!</span>(
-<a href=#367 id=367 data-nosnippet>367</a>            err.to_string().contains(<span class="string">"already exists"</span>),
-<a href=#368 id=368 data-nosnippet>368</a>            <span class="string">"Expected error about table already existing, got: {err}"</span>,
-<a href=#369 id=369 data-nosnippet>369</a>        );
-<a href=#370 id=370 data-nosnippet>370</a>    }
-<a href=#371 id=371 data-nosnippet>371</a>}</code></pre></div></section></main></body></html>
+<a href=#346 id=346 data-nosnippet>346</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">let </span>err = result.unwrap_err();
+<a href=#348 id=348 data-nosnippet>348</a>        <span class="macro">assert!</span>(
+<a href=#349 id=349 data-nosnippet>349</a>            err.to_string()
+<a href=#350 id=350 data-nosnippet>350</a>                .contains(<span class="string">"register_table does not support tables with data."</span>),
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="string">"Expected error about tables with data, got: {err}"</span>,
+<a href=#352 id=352 data-nosnippet>352</a>        );
+<a href=#353 id=353 data-nosnippet>353</a>    }
+<a href=#354 id=354 data-nosnippet>354</a>
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="attr">#[tokio::test]
+<a href=#356 id=356 data-nosnippet>356</a>    </span><span class="kw">async fn </span>test_register_empty_table_succeeds() {
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
+<a href=#358 id=358 data-nosnippet>358</a>
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="comment">// Create an empty MemTable (schema only, no data rows)
+<a href=#360 id=360 data-nosnippet>360</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#361 id=361 data-nosnippet>361</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
+<a href=#362 id=362 data-nosnippet>362</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>),
+<a href=#363 id=363 data-nosnippet>363</a>        ]));
+<a href=#364 id=364 data-nosnippet>364</a>
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="comment">// Create an empty batch (0 rows) - MemTable requires at least one partition
+<a href=#366 id=366 data-nosnippet>366</a>        </span><span class="kw">let </span>empty_batch = RecordBatch::new_empty(arrow_schema.clone());
+<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span>mem_table = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch]]).unwrap();
+<a href=#368 id=368 data-nosnippet>368</a>
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="comment">// Attempt to register the empty table - should succeed
+<a href=#370 id=370 data-nosnippet>370</a>        </span><span class="kw">let </span>result = schema_provider.register_table(<span class="string">"empty_table"</span>.to_string(), Arc::new(mem_table));
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>        <span class="macro">assert!</span>(result.is_ok(), <span class="string">"Expected success, got: {result:?}"</span>);
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="comment">// Verify the table was registered
+<a href=#375 id=375 data-nosnippet>375</a>        </span><span class="macro">assert!</span>(schema_provider.table_exist(<span class="string">"empty_table"</span>));
+<a href=#376 id=376 data-nosnippet>376</a>    }
+<a href=#377 id=377 data-nosnippet>377</a>
+<a href=#378 id=378 data-nosnippet>378</a>    <span class="attr">#[tokio::test]
+<a href=#379 id=379 data-nosnippet>379</a>    </span><span class="kw">async fn </span>test_register_duplicate_table_fails() {
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
+<a href=#381 id=381 data-nosnippet>381</a>
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="comment">// Create empty MemTables
+<a href=#383 id=383 data-nosnippet>383</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[Field::new(
+<a href=#384 id=384 data-nosnippet>384</a>            <span class="string">"id"</span>,
+<a href=#385 id=385 data-nosnippet>385</a>            DataType::Int32,
+<a href=#386 id=386 data-nosnippet>386</a>            <span class="bool-val">false</span>,
+<a href=#387 id=387 data-nosnippet>387</a>        )]));
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>empty_batch1 = RecordBatch::new_empty(arrow_schema.clone());
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw">let </span>empty_batch2 = RecordBatch::new_empty(arrow_schema.clone());
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>mem_table1 = MemTable::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch1]]).unwrap();
+<a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">let </span>mem_table2 = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch2]]).unwrap();
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>        <span class="comment">// Register first table - should succeed
+<a href=#395 id=395 data-nosnippet>395</a>        </span><span class="kw">let </span>result1 = schema_provider.register_table(<span class="string">"dup_table"</span>.to_string(), Arc::new(mem_table1));
+<a href=#396 id=396 data-nosnippet>396</a>        <span class="macro">assert!</span>(result1.is_ok());
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="comment">// Register second table with same name - should fail
+<a href=#399 id=399 data-nosnippet>399</a>        </span><span class="kw">let </span>result2 = schema_provider.register_table(<span class="string">"dup_table"</span>.to_string(), Arc::new(mem_table2));
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="macro">assert!</span>(result2.is_err());
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>err = result2.unwrap_err();
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="macro">assert!</span>(
+<a href=#403 id=403 data-nosnippet>403</a>            err.to_string().contains(<span class="string">"already exists"</span>),
+<a href=#404 id=404 data-nosnippet>404</a>            <span class="string">"Expected error about table already existing, got: {err}"</span>,
+<a href=#405 id=405 data-nosnippet>405</a>        );
+<a href=#406 id=406 data-nosnippet>406</a>    }
+<a href=#407 id=407 data-nosnippet>407</a>
+<a href=#408 id=408 data-nosnippet>408</a>    <span class="attr">#[tokio::test]
+<a href=#409 id=409 data-nosnippet>409</a>    </span><span class="kw">async fn </span>test_deregister_table_succeeds() {
+<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="comment">// Create and register an empty table
+<a href=#413 id=413 data-nosnippet>413</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[Field::new(
+<a href=#414 id=414 data-nosnippet>414</a>            <span class="string">"id"</span>,
+<a href=#415 id=415 data-nosnippet>415</a>            DataType::Int32,
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="bool-val">false</span>,
+<a href=#417 id=417 data-nosnippet>417</a>        )]));
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span>empty_batch = RecordBatch::new_empty(arrow_schema.clone());
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>mem_table = MemTable::try_new(arrow_schema, <span class="macro">vec!</span>[<span class="macro">vec!</span>[empty_batch]]).unwrap();
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="comment">// Register the table
+<a href=#423 id=423 data-nosnippet>423</a>        </span><span class="kw">let </span>result = schema_provider.register_table(<span class="string">"drop_me"</span>.to_string(), Arc::new(mem_table));
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="macro">assert!</span>(schema_provider.table_exist(<span class="string">"drop_me"</span>));
+<a href=#426 id=426 data-nosnippet>426</a>
+<a href=#427 id=427 data-nosnippet>427</a>        <span class="comment">// Deregister the table
+<a href=#428 id=428 data-nosnippet>428</a>        </span><span class="kw">let </span>result = schema_provider.deregister_table(<span class="string">"drop_me"</span>);
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="macro">assert!</span>(result.unwrap().is_some());
+<a href=#431 id=431 data-nosnippet>431</a>
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="comment">// Verify the table no longer exists
+<a href=#433 id=433 data-nosnippet>433</a>        </span><span class="macro">assert!</span>(!schema_provider.table_exist(<span class="string">"drop_me"</span>));
+<a href=#434 id=434 data-nosnippet>434</a>    }
+<a href=#435 id=435 data-nosnippet>435</a>
+<a href=#436 id=436 data-nosnippet>436</a>    <span class="attr">#[tokio::test]
+<a href=#437 id=437 data-nosnippet>437</a>    </span><span class="kw">async fn </span>test_deregister_nonexistent_table_returns_none() {
+<a href=#438 id=438 data-nosnippet>438</a>        <span class="kw">let </span>(schema_provider, _temp_dir) = create_test_schema_provider().<span class="kw">await</span>;
+<a href=#439 id=439 data-nosnippet>439</a>
+<a href=#440 id=440 data-nosnippet>440</a>        <span class="comment">// Attempt to deregister a table that doesn't exist
+<a href=#441 id=441 data-nosnippet>441</a>        </span><span class="kw">let </span>result = schema_provider.deregister_table(<span class="string">"nonexistent"</span>);
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#443 id=443 data-nosnippet>443</a>        <span class="macro">assert!</span>(result.unwrap().is_none());
+<a href=#444 id=444 data-nosnippet>444</a>    }
+<a href=#445 id=445 data-nosnippet>445</a>}</code></pre></div></section></main></body></html>
