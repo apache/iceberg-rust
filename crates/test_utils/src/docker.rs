@@ -79,6 +79,7 @@ impl DockerCompose {
             self.project_name.as_str(),
             "up",
             "-d",
+            "--build",
             "--wait",
             "--timeout",
             "1200000",
