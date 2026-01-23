@@ -72,15 +72,8 @@ async fn get_catalog() -> GlueCatalog {
     };
     let glue_socket_addr = SocketAddr::new(glue_catalog_ip, GLUE_CATALOG_PORT);
     let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
-    while !scan_port_addr(glue_socket_addr) {
-        info!("Waiting for 1s glue catalog to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
-    }
-
-    while !scan_port_addr(minio_socket_addr) {
-        info!("Waiting for 1s minio to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
-    }
+    wait_for_port(glue_socket_addr, "glue catalog").await;
+    wait_for_port(minio_socket_addr, "minio").await;
 
     let props = HashMap::from([
         (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
@@ -132,6 +125,20 @@ async fn get_catalog() -> GlueCatalog {
         .load("glue", glue_props)
         .await
         .unwrap()
+}
+
+async fn wait_for_port(addr: SocketAddr, name: &str) {
+    for attempt in 0..60 {
+        if scan_port_addr(addr) {
+            return;
+        }
+        info!(
+            "Waiting for 1s {name} to ready... (attempt {})",
+            attempt + 1
+        );
+        sleep(std::time::Duration::from_millis(1000)).await;
+    }
+    panic!("Timed out waiting for {name} at {addr}");
 }
 
 async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {
