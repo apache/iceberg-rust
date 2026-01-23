@@ -18,6 +18,7 @@
 //! This module contains Iceberg value types
 
 pub(crate) mod datum;
+pub(crate) mod decimal_utils;
 mod literal;
 mod map;
 mod primitive;
@@ -30,6 +31,7 @@ mod tests;
 
 // Re-export all public types
 pub use datum::Datum;
+pub use decimal_utils::Decimal;
 pub use literal::Literal;
 pub use map::Map;
 pub use primitive::PrimitiveLiteral;

@@ -22,15 +22,16 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use num_bigint::BigInt;
 use ordered_float::{Float, OrderedFloat};
-use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
 use serde::de::{self, MapAccess};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
+use super::decimal_utils::{
+    Decimal, decimal_from_i128_with_scale, decimal_from_str_exact, decimal_mantissa, decimal_scale,
+    i128_from_be_bytes, i128_to_be_bytes_min,
+};
 use super::literal::Literal;
 use super::primitive::PrimitiveLiteral;
 use super::serde::_serde::RawLiteral;
@@ -268,8 +269,8 @@ impl PartialOrd for Datum {
                     scale: other_scale,
                 },
             ) => {
-                let val = Decimal::from_i128_with_scale(*val, *scale);
-                let other_val = Decimal::from_i128_with_scale(*other_val, *other_scale);
+                let val = decimal_from_i128_with_scale(*val, *scale);
+                let other_val = decimal_from_i128_with_scale(*other_val, *other_scale);
                 val.partial_cmp(&other_val)
             }
             _ => None,
@@ -315,7 +316,7 @@ impl Display for Datum {
                 },
                 PrimitiveLiteral::Int128(val),
             ) => {
-                write!(f, "{}", Decimal::from_i128_with_scale(*val, *scale))
+                write!(f, "{}", decimal_from_i128_with_scale(*val, *scale))
             }
             (_, _) => {
                 unreachable!()
@@ -407,8 +408,7 @@ impl Datum {
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => {
-                let unscaled_value = BigInt::from_signed_bytes_be(bytes);
-                PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Can't convert bytes to i128: {bytes:?}"),
@@ -461,10 +461,8 @@ impl Datum {
                 };
 
                 // The primitive literal is unscaled value.
-                let unscaled_value = BigInt::from(*val);
-                // Convert into two's-complement byte representation of the BigInt
-                // in big-endian byte order.
-                let mut bytes = unscaled_value.to_signed_bytes_be();
+                // Convert into two's-complement byte representation in big-endian byte order.
+                let mut bytes = i128_to_be_bytes_min(*val);
                 // Truncate with required bytes to make sure.
                 bytes.truncate(required_bytes as usize);
 
@@ -993,22 +991,18 @@ impl Datum {
         }
     }
 
-    /// Creates decimal literal from string. See [`Decimal::from_str_exact`].
+    /// Creates decimal literal from string.
     ///
     /// Example:
     ///
     /// ```rust
     /// use iceberg::spec::Datum;
-    /// use itertools::assert_equal;
-    /// use rust_decimal::Decimal;
     /// let t = Datum::decimal_from_str("123.45").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "123.45");
     /// ```
     pub fn decimal_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let decimal = Decimal::from_str_exact(s.as_ref()).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse decimal.").with_source(e)
-        })?;
+        let decimal = decimal_from_str_exact(s.as_ref())?;
 
         Self::decimal(decimal)
     }
@@ -1019,21 +1013,19 @@ impl Datum {
     ///
     /// ```rust
     /// use iceberg::spec::Datum;
-    /// use rust_decimal::Decimal;
     ///
-    /// let t = Datum::decimal(Decimal::new(123, 2)).unwrap();
+    /// let t = Datum::decimal_from_str("1.23").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1.23");
     /// ```
-    pub fn decimal(value: impl Into<Decimal>) -> Result<Self> {
-        let decimal = value.into();
-        let scale = decimal.scale();
+    pub fn decimal(value: Decimal) -> Result<Self> {
+        let scale = decimal_scale(&value);
 
         let r#type = Type::decimal(MAX_DECIMAL_PRECISION, scale)?;
         if let Type::Primitive(p) = r#type {
             Ok(Self {
                 r#type: p,
-                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
+                literal: PrimitiveLiteral::Int128(decimal_mantissa(&value)),
             })
         } else {
             unreachable!("Decimal type must be primitive.")
@@ -1042,27 +1034,19 @@ impl Datum {
 
     /// Try to create a decimal literal from [`Decimal`] with precision.
     ///
-    /// Example:
-    ///
-    /// ```rust
-    /// use iceberg::spec::Datum;
-    /// use rust_decimal::Decimal;
-    ///
-    /// let t = Datum::decimal_with_precision(Decimal::new(123, 2), 30).unwrap();
-    ///
-    /// assert_eq!(&format!("{t}"), "1.23");
-    /// ```
-    pub fn decimal_with_precision(value: impl Into<Decimal>, precision: u32) -> Result<Self> {
-        let decimal = value.into();
-        let scale = decimal.scale();
+    /// This method allows specifying a custom precision for the decimal type,
+    /// which is useful when you need to control the storage requirements.
+    /// Use [`Datum::decimal`] if you want to use the maximum precision (38).
+    pub fn decimal_with_precision(value: Decimal, precision: u32) -> Result<Self> {
+        let scale = decimal_scale(&value);
+        let mantissa = decimal_mantissa(&value);
 
         let available_bytes = Type::decimal_required_bytes(precision)? as usize;
-        let unscaled_value = BigInt::from(decimal.mantissa());
-        let actual_bytes = unscaled_value.to_signed_bytes_be();
+        let actual_bytes = i128_to_be_bytes_min(mantissa);
         if actual_bytes.len() > available_bytes {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Decimal value {decimal} is too large for precision {precision}"),
+                format!("Decimal value {value} is too large for precision {precision}"),
             ));
         }
 
@@ -1070,7 +1054,7 @@ impl Datum {
         if let Type::Primitive(p) = r#type {
             Ok(Self {
                 r#type: p,
-                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
+                literal: PrimitiveLiteral::Int128(mantissa),
             })
         } else {
             unreachable!("Decimal type must be primitive.")
