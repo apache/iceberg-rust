@@ -24,7 +24,6 @@ use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, Result, TableUpdate};
 
-
 #[derive(Clone)]
 pub struct SchemaPartitionSpec {
     schema: Schema,
@@ -40,7 +39,9 @@ pub struct UpdateSchemaAction {
 impl UpdateSchemaAction {
     /// Creates a new [`UpdateSchemaAction`] with no schema set.
     pub fn new() -> Self {
-        UpdateSchemaAction { schema_with_partition_spec: None }
+        UpdateSchemaAction {
+            schema_with_partition_spec: None,
+        }
     }
 
     /// Sets the target schema for this action and returns the updated instance.
@@ -53,8 +54,15 @@ impl UpdateSchemaAction {
     /// # Returns
     ///
     /// The [`UpdateSchemaAction`] with the new schema set.
-    pub fn set_schema_with_partition_spec(mut self, schema: Schema, partition_spec: Option<UnboundPartitionSpec>) -> Self {
-        self.schema_with_partition_spec = Some(SchemaPartitionSpec { schema, partition_spec });
+    pub fn set_schema_with_partition_spec(
+        mut self,
+        schema: Schema,
+        partition_spec: Option<UnboundPartitionSpec>,
+    ) -> Self {
+        self.schema_with_partition_spec = Some(SchemaPartitionSpec {
+            schema,
+            partition_spec,
+        });
         self
     }
 }
@@ -69,16 +77,24 @@ impl Default for UpdateSchemaAction {
 impl TransactionAction for UpdateSchemaAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
-        if let Some(SchemaPartitionSpec { schema, partition_spec }) = self.schema_with_partition_spec.clone() {
+        if let Some(SchemaPartitionSpec {
+            schema,
+            partition_spec,
+        }) = self.schema_with_partition_spec.clone()
+        {
             let partition_spec = partition_spec.unwrap_or(UnboundPartitionSpec {
                 spec_id: None,
                 fields: vec![],
             });
 
             updates = vec![
-                TableUpdate::AddSchema { schema: schema.clone() },
+                TableUpdate::AddSchema {
+                    schema: schema.clone(),
+                },
                 TableUpdate::SetCurrentSchema { schema_id: -1 }, // Use -1 to reference the last added schema, since Iceberg may reassign the schema ID
-                TableUpdate::AddSpec { spec: partition_spec },
+                TableUpdate::AddSpec {
+                    spec: partition_spec,
+                },
                 TableUpdate::SetDefaultSpec { spec_id: -1 },
             ];
         } else {
