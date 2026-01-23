@@ -66,6 +66,7 @@ bytes = "1.10"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
 ctor = "0.2.8"
+dashmap = "6"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"

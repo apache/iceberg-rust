@@ -32,6 +32,7 @@ repository = "https://github.com/apache/iceberg-rust"
 # Dependencies commented out - this crate is excluded from workspace
 # anyhow = { workspace = true }
 # async-trait = { workspace = true }
+# dashmap = { workspace = true }
 # datafusion = { workspace = true }
 # futures = { workspace = true }
 # iceberg = { workspace = true }
