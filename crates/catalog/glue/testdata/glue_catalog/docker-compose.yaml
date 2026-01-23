@@ -24,7 +24,6 @@ services:
     environment:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
-      - MINIO_DOMAIN=minio
     command: [ "server", "/data", "--console-address", ":9001" ]
 
   mc:
