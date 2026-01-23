@@ -29,8 +29,8 @@ use iceberg::{
     Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, TableCreation, TableIdent,
 };
 use iceberg_catalog_glue::{
-    GlueCatalog, GlueCatalogBuilder, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
-    GLUE_CATALOG_PROP_URI, GLUE_CATALOG_PROP_WAREHOUSE,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
+    GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalog, GlueCatalogBuilder,
 };
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -274,9 +274,11 @@ async fn test_create_table() -> Result<()> {
     let result = catalog.create_table(&namespace, creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
-    assert!(result
-        .metadata_location()
-        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        result
+            .metadata_location()
+            .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-"))
+    );
     assert!(
         catalog
             .file_io()
