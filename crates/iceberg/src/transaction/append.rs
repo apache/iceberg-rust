@@ -101,14 +101,14 @@ impl TransactionAction for FastAppendAction {
         }
 
         snapshot_producer
-            .commit(FastAppendOperation, DefaultManifestProcess)
+            .commit(AppendOperation, DefaultManifestProcess)
             .await
     }
 }
 
-struct FastAppendOperation;
+pub(crate) struct AppendOperation;
 
-impl SnapshotProduceOperation for FastAppendOperation {
+impl SnapshotProduceOperation for AppendOperation {
     fn operation(&self) -> Operation {
         Operation::Append
     }
