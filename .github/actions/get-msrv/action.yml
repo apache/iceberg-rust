@@ -1,5 +1,3 @@
-#!/bin/bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,18 +14,22 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-set -e
+name: Get MSRV
+description: Get the Minimum Supported Rust Version from Cargo.toml
 
-start-master.sh -p 7077
-start-worker.sh spark://spark-iceberg:7077
+outputs:
+  msrv:
+    description: The MSRV extracted from Cargo.toml
+    value: ${{ steps.get-msrv.outputs.msrv }}
 
-echo "Starting provision"
-python3 ./provision.py
-
-echo "Finished provisioning"
-touch /tmp/ready
-
-echo "Print logs"
-tail -f $SPARK_HOME/logs/*
+runs:
+  using: composite
+  steps:
+    - name: Get MSRV
+      id: get-msrv
+      shell: bash
+      run: |
+        msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+        echo "msrv=$msrv" >> $GITHUB_OUTPUT
+        echo "MSRV is $msrv"

@@ -24,8 +24,20 @@ slt = "df_test/show_tables.slt"
 
 [[steps]]
 engine = "df"
+slt = "df_test/create_table.slt"
+
+[[steps]]
+engine = "df"
 slt = "df_test/insert_into.slt"
 
 [[steps]]
 engine = "df"
 slt = "df_test/namespaces.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/binary_predicate_pushdown.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/drop_table.slt"
