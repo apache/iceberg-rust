@@ -147,13 +147,14 @@ jobs:
           key: ${{ matrix.test-suite.name }}
 
       - name: Start Docker containers
+        if: matrix.test-suite.name == 'default'
         run: make docker-up
 
       - name: Run tests
         run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
 
       - name: Stop Docker containers
-        if: always()
+        if: always() && matrix.test-suite.name == 'default'
         run: make docker-down
 
   msrv:
