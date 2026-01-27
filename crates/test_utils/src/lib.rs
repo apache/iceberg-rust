@@ -59,35 +59,34 @@ mod common {
     /// Checks ICEBERG_TEST_MINIO_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_minio_endpoint() -> String {
         std::env::var(ENV_MINIO_ENDPOINT)
-            .unwrap_or_else(|_| format!("http://localhost:{}", DEFAULT_MINIO_PORT))
+            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_MINIO_PORT}"))
     }
 
     /// Returns the REST catalog endpoint.
     /// Checks ICEBERG_TEST_REST_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_rest_catalog_endpoint() -> String {
         std::env::var(ENV_REST_CATALOG_ENDPOINT)
-            .unwrap_or_else(|_| format!("http://localhost:{}", DEFAULT_REST_CATALOG_PORT))
+            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_REST_CATALOG_PORT}"))
     }
 
     /// Returns the HMS (Hive Metastore) endpoint.
     /// Checks ICEBERG_TEST_HMS_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_hms_endpoint() -> String {
-        std::env::var(ENV_HMS_ENDPOINT)
-            .unwrap_or_else(|_| format!("localhost:{}", DEFAULT_HMS_PORT))
+        std::env::var(ENV_HMS_ENDPOINT).unwrap_or_else(|_| format!("localhost:{DEFAULT_HMS_PORT}"))
     }
 
     /// Returns the Glue (Moto mock) endpoint.
     /// Checks ICEBERG_TEST_GLUE_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_glue_endpoint() -> String {
         std::env::var(ENV_GLUE_ENDPOINT)
-            .unwrap_or_else(|_| format!("http://localhost:{}", DEFAULT_GLUE_PORT))
+            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_GLUE_PORT}"))
     }
 
     /// Returns the GCS (fake-gcs-server) endpoint.
     /// Checks ICEBERG_TEST_GCS_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_gcs_endpoint() -> String {
         std::env::var(ENV_GCS_ENDPOINT)
-            .unwrap_or_else(|_| format!("http://localhost:{}", DEFAULT_GCS_PORT))
+            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_GCS_PORT}"))
     }
 
     /// Helper to clean up a namespace and its tables before a test runs.

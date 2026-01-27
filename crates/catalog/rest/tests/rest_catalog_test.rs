@@ -26,7 +26,9 @@ use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
-use iceberg_test_utils::{cleanup_namespace, get_rest_catalog_endpoint, normalize_test_name_with_parts, set_up};
+use iceberg_test_utils::{
+    cleanup_namespace, get_rest_catalog_endpoint, normalize_test_name_with_parts, set_up,
+};
 use tokio::time::sleep;
 use tracing::info;
 
@@ -39,13 +41,20 @@ async fn get_catalog() -> RestCatalog {
     let client = reqwest::Client::new();
     let mut retries = 0;
     while retries < 30 {
-        match client.get(format!("{}/v1/config", rest_endpoint)).send().await {
+        match client
+            .get(format!("{rest_endpoint}/v1/config"))
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 info!("REST catalog is ready at {}", rest_endpoint);
                 break;
             }
             _ => {
-                info!("Waiting for REST catalog to be ready... (attempt {})", retries + 1);
+                info!(
+                    "Waiting for REST catalog to be ready... (attempt {})",
+                    retries + 1
+                );
                 sleep(std::time::Duration::from_millis(1000)).await;
                 retries += 1;
             }
@@ -66,7 +75,9 @@ async fn test_get_non_exist_namespace() {
     let catalog = get_catalog().await;
 
     // Use unique namespace name to ensure it doesn't exist
-    let ns_ident = NamespaceIdent::new(normalize_test_name_with_parts!("test_get_non_exist_namespace"));
+    let ns_ident = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "test_get_non_exist_namespace"
+    ));
     // Clean up from any previous test runs
     cleanup_namespace(&catalog, &ns_ident).await;
 
@@ -82,8 +93,12 @@ async fn test_get_namespace() {
 
     // Use unique namespace to avoid conflicts with other tests
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios", &normalize_test_name_with_parts!("test_get_namespace")])
-            .unwrap(),
+        NamespaceIdent::from_strs([
+            "apple",
+            "ios",
+            &normalize_test_name_with_parts!("test_get_namespace"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
