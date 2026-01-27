@@ -95,6 +95,7 @@ impl DataFusionEngine {
 
         // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
+        Self::create_namespaced_table(&catalog).await?;
         Self::create_binary_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
@@ -132,6 +133,30 @@ impl DataFusionEngine {
                     .build(),
             )
             .await?;
+
+        Ok(())
+    }
+
+    async fn create_namespaced_table(catalog: &impl Catalog) -> anyhow::Result<()> {
+        let parent_ns = NamespaceIdent::new("parent_ns".to_string());
+        catalog.create_namespace(&parent_ns, HashMap::new()).await?;
+        let child_ns =
+            NamespaceIdent::from_vec(vec!["parent_ns".to_string(), "child_ns".to_string()])?;
+        catalog.create_namespace(&child_ns, HashMap::new()).await?;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        let table_creation = TableCreation::builder()
+            .name("t".to_string())
+            .schema(schema.clone())
+            .build();
+
+        catalog.create_table(&child_ns, table_creation).await?;
 
         Ok(())
     }
