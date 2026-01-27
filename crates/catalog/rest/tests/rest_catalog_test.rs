@@ -16,64 +16,45 @@
 // under the License.
 
 //! Integration tests for rest catalog.
+//!
+//! These tests assume Docker containers are started externally via `make docker-up`.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::RwLock;
 
-use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{normalize_test_name, set_up};
-use port_scanner::scan_port_addr;
+use iceberg_test_utils::{get_rest_catalog_endpoint, set_up};
 use tokio::time::sleep;
 use tracing::info;
-
-const REST_CATALOG_PORT: u16 = 8181;
-static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
-
-#[ctor]
-fn before_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(module_path!()),
-        format!("{}/testdata/rest_catalog", env!("CARGO_MANIFEST_DIR")),
-    );
-    docker_compose.up();
-    guard.replace(docker_compose);
-}
-
-#[dtor]
-fn after_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    guard.take();
-}
 
 async fn get_catalog() -> RestCatalog {
     set_up();
 
-    let rest_catalog_ip = {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        docker_compose.get_container_ip("rest")
-    };
+    let rest_endpoint = get_rest_catalog_endpoint();
 
-    let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
-    while !scan_port_addr(rest_socket_addr) {
-        info!("Waiting for 1s rest catalog to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
+    // Wait for catalog to be ready
+    let client = reqwest::Client::new();
+    let mut retries = 0;
+    while retries < 30 {
+        match client.get(format!("{}/v1/config", rest_endpoint)).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                info!("REST catalog is ready at {}", rest_endpoint);
+                break;
+            }
+            _ => {
+                info!("Waiting for REST catalog to be ready... (attempt {})", retries + 1);
+                sleep(std::time::Duration::from_millis(1000)).await;
+                retries += 1;
+            }
+        }
     }
 
     RestCatalogBuilder::default()
         .load(
             "rest",
-            HashMap::from([(
-                REST_CATALOG_PROP_URI.to_string(),
-                format!("http://{rest_socket_addr}"),
-            )]),
+            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_endpoint)]),
         )
         .await
         .unwrap()

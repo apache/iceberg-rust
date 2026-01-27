@@ -15,22 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, OnceLock};
-
-use ctor::dtor;
-use iceberg_integration_tests::{TestFixture, set_test_fixture};
+use iceberg_integration_tests::{GlobalTestFixture, get_test_fixture};
 
 pub mod shared_tests;
 
-static DOCKER_CONTAINERS: OnceLock<Arc<TestFixture>> = OnceLock::new();
-
-pub fn get_shared_containers() -> &'static Arc<TestFixture> {
-    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests")))
-}
-
-#[dtor]
-fn shutdown() {
-    if let Some(fixture) = DOCKER_CONTAINERS.get() {
-        fixture._docker_compose.down()
-    }
+/// Returns a reference to the shared test fixture.
+/// This assumes Docker containers are started externally via `make docker-up`.
+pub fn get_shared_containers() -> &'static GlobalTestFixture {
+    get_test_fixture()
 }

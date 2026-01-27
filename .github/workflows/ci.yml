@@ -172,6 +172,50 @@ jobs:
       - name: Test
         run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
 
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "false"
+          root-reserve-mb: 10240
+          temp-reserve-mb: 10240
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration
+
+      - name: Start test containers
+        run: make docker-up
+
+      - name: Run integration tests
+        run: make integration-test
+
+      - name: Show container logs on failure
+        if: failure()
+        run: make docker-logs || true
+
+      - name: Stop test containers
+        if: always()
+        run: make docker-down
+
   msrv:
     name: Verify MSRV
     runs-on: ubuntu-latest

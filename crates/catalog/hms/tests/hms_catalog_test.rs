@@ -16,12 +16,11 @@
 // under the License.
 
 //! Integration tests for hms catalog.
+//!
+//! These tests assume Docker containers are started externally via `make docker-up`.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::RwLock;
 
-use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
@@ -29,63 +28,20 @@ use iceberg_catalog_hms::{
     HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
     HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
 };
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{normalize_test_name, set_up};
-use port_scanner::scan_port_addr;
+use iceberg_test_utils::{get_hms_endpoint, get_minio_endpoint, set_up};
 use tokio::time::sleep;
 use tracing::info;
 
-const HMS_CATALOG_PORT: u16 = 9083;
-const MINIO_PORT: u16 = 9000;
-static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 type Result<T> = std::result::Result<T, iceberg::Error>;
-
-#[ctor]
-fn before_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(module_path!()),
-        format!("{}/testdata/hms_catalog", env!("CARGO_MANIFEST_DIR")),
-    );
-    docker_compose.up();
-    guard.replace(docker_compose);
-}
-
-#[dtor]
-fn after_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    guard.take();
-}
 
 async fn get_catalog() -> HmsCatalog {
     set_up();
 
-    let (hms_catalog_ip, minio_ip) = {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        (
-            docker_compose.get_container_ip("hive-metastore"),
-            docker_compose.get_container_ip("minio"),
-        )
-    };
-    let hms_socket_addr = SocketAddr::new(hms_catalog_ip, HMS_CATALOG_PORT);
-    let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
-    while !scan_port_addr(hms_socket_addr) {
-        info!("scan hms_socket_addr {} check", hms_socket_addr);
-        info!("Waiting for 1s hms catalog to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
-    }
-
-    while !scan_port_addr(minio_socket_addr) {
-        info!("Waiting for 1s minio to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
-    }
+    let hms_endpoint = get_hms_endpoint();
+    let minio_endpoint = get_minio_endpoint();
 
     let props = HashMap::from([
-        (
-            HMS_CATALOG_PROP_URI.to_string(),
-            hms_socket_addr.to_string(),
-        ),
+        (HMS_CATALOG_PROP_URI.to_string(), hms_endpoint),
         (
             HMS_CATALOG_PROP_THRIFT_TRANSPORT.to_string(),
             THRIFT_TRANSPORT_BUFFERED.to_string(),
@@ -94,10 +50,7 @@ async fn get_catalog() -> HmsCatalog {
             HMS_CATALOG_PROP_WAREHOUSE.to_string(),
             "s3a://warehouse/hive".to_string(),
         ),
-        (
-            S3_ENDPOINT.to_string(),
-            format!("http://{minio_socket_addr}"),
-        ),
+        (S3_ENDPOINT.to_string(), minio_endpoint),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
