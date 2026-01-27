@@ -144,27 +144,51 @@ pub(crate) struct DeleteFileContext {
 
 impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
     fn from(ctx: &DeleteFileContext) -> Self {
+        let data_file = &ctx.manifest_entry.data_file;
         FileScanTaskDeleteFile {
             file_path: ctx.manifest_entry.file_path().to_string(),
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
-            equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
+            equality_ids: data_file.equality_ids.clone(),
+            // Deletion vector fields from DataFile
+            referenced_data_file: data_file.referenced_data_file.clone(),
+            content_offset: data_file.content_offset,
+            content_size_in_bytes: data_file.content_size_in_bytes,
         }
     }
 }
 
-/// A task to scan part of file.
+/// A task to scan part of a delete file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
 
-    /// delete file type
+    /// Delete file type (PositionDeletes or EqualityDeletes)
     pub file_type: DataContentType,
 
-    /// partition id
+    /// Partition spec id
     pub partition_spec_id: i32,
 
-    /// equality ids for equality deletes (null for anything other than equality-deletes)
+    /// Equality ids for equality deletes (None for positional deletes and deletion vectors)
     pub equality_ids: Option<Vec<i32>>,
+
+    /// Referenced data file for deletion vectors.
+    /// When set along with content_offset and content_size_in_bytes, indicates this is a deletion vector.
+    pub referenced_data_file: Option<String>,
+
+    /// Content offset in the Puffin file for deletion vectors.
+    pub content_offset: Option<i64>,
+
+    /// Content size in bytes for deletion vectors.
+    pub content_size_in_bytes: Option<i64>,
+}
+
+impl FileScanTaskDeleteFile {
+    /// Returns true if this delete file is a deletion vector stored in a Puffin file.
+    ///
+    /// Deletion vectors are identified by having both content_offset and referenced_data_file set.
+    pub fn is_deletion_vector(&self) -> bool {
+        self.content_offset.is_some() && self.referenced_data_file.is_some()
+    }
 }

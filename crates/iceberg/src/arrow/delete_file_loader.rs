@@ -50,6 +50,12 @@ impl BasicDeleteFileLoader {
     pub fn new(file_io: FileIO) -> Self {
         BasicDeleteFileLoader { file_io }
     }
+
+    /// Returns a reference to the FileIO used by this loader.
+    pub fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
     /// Loads a RecordBatchStream for a given datafile.
     pub(crate) async fn parquet_to_batch_stream(
         &self,
