@@ -112,20 +112,20 @@ impl TryFrom<&StorageConfig> for GcsConfig {
             cfg.disable_config_load = true;
         }
 
-        if let Some(allow_anonymous) = props.get(GCS_ALLOW_ANONYMOUS) {
-            if is_truthy(allow_anonymous.to_lowercase().as_str()) {
-                cfg.allow_anonymous = true;
-            }
+        if let Some(allow_anonymous) = props.get(GCS_ALLOW_ANONYMOUS)
+            && is_truthy(allow_anonymous.to_lowercase().as_str())
+        {
+            cfg.allow_anonymous = true;
         }
-        if let Some(disable_vm_metadata) = props.get(GCS_DISABLE_VM_METADATA) {
-            if is_truthy(disable_vm_metadata.to_lowercase().as_str()) {
-                cfg.disable_vm_metadata = true;
-            }
+        if let Some(disable_vm_metadata) = props.get(GCS_DISABLE_VM_METADATA)
+            && is_truthy(disable_vm_metadata.to_lowercase().as_str())
+        {
+            cfg.disable_vm_metadata = true;
         }
-        if let Some(disable_config_load) = props.get(GCS_DISABLE_CONFIG_LOAD) {
-            if is_truthy(disable_config_load.to_lowercase().as_str()) {
-                cfg.disable_config_load = true;
-            }
+        if let Some(disable_config_load) = props.get(GCS_DISABLE_CONFIG_LOAD)
+            && is_truthy(disable_config_load.to_lowercase().as_str())
+        {
+            cfg.disable_config_load = true;
         }
 
         Ok(cfg)

@@ -197,20 +197,20 @@ impl TryFrom<&StorageConfig> for S3Config {
             }
         }
 
-        if let Some(allow_anonymous) = props.get(S3_ALLOW_ANONYMOUS) {
-            if is_truthy(allow_anonymous.to_lowercase().as_str()) {
-                cfg.allow_anonymous = true;
-            }
+        if let Some(allow_anonymous) = props.get(S3_ALLOW_ANONYMOUS)
+            && is_truthy(allow_anonymous.to_lowercase().as_str())
+        {
+            cfg.allow_anonymous = true;
         }
-        if let Some(disable_ec2_metadata) = props.get(S3_DISABLE_EC2_METADATA) {
-            if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
-                cfg.disable_ec2_metadata = true;
-            }
+        if let Some(disable_ec2_metadata) = props.get(S3_DISABLE_EC2_METADATA)
+            && is_truthy(disable_ec2_metadata.to_lowercase().as_str())
+        {
+            cfg.disable_ec2_metadata = true;
         }
-        if let Some(disable_config_load) = props.get(S3_DISABLE_CONFIG_LOAD) {
-            if is_truthy(disable_config_load.to_lowercase().as_str()) {
-                cfg.disable_config_load = true;
-            }
+        if let Some(disable_config_load) = props.get(S3_DISABLE_CONFIG_LOAD)
+            && is_truthy(disable_config_load.to_lowercase().as_str())
+        {
+            cfg.disable_config_load = true;
         }
 
         Ok(cfg)
