@@ -936,6 +936,7 @@ mod tests {
             project_field_ids: vec![2, 3],
             predicate: None,
             deletes: vec![pos_del, eq_del],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
