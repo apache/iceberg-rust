@@ -70,7 +70,9 @@ mod config;
 mod file_io;
 mod storage;
 
+pub use config::*;
 pub use file_io::*;
+pub use storage::{Storage, StorageFactory};
 pub(crate) mod object_cache;
 
 #[cfg(feature = "storage-azdls")]
@@ -86,8 +88,6 @@ mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
 
-pub use config::*;
-pub use storage::{Storage, StorageFactory};
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;
 #[cfg(feature = "storage-fs")]
