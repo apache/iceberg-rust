@@ -196,14 +196,22 @@ impl SchemaBuilder {
                 }
 
                 Type::Struct(nested) => {
+                    // add an accessor for the struct itself (for null checks)
+                    let struct_accessor =
+                        Arc::new(StructAccessor::new_complex(pos, field.field_type.as_ref()));
+                    map.insert(field.id, struct_accessor);
+
                     // add accessors for nested fields
                     for (field_id, accessor) in Self::build_accessors_nested(nested.fields()) {
                         let new_accessor = Arc::new(StructAccessor::wrap(pos, accessor));
                         map.insert(field_id, new_accessor.clone());
                     }
                 }
-                _ => {
-                    // Accessors don't get built for Map or List types
+                Type::List(_) | Type::Map(_) => {
+                    // add an accessor for complex types (for null checks)
+                    let accessor =
+                        Arc::new(StructAccessor::new_complex(pos, field.field_type.as_ref()));
+                    map.insert(field.id, accessor);
                 }
             }
         }
@@ -220,6 +228,11 @@ impl SchemaBuilder {
                     results.push((field.id, accessor));
                 }
                 Type::Struct(nested) => {
+                    // add an accessor for the struct itself (for null checks)
+                    let struct_accessor =
+                        Box::new(StructAccessor::new_complex(pos, field.field_type.as_ref()));
+                    results.push((field.id, struct_accessor));
+
                     let nested_accessors = Self::build_accessors_nested(nested.fields());
 
                     let wrapped_nested_accessors =
@@ -230,8 +243,11 @@ impl SchemaBuilder {
 
                     results.extend(wrapped_nested_accessors);
                 }
-                _ => {
-                    // Accessors don't get built for Map or List types
+                Type::List(_) | Type::Map(_) => {
+                    // add an accessor for complex types (for null checks)
+                    let accessor =
+                        Box::new(StructAccessor::new_complex(pos, field.field_type.as_ref()));
+                    results.push((field.id, accessor));
                 }
             }
         }
