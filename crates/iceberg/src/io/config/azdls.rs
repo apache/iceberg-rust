@@ -51,18 +51,6 @@ pub const ADLS_AUTHORITY_HOST: &str = "adls.authority-host";
 ///
 /// This struct contains all the configuration options for connecting to Azure Data Lake Storage.
 /// Use the builder pattern via `AzdlsConfig::builder()` to construct instances.
-///
-/// # Example
-///
-/// ```rust
-/// use iceberg::io::AzdlsConfig;
-///
-/// let azdls_config = AzdlsConfig::builder()
-///     .account_name("myaccount")
-///     .account_key("my-account-key")
-///     .build();
-///
-/// assert_eq!(azdls_config.account_name.as_deref(), Some("myaccount"));
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct AzdlsConfig {

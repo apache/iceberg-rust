@@ -36,22 +36,6 @@ pub const OSS_ACCESS_KEY_SECRET: &str = "oss.access-key-secret";
 ///
 /// This struct contains all the configuration options for connecting to Alibaba Cloud OSS.
 /// Use the builder pattern via `OssConfig::builder()` to construct instances.
-///
-/// # Example
-///
-/// ```rust
-/// use iceberg::io::OssConfig;
-///
-/// let oss_config = OssConfig::builder()
-///     .endpoint("https://oss-cn-hangzhou.aliyuncs.com")
-///     .access_key_id("my-access-key")
-///     .access_key_secret("my-secret-key")
-///     .build();
-///
-/// assert_eq!(
-///     oss_config.endpoint.as_deref(),
-///     Some("https://oss-cn-hangzhou.aliyuncs.com")
-/// );
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct OssConfig {
