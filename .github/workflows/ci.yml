@@ -122,14 +122,14 @@ jobs:
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
-  unit:
+  tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         test-suite:
           - { name: "default", args: "--all-targets --all-features --workspace" }
           - { name: "doc", args: "--doc --all-features --workspace" }
-    name: Unit Tests (${{ matrix.test-suite.name }})
+    name: Tests (${{ matrix.test-suite.name }})
     steps:
       - uses: actions/checkout@v6
 
@@ -146,30 +146,15 @@ jobs:
         with:
           key: ${{ matrix.test-suite.name }}
 
-      - name: Test
-        run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
-
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: integration
+      - name: Start Docker containers
+        run: make docker-up
 
       - name: Run tests
-        run: make test
+        run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+
+      - name: Stop Docker containers
+        if: always()
+        run: make docker-down
 
   msrv:
     name: Verify MSRV
