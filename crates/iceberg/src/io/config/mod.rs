@@ -30,19 +30,17 @@
 //! - [`OssConfig`]: Alibaba Cloud OSS specific configuration
 //! - [`AzdlsConfig`]: Azure Data Lake Storage specific configuration
 
-// TODO Add specific configs
-// mod azdls;
-// mod gcs;
-// mod oss;
-// mod s3;
+mod azdls;
+mod gcs;
+mod oss;
+mod s3;
 
 use std::collections::HashMap;
 
-// TODO Add specific configs
-// pub use azdls::*;
-// pub use gcs::*;
-// pub use oss::*;
-// pub use s3::*;
+pub use azdls::*;
+pub use gcs::*;
+pub use oss::*;
+pub use s3::*;
 use serde::{Deserialize, Serialize};
 
 /// Configuration properties for storage backends.
