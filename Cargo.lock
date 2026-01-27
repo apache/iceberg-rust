@@ -3595,6 +3595,7 @@ dependencies = [
 name = "iceberg_test_utils"
 version = "0.8.0"
 dependencies = [
+ "iceberg",
  "tracing",
  "tracing-subscriber",
 ]

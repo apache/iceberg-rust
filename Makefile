@@ -55,7 +55,8 @@ doc-test:
 unit-test: doc-test
 	cargo test --no-fail-fast --lib --all-features --workspace
 
-test: doc-test
+test: docker-up
+	@trap '$(MAKE) docker-down' EXIT; \
 	cargo test --no-fail-fast --all-targets --all-features --workspace
 
 clean:
@@ -76,12 +77,3 @@ docker-down:
 
 docker-logs:
 	docker compose -f dev/docker-compose.yaml logs -f
-
-# Integration tests (requires docker containers to be running)
-integration-test: docker-up
-	cargo test --no-fail-fast --all-features -p iceberg-integration-tests
-	cargo test --no-fail-fast --all-features -p iceberg-catalog-rest --test '*'
-	cargo test --no-fail-fast --all-features -p iceberg-catalog-hms --test '*'
-	cargo test --no-fail-fast --all-features -p iceberg-catalog-glue --test '*'
-	cargo test --no-fail-fast --features storage-s3 -p iceberg --test file_io_s3_test
-	cargo test --no-fail-fast --features storage-gcs -p iceberg --test file_io_gcs_test

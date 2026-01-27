@@ -18,6 +18,7 @@
 //! Integration tests for FileIO S3.
 //!
 //! These tests assume Docker containers are started externally via `make docker-up`.
+//! Each test uses unique file paths based on module path to avoid conflicts.
 #[cfg(all(test, feature = "storage-s3"))]
 mod tests {
     use std::sync::Arc;
@@ -27,7 +28,7 @@ mod tests {
         CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
         S3_SECRET_ACCESS_KEY,
     };
-    use iceberg_test_utils::{get_minio_endpoint, set_up};
+    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
     use reqwest::Client;
 
@@ -57,23 +58,35 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_s3_output() {
         let file_io = get_file_io().await;
-        assert!(!file_io.exists("s3://bucket1/test_output").await.unwrap());
-        let output_file = file_io.new_output("s3://bucket1/test_output").unwrap();
+        // Use unique file path based on module path to avoid conflicts
+        let output_path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_output")
+        );
+        // Clean up from any previous test runs
+        let _ = file_io.delete(&output_path).await;
+        assert!(!file_io.exists(&output_path).await.unwrap());
+        let output_file = file_io.new_output(&output_path).unwrap();
         {
             output_file.write("123".into()).await.unwrap();
         }
-        assert!(file_io.exists("s3://bucket1/test_output").await.unwrap());
+        assert!(file_io.exists(&output_path).await.unwrap());
     }
 
     #[tokio::test]
     async fn test_file_io_s3_input() {
         let file_io = get_file_io().await;
-        let output_file = file_io.new_output("s3://bucket1/test_input").unwrap();
+        // Use unique file path based on module path to avoid conflicts
+        let file_path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_input")
+        );
+        let output_file = file_io.new_output(&file_path).unwrap();
         {
             output_file.write("test_input".into()).await.unwrap();
         }
 
-        let input_file = file_io.new_input("s3://bucket1/test_input").unwrap();
+        let input_file = file_io.new_input(&file_path).unwrap();
 
         {
             let buffer = input_file.read().await.unwrap();

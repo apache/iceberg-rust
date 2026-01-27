@@ -31,6 +31,8 @@ pub use common::*;
 mod common {
     use std::sync::Once;
 
+    use iceberg::{Catalog, NamespaceIdent};
+
     static INIT: Once = Once::new();
     pub fn set_up() {
         INIT.call_once(tracing_subscriber::fmt::init);
@@ -86,5 +88,36 @@ mod common {
     pub fn get_gcs_endpoint() -> String {
         std::env::var(ENV_GCS_ENDPOINT)
             .unwrap_or_else(|_| format!("http://localhost:{}", DEFAULT_GCS_PORT))
+    }
+
+    /// Helper to clean up a namespace and its tables before a test runs.
+    /// This handles the case where previous test runs left data in the persistent database.
+    pub async fn cleanup_namespace<C: Catalog>(catalog: &C, ns: &NamespaceIdent) {
+        // Try to drop all tables in the namespace first
+        if let Ok(tables) = catalog.list_tables(ns).await {
+            for table in tables {
+                let _ = catalog.drop_table(&table).await;
+            }
+        }
+        // Then try to drop the namespace itself
+        let _ = catalog.drop_namespace(ns).await;
+    }
+
+    /// Macro to generate a normalized test name with module path prefix.
+    /// Takes one or more string parts and joins them with the module path.
+    ///
+    /// Example:
+    /// ```ignore
+    /// // Returns something like "rest_catalog_test__test_create_table"
+    /// let name = normalize_test_name_with_parts!("test_create_table");
+    ///
+    /// // Returns something like "rest_catalog_test__apple__ios"
+    /// let name = normalize_test_name_with_parts!("apple", "ios");
+    /// ```
+    #[macro_export]
+    macro_rules! normalize_test_name_with_parts {
+        ($($part:expr),+) => {
+            $crate::normalize_test_name([module_path!(), $($part),+].join("_"))
+        };
     }
 }

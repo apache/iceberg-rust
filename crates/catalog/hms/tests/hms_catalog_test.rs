@@ -18,6 +18,7 @@
 //! Integration tests for hms catalog.
 //!
 //! These tests assume Docker containers are started externally via `make docker-up`.
+//! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
 
@@ -28,7 +29,7 @@ use iceberg_catalog_hms::{
     HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
     HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
 };
-use iceberg_test_utils::{get_hms_endpoint, get_minio_endpoint, set_up};
+use iceberg_test_utils::{cleanup_namespace, get_hms_endpoint, get_minio_endpoint, normalize_test_name_with_parts, set_up};
 use tokio::time::sleep;
 use tracing::info;
 
@@ -110,7 +111,10 @@ fn set_table_creation(location: Option<String>, name: impl ToString) -> Result<T
 async fn test_rename_table() -> Result<()> {
     let catalog = get_catalog().await;
     let creation: TableCreation = set_table_creation(None, "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
+    // Use unique namespace to avoid conflicts
+    let namespace = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_rename_table")));
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, namespace.name()).await;
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let table: iceberg::table::Table = catalog.create_table(namespace.name(), creation).await?;
@@ -130,7 +134,9 @@ async fn test_rename_table() -> Result<()> {
 async fn test_table_exists() -> Result<()> {
     let catalog = get_catalog().await;
     let creation = set_table_creation(None, "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
+    // Use unique namespace to avoid conflicts
+    let namespace = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_table_exists")));
+    cleanup_namespace(&catalog, namespace.name()).await;
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let table = catalog.create_table(namespace.name(), creation).await?;
@@ -146,7 +152,9 @@ async fn test_table_exists() -> Result<()> {
 async fn test_drop_table() -> Result<()> {
     let catalog = get_catalog().await;
     let creation = set_table_creation(None, "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
+    // Use unique namespace to avoid conflicts
+    let namespace = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_drop_table")));
+    cleanup_namespace(&catalog, namespace.name()).await;
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let table = catalog.create_table(namespace.name(), creation).await?;
@@ -164,7 +172,9 @@ async fn test_drop_table() -> Result<()> {
 async fn test_load_table() -> Result<()> {
     let catalog = get_catalog().await;
     let creation = set_table_creation(None, "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
+    // Use unique namespace to avoid conflicts
+    let namespace = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_load_table")));
+    cleanup_namespace(&catalog, namespace.name()).await;
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let expected = catalog.create_table(namespace.name(), creation).await?;
@@ -188,7 +198,9 @@ async fn test_create_table() -> Result<()> {
     let catalog = get_catalog().await;
     // inject custom location, ignore the namespace prefix
     let creation = set_table_creation(Some("s3a://warehouse/hive".into()), "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("test_create_table".into()));
+    // Use unique namespace to avoid conflicts
+    let namespace = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_create_table")));
+    cleanup_namespace(&catalog, namespace.name()).await;
     set_test_namespace(&catalog, namespace.name()).await?;
 
     let result = catalog.create_table(namespace.name(), creation).await?;
@@ -212,9 +224,12 @@ async fn test_create_table() -> Result<()> {
 #[tokio::test]
 async fn test_list_tables() -> Result<()> {
     let catalog = get_catalog().await;
-    let ns = Namespace::new(NamespaceIdent::new("test_list_tables".into()));
-    let result = catalog.list_tables(ns.name()).await?;
+    // Use unique namespace to avoid conflicts
+    let ns = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_list_tables")));
+    // Clean up and create namespace, then verify it's empty
+    cleanup_namespace(&catalog, ns.name()).await;
     set_test_namespace(&catalog, ns.name()).await?;
+    let result = catalog.list_tables(ns.name()).await?;
 
     assert_eq!(result, vec![]);
 
@@ -264,10 +279,9 @@ async fn test_create_namespace() -> Result<()> {
         ("key1".to_string(), "value1".to_string()),
     ]);
 
-    let ns = Namespace::with_properties(
-        NamespaceIdent::new("test_create_namespace".into()),
-        properties.clone(),
-    );
+    // Use unique namespace to avoid conflicts
+    let ns = Namespace::with_properties(NamespaceIdent::new(normalize_test_name_with_parts!("test_create_namespace")), properties.clone());
+    cleanup_namespace(&catalog, ns.name()).await;
 
     let result = catalog.create_namespace(ns.name(), properties).await?;
 
@@ -308,7 +322,9 @@ async fn test_namespace_exists() -> Result<()> {
     let catalog = get_catalog().await;
 
     let ns_exists = Namespace::new(NamespaceIdent::new("default".into()));
-    let ns_not_exists = Namespace::new(NamespaceIdent::new("test_namespace_exists".into()));
+    // Use unique namespace to ensure it doesn't exist
+    let ns_not_exists = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_namespace_exists")));
+    cleanup_namespace(&catalog, ns_not_exists.name()).await;
 
     let result_exists = catalog.namespace_exists(ns_exists.name()).await?;
     let result_not_exists = catalog.namespace_exists(ns_not_exists.name()).await?;
@@ -323,7 +339,9 @@ async fn test_namespace_exists() -> Result<()> {
 async fn test_update_namespace() -> Result<()> {
     let catalog = get_catalog().await;
 
-    let ns = NamespaceIdent::new("test_update_namespace".into());
+    // Use unique namespace to avoid conflicts
+    let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_update_namespace"));
+    cleanup_namespace(&catalog, &ns).await;
     set_test_namespace(&catalog, &ns).await?;
     let properties = HashMap::from([("comment".to_string(), "my_update".to_string())]);
 
@@ -343,7 +361,9 @@ async fn test_update_namespace() -> Result<()> {
 async fn test_drop_namespace() -> Result<()> {
     let catalog = get_catalog().await;
 
-    let ns = Namespace::new(NamespaceIdent::new("delete_me".into()));
+    // Use unique namespace to avoid conflicts
+    let ns = Namespace::new(NamespaceIdent::new(normalize_test_name_with_parts!("test_drop_namespace")));
+    cleanup_namespace(&catalog, ns.name()).await;
 
     catalog.create_namespace(ns.name(), HashMap::new()).await?;
 
