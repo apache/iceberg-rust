@@ -32,7 +32,7 @@ use crate::{Error, Result};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
-/// Enum for Schema serialization/deserializaion
+/// Enum for Schema serialization/deserialization
 pub(super) enum SchemaEnum {
     V2(SchemaV2),
     V1(SchemaV1),
@@ -61,7 +61,7 @@ pub(crate) struct SchemaV1 {
     pub fields: StructType,
 }
 
-/// Helper to serialize/deserializa Schema
+/// Helper to serialize/deserialize Schema
 impl TryFrom<SchemaEnum> for Schema {
     type Error = Error;
     fn try_from(value: SchemaEnum) -> Result<Self> {
