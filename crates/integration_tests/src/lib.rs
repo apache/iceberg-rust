@@ -20,19 +20,7 @@ use std::sync::OnceLock;
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{
-    get_minio_endpoint, get_rest_catalog_endpoint, normalize_test_name, set_up,
-};
-
-const REST_CATALOG_PORT: u16 = 8181;
-
-/// Test fixture that manages Docker containers.
-/// This is kept for backward compatibility but deprecated in favor of GlobalTestFixture.
-pub struct TestFixture {
-    pub _docker_compose: DockerCompose,
-    pub catalog_config: HashMap<String, String>,
-}
+use iceberg_test_utils::{get_minio_endpoint, get_rest_catalog_endpoint, set_up};
 
 /// Global test fixture that uses environment-based configuration.
 /// This assumes Docker containers are started externally (e.g., via `make docker-up`).
@@ -67,40 +55,4 @@ impl GlobalTestFixture {
 /// This fixture assumes Docker containers are started externally.
 pub fn get_test_fixture() -> &'static GlobalTestFixture {
     GLOBAL_FIXTURE.get_or_init(GlobalTestFixture::from_env)
-}
-
-/// Legacy function to create a test fixture with Docker container management.
-/// Deprecated: prefer using `get_test_fixture()` with externally managed containers.
-pub fn set_test_fixture(func: &str) -> TestFixture {
-    set_up();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{func}", module_path!())),
-        format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
-    );
-
-    // Stop any containers from previous runs and start new ones
-    docker_compose.down();
-    docker_compose.up();
-
-    let rest_catalog_ip = docker_compose.get_container_ip("rest");
-    let minio_ip = docker_compose.get_container_ip("minio");
-
-    let catalog_config = HashMap::from([
-        (
-            REST_CATALOG_PROP_URI.to_string(),
-            format!("http://{rest_catalog_ip}:{REST_CATALOG_PORT}"),
-        ),
-        (
-            S3_ENDPOINT.to_string(),
-            format!("http://{}:{}", minio_ip, 9000),
-        ),
-        (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
-        (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
-        (S3_REGION.to_string(), "us-east-1".to_string()),
-    ]);
-
-    TestFixture {
-        _docker_compose: docker_compose,
-        catalog_config,
-    }
 }

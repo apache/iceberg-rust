@@ -3547,11 +3547,9 @@ version = "0.8.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
- "datafusion",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
- "iceberg-datafusion",
  "iceberg_test_utils",
  "ordered-float 2.10.1",
  "parquet",
@@ -3608,7 +3606,6 @@ name = "iceberg_test_utils"
 version = "0.8.0"
 dependencies = [
  "iceberg",
- "tracing",
  "tracing-subscriber",
 ]
 
