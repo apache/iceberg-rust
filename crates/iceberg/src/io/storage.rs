@@ -18,6 +18,7 @@
 //! Storage interfaces for Iceberg.
 
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -37,9 +38,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "storage-azdls")]
 use super::AzureStorageScheme;
 use super::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
-pub use crate::io::config::StorageConfig;
 #[cfg(feature = "storage-s3")]
 use crate::io::CustomAwsCredentialLoader;
+pub use crate::io::config::StorageConfig;
 use crate::{Error, ErrorKind, Result};
 
 /// Trait for storage operations in Iceberg.
@@ -220,7 +221,7 @@ fn default_memory_operator() -> Operator {
 }
 
 /// OpenDAL-based storage implementation.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDal {
     /// Memory storage variant.
     #[cfg(feature = "storage-memory")]
@@ -482,16 +483,31 @@ impl Storage for OpenDal {
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
-        let (op, relative_path) = self.create_operator(&path)?;
-        let path = path.to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(InputFile::new(op, path, relative_path_pos))
+        Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
     }
 
     fn new_output(&self, path: &str) -> Result<OutputFile> {
-        let (op, relative_path) = self.create_operator(&path)?;
-        let path = path.to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(OutputFile::new(op, path, relative_path_pos))
+        Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+    }
+}
+
+// OpenDAL implementations for FileRead and FileWrite traits
+
+#[async_trait]
+impl FileRead for opendal::Reader {
+    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+        Ok(opendal::Reader::read(self, range).await?.to_bytes())
+    }
+}
+
+#[async_trait]
+impl FileWrite for opendal::Writer {
+    async fn write(&mut self, bs: Bytes) -> Result<()> {
+        Ok(opendal::Writer::write(self, bs).await?)
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        let _ = opendal::Writer::close(self).await?;
+        Ok(())
     }
 }
