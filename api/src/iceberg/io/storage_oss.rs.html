@@ -21,46 +21,36 @@
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>opendal::{Configurator, Operator};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>url::Url;
 <a href=#23 id=23 data-nosnippet>23</a>
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
-<a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a><span class="doccomment">/// Required configuration arguments for creating an Aliyun OSS Operator with OpenDAL:
-<a href=#27 id=27 data-nosnippet>27</a>/// - `oss.endpoint`: The OSS service endpoint URL
-<a href=#28 id=28 data-nosnippet>28</a>/// - `oss.access-key-id`: The access key ID for authentication
-<a href=#29 id=29 data-nosnippet>29</a>/// - `oss.access-key-secret`: The access key secret for authentication
-<a href=#30 id=30 data-nosnippet>30</a>///   Aliyun oss endpoint.
-<a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub const </span>OSS_ENDPOINT: <span class="kw-2">&amp;</span>str = <span class="string">"oss.endpoint"</span>;
-<a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Aliyun oss access key id.
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub const </span>OSS_ACCESS_KEY_ID: <span class="kw-2">&amp;</span>str = <span class="string">"oss.access-key-id"</span>;
-<a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// Aliyun oss access key secret.
-<a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub const </span>OSS_ACCESS_KEY_SECRET: <span class="kw-2">&amp;</span>str = <span class="string">"oss.access-key-secret"</span>;
-<a href=#36 id=36 data-nosnippet>36</a>
-<a href=#37 id=37 data-nosnippet>37</a><span class="doccomment">/// Parse iceberg props to oss config.
-<a href=#38 id=38 data-nosnippet>38</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>oss_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;OssConfig&gt; {
-<a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">let </span><span class="kw-2">mut </span>cfg: OssConfig = OssConfig::default();
-<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(endpoint) = m.remove(OSS_ENDPOINT) {
-<a href=#41 id=41 data-nosnippet>41</a>        cfg.endpoint = <span class="prelude-val">Some</span>(endpoint);
-<a href=#42 id=42 data-nosnippet>42</a>    };
-<a href=#43 id=43 data-nosnippet>43</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(access_key_id) = m.remove(OSS_ACCESS_KEY_ID) {
-<a href=#44 id=44 data-nosnippet>44</a>        cfg.access_key_id = <span class="prelude-val">Some</span>(access_key_id);
-<a href=#45 id=45 data-nosnippet>45</a>    };
-<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(access_key_secret) = m.remove(OSS_ACCESS_KEY_SECRET) {
-<a href=#47 id=47 data-nosnippet>47</a>        cfg.access_key_secret = <span class="prelude-val">Some</span>(access_key_secret);
-<a href=#48 id=48 data-nosnippet>48</a>    };
-<a href=#49 id=49 data-nosnippet>49</a>
-<a href=#50 id=50 data-nosnippet>50</a>    <span class="prelude-val">Ok</span>(cfg)
-<a href=#51 id=51 data-nosnippet>51</a>}
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::io::config::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="doccomment">/// Parse iceberg props to oss config.
+<a href=#28 id=28 data-nosnippet>28</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>oss_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;OssConfig&gt; {
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span><span class="kw-2">mut </span>cfg: OssConfig = OssConfig::default();
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(endpoint) = m.remove(OSS_ENDPOINT) {
+<a href=#31 id=31 data-nosnippet>31</a>        cfg.endpoint = <span class="prelude-val">Some</span>(endpoint);
+<a href=#32 id=32 data-nosnippet>32</a>    };
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(access_key_id) = m.remove(OSS_ACCESS_KEY_ID) {
+<a href=#34 id=34 data-nosnippet>34</a>        cfg.access_key_id = <span class="prelude-val">Some</span>(access_key_id);
+<a href=#35 id=35 data-nosnippet>35</a>    };
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(access_key_secret) = m.remove(OSS_ACCESS_KEY_SECRET) {
+<a href=#37 id=37 data-nosnippet>37</a>        cfg.access_key_secret = <span class="prelude-val">Some</span>(access_key_secret);
+<a href=#38 id=38 data-nosnippet>38</a>    };
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="prelude-val">Ok</span>(cfg)
+<a href=#41 id=41 data-nosnippet>41</a>}
+<a href=#42 id=42 data-nosnippet>42</a>
+<a href=#43 id=43 data-nosnippet>43</a><span class="doccomment">/// Build new opendal operator from give path.
+<a href=#44 id=44 data-nosnippet>44</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>oss_config_build(cfg: <span class="kw-2">&amp;</span>OssConfig, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
+<a href=#45 id=45 data-nosnippet>45</a>    <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
+<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
+<a href=#47 id=47 data-nosnippet>47</a>        Error::new(
+<a href=#48 id=48 data-nosnippet>48</a>            ErrorKind::DataInvalid,
+<a href=#49 id=49 data-nosnippet>49</a>            <span class="macro">format!</span>(<span class="string">"Invalid oss url: {path}, missing bucket"</span>),
+<a href=#50 id=50 data-nosnippet>50</a>        )
+<a href=#51 id=51 data-nosnippet>51</a>    })<span class="question-mark">?</span>;
 <a href=#52 id=52 data-nosnippet>52</a>
-<a href=#53 id=53 data-nosnippet>53</a><span class="doccomment">/// Build new opendal operator from give path.
-<a href=#54 id=54 data-nosnippet>54</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>oss_config_build(cfg: <span class="kw-2">&amp;</span>OssConfig, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
-<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
-<a href=#57 id=57 data-nosnippet>57</a>        Error::new(
-<a href=#58 id=58 data-nosnippet>58</a>            ErrorKind::DataInvalid,
-<a href=#59 id=59 data-nosnippet>59</a>            <span class="macro">format!</span>(<span class="string">"Invalid oss url: {path}, missing bucket"</span>),
-<a href=#60 id=60 data-nosnippet>60</a>        )
-<a href=#61 id=61 data-nosnippet>61</a>    })<span class="question-mark">?</span>;
-<a href=#62 id=62 data-nosnippet>62</a>
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">let </span>builder = cfg.clone().into_builder().bucket(bucket);
-<a href=#64 id=64 data-nosnippet>64</a>
-<a href=#65 id=65 data-nosnippet>65</a>    <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
-<a href=#66 id=66 data-nosnippet>66</a>}</code></pre></div></section></main></body></html>
+<a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">let </span>builder = cfg.clone().into_builder().bucket(bucket);
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
+<a href=#56 id=56 data-nosnippet>56</a>}</code></pre></div></section></main></body></html>
