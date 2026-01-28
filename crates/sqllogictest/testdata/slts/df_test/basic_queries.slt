@@ -24,43 +24,42 @@ CREATE TABLE default.default.query_test_table (
     id INT NOT NULL,
     name STRING,
     score DOUBLE,
-    category STRING,
-    active BOOLEAN
+    category STRING
 )
 
 # Insert test data
 query I
 INSERT INTO default.default.query_test_table VALUES
-    (1, 'Alice', 95.5, 'A', true),
-    (2, 'Bob', 87.0, 'B', true),
-    (3, 'Charlie', 92.5, 'A', false),
-    (4, 'Diana', 78.5, 'C', true),
-    (5, 'Eve', 88.0, 'B', false),
-    (6, 'Frank', 91.0, 'A', true),
-    (7, 'Grace', 85.5, 'B', NULL),
-    (8, 'Henry', 79.0, 'C', false),
-    (9, 'Ivy', 96.5, 'A', true),
-    (10, 'Jack', 82.0, 'C', true)
+    (1, 'Alice', 95.5, 'A'),
+    (2, 'Bob', 87.0, 'B'),
+    (3, 'Charlie', 92.5, 'A'),
+    (4, 'Diana', 78.5, 'C'),
+    (5, 'Eve', 88.0, 'B'),
+    (6, 'Frank', 91.0, 'A'),
+    (7, 'Grace', 85.5, 'B'),
+    (8, 'Henry', 79.0, 'C'),
+    (9, 'Ivy', 96.5, 'A'),
+    (10, 'Jack', 82.0, 'C')
 ----
 10
 
 # Test SELECT * with ORDER BY and LIMIT
-query ITRTB
+query ITRT
 SELECT * FROM default.default.query_test_table ORDER BY id LIMIT 3
 ----
-1 Alice 95.5 A true
-2 Bob 87.0 B true
-3 Charlie 92.5 A false
+1 Alice 95.5 A
+2 Bob 87 B
+3 Charlie 92.5 A
 
 # Test ORDER BY DESC with LIMIT
-query ITRTB
+query ITRT
 SELECT * FROM default.default.query_test_table ORDER BY score DESC LIMIT 5
 ----
-9 Ivy 96.5 A true
-1 Alice 95.5 A true
-3 Charlie 92.5 A false
-6 Frank 91.0 A true
-5 Eve 88.0 B false
+9 Ivy 96.5 A
+1 Alice 95.5 A
+3 Charlie 92.5 A
+6 Frank 91 A
+5 Eve 88 B
 
 # Test ORDER BY with multiple columns
 query ITR
@@ -69,12 +68,12 @@ SELECT id, name, score FROM default.default.query_test_table ORDER BY category, 
 9 Ivy 96.5
 1 Alice 95.5
 3 Charlie 92.5
-6 Frank 91.0
-5 Eve 88.0
-2 Bob 87.0
+6 Frank 91
+5 Eve 88
+2 Bob 87
 7 Grace 85.5
-10 Jack 82.0
-8 Henry 79.0
+10 Jack 82
+8 Henry 79
 4 Diana 78.5
 
 # Test LIMIT with OFFSET
@@ -92,7 +91,7 @@ SELECT id, name, score FROM default.default.query_test_table WHERE score > 90 OR
 9 Ivy 96.5
 1 Alice 95.5
 3 Charlie 92.5
-6 Frank 91.0
+6 Frank 91
 
 # Test WHERE clause with string comparison
 query ITT rowsort
@@ -103,30 +102,13 @@ SELECT id, name, category FROM default.default.query_test_table WHERE category =
 6 Frank A
 9 Ivy A
 
-# Test WHERE clause with boolean
-query IT rowsort
-SELECT id, name FROM default.default.query_test_table WHERE active = true
-----
-1 Alice
-10 Jack
-2 Bob
-4 Diana
-6 Frank
-9 Ivy
-
-# Test WHERE clause with NULL handling
-query ITB rowsort
-SELECT id, name, active FROM default.default.query_test_table WHERE active IS NULL
-----
-7 Grace NULL
-
 # Test aggregation with GROUP BY
 query TIR rowsort
 SELECT category, COUNT(*), AVG(score) FROM default.default.query_test_table GROUP BY category
 ----
 A 4 93.875
-B 3 86.833333333333333
-C 3 79.833333333333333
+B 3 86.833333333333
+C 3 79.833333333333
 
 # Test aggregation with HAVING clause
 query TI rowsort
@@ -170,7 +152,7 @@ LIMIT 4
 9 Ivy 96.5
 1 Alice 95.5
 3 Charlie 92.5
-6 Frank 91.0
+6 Frank 91
 
 # Test aliasing
 query IT

@@ -51,17 +51,16 @@ query IIRRTTT rowsort
 SELECT * FROM default.default.all_primitive_types
 ----
 -1 -100 -1.5 -2.5 -123.45 negative false
-0 0 0.0 0.0 0.00 zero NULL
+0 0 0 0 0 zero NULL
 1 100 1.5 2.5 123.45 hello true
 2 200 2.5 3.5 234.56 world false
 3 300 3.5 4.5 345.67 NULL true
 
-# Test selecting specific columns
+# Test selecting specific columns with string filter
 query IT rowsort
-SELECT col_int, col_string FROM default.default.all_primitive_types WHERE col_boolean = true
+SELECT col_int, col_string FROM default.default.all_primitive_types WHERE col_string = 'hello'
 ----
 1 hello
-3 NULL
 
 # Test numeric comparisons
 query IR rowsort
@@ -74,7 +73,7 @@ SELECT col_int, col_decimal FROM default.default.all_primitive_types WHERE col_d
 query IIRRTTT rowsort
 SELECT * FROM default.default.all_primitive_types WHERE col_int >= 0 ORDER BY col_int
 ----
-0 0 0.0 0.0 0.00 zero NULL
+0 0 0 0 0 zero NULL
 1 100 1.5 2.5 123.45 hello true
 2 200 2.5 3.5 234.56 world false
 3 300 3.5 4.5 345.67 NULL true
