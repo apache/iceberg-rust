@@ -117,10 +117,7 @@ impl PuffinWriter {
             properties: self.properties.clone(),
         };
         let json = serde_json::to_string::<FileMetadata>(&file_metadata)?;
-        let compressed = self
-            .footer_compression_codec
-            .compress(json.into_bytes())?;
-        Ok(compressed)
+        self.footer_compression_codec.compress(json.into_bytes())
     }
 
     fn flags_bytes(&self) -> [u8; FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH as usize] {
