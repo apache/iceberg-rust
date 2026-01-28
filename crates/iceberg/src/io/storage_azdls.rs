@@ -23,36 +23,11 @@ use opendal::Configurator;
 use opendal::services::AzdlsConfig;
 use url::Url;
 
+use crate::io::config::{
+    ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
+    ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
+};
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
-
-/// A connection string.
-///
-/// Note, this string is parsed first, and any other passed adls.* properties
-/// will override values from the connection string.
-const ADLS_CONNECTION_STRING: &str = "adls.connection-string";
-
-/// The account that you want to connect to.
-pub const ADLS_ACCOUNT_NAME: &str = "adls.account-name";
-
-/// The key to authentication against the account.
-pub const ADLS_ACCOUNT_KEY: &str = "adls.account-key";
-
-/// The shared access signature.
-pub const ADLS_SAS_TOKEN: &str = "adls.sas-token";
-
-/// The tenant-id.
-pub const ADLS_TENANT_ID: &str = "adls.tenant-id";
-
-/// The client-id.
-pub const ADLS_CLIENT_ID: &str = "adls.client-id";
-
-/// The client-secret.
-pub const ADLS_CLIENT_SECRET: &str = "adls.client-secret";
-
-/// The authority host of the service principal.
-/// - required for client_credentials authentication
-/// - default value: `https://login.microsoftonline.com`
-pub const ADLS_AUTHORITY_HOST: &str = "adls.authority-host";
 
 /// Parses adls.* prefixed configuration properties.
 pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Result<AzdlsConfig> {
