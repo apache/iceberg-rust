@@ -89,6 +89,7 @@ pub mod transform;
 
 mod runtime;
 
+pub mod actions;
 pub mod arrow;
 pub(crate) mod delete_file_index;
 pub mod test_utils;

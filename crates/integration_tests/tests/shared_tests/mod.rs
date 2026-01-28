@@ -31,6 +31,7 @@ mod merge_append_test;
 mod overwrite_files_test;
 mod read_evolved_schema;
 mod read_positional_deletes;
+mod remove_orphan_files_test;
 mod remove_snapshots_test;
 mod rewrite_files_test;
 mod scan_all_type;
@@ -58,7 +59,7 @@ pub async fn random_ns() -> Namespace {
     ns
 }
 
-fn test_schema() -> Schema {
+pub fn test_schema() -> Schema {
     Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])

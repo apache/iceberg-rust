@@ -23,6 +23,7 @@ mod tests {
 
     use async_trait::async_trait;
     use ctor::{ctor, dtor};
+    use futures::TryStreamExt;
     use iceberg::io::{
         CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
         S3_SECRET_ACCESS_KEY,
@@ -255,5 +256,183 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_recursive_s3() {
+        let file_io = get_file_io().await;
+
+        // Create a comprehensive directory structure mimicking real Iceberg table
+        let base_path = "s3://bucket1/test_list_recursive";
+
+        // Metadata files (version-hint, metadata json, manifest lists, manifests)
+        let version_hint = format!("{base_path}/metadata/version-hint.text");
+        let metadata_v1 = format!("{base_path}/metadata/v1.metadata.json");
+        let metadata_v2 = format!("{base_path}/metadata/v2.metadata.json");
+        let manifest_list = format!("{base_path}/metadata/snap-123456789-1-abc.avro");
+        let manifest1 = format!("{base_path}/metadata/abc-m0.avro");
+        let manifest2 = format!("{base_path}/metadata/def-m1.avro");
+
+        // Data files in various partition structures
+        let data_unpartitioned = format!("{base_path}/data/00000-0-abc.parquet");
+        let data_partition1 = format!("{base_path}/data/dt=2024-01-01/00001-0-def.parquet");
+        let data_partition2 = format!("{base_path}/data/dt=2024-01-01/00002-0-ghi.parquet");
+        let data_partition3 = format!("{base_path}/data/dt=2024-01-02/00003-0-jkl.parquet");
+
+        // Multi-level nested partitions (e.g., dt/hour/region)
+        let data_nested1 =
+            format!("{base_path}/data/dt=2024-01-01/hour=10/region=us/00004-0-mno.parquet");
+        let data_nested2 =
+            format!("{base_path}/data/dt=2024-01-01/hour=10/region=eu/00005-0-pqr.parquet");
+        let data_nested3 =
+            format!("{base_path}/data/dt=2024-01-01/hour=11/region=us/00006-0-stu.parquet");
+
+        // Delete files
+        let delete_file = format!("{base_path}/data/dt=2024-01-01/00007-0-del.parquet");
+
+        // Statistics files
+        let stats_file = format!("{base_path}/metadata/stats-123.puffin");
+
+        // Collect all files for verification
+        let all_files = vec![
+            &version_hint,
+            &metadata_v1,
+            &metadata_v2,
+            &manifest_list,
+            &manifest1,
+            &manifest2,
+            &data_unpartitioned,
+            &data_partition1,
+            &data_partition2,
+            &data_partition3,
+            &data_nested1,
+            &data_nested2,
+            &data_nested3,
+            &delete_file,
+            &stats_file,
+        ];
+
+        // Write all test files
+        for (i, file_path) in all_files.iter().enumerate() {
+            file_io
+                .new_output(file_path.as_str())
+                .unwrap()
+                .write(format!("content_{}", i).into())
+                .await
+                .unwrap();
+        }
+
+        // List recursively from base path
+        let entries: Vec<_> = file_io
+            .list(base_path, true)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let listed_paths: std::collections::HashSet<String> =
+            entries.iter().map(|e| e.path.clone()).collect();
+
+        // Verify ALL files are found with EXACT path match
+        for expected_path in &all_files {
+            assert!(
+                listed_paths.contains(expected_path.as_str()),
+                "Missing file: '{}'\nListed paths: {:?}",
+                expected_path,
+                listed_paths
+            );
+        }
+
+        // Verify count matches
+        assert_eq!(
+            listed_paths.len(),
+            all_files.len(),
+            "Expected {} files but found {}.\nExpected: {:?}\nGot: {:?}",
+            all_files.len(),
+            listed_paths.len(),
+            all_files,
+            listed_paths
+        );
+
+        // Verify metadata for each entry
+        for entry in &entries {
+            assert!(
+                !entry.metadata.is_dir,
+                "Files should not be directories: {}",
+                entry.path
+            );
+            assert!(
+                entry.metadata.size > 0,
+                "Files should have size > 0: {}",
+                entry.path
+            );
+            assert!(
+                entry.metadata.last_modified_ms.is_some(),
+                "S3/minio should provide last_modified_ms: {}",
+                entry.path
+            );
+        }
+
+        // Cleanup
+        for file_path in &all_files {
+            file_io.delete(file_path.as_str()).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_recursive_path_format_consistency_s3() {
+        // This test verifies that the paths returned by list_recursive
+        // match exactly the paths that would be stored in manifest entries.
+        // This is critical for delete_orphan_files to work correctly.
+
+        let file_io = get_file_io().await;
+
+        let table_location = "s3://bucket1/test_path_consistency";
+        let data_file_path = format!("{table_location}/data/00000-0-abc.parquet");
+        let manifest_path = format!("{table_location}/metadata/snap-123-0-abc.avro");
+
+        // Simulate writing files like Iceberg would
+        file_io
+            .new_output(&data_file_path)
+            .unwrap()
+            .write("data".into())
+            .await
+            .unwrap();
+        file_io
+            .new_output(&manifest_path)
+            .unwrap()
+            .write("manifest".into())
+            .await
+            .unwrap();
+
+        // List files like delete_orphan_files would
+        let entries: Vec<_> = file_io
+            .list(table_location, true)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let listed_paths: std::collections::HashSet<String> =
+            entries.into_iter().map(|e| e.path).collect();
+
+        // The paths from list_recursive should match exactly what we wrote
+        // This is the key assertion for delete_orphan_files correctness
+        assert!(
+            listed_paths.contains(&data_file_path),
+            "list_recursive should return exact path '{}' for HashSet.contains() to work.\nGot: {:?}",
+            data_file_path,
+            listed_paths
+        );
+        assert!(
+            listed_paths.contains(&manifest_path),
+            "list_recursive should return exact path '{}' for HashSet.contains() to work.\nGot: {:?}",
+            manifest_path,
+            listed_paths
+        );
+
+        // Cleanup
+        file_io.delete(&data_file_path).await.unwrap();
+        file_io.delete(&manifest_path).await.unwrap();
     }
 }

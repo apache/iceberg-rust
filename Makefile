@@ -33,7 +33,7 @@ cargo-machete: install-cargo-machete
 	cargo machete
 
 install-taplo-cli:
-	cargo install taplo-cli@0.9.3
+	cargo install --locked taplo-cli@0.9.3
 
 fix-toml: install-taplo-cli
 	taplo fmt

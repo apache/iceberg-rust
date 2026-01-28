@@ -265,7 +265,7 @@ impl Table {
         concurrency_limit: usize,
     ) -> Result<()> {
         let cleanup_strategy = ReachableFileCleanupStrategy::new(self.file_io.clone())
-            .with_concurrency_limit(concurrency_limit);
+            .with_delete_concurrency(concurrency_limit);
 
         cleanup_strategy
             .clean_files(before_metadata, &self.metadata_ref())

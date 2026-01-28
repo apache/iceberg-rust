@@ -21,6 +21,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use opendal::Operator;
 use url::Url;
 
@@ -173,6 +175,64 @@ impl FileIO {
             .inner
             .create_operator_with_config(&path, &self.builder.props)?;
         Ok(op.exists(relative_path).await?)
+    }
+
+    /// Lists files and directories under the given path as a stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `path`: Absolute path starting with scheme string used to construct [`FileIO`].
+    /// * `recursive`: If `true`, list all files recursively; otherwise list only direct children.
+    pub async fn list(
+        &self,
+        path: impl AsRef<str>,
+        recursive: bool,
+    ) -> Result<BoxStream<'static, Result<ListEntry>>> {
+        let path_str: Arc<str> = Arc::from(path.as_ref());
+        let (op, relative_path) = self
+            .inner
+            .create_operator_with_config(&path_str, &self.builder.props)?;
+
+        // Calculate the absolute prefix: path_str without the relative_path suffix.
+        let absolute_prefix: Arc<str> =
+            Arc::from(&path_str[..path_str.len() - relative_path.len()]);
+
+        // Ensure path ends with '/' for directory listing
+        let list_path = if relative_path.is_empty() || relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{}/", relative_path)
+        };
+
+        // OpenDAL's lister_with returns a Lister that implements Stream
+        let lister = op.lister_with(&list_path).recursive(recursive).await?;
+
+        // Transform the OpenDAL Entry stream into our ListEntry stream
+        let stream = lister
+            .map(move |entry_result| {
+                entry_result
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Unexpected, "Failed to list entry")
+                            .with_context("path", path_str.to_string())
+                            .with_source(e)
+                    })
+                    .map(|entry| {
+                        let meta = entry.metadata();
+                        ListEntry {
+                            path: format!("{}{}", absolute_prefix, entry.path()),
+                            metadata: FileMetadata {
+                                size: meta.content_length(),
+                                last_modified_ms: meta
+                                    .last_modified()
+                                    .map(|dt| dt.timestamp_millis()),
+                                is_dir: meta.is_dir(),
+                            },
+                        }
+                    })
+            })
+            .boxed();
+
+        Ok(stream)
     }
 
     /// Creates input file.
@@ -352,12 +412,22 @@ impl FileIOBuilder {
     }
 }
 
-/// The struct the represents the metadata of a file.
-///
-/// TODO: we can add last modified time, content type, etc. in the future.
+/// The struct that represents the metadata of a file.
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,
+    /// The last modified time in milliseconds since Unix epoch.
+    pub last_modified_ms: Option<i64>,
+    /// Whether this entry represents a directory.
+    pub is_dir: bool,
+}
+
+/// A single entry returned by listing operations.
+pub struct ListEntry {
+    /// Absolute path that can be directly passed back to [`FileIO`] operations.
+    pub path: String,
+    /// Metadata associated with the path.
+    pub metadata: FileMetadata,
 }
 
 /// Trait for reading file.
@@ -408,6 +478,8 @@ impl InputFile {
 
         Ok(FileMetadata {
             size: meta.content_length(),
+            last_modified_ms: meta.last_modified().map(|dt| dt.timestamp_millis()),
+            is_dir: meta.is_dir(),
         })
     }
 
@@ -549,15 +621,12 @@ mod tests {
     use std::path::Path;
 
     use bytes::Bytes;
-    use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use futures::{AsyncReadExt, TryStreamExt};
     use tempfile::TempDir;
 
-    use super::{FileIO, FileIOBuilder};
-    use crate::io::{
-        IO_CHUNK_SIZE, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS,
-        IO_TIMEOUT_SECONDS,
-    };
+    use super::{FileIO, FileIOBuilder, ListEntry};
+    use crate::io::IO_CHUNK_SIZE;
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
@@ -712,5 +781,74 @@ mod tests {
         let path = format!("{}/1.txt", TempDir::new().unwrap().path().to_str().unwrap());
         let output_file = io.new_output(&path).unwrap();
         assert_eq!(Some(32 * 1024 * 1024), output_file.chunk_size);
+    }
+
+    #[tokio::test]
+    async fn test_list() {
+        let tmp_dir = TempDir::new().unwrap();
+        let root = tmp_dir.path().join("root");
+        let sub_dir = root.join("subdir");
+        create_dir_all(&sub_dir).unwrap();
+
+        // Create files at different levels
+        let root_file = root.join("root_file.txt");
+        let nested_file = sub_dir.join("nested_file.txt");
+        write_to_file("root", &root_file);
+        write_to_file("nested", &nested_file);
+
+        let file_io = create_local_file_io();
+        let root_path = root.to_str().unwrap();
+
+        // Non-recursive: should only see direct children
+        let entries: Vec<ListEntry> = file_io
+            .list(root_path, false)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+
+        assert!(paths.iter().any(|p| p.ends_with("root_file.txt")));
+        assert!(!paths.iter().any(|p| p.ends_with("nested_file.txt")));
+
+        // Recursive: should see all files with correct absolute paths
+        let entries: Vec<ListEntry> = file_io
+            .list(root_path, true)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+
+        // Verify absolute path format (can be passed back to FileIO)
+        let expected_nested = format!("{}/subdir/nested_file.txt", root_path);
+        assert!(paths.contains(&expected_nested.as_str()));
+        assert!(paths.iter().any(|p| p.ends_with("root_file.txt")));
+    }
+
+    #[tokio::test]
+    async fn test_list_with_file_scheme() {
+        let tmp_dir = TempDir::new().unwrap();
+        let data_dir = tmp_dir.path().join("data");
+        create_dir_all(&data_dir).unwrap();
+        write_to_file("test", data_dir.join("file.parquet"));
+
+        let file_io = create_local_file_io();
+        let path = format!("file://{}", tmp_dir.path().to_str().unwrap());
+
+        let entries: Vec<ListEntry> = file_io
+            .list(&path, true)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+
+        // Returned paths preserve the file:/ scheme prefix
+        assert!(paths.iter().all(|p| p.starts_with("file:/")));
+        assert!(paths.iter().any(|p| p.ends_with("file.parquet")));
     }
 }
