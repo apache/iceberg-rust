@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display, Formatter};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -50,19 +50,13 @@ pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
-#[derive(Debug)]
-pub struct GlueCatalogBuilder(GlueCatalogConfig);
-
-impl Default for GlueCatalogBuilder {
-    fn default() -> Self {
-        Self(GlueCatalogConfig {
-            name: None,
-            uri: None,
-            catalog_id: None,
-            warehouse: "".to_string(),
-            props: HashMap::new(),
-        })
-    }
+#[derive(Debug, Default)]
+pub struct GlueCatalogBuilder {
+    name: Option<String>,
+    uri: Option<String>,
+    catalog_id: Option<String>,
+    warehouse: Option<String>,
+    props: HashMap<String, String>,
 }
 
 impl CatalogBuilder for GlueCatalogBuilder {
@@ -73,25 +67,22 @@ impl CatalogBuilder for GlueCatalogBuilder {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.name = Some(name.into());
 
         if props.contains_key(GLUE_CATALOG_PROP_URI) {
-            self.0.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
+            self.uri = props.get(GLUE_CATALOG_PROP_URI).cloned();
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
-            self.0.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
+            self.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned();
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
-                .get(GLUE_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default();
+            self.warehouse = props.get(GLUE_CATALOG_PROP_WAREHOUSE).cloned();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != GLUE_CATALOG_PROP_URI
@@ -101,32 +92,52 @@ impl CatalogBuilder for GlueCatalogBuilder {
             .collect();
 
         async move {
-            if self.0.name.is_none() {
+            // Catalog name and warehouse are required
+            let name = self
+                .name
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Catalog name is required"))?;
+            let warehouse = self.warehouse.ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Catalog warehouse is required")
+            })?;
+
+            if warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ));
-            }
-            if self.0.warehouse.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
+                    "Catalog warehouse cannot be empty",
                 ));
             }
 
-            GlueCatalog::new(self.0).await
+            let config = GlueCatalogConfig {
+                name,
+                uri: self.uri,
+                catalog_id: self.catalog_id,
+                warehouse,
+                props: self.props,
+            };
+
+            GlueCatalog::new(config).await
         }
     }
 }
 
-#[derive(Debug)]
 /// Glue Catalog configuration
+#[derive(Debug)]
 pub(crate) struct GlueCatalogConfig {
-    name: Option<String>,
+    name: String,
     uri: Option<String>,
     catalog_id: Option<String>,
     warehouse: String,
     props: HashMap<String, String>,
+}
+
+impl Display for GlueCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GlueCatalogConfig(name={}, warehouse={})",
+            self.name, self.warehouse
+        )
+    }
 }
 
 struct GlueClient(aws_sdk_glue::Client);
