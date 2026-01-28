@@ -157,6 +157,8 @@ jobs:
         run: make docker-up
 
       - name: Run tests
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
             cargo nextest run ${{ matrix.test-suite.args }}
