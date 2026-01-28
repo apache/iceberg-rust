@@ -141,9 +141,20 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
 
 impl From<&DeleteFileContext> for FileScanTask {
     fn from(ctx: &DeleteFileContext) -> Self {
+        let (start, length) = match ctx.manifest_entry.file_format() {
+            DataFileFormat::Puffin => match (
+                ctx.manifest_entry.data_file().content_offset(),
+                ctx.manifest_entry.data_file().content_size_in_bytes(),
+            ) {
+                (Some(offset), Some(size)) => (offset as u64, size as u64),
+                _ => (0, 0),
+            },
+            _ => (0, ctx.manifest_entry.file_size_in_bytes()),
+        };
+
         FileScanTask {
-            start: 0,
-            length: ctx.manifest_entry.file_size_in_bytes(),
+            start,
+            length,
             record_count: Some(ctx.manifest_entry.record_count()),
 
             data_file_path: ctx.manifest_entry.file_path().to_string(),

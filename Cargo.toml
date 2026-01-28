@@ -63,6 +63,7 @@ bytes = "1.10"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
 ctor = "0.2.8"
+crc32fast = "1.5.0"
 datafusion = "50"
 datafusion-cli = "50"
 datafusion-sqllogictest = "50"
