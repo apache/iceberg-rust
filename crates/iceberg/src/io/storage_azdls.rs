@@ -100,7 +100,7 @@ pub(crate) fn azdls_create_operator<'a>(
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum AzureStorageScheme {
     Abfs,
     Abfss,
