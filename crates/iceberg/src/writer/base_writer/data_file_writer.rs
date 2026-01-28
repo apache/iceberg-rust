@@ -30,6 +30,7 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: RollingFileWriterBuilder<B, L, F>,
+    sort_order_id: Option<i32>,
 }
 
 impl<B, L, F> DataFileWriterBuilder<B, L, F>
@@ -40,7 +41,13 @@ where
 {
     /// Create a new `DataFileWriterBuilder` using a `RollingFileWriterBuilder`.
     pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
-        Self { inner }
+        Self { inner, sort_order_id: None }
+    }
+
+    /// Set sort order id for data files.
+    pub fn sort_order_id(mut self, sort_order_id: Option<i32>) -> Self {
+        self.sort_order_id = sort_order_id;
+        self
     }
 }
 
@@ -57,6 +64,7 @@ where
         Ok(DataFileWriter {
             inner: Some(self.inner.clone().build()),
             partition_key,
+            sort_order_id: self.sort_order_id,
         })
     }
 }
@@ -66,6 +74,7 @@ where
 pub struct DataFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: Option<RollingFileWriter<B, L, F>>,
     partition_key: Option<PartitionKey>,
+    sort_order_id: Option<i32>,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +106,9 @@ where
                     if let Some(pk) = self.partition_key.as_ref() {
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
+                    }
+                    if let Some(sort_order_id) = self.sort_order_id {
+                        res.sort_order_id(sort_order_id);
                     }
                     res.build().map_err(|e| {
                         Error::new(
