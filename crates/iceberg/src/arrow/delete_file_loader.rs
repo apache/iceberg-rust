@@ -50,6 +50,10 @@ impl BasicDeleteFileLoader {
     pub fn new(file_io: FileIO) -> Self {
         BasicDeleteFileLoader { file_io }
     }
+
+    pub(crate) fn input_file(&self, data_file_path: &str) -> Result<crate::io::InputFile> {
+        self.file_io.new_input(data_file_path)
+    }
     /// Loads a RecordBatchStream for a given datafile.
     pub(crate) async fn parquet_to_batch_stream(
         &self,
