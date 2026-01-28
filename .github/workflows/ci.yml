@@ -158,6 +158,7 @@ jobs:
 
       - name: Run tests
         env:
+          # Disable debug info to speed up compilation and reduce artifact size
           RUSTFLAGS: "-C debuginfo=0"
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
