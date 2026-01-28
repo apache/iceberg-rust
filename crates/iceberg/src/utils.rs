@@ -247,26 +247,74 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use futures::stream::{self, StreamExt};
-use itertools::Itertools;
 
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::{ManifestFile, Snapshot};
+use crate::spec::{Manifest, ManifestFile, ManifestList, Snapshot};
 
 pub(crate) const DEFAULT_DELETE_CONCURRENCY_LIMIT: usize = 10;
+pub(crate) const DEFAULT_LOAD_CONCURRENCY_LIMIT: usize = 16;
+
+/// Concurrently loads manifest lists for the given snapshots.
+pub(crate) async fn load_manifest_lists(
+    file_io: &FileIO,
+    table_metadata: &TableMetadataRef,
+    snapshots: Vec<SnapshotRef>,
+    concurrency: usize,
+) -> Result<Vec<(SnapshotRef, ManifestList)>> {
+    let concurrency = concurrency.max(1);
+
+    stream::iter(snapshots)
+        .map(|snapshot| {
+            let file_io = file_io.clone();
+            let table_metadata = table_metadata.clone();
+            async move {
+                let manifest_list = snapshot
+                    .load_manifest_list(&file_io, &table_metadata)
+                    .await?;
+                Ok((snapshot, manifest_list))
+            }
+        })
+        .buffer_unordered(concurrency)
+        .try_collect()
+        .await
+}
+
+/// Concurrently loads manifests for the given manifest files.
+pub(crate) async fn load_manifests(
+    file_io: &FileIO,
+    manifest_files: Vec<ManifestFile>,
+    concurrency: usize,
+) -> Result<Vec<(ManifestFile, Manifest)>> {
+    let concurrency = concurrency.max(1);
+
+    stream::iter(manifest_files)
+        .map(|manifest_file| {
+            let file_io = file_io.clone();
+            async move {
+                let manifest = manifest_file.load_manifest(&file_io).await?;
+                Ok((manifest_file, manifest))
+            }
+        })
+        .buffer_unordered(concurrency)
+        .try_collect()
+        .await
+}
 
 /// Strategy for cleaning up unreachable files after snapshot expiration.
 pub struct ReachableFileCleanupStrategy {
     file_io: FileIO,
-    concurrency_limit: usize,
+    delete_concurrency: usize,
+    load_concurrency: usize,
 }
 
 impl ReachableFileCleanupStrategy {
-    /// Creates a new cleanup strategy with default concurrency limit.
+    /// Creates a new cleanup strategy with default concurrency limits.
     pub fn new(file_io: FileIO) -> Self {
         Self {
             file_io,
-            concurrency_limit: DEFAULT_DELETE_CONCURRENCY_LIMIT,
+            delete_concurrency: DEFAULT_DELETE_CONCURRENCY_LIMIT,
+            load_concurrency: DEFAULT_LOAD_CONCURRENCY_LIMIT,
         }
     }
 
@@ -292,9 +340,30 @@ impl ReachableFileCleanupStrategy {
     }
 
     /// Sets the concurrency limit for file deletion.
-    pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit = limit.max(1);
+    pub fn with_delete_concurrency(mut self, limit: usize) -> Self {
+        self.delete_concurrency = limit.max(1);
         self
+    }
+
+    /// Sets the concurrency limit for loading manifest lists and manifests.
+    #[allow(dead_code)]
+    pub fn with_load_concurrency(mut self, limit: usize) -> Self {
+        self.load_concurrency = limit.max(1);
+        self
+    }
+
+    /// Deletes files concurrently with the configured concurrency limit.
+    async fn delete_files<I>(&self, paths: I) -> Result<()>
+    where I: IntoIterator<Item = String> {
+        stream::iter(paths)
+            .map(|path| {
+                let file_io = self.file_io.clone();
+                async move { file_io.delete(&path).await }
+            })
+            .buffer_unordered(self.delete_concurrency)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(())
     }
 
     /// Cleans up files that became unreachable after snapshot expiration.
@@ -311,13 +380,15 @@ impl ReachableFileCleanupStrategy {
 
         let deletion_candidates = {
             let mut deletion_candidates = HashSet::default();
-            // This part can also be parallelized if `load_manifest_list` is a bottleneck
-            // and if the underlying FileIO supports concurrent reads efficiently.
-            for snapshot in expired_snapshots {
-                let manifest_list = snapshot
-                    .load_manifest_list(&self.file_io, before_expiration)
-                    .await?;
+            let loaded = load_manifest_lists(
+                &self.file_io,
+                before_expiration,
+                expired_snapshots,
+                self.load_concurrency,
+            )
+            .await?;
 
+            for (_, manifest_list) in loaded {
                 for manifest_file in manifest_list.entries() {
                     deletion_candidates.insert(manifest_file.clone());
                 }
@@ -339,28 +410,13 @@ impl ReachableFileCleanupStrategy {
                     .find_files_to_delete(&manifests_to_delete, &referenced_manifests)
                     .await?;
 
-                stream::iter(files_to_delete)
-                    .map(|file_path| self.file_io.delete(file_path))
-                    .buffer_unordered(self.concurrency_limit)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-
-                stream::iter(manifests_to_delete)
-                    .map(|manifest_file| self.file_io.delete(manifest_file.manifest_path))
-                    .buffer_unordered(self.concurrency_limit)
-                    .try_collect::<Vec<_>>()
+                self.delete_files(files_to_delete).await?;
+                self.delete_files(manifests_to_delete.into_iter().map(|m| m.manifest_path))
                     .await?;
             }
         }
 
-        let manifest_lists_to_delete = manifest_lists_to_delete
-            .iter()
-            .map(|path| self.file_io.delete(path))
-            .collect_vec();
-
-        stream::iter(manifest_lists_to_delete)
-            .buffer_unordered(self.concurrency_limit)
-            .try_collect::<Vec<_>>()
+        self.delete_files(manifest_lists_to_delete.into_iter().map(|s| s.to_string()))
             .await?;
 
         Ok(())
@@ -373,19 +429,20 @@ impl ReachableFileCleanupStrategy {
         table_meta_data_ref: &TableMetadataRef,
         mut deletion_candidates: HashSet<ManifestFile>,
     ) -> Result<(HashSet<ManifestFile>, HashSet<ManifestFile>)> {
-        let mut referenced_manifests = HashSet::default();
-        for snapshot in snapshots {
-            let manifest_list = snapshot
-                .load_manifest_list(&self.file_io, table_meta_data_ref)
-                .await?;
+        let snapshots: Vec<_> = snapshots.cloned().collect();
+        let loaded = load_manifest_lists(
+            &self.file_io,
+            table_meta_data_ref,
+            snapshots,
+            self.load_concurrency,
+        )
+        .await?;
 
+        let mut referenced_manifests = HashSet::default();
+        for (_, manifest_list) in loaded {
             for manifest_file in manifest_list.entries() {
                 deletion_candidates.remove(manifest_file);
                 referenced_manifests.insert(manifest_file.clone());
-
-                if deletion_candidates.is_empty() {
-                    break;
-                }
             }
         }
 
@@ -398,10 +455,18 @@ impl ReachableFileCleanupStrategy {
         manifest_files: &HashSet<ManifestFile>,
         referenced_manifests: &HashSet<ManifestFile>,
     ) -> Result<HashSet<String>> {
+        // Load manifests to delete concurrently
+        let manifests_to_delete_vec: Vec<_> = manifest_files.iter().cloned().collect();
+        let loaded_to_delete = load_manifests(
+            &self.file_io,
+            manifests_to_delete_vec,
+            self.load_concurrency,
+        )
+        .await?;
+
         let mut files_to_delete = HashSet::default();
-        for manifest_file in manifest_files {
-            let m = manifest_file.load_manifest(&self.file_io).await?;
-            for entry in m.entries() {
+        for (_, manifest) in loaded_to_delete {
+            for entry in manifest.entries() {
                 files_to_delete.insert(entry.data_file().file_path().to_owned());
             }
         }
@@ -410,9 +475,13 @@ impl ReachableFileCleanupStrategy {
             return Ok(files_to_delete);
         }
 
-        for manifest_file in referenced_manifests {
-            let m = manifest_file.load_manifest(&self.file_io).await?;
-            for entry in m.entries() {
+        // Load referenced manifests concurrently
+        let referenced_vec: Vec<_> = referenced_manifests.iter().cloned().collect();
+        let loaded_referenced =
+            load_manifests(&self.file_io, referenced_vec, self.load_concurrency).await?;
+
+        for (_, manifest) in loaded_referenced {
+            for entry in manifest.entries() {
                 files_to_delete.remove(entry.data_file().file_path());
             }
         }
@@ -471,21 +540,34 @@ mod cleanup_tests {
     fn test_cleanup_strategy_builder() {
         let file_io = FileIOBuilder::new("memory").build().unwrap();
 
-        // Test default concurrency limit
+        // Test default concurrency limits
         let strategy = ReachableFileCleanupStrategy::new(file_io.clone());
         assert_eq!(
-            strategy.concurrency_limit, DEFAULT_DELETE_CONCURRENCY_LIMIT,
-            "Default concurrency limit should be {}",
+            strategy.delete_concurrency, DEFAULT_DELETE_CONCURRENCY_LIMIT,
+            "Default delete concurrency limit should be {}",
             DEFAULT_DELETE_CONCURRENCY_LIMIT
         );
-
-        // Test custom concurrency limit
-        let custom_limit = 20;
-        let strategy =
-            ReachableFileCleanupStrategy::new(file_io).with_concurrency_limit(custom_limit);
         assert_eq!(
-            strategy.concurrency_limit, custom_limit,
-            "Custom concurrency limit should be set correctly"
+            strategy.load_concurrency, DEFAULT_LOAD_CONCURRENCY_LIMIT,
+            "Default load concurrency limit should be {}",
+            DEFAULT_LOAD_CONCURRENCY_LIMIT
+        );
+
+        // Test custom delete concurrency limit
+        let custom_limit = 20;
+        let strategy = ReachableFileCleanupStrategy::new(file_io.clone())
+            .with_delete_concurrency(custom_limit);
+        assert_eq!(
+            strategy.delete_concurrency, custom_limit,
+            "Custom delete concurrency limit should be set correctly"
+        );
+
+        // Test custom load concurrency limit
+        let strategy =
+            ReachableFileCleanupStrategy::new(file_io).with_load_concurrency(custom_limit);
+        assert_eq!(
+            strategy.load_concurrency, custom_limit,
+            "Custom load concurrency limit should be set correctly"
         );
     }
 

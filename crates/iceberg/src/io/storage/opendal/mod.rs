@@ -477,6 +477,8 @@ impl Storage for OpenDalStorage {
         let meta = op.stat(relative_path).await?;
         Ok(FileMetadata {
             size: meta.content_length(),
+            last_modified_ms: meta.last_modified().map(|dt| dt.timestamp_millis()),
+            is_dir: meta.is_dir(),
         })
     }
 

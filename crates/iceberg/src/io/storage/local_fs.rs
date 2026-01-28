@@ -105,6 +105,12 @@ impl Storage for LocalFsStorage {
         })?;
         Ok(FileMetadata {
             size: metadata.len(),
+            last_modified_ms: metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64),
+            is_dir: metadata.is_dir(),
         })
     }
 
