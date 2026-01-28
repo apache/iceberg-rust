@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["set_test_fixture"],"struct":["TestFixture"]};
+window.SIDEBAR_ITEMS = {"fn":["get_test_fixture","set_test_fixture"],"struct":["GlobalTestFixture","TestFixture"]};
