@@ -97,7 +97,6 @@ mockall = "0.13.1"
 mockito = "1"
 motore-macros = "0.4.3"
 murmur3 = "0.5.2"
-num-bigint = "0.4.6"
 once_cell = "1.20"
 opendal = "0.55.0"
 ordered-float = "4"
@@ -108,7 +107,7 @@ rand = "0.8.5"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
-rust_decimal = { version = "1.39", default-features = false, features = ["std"] }
+fastnum = { version = "0.7", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
 serde_derive = "1.0.219"

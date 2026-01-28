@@ -52,6 +52,7 @@ pub use table_metadata::*;
 pub(crate) use table_metadata_builder::FIRST_FIELD_ID;
 pub use table_properties::*;
 pub use transform::*;
+pub(crate) use values::decimal_utils;
 pub use values::*;
 pub use view_metadata::*;
 pub use view_version::*;
