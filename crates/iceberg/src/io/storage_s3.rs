@@ -25,50 +25,14 @@ pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
 use url::Url;
 
+use crate::io::config::{
+    CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
+    S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
+    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
+    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+};
 use crate::io::is_truthy;
 use crate::{Error, ErrorKind, Result};
-
-/// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
-/// S3 endpoint.
-pub const S3_ENDPOINT: &str = "s3.endpoint";
-/// S3 access key id.
-pub const S3_ACCESS_KEY_ID: &str = "s3.access-key-id";
-/// S3 secret access key.
-pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
-/// S3 session token.
-/// This is required when using temporary credentials.
-pub const S3_SESSION_TOKEN: &str = "s3.session-token";
-/// S3 region.
-pub const S3_REGION: &str = "s3.region";
-/// Region to use for the S3 client.
-///
-/// This takes precedence over [`S3_REGION`].
-pub const CLIENT_REGION: &str = "client.region";
-/// S3 Path Style Access.
-pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
-/// S3 Server Side Encryption Type.
-pub const S3_SSE_TYPE: &str = "s3.sse.type";
-/// S3 Server Side Encryption Key.
-/// If S3 encryption type is kms, input is a KMS Key ID.
-/// In case this property is not set, default key "aws/s3" is used.
-/// If encryption type is custom, input is a custom base-64 AES256 symmetric key.
-pub const S3_SSE_KEY: &str = "s3.sse.key";
-/// S3 Server Side Encryption MD5.
-pub const S3_SSE_MD5: &str = "s3.sse.md5";
-/// If set, all AWS clients will assume a role of the given ARN, instead of using the default
-/// credential chain.
-pub const S3_ASSUME_ROLE_ARN: &str = "client.assume-role.arn";
-/// Optional external ID used to assume an IAM role.
-pub const S3_ASSUME_ROLE_EXTERNAL_ID: &str = "client.assume-role.external-id";
-/// Optional session name used to assume an IAM role.
-pub const S3_ASSUME_ROLE_SESSION_NAME: &str = "client.assume-role.session-name";
-/// Option to skip signing requests (e.g. for public buckets/folders).
-pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
-/// Option to skip loading the credential from EC2 metadata (typically used in conjunction with
-/// `S3_ALLOW_ANONYMOUS`).
-pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
-/// Option to skip loading configuration from config file and the env.
-pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
