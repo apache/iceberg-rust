@@ -20,11 +20,6 @@
 //! It's not intended for use outside of `iceberg-rust`.
 
 #[cfg(feature = "tests")]
-mod cmd;
-#[cfg(feature = "tests")]
-pub mod docker;
-
-#[cfg(feature = "tests")]
 pub use common::*;
 
 #[cfg(feature = "tests")]
