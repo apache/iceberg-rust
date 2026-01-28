@@ -146,12 +146,23 @@ jobs:
         with:
           key: ${{ matrix.test-suite.name }}
 
+      - name: Install cargo-nextest
+        if: matrix.test-suite.name == 'default'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Start Docker containers
         if: matrix.test-suite.name == 'default'
         run: make docker-up
 
       - name: Run tests
-        run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+        run: |
+          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
+            cargo nextest run ${{ matrix.test-suite.args }}
+          else
+            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+          fi
 
       - name: Stop Docker containers
         if: always() && matrix.test-suite.name == 'default'
