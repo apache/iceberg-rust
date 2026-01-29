@@ -20,19 +20,10 @@ use std::collections::HashMap;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
-
-use crate::get_shared_containers;
-
-mod append_data_file_test;
-mod append_partition_data_file_test;
-mod conflict_commit_test;
-mod datafusion;
-mod read_evolved_schema;
-mod read_positional_deletes;
-mod scan_all_type;
+use iceberg_integration_tests::get_test_fixture;
 
 pub async fn random_ns() -> Namespace {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
@@ -54,7 +45,7 @@ pub async fn random_ns() -> Namespace {
     ns
 }
 
-fn test_schema() -> Schema {
+pub fn test_schema() -> Schema {
     Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])

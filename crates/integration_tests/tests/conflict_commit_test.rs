@@ -17,9 +17,12 @@
 
 //! Integration tests for rest catalog.
 
+mod common;
+
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
+use common::{random_ns, test_schema};
 use futures::TryStreamExt;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -31,15 +34,12 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use iceberg_integration_tests::get_test_fixture;
 use parquet::file::properties::WriterProperties;
 
-use crate::get_shared_containers;
-use crate::shared_tests::{random_ns, test_schema};
-
 #[tokio::test]
-async fn test_append_data_file() {
-    let fixture = get_shared_containers();
+async fn test_append_data_file_conflict() {
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
@@ -96,32 +96,18 @@ async fn test_append_data_file() {
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
 
-    // check parquet file schema
-    let content = table
-        .file_io()
-        .new_input(data_file[0].file_path())
-        .unwrap()
-        .read()
-        .await
-        .unwrap();
-    let parquet_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
-        &content,
-        ArrowReaderOptions::default(),
-    )
-    .unwrap();
-    let field_ids: Vec<i32> = parquet_reader
-        .parquet_schema()
-        .columns()
-        .iter()
-        .map(|col| col.self_type().get_basic_info().id())
-        .collect();
-    assert_eq!(field_ids, vec![1, 2, 3]);
+    // start two transaction and commit one of them
+    let tx1 = Transaction::new(&table);
+    let append_action = tx1.fast_append().add_data_files(data_file.clone());
+    let tx1 = append_action.apply(tx1).unwrap();
 
-    // commit result
-    let tx = Transaction::new(&table);
-    let append_action = tx.fast_append().add_data_files(data_file.clone());
-    let tx = append_action.apply(tx).unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
+    let tx2 = Transaction::new(&table);
+    let append_action = tx2.fast_append().add_data_files(data_file.clone());
+    let tx2 = append_action.apply(tx2).unwrap();
+    let table = tx2
+        .commit(&rest_catalog)
+        .await
+        .expect("The first commit should not fail.");
 
     // check result
     let batch_stream = table
@@ -135,4 +121,7 @@ async fn test_append_data_file() {
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
+
+    // another commit should fail
+    assert!(tx1.commit(&rest_catalog).await.is_err());
 }

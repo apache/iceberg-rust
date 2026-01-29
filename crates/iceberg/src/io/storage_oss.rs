@@ -21,18 +21,8 @@ use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
 
+use crate::io::config::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
 use crate::{Error, ErrorKind, Result};
-
-/// Required configuration arguments for creating an Aliyun OSS Operator with OpenDAL:
-/// - `oss.endpoint`: The OSS service endpoint URL
-/// - `oss.access-key-id`: The access key ID for authentication
-/// - `oss.access-key-secret`: The access key secret for authentication
-///   Aliyun oss endpoint.
-pub const OSS_ENDPOINT: &str = "oss.endpoint";
-/// Aliyun oss access key id.
-pub const OSS_ACCESS_KEY_ID: &str = "oss.access-key-id";
-/// Aliyun oss access key secret.
-pub const OSS_ACCESS_KEY_SECRET: &str = "oss.access-key-secret";
 
 /// Parse iceberg props to oss config.
 pub(crate) fn oss_config_parse(mut m: HashMap<String, String>) -> Result<OssConfig> {

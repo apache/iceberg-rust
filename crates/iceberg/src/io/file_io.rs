@@ -24,7 +24,7 @@ use bytes::Bytes;
 use opendal::Operator;
 use url::Url;
 
-use super::storage::Storage;
+use super::storage::OpenDalStorage;
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -48,7 +48,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct FileIO {
     builder: FileIOBuilder,
 
-    inner: Arc<Storage>,
+    inner: Arc<OpenDalStorage>,
 }
 
 impl FileIO {
@@ -262,7 +262,7 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        let storage = Storage::build(self.clone())?;
+        let storage = OpenDalStorage::build(self.clone())?;
         Ok(FileIO {
             builder: self,
             inner: Arc::new(storage),

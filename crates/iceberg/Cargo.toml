@@ -86,12 +86,12 @@ serde_with = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
+typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
-ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 mockall = { workspace = true }

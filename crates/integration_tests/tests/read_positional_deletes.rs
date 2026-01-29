@@ -20,12 +20,11 @@
 use futures::TryStreamExt;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
-
-use crate::get_shared_containers;
+use iceberg_integration_tests::get_test_fixture;
 
 #[tokio::test]
 async fn test_read_table_with_positional_deletes() {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await

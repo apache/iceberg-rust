@@ -29,3 +29,23 @@ slt = "df_test/create_table.slt"
 [[steps]]
 engine = "df"
 slt = "df_test/insert_into.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/scan_all_types.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/basic_queries.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/binary_predicate_pushdown.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/like_predicate_pushdown.slt"
+
+[[steps]]
+engine = "df"
+slt = "df_test/drop_table.slt"

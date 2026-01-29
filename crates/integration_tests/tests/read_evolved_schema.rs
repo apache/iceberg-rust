@@ -23,13 +23,12 @@ use iceberg::expr::Reference;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_integration_tests::get_test_fixture;
 use ordered_float::OrderedFloat;
-
-use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_evolved_schema() {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
