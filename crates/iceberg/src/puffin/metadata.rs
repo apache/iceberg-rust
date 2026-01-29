@@ -261,8 +261,8 @@ impl FileMetadata {
         let footer_payload_bytes = footer_bytes
             .get(start_offset..end_offset)
             .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Index range is out of bounds."))?;
-        let decompressed_footer_payload_bytes = footer_compression_codec
-            .decompress(footer_payload_bytes.to_vec())?;
+        let decompressed_footer_payload_bytes =
+            footer_compression_codec.decompress(footer_payload_bytes.into())?;
 
         String::from_utf8(decompressed_footer_payload_bytes).map_err(|src| {
             Error::new(ErrorKind::DataInvalid, "Footer is not a valid UTF-8 string")

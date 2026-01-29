@@ -150,7 +150,6 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::{ErrorKind, Result};
     use crate::compression::CompressionCodec;
     use crate::io::{FileIOBuilder, InputFile, OutputFile};
     use crate::puffin::blob::Blob;
@@ -163,6 +162,7 @@ mod tests {
         zstd_compressed_metric_file_metadata,
     };
     use crate::puffin::writer::PuffinWriter;
+    use crate::{ErrorKind, Result};
 
     async fn write_puffin_file(
         temp_dir: &TempDir,
