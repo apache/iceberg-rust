@@ -301,7 +301,7 @@ mod tests {
             "super-secret",
             "https://auth.example.com/token",
         );
-        let debug_str = format!("{:?}", auth);
+        let debug_str = format!("{auth:?}");
         assert!(!debug_str.contains("super-secret"));
     }
 
