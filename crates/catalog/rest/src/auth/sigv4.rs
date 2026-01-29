@@ -47,7 +47,10 @@ impl Debug for SigV4Credentials {
         f.debug_struct("SigV4Credentials")
             .field("access_key_id", &self.access_key_id)
             .field("secret_access_key", &"[REDACTED]")
-            .field("session_token", &self.session_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -221,12 +224,12 @@ impl SigV4Authenticator {
 
         // Add session token if present
         if let Some(ref token) = self.credentials.session_token {
-            request
-                .headers_mut()
-                .insert("x-amz-security-token", token.parse().map_err(|e| {
-                    Error::new(ErrorKind::DataInvalid, "Invalid session token")
-                        .with_source(e)
-                })?);
+            request.headers_mut().insert(
+                "x-amz-security-token",
+                token.parse().map_err(|e| {
+                    Error::new(ErrorKind::DataInvalid, "Invalid session token").with_source(e)
+                })?,
+            );
         }
 
         // Compute payload hash
@@ -245,11 +248,11 @@ impl SigV4Authenticator {
             .insert("x-amz-content-sha256", payload_hash.parse().unwrap());
 
         // Build canonical request
-        let (canonical_request, signed_headers) =
-            build_canonical_request(request, &payload_hash)?;
+        let (canonical_request, signed_headers) = build_canonical_request(request, &payload_hash)?;
 
         // Create string to sign
-        let credential_scope = format!("{date_stamp}/{}/{}/aws4_request", self.region, self.service);
+        let credential_scope =
+            format!("{date_stamp}/{}/{}/aws4_request", self.region, self.service);
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
             sha256_hex(canonical_request.as_bytes())
@@ -265,12 +268,12 @@ impl SigV4Authenticator {
             self.credentials.access_key_id, credential_scope, signed_headers, signature
         );
 
-        request
-            .headers_mut()
-            .insert(http::header::AUTHORIZATION, authorization.parse().map_err(|e| {
-                Error::new(ErrorKind::DataInvalid, "Invalid authorization header")
-                    .with_source(e)
-            })?);
+        request.headers_mut().insert(
+            http::header::AUTHORIZATION,
+            authorization.parse().map_err(|e| {
+                Error::new(ErrorKind::DataInvalid, "Invalid authorization header").with_source(e)
+            })?,
+        );
 
         Ok(())
     }
@@ -337,7 +340,10 @@ fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
 
 /// Derive the signing key for AWS SigV4.
 fn derive_signing_key(secret_key: &str, date_stamp: &str, region: &str, service: &str) -> [u8; 32] {
-    let k_date = hmac_sha256(format!("AWS4{secret_key}").as_bytes(), date_stamp.as_bytes());
+    let k_date = hmac_sha256(
+        format!("AWS4{secret_key}").as_bytes(),
+        date_stamp.as_bytes(),
+    );
     let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
     hmac_sha256(&k_service, b"aws4_request")
@@ -450,7 +456,11 @@ mod tests {
 
     #[test]
     fn test_credentials_debug_redacts_secrets() {
-        let creds = SigV4Credentials::new("AKIAIOSFODNN7EXAMPLE", "my-secret-key", Some("my-token-value"));
+        let creds = SigV4Credentials::new(
+            "AKIAIOSFODNN7EXAMPLE",
+            "my-secret-key",
+            Some("my-token-value"),
+        );
         let debug_str = format!("{creds:?}");
         assert!(debug_str.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(debug_str.contains("[REDACTED]"));
@@ -513,10 +523,7 @@ mod tests {
         assert_eq!(build_canonical_query_string(Some("foo=bar")), "foo=bar");
 
         // Multiple parameters (should be sorted)
-        assert_eq!(
-            build_canonical_query_string(Some("b=2&a=1")),
-            "a=1&b=2"
-        );
+        assert_eq!(build_canonical_query_string(Some("b=2&a=1")), "a=1&b=2");
 
         // Parameters with encoding needed
         assert_eq!(
@@ -558,11 +565,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sigv4_with_session_token() {
-        let creds = SigV4Credentials::new(
-            "AKIAIOSFODNN7EXAMPLE",
-            "secret-key",
-            Some("session-token"),
-        );
+        let creds =
+            SigV4Credentials::new("AKIAIOSFODNN7EXAMPLE", "secret-key", Some("session-token"));
         let auth = SigV4Authenticator::new(creds, "us-east-1", "s3");
 
         let client = reqwest::Client::new();
@@ -669,7 +673,12 @@ mod tests {
         // Should hash the body and include in signature
         auth.authenticate(&mut request).await.unwrap();
 
-        let content_hash = request.headers().get("x-amz-content-sha256").unwrap().to_str().unwrap();
+        let content_hash = request
+            .headers()
+            .get("x-amz-content-sha256")
+            .unwrap()
+            .to_str()
+            .unwrap();
         // The hash should not be the empty string hash
         assert_ne!(
             content_hash,

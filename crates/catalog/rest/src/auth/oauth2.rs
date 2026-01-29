@@ -369,6 +369,9 @@ mod tests {
         .with_extra_params(params);
 
         assert_eq!(auth.extra_params.get("scope").unwrap(), "custom-scope");
-        assert_eq!(auth.extra_params.get("audience").unwrap(), "custom-audience");
+        assert_eq!(
+            auth.extra_params.get("audience").unwrap(),
+            "custom-audience"
+        );
     }
 }

@@ -329,11 +329,16 @@ impl RestCatalogConfig {
             .map(|s| s.as_str())
             .unwrap_or("s3");
 
-        let credentials =
-            crate::auth::SigV4Credentials::new(access_key.clone(), secret_key.clone(), session_token);
+        let credentials = crate::auth::SigV4Credentials::new(
+            access_key.clone(),
+            secret_key.clone(),
+            session_token,
+        );
 
         Some(crate::auth::SigV4Authenticator::new(
-            credentials, region, service,
+            credentials,
+            region,
+            service,
         ))
     }
 

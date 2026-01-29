@@ -50,14 +50,13 @@
 mod oauth2;
 mod sigv4;
 
-pub use oauth2::OAuth2Authenticator;
-pub use sigv4::{SigV4Authenticator, SigV4Credentials};
-
 use std::fmt::Debug;
 
 use async_trait::async_trait;
 use iceberg::Result;
+pub use oauth2::OAuth2Authenticator;
 use reqwest::Request;
+pub use sigv4::{SigV4Authenticator, SigV4Credentials};
 
 /// Authentication provider trait for REST catalog requests.
 ///
