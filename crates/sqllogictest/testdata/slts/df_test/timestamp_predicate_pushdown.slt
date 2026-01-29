@@ -28,7 +28,6 @@ statement ok
 CREATE TABLE default.default.test_timestamp_table (id INT NOT NULL, ts TIMESTAMP)
 
 # Insert test data with timestamps
-# Note: Iceberg timestamps are stored in microseconds
 # We use CAST to convert string timestamps to proper timestamp values
 query I
 INSERT INTO default.default.test_timestamp_table

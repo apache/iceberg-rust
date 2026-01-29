@@ -269,10 +269,7 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
-        // Timestamp conversions
-        // We convert to microseconds using Datum::timestamp_micros(), which works when:
-        // - Table column is Iceberg Timestamp type (microsecond precision), OR
-        // - Source precision is microseconds or coarser (second, millisecond)
+        // Timestamp conversions - convert to appropriate Iceberg Datum based on precision
         ScalarValue::TimestampSecond(Some(v), _) => {
             Some(Datum::timestamp_micros(v * MICROS_PER_SECOND))
         }
@@ -280,9 +277,6 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
             Some(Datum::timestamp_micros(v * MICROS_PER_MILLI))
         }
         ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
-        // For nanosecond timestamps, use Datum::timestamp_nanos() to preserve precision
-        // This works correctly when the table column is TimestampNs (nanosecond precision)
-        // If the column is Timestamp (microsecond), Iceberg will handle the type appropriately
         ScalarValue::TimestampNanosecond(Some(v), _) => Some(Datum::timestamp_nanos(*v)),
         _ => None,
     }
