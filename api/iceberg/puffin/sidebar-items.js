@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["APACHE_DATASKETCHES_THETA_V1","CREATED_BY_PROPERTY","DELETION_VECTOR_V1"],"enum":["CompressionCodec"],"struct":["Blob","BlobMetadata","FileMetadata","PuffinReader","PuffinWriter"]};
+window.SIDEBAR_ITEMS = {"constant":["APACHE_DATASKETCHES_THETA_V1","CREATED_BY_PROPERTY","DELETION_VECTOR_V1"],"struct":["Blob","BlobMetadata","FileMetadata","PuffinReader","PuffinWriter"]};
