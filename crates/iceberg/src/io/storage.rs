@@ -190,6 +190,9 @@ pub enum OpenDalFactory {
     /// Placeholder variant to ensure the enum is always inhabited.
     /// This variant cannot be constructed and exists only to satisfy
     /// the compiler when no storage features are enabled.
+    ///
+    /// TODO this should be replaced with cfg(any) to be gated with feature flag
+    /// once we moved it to a different crate
     #[doc(hidden)]
     #[serde(skip)]
     _Phantom(std::convert::Infallible),
@@ -201,9 +204,7 @@ impl StorageFactory for OpenDalFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         match self {
             #[cfg(feature = "storage-memory")]
-            OpenDalFactory::Memory => {
-                Ok(Arc::new(OpenDal::Memory(super::memory_config_build()?)))
-            }
+            OpenDalFactory::Memory => Ok(Arc::new(OpenDal::Memory(super::memory_config_build()?))),
             #[cfg(feature = "storage-fs")]
             OpenDalFactory::Fs => Ok(Arc::new(OpenDal::LocalFs)),
             #[cfg(feature = "storage-s3")]
