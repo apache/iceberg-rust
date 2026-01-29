@@ -160,6 +160,8 @@ pub trait StorageFactory: Debug + Send + Sync {
 /// OpenDAL-based storage factory.
 ///
 /// Maps scheme to the corresponding OpenDal storage variant.
+///
+/// TODO this is currently not used, we still use OpenDal::build() for now
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalFactory {
     /// Memory storage factory.
@@ -187,15 +189,6 @@ pub enum OpenDalFactory {
         /// The configured Azure storage scheme.
         configured_scheme: AzureStorageScheme,
     },
-    /// Placeholder variant to ensure the enum is always inhabited.
-    /// This variant cannot be constructed and exists only to satisfy
-    /// the compiler when no storage features are enabled.
-    ///
-    /// TODO this should be replaced with cfg(any) to be gated with feature flag
-    /// once we moved it to a different crate
-    #[doc(hidden)]
-    #[serde(skip)]
-    _Phantom(std::convert::Infallible),
 }
 
 #[typetag::serde(name = "OpenDalFactory")]
@@ -228,7 +221,18 @@ impl StorageFactory for OpenDalFactory {
                 configured_scheme: configured_scheme.clone(),
                 config: super::azdls_config_parse(config.props().clone())?.into(),
             })),
-            OpenDalFactory::_Phantom(infallible) => match *infallible {},
+            #[cfg(all(
+                not(feature = "storage-memory"),
+                not(feature = "storage-fs"),
+                not(feature = "storage-s3"),
+                not(feature = "storage-gcs"),
+                not(feature = "storage-oss"),
+                not(feature = "storage-azdls"),
+            ))]
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "No storage service has been enabled",
+            )),
         }
     }
 }
@@ -275,25 +279,26 @@ pub enum OpenDal {
         config: Arc<OssConfig>,
     },
     /// Azure Data Lake Storage variant.
+    /// Expects paths of the form
+    /// `abfs[s]://<filesystem>@<account>.dfs.<endpoint-suffix>/<path>` or
+    /// `wasb[s]://<container>@<account>.blob.<endpoint-suffix>/<path>`.
     #[cfg(feature = "storage-azdls")]
     #[allow(private_interfaces)]
     Azdls {
         /// The configured Azure storage scheme.
+        /// Because Azdls accepts multiple possible schemes, we store the full
+        /// passed scheme here to later validate schemes passed via paths.
         configured_scheme: AzureStorageScheme,
         /// Azure DLS configuration.
         #[serde(skip)]
         config: Arc<AzdlsConfig>,
     },
-    /// Placeholder variant to ensure the enum is always inhabited.
-    /// This variant cannot be constructed and exists only to satisfy
-    /// the compiler when no storage features are enabled.
-    #[doc(hidden)]
-    #[serde(skip)]
-    _Phantom(std::convert::Infallible),
 }
 
 impl OpenDal {
     /// Convert iceberg config to opendal config.
+    ///
+    /// TODO Switch to use OpenDalFactory::build()
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let _ = (&props, &extensions);
@@ -423,7 +428,19 @@ impl OpenDal {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme)?,
-            OpenDal::_Phantom(infallible) => match *infallible {},
+            #[cfg(all(
+                not(feature = "storage-s3"),
+                not(feature = "storage-fs"),
+                not(feature = "storage-gcs"),
+                not(feature = "storage-oss"),
+                not(feature = "storage-azdls"),
+            ))]
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "No storage service has been enabled",
+                ));
+            }
         };
 
         // Transient errors are common for object stores; however there's no
