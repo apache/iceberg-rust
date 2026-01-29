@@ -33,7 +33,7 @@ use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, stream, try_join};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
@@ -58,6 +58,8 @@ use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{DataContentType, Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
+
+const MAX_BYTE_RANGE_CONCURRENCY: usize = 16;
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -1688,6 +1690,28 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
                 .read(range.start..range.end)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        let reader = &self.r;
+        async move {
+            let concurrency = available_parallelism()
+                .get()
+                .clamp(1, MAX_BYTE_RANGE_CONCURRENCY);
+            let reads = ranges.into_iter().map(|range| {
+                reader
+                    .read(range.start..range.end)
+                    .map_err(|err| parquet::errors::ParquetError::External(Box::new(err)))
+            });
+            stream::iter(reads)
+                .buffered(concurrency)
+                .try_collect()
+                .await
+        }
+        .boxed()
     }
 
     // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
