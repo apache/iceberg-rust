@@ -255,10 +255,10 @@ pub enum OpenDal {
     /// S3 storage variant.
     #[cfg(feature = "storage-s3")]
     S3 {
-        /// The configured scheme (s3 or s3a).
+        /// s3 storage could have `s3://` and `s3a://`.
+        /// Storing the scheme string here to return the correct path.
         configured_scheme: String,
         /// S3 configuration.
-        #[serde(skip)]
         config: Arc<S3Config>,
         /// Custom AWS credential loader.
         #[serde(skip)]
@@ -268,14 +268,12 @@ pub enum OpenDal {
     #[cfg(feature = "storage-gcs")]
     Gcs {
         /// GCS configuration.
-        #[serde(skip)]
         config: Arc<GcsConfig>,
     },
     /// OSS storage variant.
     #[cfg(feature = "storage-oss")]
     Oss {
         /// OSS configuration.
-        #[serde(skip)]
         config: Arc<OssConfig>,
     },
     /// Azure Data Lake Storage variant.
@@ -290,7 +288,6 @@ pub enum OpenDal {
         /// passed scheme here to later validate schemes passed via paths.
         configured_scheme: AzureStorageScheme,
         /// Azure DLS configuration.
-        #[serde(skip)]
         config: Arc<AzdlsConfig>,
     },
 }

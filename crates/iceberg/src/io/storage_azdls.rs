@@ -22,7 +22,7 @@ use std::str::FromStr;
 use opendal::Configurator;
 use opendal::services::AzdlsConfig;
 use url::Url;
-
+use serde::{Serialize, Deserialize};
 use crate::io::config::{
     ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
     ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
@@ -100,8 +100,8 @@ pub(crate) fn azdls_create_operator<'a>(
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum AzureStorageScheme {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum AzureStorageScheme {
     Abfs,
     Abfss,
     Wasb,
