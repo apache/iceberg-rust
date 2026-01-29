@@ -96,6 +96,7 @@ impl DataFusionEngine {
         // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
         Self::create_binary_table(&catalog, &namespace).await?;
+        Self::create_boolean_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
@@ -155,6 +156,34 @@ impl DataFusionEngine {
                 namespace,
                 TableCreation::builder()
                     .name("test_binary_table".to_string())
+                    .schema(schema)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Create a test table with boolean type column
+    /// Used for testing boolean predicate pushdown
+    /// TODO: this can be removed when we support CREATE TABLE
+    async fn create_boolean_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "is_active", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(3, "description", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_boolean_table".to_string())
                     .schema(schema)
                     .build(),
             )
