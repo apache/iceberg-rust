@@ -252,7 +252,6 @@ fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
 
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 const MICROS_PER_SECOND: i64 = 1_000_000;
-const NANOS_PER_MICRO: i64 = 1_000;
 const MICROS_PER_MILLI: i64 = 1_000;
 
 /// Convert a scalar value to an iceberg datum.
@@ -278,9 +277,11 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
             Some(Datum::timestamp_micros(v * MICROS_PER_MILLI))
         }
         ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
-        ScalarValue::TimestampNanosecond(Some(v), _) => {
-            Some(Datum::timestamp_micros(v / NANOS_PER_MICRO))
-        }
+        // Don't convert nanosecond timestamps - would lose precision
+        // Iceberg timestamps are microseconds, converting from nanoseconds loses sub-microsecond precision
+        // Example: 100 nanoseconds / 1000 = 0 microseconds (incorrect)
+        // Better to not push down and let DataFusion handle filtering
+        ScalarValue::TimestampNanosecond(_, _) => None,
         _ => None,
     }
 }
@@ -519,12 +520,13 @@ mod tests {
             super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(Some(ts_micros), None));
         assert_eq!(datum, Some(Datum::timestamp_micros(ts_micros)));
 
-        // Test TimestampNanosecond - convert to microseconds (truncate)
+        // Test TimestampNanosecond - should return None to avoid precision loss
+        // Converting nanoseconds to microseconds loses sub-microsecond precision
         let ts_nanos = 1672876800000000500i64; // 2023-01-05 00:00:00.000000500 UTC in nanoseconds
         let datum =
             super::scalar_value_to_datum(&ScalarValue::TimestampNanosecond(Some(ts_nanos), None));
-        // Nanoseconds are truncated when converting to microseconds
-        assert_eq!(datum, Some(Datum::timestamp_micros(1672876800000000)));
+        // Should return None - predicates with nanosecond timestamps won't be pushed down
+        assert_eq!(datum, None);
 
         // Test None timestamp
         let datum = super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(None, None));

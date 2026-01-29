@@ -96,7 +96,6 @@ impl DataFusionEngine {
         // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
         Self::create_binary_table(&catalog, &namespace).await?;
-        Self::create_timestamp_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
@@ -156,33 +155,6 @@ impl DataFusionEngine {
                 namespace,
                 TableCreation::builder()
                     .name("test_binary_table".to_string())
-                    .schema(schema)
-                    .build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    /// Create a test table with timestamp type column
-    /// Used for testing timestamp predicate pushdown
-    /// TODO: this can be removed when we support CREATE TABLE
-    async fn create_timestamp_table(
-        catalog: &impl Catalog,
-        namespace: &NamespaceIdent,
-    ) -> anyhow::Result<()> {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
-            ])
-            .build()?;
-
-        catalog
-            .create_table(
-                namespace,
-                TableCreation::builder()
-                    .name("test_timestamp_table".to_string())
                     .schema(schema)
                     .build(),
             )

@@ -15,10 +15,28 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Test timestamp predicate pushdown
-# This validates that timestamp predicates are pushed down to the storage layer
-# Note: Timestamp scalar value conversion to Datum::timestamp_micros supports
-# direct timestamp literals when DataFusion provides them in ScalarValue form
+# Test timestamp predicate pushdown behavior
+#
+# IMPORTANT: DataFusion uses nanosecond precision timestamps by default.
+# Iceberg stores timestamps in microseconds. Converting nanoseconds to microseconds
+# loses sub-microsecond precision, which can cause incorrect predicate evaluation.
+#
+# Example of the precision loss problem:
+#   Predicate: ts >= 100 nanoseconds
+#   Converted: ts >= 0 microseconds (100ns / 1000 = 0us, losing 100ns)
+#   This would incorrectly match ts = 0, which fails the original predicate.
+#
+# Therefore, nanosecond timestamp predicates are NOT pushed down to avoid this
+# precision loss. The tests below verify that nanosecond timestamps result in
+# empty predicates (predicate:[]) at the IcebergTableScan level, with filtering
+# happening in DataFusion's FilterExec instead.
+#
+# For timestamp types with precision that fits in microseconds (second, millisecond,
+# microsecond), predicate pushdown works correctly and those predicates ARE pushed down.
+
+# Create test table with timestamp column
+statement ok
+CREATE TABLE default.default.test_timestamp_table (id INT NOT NULL, ts TIMESTAMP)
 
 # Insert test data with timestamps
 # Note: Iceberg timestamps are stored in microseconds
@@ -34,19 +52,22 @@ VALUES
 ----
 5
 
-# Verify timestamp equality predicate is pushed down to IcebergTableScan
+# Verify timestamp equality predicate is NOT pushed down for nanosecond timestamps
+# Note: DataFusion uses nanosecond precision by default. We don't push down nanosecond
+# timestamps to avoid precision loss (Iceberg stores microseconds).
+# Example: 100ns / 1000 = 0us, which would incorrectly match ts >= 0us
 query TT
 EXPLAIN SELECT * FROM default.default.test_timestamp_table WHERE ts = CAST('2023-01-05 12:30:00' AS TIMESTAMP)
 ----
 logical_plan
-01)Filter: default.default.test_timestamp_table.ts = TimestampMicrosecond(1672921800000000, None)
-02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts = TimestampMicrosecond(1672921800000000, None)]
+01)Filter: default.default.test_timestamp_table.ts = TimestampNanosecond(1672921800000000000, None)
+02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts = TimestampNanosecond(1672921800000000000, None)]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 = 1672921800000000
+02)--FilterExec: ts@1 = 1672921800000000000
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[ts = 2023-01-05 12:30:00]
+05)--------IcebergTableScan projection:[id,ts] predicate:[]
 
 # Verify timestamp equality filtering works
 query I?
@@ -54,19 +75,19 @@ SELECT * FROM default.default.test_timestamp_table WHERE ts = CAST('2023-01-05 1
 ----
 2 2023-01-05T12:30:00
 
-# Verify timestamp greater than predicate is pushed down to IcebergTableScan
+# Verify timestamp greater than predicate is NOT pushed down for nanosecond timestamps
 query TT
 EXPLAIN SELECT * FROM default.default.test_timestamp_table WHERE ts > CAST('2023-01-10 00:00:00' AS TIMESTAMP)
 ----
 logical_plan
-01)Filter: default.default.test_timestamp_table.ts > TimestampMicrosecond(1673308800000000, None)
-02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts > TimestampMicrosecond(1673308800000000, None)]
+01)Filter: default.default.test_timestamp_table.ts > TimestampNanosecond(1673308800000000000, None)
+02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts > TimestampNanosecond(1673308800000000000, None)]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 > 1673308800000000
+02)--FilterExec: ts@1 > 1673308800000000000
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-10 00:00:00]
+05)--------IcebergTableScan projection:[id,ts] predicate:[]
 
 # Verify timestamp greater than filtering
 query I? rowsort
@@ -83,21 +104,21 @@ SELECT * FROM default.default.test_timestamp_table WHERE ts <= CAST('2023-01-05 
 1 2023-01-01T00:00:00
 2 2023-01-05T12:30:00
 
-# Verify timestamp range predicate (AND of two comparisons) is pushed down
+# Verify timestamp range predicate (AND of two comparisons) is NOT pushed down for nanosecond timestamps
 query TT
 EXPLAIN SELECT * FROM default.default.test_timestamp_table
 WHERE ts >= CAST('2023-01-05 00:00:00' AS TIMESTAMP)
   AND ts <= CAST('2023-01-15 23:59:59' AS TIMESTAMP)
 ----
 logical_plan
-01)Filter: default.default.test_timestamp_table.ts >= TimestampMicrosecond(1672876800000000, None) AND default.default.test_timestamp_table.ts <= TimestampMicrosecond(1673827199000000, None)
-02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts >= TimestampMicrosecond(1672876800000000, None), default.default.test_timestamp_table.ts <= TimestampMicrosecond(1673827199000000, None)]
+01)Filter: default.default.test_timestamp_table.ts >= TimestampNanosecond(1672876800000000000, None) AND default.default.test_timestamp_table.ts <= TimestampNanosecond(1673827199000000000, None)
+02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts >= TimestampNanosecond(1672876800000000000, None), default.default.test_timestamp_table.ts <= TimestampNanosecond(1673827199000000000, None)]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 >= 1672876800000000 AND ts@1 <= 1673827199000000
+02)--FilterExec: ts@1 >= 1672876800000000000 AND ts@1 <= 1673827199000000000
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[(ts >= 2023-01-05 00:00:00) AND (ts <= 2023-01-15 23:59:59)]
+05)--------IcebergTableScan projection:[id,ts] predicate:[]
 
 # Test timestamp range predicate filtering
 query I? rowsort
@@ -131,3 +152,7 @@ query I? rowsort
 SELECT * FROM default.default.test_timestamp_table WHERE ts < CAST('2023-01-05 00:00:00' AS TIMESTAMP)
 ----
 1 2023-01-01T00:00:00
+
+# Clean up: Drop the test table
+statement ok
+DROP TABLE default.default.test_timestamp_table
