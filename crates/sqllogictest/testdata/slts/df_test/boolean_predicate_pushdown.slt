@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Create test table with boolean column
+statement ok
+CREATE TABLE default.default.test_boolean_table (id INT NOT NULL, is_active BOOLEAN, description STRING)
+
 # Insert test data into test_boolean_table
 statement ok
 INSERT INTO default.default.test_boolean_table VALUES
@@ -120,3 +124,7 @@ SELECT * FROM default.default.test_boolean_table WHERE is_active IS NOT NULL
 3 true Premium member
 4 false Trial expired
 5 true Verified account
+
+# Clean up: Drop the test table
+statement ok
+DROP TABLE default.default.test_boolean_table
