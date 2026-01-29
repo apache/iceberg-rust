@@ -26,6 +26,13 @@ pub fn from_sqlx_error(error: sqlx::Error) -> Error {
     .with_source(error)
 }
 
+pub fn unsupported_sql_backend_err<T>(backend: impl ToString) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::FeatureUnsupported,
+        format!("Unsupported SQL backend: {}", backend.to_string()),
+    ))
+}
+
 pub fn no_such_namespace_err<T>(namespace: &NamespaceIdent) -> Result<T> {
     Err(Error::new(
         ErrorKind::Unexpected,
