@@ -20,8 +20,8 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::compression::CompressionCodec;
 use crate::io::{FileRead, InputFile};
-use crate::puffin::compression::CompressionCodec;
 use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
@@ -956,5 +956,35 @@ mod tests {
             .unwrap();
 
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata());
+    }
+
+    #[tokio::test]
+    async fn test_gzip_compression_allowed_in_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a JSON payload with Gzip compression codec
+        // Metadata should be readable, but accessing the blob will fail
+        let payload = r#"{
+            "blobs": [
+                {
+                    "type": "test-type",
+                    "fields": [1],
+                    "snapshot-id": 1,
+                    "sequence-number": 1,
+                    "offset": 4,
+                    "length": 10,
+                    "compression-codec": "gzip"
+                }
+            ]
+        }"#;
+
+        let input_file = input_file_with_payload(&temp_dir, payload).await;
+
+        // Reading metadata should succeed (lazy validation)
+        let result = FileMetadata::read(&input_file).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+        assert_eq!(metadata.blobs.len(), 1);
+        assert_eq!(metadata.blobs[0].compression_codec, CompressionCodec::Gzip);
     }
 }
