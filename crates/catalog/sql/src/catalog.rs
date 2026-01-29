@@ -28,7 +28,7 @@ use iceberg::{
     TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
-use sqlx::{Any, AnyPool, Column, Row, Transaction};
+use sqlx::{Any, AnyPool, Row, Transaction};
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
