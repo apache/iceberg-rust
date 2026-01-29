@@ -280,15 +280,10 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
             Some(Datum::timestamp_micros(v * MICROS_PER_MILLI))
         }
         ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
-        // Don't convert nanosecond timestamps - loses precision when truncating to microseconds
-        // Example: 100 nanoseconds / 1000 = 0 microseconds
-        // This makes "ts >= 100ns" incorrectly match "ts = 0us"
-        //
-        // Note: Iceberg also has TimestampNs type (nanosecond precision). We could theoretically
-        // use Datum::timestamp_nanos() for those columns, but we'd need to check the actual
-        // column type first. Currently we always use timestamp_micros(), which is safe for
-        // the common case (Timestamp columns with microsecond precision).
-        ScalarValue::TimestampNanosecond(_, _) => None,
+        // For nanosecond timestamps, use Datum::timestamp_nanos() to preserve precision
+        // This works correctly when the table column is TimestampNs (nanosecond precision)
+        // If the column is Timestamp (microsecond), Iceberg will handle the type appropriately
+        ScalarValue::TimestampNanosecond(Some(v), _) => Some(Datum::timestamp_nanos(*v)),
         _ => None,
     }
 }
@@ -527,13 +522,12 @@ mod tests {
             super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(Some(ts_micros), None));
         assert_eq!(datum, Some(Datum::timestamp_micros(ts_micros)));
 
-        // Test TimestampNanosecond - should return None to avoid precision loss
-        // Converting nanoseconds to microseconds loses sub-microsecond precision
+        // Test TimestampNanosecond - should use timestamp_nanos to preserve precision
         let ts_nanos = 1672876800000000500i64; // 2023-01-05 00:00:00.000000500 UTC in nanoseconds
         let datum =
             super::scalar_value_to_datum(&ScalarValue::TimestampNanosecond(Some(ts_nanos), None));
-        // Should return None - predicates with nanosecond timestamps won't be pushed down
-        assert_eq!(datum, None);
+        // Should preserve full nanosecond precision
+        assert_eq!(datum, Some(Datum::timestamp_nanos(ts_nanos)));
 
         // Test None timestamp
         let datum = super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(None, None));
