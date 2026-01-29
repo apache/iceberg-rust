@@ -45,7 +45,7 @@ impl MetadataLocation {
         Ok(if codec.is_none() {
             None
         } else {
-            Some(codec.suffix().to_string())
+            Some(codec.suffix()?.to_string())
         })
     }
 
@@ -130,7 +130,7 @@ impl MetadataLocation {
         ))?;
 
         // Check for compression suffix (e.g., .gz)
-        let gzip_suffix = CompressionCodec::Gzip.suffix();
+        let gzip_suffix = CompressionCodec::Gzip.suffix()?;
         let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(gzip_suffix) {
             (s, Some(gzip_suffix.to_string()))
         } else {
@@ -277,7 +277,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: Some(CompressionCodec::Gzip.suffix().to_string()),
+                    compression_suffix: Some(CompressionCodec::Gzip.suffix().unwrap().to_string()),
                 }),
             ),
             // Negative version
@@ -388,7 +388,7 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
-        let gzip_suffix = CompressionCodec::Gzip.suffix();
+        let gzip_suffix = CompressionCodec::Gzip.suffix().unwrap();
         assert_eq!(location.compression_suffix, Some(gzip_suffix.to_string()));
         assert_eq!(
             location.to_string(),
@@ -418,13 +418,13 @@ mod test {
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip_upper);
         assert_eq!(
             location.compression_suffix,
-            Some(CompressionCodec::Gzip.suffix().to_string())
+            Some(CompressionCodec::Gzip.suffix().unwrap().to_string())
         );
     }
 
     #[test]
     fn test_metadata_next_version_handles_compression() {
-        let gzip_suffix = CompressionCodec::Gzip.suffix();
+        let gzip_suffix = CompressionCodec::Gzip.suffix().unwrap();
 
         // Start with a location without compression
         let props_none = HashMap::new();
@@ -525,7 +525,7 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let location_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
-        let gzip_suffix = CompressionCodec::Gzip.suffix();
+        let gzip_suffix = CompressionCodec::Gzip.suffix().unwrap();
         assert_eq!(
             location_gzip.compression_suffix,
             Some(gzip_suffix.to_string())
