@@ -189,3 +189,4 @@ CREATE TABLE default.default.test_timestamp_millis (id INT NOT NULL, ts TIMESTAM
 # This should fail because Iceberg doesn't support second precision
 statement error DataFusion error: External error: DataInvalid => Unsupported Arrow data type: Timestamp\(s\)
 CREATE TABLE default.default.test_timestamp_seconds (id INT NOT NULL, ts TIMESTAMP(0))
+

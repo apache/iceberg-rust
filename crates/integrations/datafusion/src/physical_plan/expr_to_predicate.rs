@@ -251,8 +251,6 @@ fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
 }
 
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
-const MICROS_PER_SECOND: i64 = 1_000_000;
-const MICROS_PER_MILLI: i64 = 1_000;
 
 /// Convert a scalar value to an iceberg datum.
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
@@ -269,13 +267,11 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
-        // Timestamp conversions - convert to appropriate Iceberg Datum based on precision
-        ScalarValue::TimestampSecond(Some(v), _) => {
-            Some(Datum::timestamp_micros(v * MICROS_PER_SECOND))
-        }
-        ScalarValue::TimestampMillisecond(Some(v), _) => {
-            Some(Datum::timestamp_micros(v * MICROS_PER_MILLI))
-        }
+        // Timestamp conversions
+        // Note: TimestampSecond and TimestampMillisecond are not handled here because
+        // DataFusion's type coercion always converts them to match the column type
+        // (either TimestampMicrosecond or TimestampNanosecond) before predicate pushdown.
+        // See unit tests for how those conversions would work if needed.
         ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
         ScalarValue::TimestampNanosecond(Some(v), _) => Some(Datum::timestamp_nanos(*v)),
         _ => None,
@@ -498,33 +494,35 @@ mod tests {
     fn test_scalar_value_to_datum_timestamp() {
         use datafusion::common::ScalarValue;
 
-        // Test TimestampSecond - convert to microseconds
-        let ts_seconds = 1672876800i64; // 2023-01-05 00:00:00 UTC in seconds
-        let datum =
-            super::scalar_value_to_datum(&ScalarValue::TimestampSecond(Some(ts_seconds), None));
-        assert_eq!(datum, Some(Datum::timestamp_micros(ts_seconds * 1_000_000)));
-
-        // Test TimestampMillisecond - convert to microseconds
-        let ts_millis = 1672876800000i64; // 2023-01-05 00:00:00 UTC in milliseconds
-        let datum =
-            super::scalar_value_to_datum(&ScalarValue::TimestampMillisecond(Some(ts_millis), None));
-        assert_eq!(datum, Some(Datum::timestamp_micros(ts_millis * 1_000)));
-
-        // Test TimestampMicrosecond - use directly
+        // Test TimestampMicrosecond - maps directly to Datum::timestamp_micros
         let ts_micros = 1672876800000000i64; // 2023-01-05 00:00:00 UTC in microseconds
         let datum =
             super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(Some(ts_micros), None));
         assert_eq!(datum, Some(Datum::timestamp_micros(ts_micros)));
 
-        // Test TimestampNanosecond - should use timestamp_nanos to preserve precision
+        // Test TimestampNanosecond - maps to Datum::timestamp_nanos to preserve precision
         let ts_nanos = 1672876800000000500i64; // 2023-01-05 00:00:00.000000500 UTC in nanoseconds
         let datum =
             super::scalar_value_to_datum(&ScalarValue::TimestampNanosecond(Some(ts_nanos), None));
-        // Should preserve full nanosecond precision
         assert_eq!(datum, Some(Datum::timestamp_nanos(ts_nanos)));
 
         // Test None timestamp
         let datum = super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(None, None));
+        assert_eq!(datum, None);
+
+        // Note: TimestampSecond and TimestampMillisecond are not supported because
+        // DataFusion's type coercion converts them to TimestampMicrosecond or TimestampNanosecond
+        // before they reach scalar_value_to_datum in SQL queries.
+        //
+        // These return None (not pushed down):
+        let ts_seconds = 1672876800i64; // 2023-01-05 00:00:00 UTC in seconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampSecond(Some(ts_seconds), None));
+        assert_eq!(datum, None);
+
+        let ts_millis = 1672876800000i64; // 2023-01-05 00:00:00 UTC in milliseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampMillisecond(Some(ts_millis), None));
         assert_eq!(datum, None);
     }
 
