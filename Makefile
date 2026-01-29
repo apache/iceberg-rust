@@ -32,6 +32,12 @@ install-cargo-machete:
 cargo-machete: install-cargo-machete
 	cargo machete
 
+install-cargo-nextest:
+	cargo install --locked cargo-nextest
+
+nextest: install-cargo-nextest
+	cargo nextest run --all-targets --all-features --workspace
+
 install-taplo-cli:
 	cargo install taplo-cli@0.9.3
 
@@ -57,7 +63,7 @@ unit-test: doc-test
 
 test: docker-up
 	@trap '$(MAKE) docker-down' EXIT; \
-	cargo test --no-fail-fast --all-targets --all-features --workspace
+	$(MAKE) nextest
 
 clean:
 	cargo clean
