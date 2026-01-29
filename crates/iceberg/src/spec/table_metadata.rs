@@ -490,21 +490,10 @@ impl TableMetadata {
         // Check if compression is enabled via table properties
         let codec = parse_metadata_file_compression(&self.properties)?;
 
-        // Use case-insensitive comparison to match Java implementation
+        // Apply compression and adjust filename based on codec
         let (data_to_write, actual_location) = match codec {
             CompressionCodec::Gzip => {
-                let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
-                encoder.write_all(&json_data).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to compress metadata with gzip",
-                    )
-                    .with_source(e)
-                })?;
-                let compressed_data = encoder.finish().map_err(|e| {
-                    Error::new(ErrorKind::DataInvalid, "Failed to finish gzip compression")
-                        .with_source(e)
-                })?;
+                let compressed_data = codec.compress(json_data)?;
 
                 // Modify filename to add .gz before .metadata.json
                 let location = metadata_location.as_ref();
