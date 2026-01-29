@@ -141,3 +141,41 @@ SELECT * FROM default.default.test_timestamp_table WHERE ts < CAST('2023-01-05 0
 # Clean up: Drop the test table
 statement ok
 DROP TABLE default.default.test_timestamp_table
+
+# ============================================================================
+# Test timestamp predicate pushdown with different precisions
+# ============================================================================
+
+# Test with TIMESTAMP(6) - microsecond precision
+statement ok
+CREATE TABLE default.default.test_timestamp_micros (id INT NOT NULL, ts TIMESTAMP(6))
+
+query I
+INSERT INTO default.default.test_timestamp_micros
+VALUES
+  (1, CAST('2023-01-01 00:00:00' AS TIMESTAMP)),
+  (2, CAST('2023-01-05 12:30:00' AS TIMESTAMP))
+----
+2
+
+# Verify microsecond timestamp predicate is pushed down
+query TT
+EXPLAIN SELECT * FROM default.default.test_timestamp_micros WHERE ts > CAST('2023-01-01 00:00:00' AS TIMESTAMP)
+----
+logical_plan
+01)Filter: default.default.test_timestamp_micros.ts > TimestampMicrosecond(1672531200000000, None)
+02)--TableScan: default.default.test_timestamp_micros projection=[id, ts], partial_filters=[default.default.test_timestamp_micros.ts > TimestampMicrosecond(1672531200000000, None)]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: ts@1 > 1672531200000000
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CooperativeExec
+05)--------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-01 00:00:00]
+
+query I?
+SELECT * FROM default.default.test_timestamp_micros WHERE ts > CAST('2023-01-01 00:00:00' AS TIMESTAMP)
+----
+2 2023-01-05T12:30:00
+
+statement ok
+DROP TABLE default.default.test_timestamp_micros
