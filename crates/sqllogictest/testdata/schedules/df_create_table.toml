@@ -15,9 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-services:
-  gcs-server:
-    image: fsouza/fake-gcs-server@sha256:36b0116fae5236e8def76ccb07761a9ca323e476f366a5f4bf449cac19deaf2d
-    expose:
-      - 4443
-    command: --scheme http
+[engines]
+df = { type = "datafusion" }
+
+[[steps]]
+engine = "df"
+slt = "df_test/create_table.slt"

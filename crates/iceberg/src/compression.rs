@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Compression codec support for data compression and decompression.
+
+use std::io::{Read, Write};
+
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, ErrorKind, Result};
@@ -30,6 +37,8 @@ pub enum CompressionCodec {
     Lz4,
     /// Zstandard single compression frame with content size present
     Zstd,
+    /// Gzip compression
+    Gzip,
 }
 
 impl CompressionCodec {
@@ -40,8 +49,11 @@ impl CompressionCodec {
                 ErrorKind::FeatureUnsupported,
                 "LZ4 decompression is not supported currently",
             )),
-            CompressionCodec::Zstd => {
-                let decompressed = zstd::stream::decode_all(&bytes[..])?;
+            CompressionCodec::Zstd => Ok(zstd::stream::decode_all(&bytes[..])?),
+            CompressionCodec::Gzip => {
+                let mut decoder = GzDecoder::new(&bytes[..]);
+                let mut decompressed = Vec::new();
+                decoder.read_to_end(&mut decompressed)?;
                 Ok(decompressed)
             }
         }
@@ -60,8 +72,12 @@ impl CompressionCodec {
                 encoder.include_checksum(true)?;
                 encoder.set_pledged_src_size(Some(bytes.len().try_into()?))?;
                 std::io::copy(&mut &bytes[..], &mut encoder)?;
-                let compressed = encoder.finish()?;
-                Ok(compressed)
+                Ok(encoder.finish()?)
+            }
+            CompressionCodec::Gzip => {
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&bytes)?;
+                Ok(encoder.finish()?)
             }
         }
     }
@@ -73,51 +89,48 @@ impl CompressionCodec {
 
 #[cfg(test)]
 mod tests {
-    use crate::puffin::compression::CompressionCodec;
+    use super::CompressionCodec;
 
     #[tokio::test]
     async fn test_compression_codec_none() {
-        let compression_codec = CompressionCodec::None;
         let bytes_vec = [0_u8; 100].to_vec();
 
-        let compressed = compression_codec.compress(bytes_vec.clone()).unwrap();
+        let codec = CompressionCodec::None;
+        let compressed = codec.compress(bytes_vec.clone()).unwrap();
         assert_eq!(bytes_vec, compressed);
-
-        let decompressed = compression_codec.decompress(compressed.clone()).unwrap();
-        assert_eq!(compressed, decompressed)
+        let decompressed = codec.decompress(compressed).unwrap();
+        assert_eq!(bytes_vec, decompressed);
     }
 
     #[tokio::test]
-    async fn test_compression_codec_lz4() {
-        let compression_codec = CompressionCodec::Lz4;
+    async fn test_compression_codec_compress() {
         let bytes_vec = [0_u8; 100].to_vec();
 
-        assert_eq!(
-            compression_codec
-                .compress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently",
-        );
+        let compression_codecs = [CompressionCodec::Zstd, CompressionCodec::Gzip];
 
-        assert_eq!(
-            compression_codec
-                .decompress(bytes_vec.clone())
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 decompression is not supported currently",
-        )
+        for codec in compression_codecs {
+            let compressed = codec.compress(bytes_vec.clone()).unwrap();
+            assert!(compressed.len() < bytes_vec.len());
+            let decompressed = codec.decompress(compressed).unwrap();
+            assert_eq!(decompressed, bytes_vec);
+        }
     }
 
     #[tokio::test]
-    async fn test_compression_codec_zstd() {
-        let compression_codec = CompressionCodec::Zstd;
+    async fn test_compression_codec_unsupported() {
+        let unsupported_codecs = [(CompressionCodec::Lz4, "LZ4")];
         let bytes_vec = [0_u8; 100].to_vec();
 
-        let compressed = compression_codec.compress(bytes_vec.clone()).unwrap();
-        assert!(compressed.len() < bytes_vec.len());
+        for (codec, name) in unsupported_codecs {
+            assert_eq!(
+                codec.compress(bytes_vec.clone()).unwrap_err().to_string(),
+                format!("FeatureUnsupported => {name} compression is not supported currently"),
+            );
 
-        let decompressed = compression_codec.decompress(compressed.clone()).unwrap();
-        assert_eq!(decompressed, bytes_vec)
+            assert_eq!(
+                codec.decompress(bytes_vec.clone()).unwrap_err().to_string(),
+                format!("FeatureUnsupported => {name} decompression is not supported currently"),
+            );
+        }
     }
 }

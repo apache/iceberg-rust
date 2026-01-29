@@ -49,9 +49,7 @@ middleware = ["reqwest-middleware"]
 
 [dev-dependencies]
 async-trait = { workspace = true }
-ctor = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
-port_scanner = { workspace = true }
 task-local-extensions = "0.1"
 tokio = { workspace = true }
