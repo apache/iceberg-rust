@@ -203,8 +203,6 @@ impl TableProperties {
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
-    /// Metadata compression codec value for gzip
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_GZIP: &str = "gzip";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
