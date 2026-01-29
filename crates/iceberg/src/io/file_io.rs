@@ -102,7 +102,7 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
-    pub async fn remove_dir_all(&self, path: impl AsRef<str>) -> Result<()> {
+    pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
         self.inner.delete_prefix(path.as_ref()).await
     }
 
@@ -457,14 +457,14 @@ mod tests {
         assert!(file_io.exists(&a_path).await.unwrap());
 
         // Remove a file should be no-op.
-        file_io.remove_dir_all(&a_path).await.unwrap();
+        file_io.delete_prefix(&a_path).await.unwrap();
         assert!(file_io.exists(&a_path).await.unwrap());
 
         // Remove a not exist dir should be no-op.
-        file_io.remove_dir_all("not_exists/").await.unwrap();
+        file_io.delete_prefix("not_exists/").await.unwrap();
 
         // Remove a dir should remove all files in it.
-        file_io.remove_dir_all(&sub_dir_path).await.unwrap();
+        file_io.delete_prefix(&sub_dir_path).await.unwrap();
         assert!(!file_io.exists(&b_path).await.unwrap());
         assert!(!file_io.exists(&c_path).await.unwrap());
         assert!(file_io.exists(&a_path).await.unwrap());
@@ -483,7 +483,7 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(!file_io.exists(&full_path).await.unwrap());
         assert!(file_io.delete(&full_path).await.is_ok());
-        assert!(file_io.remove_dir_all(&full_path).await.is_ok());
+        assert!(file_io.delete_prefix(&full_path).await.is_ok());
     }
 
     #[tokio::test]
