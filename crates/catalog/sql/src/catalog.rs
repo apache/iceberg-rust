@@ -148,10 +148,6 @@ impl CatalogBuilder for SqlCatalogBuilder {
         }
 
         let name = name.into();
-        let valid_name = !name.trim().is_empty();
-        if valid_name {
-            self.0.name = name;
-        }
 
         let mut valid_sql_bind_style = true;
         if let Some(sql_bind_style) = self.0.props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
@@ -161,6 +157,8 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 valid_sql_bind_style = false;
             }
         }
+
+        let valid_name = !name.trim().is_empty();
 
         async move {
             if !valid_name {
@@ -179,6 +177,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
                     ),
                 ))
             } else {
+                self.0.name = name;
                 SqlCatalog::new(self.0).await
             }
         }
@@ -1008,32 +1007,7 @@ mod tests {
         HashMap::from([("exists".to_string(), "true".to_string())])
     }
 
-    // async fn new_sql_catalog_with_name(
-    //     catalog_location: String,
-    //     warehouse_location: String,
-    //     name: String,
-    // ) -> impl Catalog {
-    //     let sql_lite_uri = format!("sqlite:{catalog_location}");
-    //     sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
-
-    //     let props = HashMap::from_iter([
-    //         (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri.to_string()),
-    //         (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
-    //         (
-    //             SQL_CATALOG_PROP_BIND_STYLE.to_string(),
-    //             SqlBindStyle::DollarNumeric.to_string(),
-    //         ),
-    //     ]);
-    //     SqlCatalogBuilder::default()
-    //         .load(name, props)
-    //         .await
-    //         .unwrap()
-    // }
-
-    // async fn new_sql_catalog(warehouse_location: String) -> impl Catalog {
-    //     new_sql_catalog_with_name(temp_path(), warehouse_location, "iceberg".to_string()).await
-    // }
-
+    /// Create a new SQLite catalog for testing. If name is not specified it defaults to "iceberg".
     async fn new_sql_catalog(
         warehouse_location: String,
         name: Option<impl ToString>,
