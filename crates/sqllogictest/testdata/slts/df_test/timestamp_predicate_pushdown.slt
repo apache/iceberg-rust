@@ -138,28 +138,6 @@ SELECT * FROM default.default.test_timestamp_table WHERE ts < CAST('2023-01-05 0
 ----
 1 2023-01-01T00:00:00
 
-# ============================================================================
-# NOTE ON POSITIVE TESTS FOR MICROSECOND TIMESTAMP PUSHDOWN
-# ============================================================================
-#
-# Ideally, we would test that TimestampMicrosecond predicates ARE pushed down.
-# However, DataFusion currently uses nanosecond precision timestamps by default
-# for all TIMESTAMP columns, and there's no way in SQL to force microsecond precision.
-#
-# The code in expr_to_predicate.rs DOES support pushing down second/millisecond/microsecond
-# timestamps correctly - this is verified by the unit tests:
-#   - test_scalar_value_to_datum_timestamp() in expr_to_predicate.rs
-#
-# Those unit tests verify:
-#   ScalarValue::TimestampSecond    -> Datum::timestamp_micros (converted)  ✓
-#   ScalarValue::TimestampMillisecond -> Datum::timestamp_micros (converted) ✓
-#   ScalarValue::TimestampMicrosecond -> Datum::timestamp_micros (direct)   ✓
-#   ScalarValue::TimestampNanosecond  -> None (precision loss avoided)      ✓
-#
-# If/when DataFusion adds SQL syntax to specify microsecond timestamps, or if
-# the default changes back to microseconds, the positive pushdown behavior
-# can be tested here in sqllogictest as well.
-
-# Clean up: Drop the nanosecond test table
+# Clean up: Drop the test table
 statement ok
 DROP TABLE default.default.test_timestamp_table
