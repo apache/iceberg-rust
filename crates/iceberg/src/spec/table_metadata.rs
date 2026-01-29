@@ -22,11 +22,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -34,9 +35,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, MetadataCompressionCodec, PartitionSpecRef, PartitionStatisticsFile,
-    SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile,
-    StructType, TableProperties,
+    parse_metadata_file_compression, DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef,
+    PartitionStatisticsFile, SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableProperties,
 };
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
@@ -366,14 +367,14 @@ impl TableMetadata {
 
     /// Returns the metadata compression codec from table properties.
     ///
-    /// Returns `None` if compression is disabled or not configured.
-    /// Returns `Some(MetadataCompressionCodec)` if compression is enabled.
+    /// Returns `CompressionCodec::None` if compression is disabled or not configured.
+    /// Returns `CompressionCodec::Gzip` if gzip compression is enabled.
     ///
     /// # Errors
     ///
     /// Returns an error if the compression codec property has an invalid value.
-    pub fn metadata_compression_codec(&self) -> Result<Option<MetadataCompressionCodec>> {
-        MetadataCompressionCodec::compression_codec_from_properties(&self.properties)
+    pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
+        parse_metadata_file_compression(&self.properties)
     }
 
     /// Returns typed table properties parsed from the raw properties map with defaults.
@@ -487,11 +488,11 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression is enabled via table properties
-        let codec = MetadataCompressionCodec::compression_codec_from_properties(self.properties())?;
+        let codec = parse_metadata_file_compression(&self.properties)?;
 
         // Use case-insensitive comparison to match Java implementation
         let (data_to_write, actual_location) = match codec {
-            Some(MetadataCompressionCodec::Gzip) => {
+            CompressionCodec::Gzip => {
                 let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(&json_data).map_err(|e| {
                     Error::new(
@@ -521,7 +522,13 @@ impl TableMetadata {
 
                 (compressed_data, new_location)
             }
-            None => (json_data, metadata_location.as_ref().to_string()),
+            CompressionCodec::None => (json_data, metadata_location.as_ref().to_string()),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Unsupported metadata compression codec: {:?}", codec),
+                ))
+            }
         };
 
         file_io

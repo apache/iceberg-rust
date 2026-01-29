@@ -85,6 +85,17 @@ impl CompressionCodec {
     pub(crate) fn is_none(&self) -> bool {
         matches!(self, CompressionCodec::None)
     }
+
+    /// Returns the file extension suffix for this compression codec.
+    /// Returns empty string for None, ".gz" for Gzip, ".lz4" for Lz4, ".zst" for Zstd.
+    pub fn suffix(&self) -> &'static str {
+        match self {
+            CompressionCodec::None => "",
+            CompressionCodec::Gzip => ".gz",
+            CompressionCodec::Lz4 => ".lz4",
+            CompressionCodec::Zstd => ".zst",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +143,13 @@ mod tests {
                 format!("FeatureUnsupported => {name} decompression is not supported currently"),
             );
         }
+    }
+
+    #[test]
+    fn test_suffix() {
+        assert_eq!(CompressionCodec::None.suffix(), "");
+        assert_eq!(CompressionCodec::Gzip.suffix(), ".gz");
+        assert_eq!(CompressionCodec::Lz4.suffix(), ".lz4");
+        assert_eq!(CompressionCodec::Zstd.suffix(), ".zst");
     }
 }
