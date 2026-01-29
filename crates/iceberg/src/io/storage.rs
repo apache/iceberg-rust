@@ -145,6 +145,15 @@ pub trait Storage: Debug + Send + Sync {
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {
     /// Build a new Storage instance from the given configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The storage configuration containing scheme and properties
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing an `Arc<dyn Storage>` on success, or an error
+    /// if the storage could not be created.
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>>;
 }
 
@@ -178,39 +187,48 @@ pub enum OpenDalFactory {
         /// The configured Azure storage scheme.
         configured_scheme: AzureStorageScheme,
     },
+    /// Placeholder variant to ensure the enum is always inhabited.
+    /// This variant cannot be constructed and exists only to satisfy
+    /// the compiler when no storage features are enabled.
+    #[doc(hidden)]
+    #[serde(skip)]
+    _Phantom(std::convert::Infallible),
 }
 
 #[typetag::serde(name = "OpenDalFactory")]
 impl StorageFactory for OpenDalFactory {
+    #[allow(unused_variables)]
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
-        let storage = match self {
+        match self {
             #[cfg(feature = "storage-memory")]
-            OpenDalFactory::Memory => OpenDal::Memory(super::memory_config_build()?),
+            OpenDalFactory::Memory => {
+                Ok(Arc::new(OpenDal::Memory(super::memory_config_build()?)))
+            }
             #[cfg(feature = "storage-fs")]
-            OpenDalFactory::Fs => OpenDal::LocalFs,
+            OpenDalFactory::Fs => Ok(Arc::new(OpenDal::LocalFs)),
             #[cfg(feature = "storage-s3")]
             OpenDalFactory::S3 {
                 customized_credential_load,
-            } => OpenDal::S3 {
+            } => Ok(Arc::new(OpenDal::S3 {
                 configured_scheme: "s3".to_string(),
                 config: super::s3_config_parse(config.props().clone())?.into(),
                 customized_credential_load: customized_credential_load.clone(),
-            },
+            })),
             #[cfg(feature = "storage-gcs")]
-            OpenDalFactory::Gcs => OpenDal::Gcs {
+            OpenDalFactory::Gcs => Ok(Arc::new(OpenDal::Gcs {
                 config: super::gcs_config_parse(config.props().clone())?.into(),
-            },
+            })),
             #[cfg(feature = "storage-oss")]
-            OpenDalFactory::Oss => OpenDal::Oss {
+            OpenDalFactory::Oss => Ok(Arc::new(OpenDal::Oss {
                 config: super::oss_config_parse(config.props().clone())?.into(),
-            },
+            })),
             #[cfg(feature = "storage-azdls")]
-            OpenDalFactory::Azdls { configured_scheme } => OpenDal::Azdls {
+            OpenDalFactory::Azdls { configured_scheme } => Ok(Arc::new(OpenDal::Azdls {
                 configured_scheme: configured_scheme.clone(),
                 config: super::azdls_config_parse(config.props().clone())?.into(),
-            },
-        };
-        Ok(Arc::new(storage))
+            })),
+            OpenDalFactory::_Phantom(infallible) => match *infallible {},
+        }
     }
 }
 
@@ -257,6 +275,7 @@ pub enum OpenDal {
     },
     /// Azure Data Lake Storage variant.
     #[cfg(feature = "storage-azdls")]
+    #[allow(private_interfaces)]
     Azdls {
         /// The configured Azure storage scheme.
         configured_scheme: AzureStorageScheme,
@@ -264,6 +283,12 @@ pub enum OpenDal {
         #[serde(skip)]
         config: Arc<AzdlsConfig>,
     },
+    /// Placeholder variant to ensure the enum is always inhabited.
+    /// This variant cannot be constructed and exists only to satisfy
+    /// the compiler when no storage features are enabled.
+    #[doc(hidden)]
+    #[serde(skip)]
+    _Phantom(std::convert::Infallible),
 }
 
 impl OpenDal {
@@ -322,28 +347,28 @@ impl OpenDal {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
+    #[allow(unreachable_code, unused_variables)]
     pub(crate) fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,
     ) -> Result<(Operator, &'a str)> {
         let path = path.as_ref();
-        let _ = path;
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
             OpenDal::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok::<_, Error>((op.clone(), stripped))
+                    (op.clone(), stripped)
                 } else {
-                    Ok::<_, Error>((op.clone(), &path[1..]))
+                    (op.clone(), &path[1..])
                 }
             }
             #[cfg(feature = "storage-fs")]
             OpenDal::LocalFs => {
                 let op = super::fs_config_build()?;
                 if let Some(stripped) = path.strip_prefix("file:/") {
-                    Ok::<_, Error>((op, stripped))
+                    (op, stripped)
                 } else {
-                    Ok::<_, Error>((op, &path[1..]))
+                    (op, &path[1..])
                 }
             }
             #[cfg(feature = "storage-s3")]
@@ -358,12 +383,12 @@ impl OpenDal {
                 // Check prefix of s3 path.
                 let prefix = format!("{}://{}/", configured_scheme, op_info.name());
                 if path.starts_with(&prefix) {
-                    Ok((op, &path[prefix.len()..]))
+                    (op, &path[prefix.len()..])
                 } else {
-                    Err(Error::new(
+                    return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid s3 url: {path}, should start with {prefix}"),
-                    ))
+                    ));
                 }
             }
             #[cfg(feature = "storage-gcs")]
@@ -371,12 +396,12 @@ impl OpenDal {
                 let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
-                    Ok((operator, &path[prefix.len()..]))
+                    (operator, &path[prefix.len()..])
                 } else {
-                    Err(Error::new(
+                    return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid gcs url: {path}, should start with {prefix}"),
-                    ))
+                    ));
                 }
             }
             #[cfg(feature = "storage-oss")]
@@ -384,31 +409,21 @@ impl OpenDal {
                 let op = super::oss_config_build(config, path)?;
                 let prefix = format!("oss://{}/", op.info().name());
                 if path.starts_with(&prefix) {
-                    Ok((op, &path[prefix.len()..]))
+                    (op, &path[prefix.len()..])
                 } else {
-                    Err(Error::new(
+                    return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid oss url: {path}, should start with {prefix}"),
-                    ))
+                    ));
                 }
             }
             #[cfg(feature = "storage-azdls")]
             OpenDal::Azdls {
                 configured_scheme,
                 config,
-            } => super::azdls_create_operator(path, config, configured_scheme),
-            #[cfg(all(
-                not(feature = "storage-s3"),
-                not(feature = "storage-fs"),
-                not(feature = "storage-gcs"),
-                not(feature = "storage-oss"),
-                not(feature = "storage-azdls"),
-            ))]
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "No storage service has been enabled",
-            )),
-        }?;
+            } => super::azdls_create_operator(path, config, configured_scheme)?,
+            OpenDal::_Phantom(infallible) => match *infallible {},
+        };
 
         // Transient errors are common for object stores; however there's no
         // harm in retrying temporary failures for other storage backends as well.
@@ -482,10 +497,12 @@ impl Storage for OpenDal {
         Ok(op.remove_all(&path).await?)
     }
 
+    #[allow(unreachable_code, unused_variables)]
     fn new_input(&self, path: &str) -> Result<InputFile> {
         Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
     }
 
+    #[allow(unreachable_code, unused_variables)]
     fn new_output(&self, path: &str) -> Result<OutputFile> {
         Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
     }
