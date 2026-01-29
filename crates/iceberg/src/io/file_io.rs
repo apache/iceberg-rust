@@ -278,7 +278,7 @@ pub struct InputFile {
 
 impl InputFile {
     /// Creates a new input file.
-    pub(crate) fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
         Self { storage, path }
     }
 
@@ -341,7 +341,7 @@ pub struct OutputFile {
 
 impl OutputFile {
     /// Creates a new output file.
-    pub(crate) fn new(storage: Arc<dyn Storage>, path: String) -> Self {
+    pub fn new(storage: Arc<dyn Storage>, path: String) -> Self {
         Self { storage, path }
     }
 

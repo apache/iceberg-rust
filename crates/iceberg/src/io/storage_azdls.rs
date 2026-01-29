@@ -102,7 +102,7 @@ pub(crate) fn azdls_create_operator<'a>(
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) enum AzureStorageScheme {
+pub enum AzureStorageScheme {
     Abfs,
     Abfss,
     Wasb,
