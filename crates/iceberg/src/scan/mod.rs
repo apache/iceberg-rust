@@ -960,6 +960,29 @@ pub mod tests {
             }
         }
 
+        /// Sets up manifest files for all snapshots (including parent).
+        /// Use this for all_* metadata table tests that iterate all snapshots.
+        pub async fn setup_all_snapshot_manifest_files(&mut self) {
+            self.setup_manifest_files().await;
+
+            // Also write an empty manifest list for the parent snapshot
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let parent_snapshot = current_snapshot
+                .parent_snapshot(self.table.metadata())
+                .unwrap();
+
+            let manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(parent_snapshot.manifest_list())
+                    .unwrap(),
+                parent_snapshot.snapshot_id(),
+                parent_snapshot.parent_snapshot_id(),
+                parent_snapshot.sequence_number(),
+            );
+            manifest_list_write.close().await.unwrap();
+        }
+
         pub async fn setup_unpartitioned_manifest_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let parent_snapshot = current_snapshot
