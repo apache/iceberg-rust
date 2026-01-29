@@ -17,22 +17,22 @@
 
 # Test timestamp predicate pushdown behavior
 #
-# IMPORTANT: DataFusion uses nanosecond precision timestamps by default.
-# Iceberg stores timestamps in microseconds. Converting nanoseconds to microseconds
-# loses sub-microsecond precision, which can cause incorrect predicate evaluation.
+# This table uses Iceberg's TIMESTAMP type (microsecond precision), which is the
+# default and most common timestamp type in Iceberg.
 #
-# Example of the precision loss problem:
-#   Predicate: ts >= 100 nanoseconds
-#   Converted: ts >= 0 microseconds (100ns / 1000 = 0us, losing 100ns)
-#   This would incorrectly match ts = 0, which fails the original predicate.
+# DataFusion uses nanosecond precision for timestamp literals by default.
+# Converting nanoseconds to microseconds loses sub-microsecond precision:
 #
-# Therefore, nanosecond timestamp predicates are NOT pushed down to avoid this
-# precision loss. The tests below verify that nanosecond timestamps result in
-# empty predicates (predicate:[]) at the IcebergTableScan level, with filtering
-# happening in DataFusion's FilterExec instead.
+#   Example: ts >= 100 nanoseconds
+#   If converted: ts >= 0 microseconds (100ns / 1000 = 0us, losing 100ns)
+#   Result: Would incorrectly match ts = 0us
 #
-# For timestamp types with precision that fits in microseconds (second, millisecond,
-# microsecond), predicate pushdown works correctly and those predicates ARE pushed down.
+# To avoid this precision loss, nanosecond timestamp predicates are NOT pushed down.
+# The tests below verify that nanosecond timestamps result in empty predicates
+# (predicate:[]) at the IcebergTableScan level, with filtering in DataFusion's FilterExec.
+#
+# For timestamp precisions that fit in microseconds (second, millisecond, microsecond),
+# predicate pushdown works correctly - verified by unit tests in expr_to_predicate.rs.
 
 # Create test table with timestamp column
 statement ok

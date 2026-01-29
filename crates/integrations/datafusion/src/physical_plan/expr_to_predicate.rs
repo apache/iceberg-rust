@@ -269,7 +269,10 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
-        // Timestamp conversions - convert to microseconds (Iceberg's native timestamp unit)
+        // Timestamp conversions
+        // We convert to microseconds using Datum::timestamp_micros(), which works when:
+        // - Table column is Iceberg Timestamp type (microsecond precision), OR
+        // - Source precision is microseconds or coarser (second, millisecond)
         ScalarValue::TimestampSecond(Some(v), _) => {
             Some(Datum::timestamp_micros(v * MICROS_PER_SECOND))
         }
@@ -277,10 +280,14 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
             Some(Datum::timestamp_micros(v * MICROS_PER_MILLI))
         }
         ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
-        // Don't convert nanosecond timestamps - would lose precision
-        // Iceberg timestamps are microseconds, converting from nanoseconds loses sub-microsecond precision
-        // Example: 100 nanoseconds / 1000 = 0 microseconds (incorrect)
-        // Better to not push down and let DataFusion handle filtering
+        // Don't convert nanosecond timestamps - loses precision when truncating to microseconds
+        // Example: 100 nanoseconds / 1000 = 0 microseconds
+        // This makes "ts >= 100ns" incorrectly match "ts = 0us"
+        //
+        // Note: Iceberg also has TimestampNs type (nanosecond precision). We could theoretically
+        // use Datum::timestamp_nanos() for those columns, but we'd need to check the actual
+        // column type first. Currently we always use timestamp_micros(), which is safe for
+        // the common case (Timestamp columns with microsecond precision).
         ScalarValue::TimestampNanosecond(_, _) => None,
         _ => None,
     }
