@@ -179,3 +179,13 @@ SELECT * FROM default.default.test_timestamp_micros WHERE ts > CAST('2023-01-01 
 
 statement ok
 DROP TABLE default.default.test_timestamp_micros
+
+# Test with TIMESTAMP(3) - millisecond precision
+# This should fail because Iceberg doesn't support millisecond precision
+statement error DataFusion error: External error: DataInvalid => Unsupported Arrow data type: Timestamp\(ms\)
+CREATE TABLE default.default.test_timestamp_millis (id INT NOT NULL, ts TIMESTAMP(3))
+
+# Test with TIMESTAMP(0) - second precision
+# This should fail because Iceberg doesn't support second precision
+statement error DataFusion error: External error: DataInvalid => Unsupported Arrow data type: Timestamp\(s\)
+CREATE TABLE default.default.test_timestamp_seconds (id INT NOT NULL, ts TIMESTAMP(0))
