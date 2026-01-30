@@ -23,7 +23,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use url::Url;
 
-use super::storage::{OpenDal, Storage};
+use super::storage::{OpenDalStorage, Storage};
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
@@ -47,7 +47,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct FileIO {
     builder: FileIOBuilder,
 
-    inner: Arc<OpenDal>,
+    inner: Arc<OpenDalStorage>,
 }
 
 impl FileIO {
@@ -239,7 +239,7 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> Result<FileIO> {
-        let storage = OpenDal::build(self.clone())?;
+        let storage = OpenDalStorage::build(self.clone())?;
         Ok(FileIO {
             builder: self,
             inner: Arc::new(storage),

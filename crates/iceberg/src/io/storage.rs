@@ -159,11 +159,11 @@ pub trait StorageFactory: Debug + Send + Sync {
 
 /// OpenDAL-based storage factory.
 ///
-/// Maps scheme to the corresponding OpenDal storage variant.
+/// Maps scheme to the corresponding OpenDalStorage storage variant.
 ///
-/// TODO this is currently not used, we still use OpenDal::build() for now
+/// TODO this is currently not used, we still use OpenDalStorage::build() for now
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum OpenDalFactory {
+pub enum OpenDalStorageFactory {
     /// Memory storage factory.
     #[cfg(feature = "storage-memory")]
     Memory,
@@ -191,36 +191,40 @@ pub enum OpenDalFactory {
     },
 }
 
-#[typetag::serde(name = "OpenDalFactory")]
-impl StorageFactory for OpenDalFactory {
+#[typetag::serde(name = "OpenDalStorageFactory")]
+impl StorageFactory for OpenDalStorageFactory {
     #[allow(unused_variables)]
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         match self {
             #[cfg(feature = "storage-memory")]
-            OpenDalFactory::Memory => Ok(Arc::new(OpenDal::Memory(super::memory_config_build()?))),
+            OpenDalStorageFactory::Memory => {
+                Ok(Arc::new(OpenDalStorage::Memory(super::memory_config_build()?)))
+            }
             #[cfg(feature = "storage-fs")]
-            OpenDalFactory::Fs => Ok(Arc::new(OpenDal::LocalFs)),
+            OpenDalStorageFactory::Fs => Ok(Arc::new(OpenDalStorage::LocalFs)),
             #[cfg(feature = "storage-s3")]
-            OpenDalFactory::S3 {
+            OpenDalStorageFactory::S3 {
                 customized_credential_load,
-            } => Ok(Arc::new(OpenDal::S3 {
+            } => Ok(Arc::new(OpenDalStorage::S3 {
                 configured_scheme: "s3".to_string(),
                 config: super::s3_config_parse(config.props().clone())?.into(),
                 customized_credential_load: customized_credential_load.clone(),
             })),
             #[cfg(feature = "storage-gcs")]
-            OpenDalFactory::Gcs => Ok(Arc::new(OpenDal::Gcs {
+            OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
                 config: super::gcs_config_parse(config.props().clone())?.into(),
             })),
             #[cfg(feature = "storage-oss")]
-            OpenDalFactory::Oss => Ok(Arc::new(OpenDal::Oss {
+            OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: super::oss_config_parse(config.props().clone())?.into(),
             })),
             #[cfg(feature = "storage-azdls")]
-            OpenDalFactory::Azdls { configured_scheme } => Ok(Arc::new(OpenDal::Azdls {
-                configured_scheme: configured_scheme.clone(),
-                config: super::azdls_config_parse(config.props().clone())?.into(),
-            })),
+            OpenDalStorageFactory::Azdls { configured_scheme } => {
+                Ok(Arc::new(OpenDalStorage::Azdls {
+                    configured_scheme: configured_scheme.clone(),
+                    config: super::azdls_config_parse(config.props().clone())?.into(),
+                }))
+            }
             #[cfg(all(
                 not(feature = "storage-memory"),
                 not(feature = "storage-fs"),
@@ -245,7 +249,7 @@ fn default_memory_operator() -> Operator {
 
 /// OpenDAL-based storage implementation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum OpenDal {
+pub enum OpenDalStorage {
     /// Memory storage variant.
     #[cfg(feature = "storage-memory")]
     Memory(#[serde(skip, default = "self::default_memory_operator")] Operator),
@@ -292,10 +296,10 @@ pub enum OpenDal {
     },
 }
 
-impl OpenDal {
+impl OpenDalStorage {
     /// Convert iceberg config to opendal config.
     ///
-    /// TODO Switch to use OpenDalFactory::build()
+    /// TODO Switch to use OpenDalStorageFactory::build()
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
         let _ = (&props, &extensions);
@@ -358,7 +362,7 @@ impl OpenDal {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
-            OpenDal::Memory(op) => {
+            OpenDalStorage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     (op.clone(), stripped)
                 } else {
@@ -366,7 +370,7 @@ impl OpenDal {
                 }
             }
             #[cfg(feature = "storage-fs")]
-            OpenDal::LocalFs => {
+            OpenDalStorage::LocalFs => {
                 let op = super::fs_config_build()?;
                 if let Some(stripped) = path.strip_prefix("file:/") {
                     (op, stripped)
@@ -375,7 +379,7 @@ impl OpenDal {
                 }
             }
             #[cfg(feature = "storage-s3")]
-            OpenDal::S3 {
+            OpenDalStorage::S3 {
                 configured_scheme,
                 config,
                 customized_credential_load,
@@ -395,7 +399,7 @@ impl OpenDal {
                 }
             }
             #[cfg(feature = "storage-gcs")]
-            OpenDal::Gcs { config } => {
+            OpenDalStorage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
@@ -408,7 +412,7 @@ impl OpenDal {
                 }
             }
             #[cfg(feature = "storage-oss")]
-            OpenDal::Oss { config } => {
+            OpenDalStorage::Oss { config } => {
                 let op = super::oss_config_build(config, path)?;
                 let prefix = format!("oss://{}/", op.info().name());
                 if path.starts_with(&prefix) {
@@ -421,7 +425,7 @@ impl OpenDal {
                 }
             }
             #[cfg(feature = "storage-azdls")]
-            OpenDal::Azdls {
+            OpenDalStorage::Azdls {
                 configured_scheme,
                 config,
             } => super::azdls_create_operator(path, config, configured_scheme)?,
@@ -460,9 +464,9 @@ impl OpenDal {
     }
 }
 
-#[typetag::serde(name = "OpenDal")]
+#[typetag::serde(name = "OpenDalStorage")]
 #[async_trait]
-impl Storage for OpenDal {
+impl Storage for OpenDalStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(op.exists(relative_path).await?)
