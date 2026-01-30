@@ -22,12 +22,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::io::Write as _;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
-use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -515,7 +513,7 @@ impl TableMetadata {
             _ => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Unsupported metadata compression codec: {:?}", codec),
+                    format!("Unsupported metadata compression codec: {codec:?}"),
                 ));
             }
         };

@@ -98,7 +98,7 @@ impl CompressionCodec {
             CompressionCodec::Gzip => Ok(".gz"),
             codec @ (CompressionCodec::Lz4 | CompressionCodec::Zstd) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!("suffix not defined for {:?}", codec),
+                format!("suffix not defined for {codec:?}"),
             )),
         }
     }
