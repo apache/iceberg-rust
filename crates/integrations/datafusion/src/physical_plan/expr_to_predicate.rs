@@ -51,8 +51,18 @@ pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
 fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
     match to_iceberg_predicate(expr) {
         TransformedResult::Predicate(predicate) => Some(predicate),
-        TransformedResult::Column(_) | TransformedResult::Literal(_) => {
-            unreachable!("Not a valid expression: {:?}", expr)
+        TransformedResult::Column(column) => {
+            // A bare column in a filter context represents a boolean column check
+            // Convert it to: column = true
+            Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                column,
+                Datum::bool(true),
+            )))
+        }
+        TransformedResult::Literal(_) => {
+            // Literal values in filter context cannot be pushed down
+            None
         }
         _ => None,
     }
@@ -75,6 +85,14 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             let expr = to_iceberg_predicate(exp);
             match expr {
                 TransformedResult::Predicate(p) => TransformedResult::Predicate(!p),
+                TransformedResult::Column(column) => {
+                    // NOT of a bare boolean column: NOT col => col = false
+                    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(
+                        PredicateOperator::Eq,
+                        column,
+                        Datum::bool(false),
+                    )))
+                }
                 _ => TransformedResult::NotTransformed,
             }
         }
@@ -254,6 +272,7 @@ const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 /// Convert a scalar value to an iceberg datum.
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
     match value {
+        ScalarValue::Boolean(Some(v)) => Some(Datum::bool(*v)),
         ScalarValue::Int8(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int16(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
@@ -507,6 +526,23 @@ mod tests {
             .equal_to(Datum::long(1))
             .and(Reference::new("bar").equal_to(Datum::binary(vec![1u8, 2u8])));
         assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_boolean() {
+        use datafusion::common::ScalarValue;
+
+        // Test boolean true
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(true)));
+        assert_eq!(datum, Some(Datum::bool(true)));
+
+        // Test boolean false
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(false)));
+        assert_eq!(datum, Some(Datum::bool(false)));
+
+        // Test None boolean
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(None));
+        assert_eq!(datum, None);
     }
 
     #[test]
