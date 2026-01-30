@@ -15,22 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[advisories]
-ignore = [
-  # rsa
-  # Marvin Attack: potential key recovery through timing sidechannels
-  # Issues: https://github.com/apache/iceberg-rust/issues/221
-  "RUSTSEC-2023-0071",
-  # `derivative` is unmaintained; consider using an alternative
-  #
-  # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
-  "RUSTSEC-2024-0388",
-  # `paste` is unmaintained; consider using an alternative
-  #
-  # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
-  "RUSTSEC-2024-0436",
-  # `rustls-pemfile` is unmaintained
-  #
-  # Introduced by object_store, see https://github.com/apache/arrow-rs-object-store/issues/564
-  "RUSTSEC-2025-0134",
-]
+[engines]
+df = { type = "datafusion" }
+
+[[steps]]
+engine = "df"
+slt = "df_test/show_tables.slt"
