@@ -595,7 +595,9 @@ impl SqlCatalog {
     async fn upgrade_schema(&self) -> Result<()> {
         if self.upgrade_schema && matches!(self.schema_version, SqlSchemaVersion::V0) {
             self.execute(
-                &format!("ALTER TABLE {CATALOG_TABLE_NAME} ADD {CATALOG_FIELD_RECORD_TYPE}"),
+                &format!(
+                    "ALTER TABLE {CATALOG_TABLE_NAME} ADD {CATALOG_FIELD_RECORD_TYPE} varchar(5)"
+                ),
                 Vec::new(),
                 None,
             )
