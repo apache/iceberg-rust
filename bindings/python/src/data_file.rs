@@ -18,10 +18,10 @@
 use std::collections::HashMap;
 
 use iceberg::spec::{DataFile, DataFileFormat, PrimitiveLiteral};
-use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use pyo3::IntoPyObjectExt;
 
 #[pyclass()]
 pub struct PyPrimitiveLiteral {
@@ -30,6 +30,11 @@ pub struct PyPrimitiveLiteral {
 
 #[pymethods]
 impl PyPrimitiveLiteral {
+    /// Returns the raw value as a Python object.
+    ///
+    /// For Int128 (Decimal) and UInt128 (UUID), returns Python int.
+    /// Use `decimal_value(scale)` for proper Decimal conversion with scale,
+    /// or `uuid_value()` for UUID conversion.
     pub fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner {
             PrimitiveLiteral::Boolean(v) => v.into_py_any(py),
@@ -43,6 +48,106 @@ impl PyPrimitiveLiteral {
             PrimitiveLiteral::UInt128(v) => v.into_py_any(py),
             PrimitiveLiteral::AboveMax => Err(PyValueError::new_err("AboveMax is not supported")),
             PrimitiveLiteral::BelowMin => Err(PyValueError::new_err("BelowMin is not supported")),
+        }
+    }
+
+    /// Returns Int128 as a Python `decimal.Decimal` with the given scale.
+    ///
+    /// Iceberg stores Decimal values as unscaled Int128 integers. This method
+    /// converts the raw integer to a properly scaled Python Decimal.
+    ///
+    /// # Arguments
+    /// * `scale` - The number of digits after the decimal point (from schema)
+    ///
+    /// # Example
+    /// ```python
+    /// # For a Decimal(10, 2) field with value 123.45 (stored as 12345):
+    /// decimal_value = literal.decimal_value(2)  # Returns Decimal("123.45")
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `ValueError` if the underlying value is not Int128.
+    pub fn decimal_value(&self, py: Python<'_>, scale: i32) -> PyResult<Py<PyAny>> {
+        match &self.inner {
+            PrimitiveLiteral::Int128(v) => {
+                let decimal_mod = py.import("decimal")?;
+                let decimal_cls = decimal_mod.getattr("Decimal")?;
+
+                let abs_value = v.unsigned_abs();
+                let is_negative = *v < 0;
+                let sign = if is_negative { "-" } else { "" };
+
+                let decimal_str = if scale <= 0 {
+                    format!("{}{}", sign, abs_value)
+                } else {
+                    let scale_u = scale as u32;
+                    let divisor = 10u128.pow(scale_u);
+                    let integer_part = abs_value / divisor;
+                    let fractional_part = abs_value % divisor;
+                    format!(
+                        "{}{}.{:0>width$}",
+                        sign,
+                        integer_part,
+                        fractional_part,
+                        width = scale as usize
+                    )
+                };
+
+                decimal_cls.call1((decimal_str,))?.into_py_any(py)
+            }
+            _ => Err(PyValueError::new_err(
+                "decimal_value() requires Int128 literal (Decimal type)",
+            )),
+        }
+    }
+
+    /// Returns UInt128 as a Python `uuid.UUID`.
+    ///
+    /// Iceberg stores UUID values as UInt128 integers. This method converts
+    /// the raw integer to a Python UUID object.
+    ///
+    /// # Example
+    /// ```python
+    /// uuid_value = literal.uuid_value()  # Returns uuid.UUID
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `ValueError` if the underlying value is not UInt128.
+    pub fn uuid_value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner {
+            PrimitiveLiteral::UInt128(v) => {
+                let uuid_mod = py.import("uuid")?;
+                let uuid_cls = uuid_mod.getattr("UUID")?;
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("int", *v)?;
+                uuid_cls.call((), Some(&kwargs))?.into_py_any(py)
+            }
+            _ => Err(PyValueError::new_err(
+                "uuid_value() requires UInt128 literal (UUID type)",
+            )),
+        }
+    }
+
+    /// Returns the type name of the underlying primitive literal.
+    ///
+    /// Useful for determining which conversion method to call.
+    ///
+    /// # Returns
+    /// One of: "boolean", "int", "long", "float", "double", "string",
+    /// "binary", "int128", "uint128", "above_max", "below_min"
+    pub fn literal_type(&self) -> &'static str {
+        match &self.inner {
+            PrimitiveLiteral::Boolean(_) => "boolean",
+            PrimitiveLiteral::Int(_) => "int",
+            PrimitiveLiteral::Long(_) => "long",
+            PrimitiveLiteral::Float(_) => "float",
+            PrimitiveLiteral::Double(_) => "double",
+            PrimitiveLiteral::String(_) => "string",
+            PrimitiveLiteral::Binary(_) => "binary",
+            PrimitiveLiteral::Int128(_) => "int128",
+            PrimitiveLiteral::UInt128(_) => "uint128",
+            PrimitiveLiteral::AboveMax => "above_max",
+            PrimitiveLiteral::BelowMin => "below_min",
         }
     }
 }
