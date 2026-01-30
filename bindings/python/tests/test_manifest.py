@@ -53,7 +53,9 @@ def fetch_manifest_entry(
             content=DataFileContent(entry.data_file.content),
             file_path=entry.data_file.file_path,
             file_format=FileFormat(entry.data_file.file_format),
-            partition=[p.value() if p is not None else None for p in entry.data_file.partition],
+            partition=[
+                p.value() if p is not None else None for p in entry.data_file.partition
+            ],
             record_count=entry.data_file.record_count,
             file_size_in_bytes=entry.data_file.file_size_in_bytes,
             column_sizes=entry.data_file.column_sizes,
