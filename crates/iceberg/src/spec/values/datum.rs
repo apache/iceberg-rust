@@ -234,6 +234,18 @@ impl PartialOrd for Datum {
                 PrimitiveType::Timestamptz,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
+                PrimitiveType::TimestampNs,
+                PrimitiveType::TimestampNs,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
+                PrimitiveType::TimestamptzNs,
+                PrimitiveType::TimestamptzNs,
+            ) => val.partial_cmp(other_val),
+            (
                 PrimitiveLiteral::String(val),
                 PrimitiveLiteral::String(other_val),
                 PrimitiveType::String,
