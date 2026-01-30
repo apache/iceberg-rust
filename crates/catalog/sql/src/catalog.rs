@@ -712,16 +712,13 @@ impl Catalog for SqlCatalog {
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let exists = self.namespace_exists(namespace).await?;
         if exists {
-            let field_type_check = self.field_type_check_query().await?;
             let rows = self
                 .fetch_rows(
                     &format!(
-                        "SELECT {CATALOG_FIELD_TABLE_NAME},
-                                {CATALOG_FIELD_TABLE_NAMESPACE}
+                        "SELECT *
                          FROM {CATALOG_TABLE_NAME}
                          WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                          AND {CATALOG_FIELD_CATALOG_NAME} = ?
-                          {field_type_check}",
+                          AND {CATALOG_FIELD_CATALOG_NAME} = ?",
                     ),
                     vec![Some(&namespace.join(".")), Some(&self.name)],
                 )
@@ -730,6 +727,15 @@ impl Catalog for SqlCatalog {
             let mut tables = HashSet::<TableIdent>::with_capacity(rows.len());
 
             for row in rows.iter() {
+                // If `iceberg_type` column exists AND ≠ "TABLE", continue to next row.
+                if row
+                    .try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
+                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
+                    != CATALOG_FIELD_TABLE_RECORD_TYPE
+                {
+                    continue;
+                }
+
                 let tbl = row
                     .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
                     .map_err(from_sqlx_error)?;
@@ -748,23 +754,31 @@ impl Catalog for SqlCatalog {
 
     async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
         let namespace = identifier.namespace().join(".");
-        let field_type_check = self.field_type_check_query().await?;
         let table_name = identifier.name();
-        let table_counts = self
+        let rows = self
             .fetch_rows(
                 &format!(
-                    "SELECT 1
+                    "SELECT *
                      FROM {CATALOG_TABLE_NAME}
                      WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                       AND {CATALOG_FIELD_CATALOG_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAME} = ?
-                      {field_type_check}"
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?"
                 ),
                 vec![Some(&namespace), Some(&self.name), Some(table_name)],
             )
             .await?;
 
-        if !table_counts.is_empty() {
+        // Filter for rows where `iceberg_type` is "TABLE" or not present.
+        let tables: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                row.try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
+                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
+                    == CATALOG_FIELD_TABLE_RECORD_TYPE
+            })
+            .collect();
+
+        if !tables.is_empty() {
             Ok(true)
         } else {
             Ok(false)
@@ -776,16 +790,15 @@ impl Catalog for SqlCatalog {
             return no_such_table_err(identifier);
         }
 
+        let field_type_check = self.field_type_check_query().await?;
+
         self.execute(
             &format!(
                 "DELETE FROM {CATALOG_TABLE_NAME}
                  WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
                   AND {CATALOG_FIELD_TABLE_NAME} = ?
                   AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                  AND (
-                    {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
-                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
-                  )"
+                  {field_type_check}"
             ),
             vec![
                 Some(&self.name),
@@ -804,16 +817,14 @@ impl Catalog for SqlCatalog {
             return no_such_table_err(identifier);
         }
 
-        let field_type_check = self.field_type_check_query().await?;
         let rows = self
             .fetch_rows(
                 &format!(
-                    "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                    "SELECT *
                      FROM {CATALOG_TABLE_NAME}
                      WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
                       AND {CATALOG_FIELD_TABLE_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                      {field_type_check}"
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?"
                 ),
                 vec![
                     Some(&self.name),
@@ -822,6 +833,16 @@ impl Catalog for SqlCatalog {
                 ],
             )
             .await?;
+
+        // Filter for rows where `iceberg_type` is "TABLE" or not present.
+        let rows: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                row.try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
+                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
+                    == CATALOG_FIELD_TABLE_RECORD_TYPE
+            })
+            .collect();
 
         if rows.is_empty() {
             return no_such_table_err(identifier);
