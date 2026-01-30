@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
-use iceberg::spec::{TableMetadata, TableMetadataBuilder};
+use iceberg::spec::{ TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
@@ -62,6 +62,183 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+/// SQL Schema version for `iceberg_tables`. Refer to Java impl JDBC
+#[derive(Debug, Clone, Copy)]
+pub enum SqlSchemaVersion {
+    /// Corresponds to 'V0' in Java impl. Does not support `iceberg_type` column.
+    V0,
+    /// Corresponds to 'V1' in Java impl. Supports `iceberg_type` for distinguishing between VIEWs and TABLEs
+    V1,
+}
+
+fn query_list_tables(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "SELECT {CATALOG_FIELD_TABLE_NAME},
+                                {CATALOG_FIELD_TABLE_NAMESPACE}
+                         FROM {CATALOG_TABLE_NAME}
+                         WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                          AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                          ",
+        ),
+        SqlSchemaVersion::V1 => format!(
+            "SELECT {CATALOG_FIELD_TABLE_NAME},
+                                {CATALOG_FIELD_TABLE_NAMESPACE}
+                         FROM {CATALOG_TABLE_NAME}
+                         WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                          AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                          AND (
+                                {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                                OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                          )",
+        ),
+    }
+}
+fn query_table_exists(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "SELECT 1
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      "
+        ),
+        SqlSchemaVersion::V1 => format!(
+            "SELECT 1
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND (
+                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                        OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                      )"
+        ),
+    }
+}
+fn query_drop_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "DELETE FROM {CATALOG_TABLE_NAME}
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  "
+        ),
+        SqlSchemaVersion::V1 => format!(
+            "DELETE FROM {CATALOG_TABLE_NAME}
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  AND (
+                    {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                  )"
+        ),
+    }
+}
+fn query_load_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      "
+        ),
+        SqlSchemaVersion::V1 => format!(
+            "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND (
+                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                        OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                      )"
+        ),
+    }
+}
+/// NOTE: these two paths have a different number of placeholders.
+fn query_create_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP})
+             VALUES (?, ?, ?, ?)
+            "),
+        SqlSchemaVersion::V1 => format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
+             VALUES (?, ?, ?, ?, ?)
+            "),
+    }
+}
+fn query_rename_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "UPDATE {CATALOG_TABLE_NAME}
+                 SET {CATALOG_FIELD_TABLE_NAME} = ?, {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  "
+        ),
+        SqlSchemaVersion::V1 => format!(
+            "UPDATE {CATALOG_TABLE_NAME}
+                 SET {CATALOG_FIELD_TABLE_NAME} = ?, {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  AND (
+                    {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}'
+                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                )"
+        ),
+    }
+}
+/// NOTE: these two paths have a different number of placeholders.
+fn query_register_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP})
+             VALUES (?, ?, ?, ?)
+            "), 
+        SqlSchemaVersion::V1 => format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
+             VALUES (?, ?, ?, ?, ?)
+            "), 
+    }
+}
+fn query_update_table(schema_ver: SqlSchemaVersion) -> String {
+    match schema_ver {
+        SqlSchemaVersion::V0 => format!(
+                    "UPDATE {CATALOG_TABLE_NAME}
+                     SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?, {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} = ?
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
+                ),
+        SqlSchemaVersion::V1 => format!(
+                    "UPDATE {CATALOG_TABLE_NAME}
+                     SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?, {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} = ?
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND (
+                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}'
+                        OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                      )
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
+                ),
+    }
+}
+
 /// Builder for [`SqlCatalog`]
 #[derive(Debug)]
 pub struct SqlCatalogBuilder(SqlCatalogConfig);
@@ -71,6 +248,7 @@ impl Default for SqlCatalogBuilder {
         Self(SqlCatalogConfig {
             uri: "".to_string(),
             name: "".to_string(),
+            upgrade_schema: false,
             warehouse_location: "".to_string(),
             sql_bind_style: SqlBindStyle::DollarNumeric,
             props: HashMap::new(),
@@ -103,6 +281,14 @@ impl SqlCatalogBuilder {
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
         self.0.sql_bind_style = sql_bind_style;
+        self
+    }
+
+    /// Configure whether database schema will be upgraded on write if outdated
+    /// 
+    /// Currently only applies to `iceberg_tables` schema
+    pub fn upgrade_schema(mut self, upgrade_schema: bool) -> Self {
+        self.0.upgrade_schema = upgrade_schema;
         self
     }
 
@@ -204,6 +390,7 @@ enum SqlBackend {
 struct SqlCatalogConfig {
     uri: String,
     name: String,
+    upgrade_schema: bool,
     warehouse_location: String,
     sql_bind_style: SqlBindStyle,
     props: HashMap<String, String>,
@@ -213,7 +400,8 @@ struct SqlCatalogConfig {
 /// Sql catalog implementation.
 pub struct SqlCatalog {
     name: String,
-    backend: SqlBackend,
+    upgrade_schema: bool,
+    schema_version: SqlSchemaVersion,
     connection: AnyPool,
     warehouse_location: String,
     fileio: FileIO,
@@ -297,9 +485,45 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
+
+        // Determine schema version for `iceberg_tables`
+        let column_names: HashSet<String> = match backend { 
+            SqlBackend::SQLite => sqlx::query(&format!("PRAGMA table_info('{CATALOG_TABLE_NAME}')"))
+                .fetch_all(&pool)
+                .await
+                .map_err(from_sqlx_error)?
+                .iter()
+                .map(|x| x.get(1))
+                .collect(),
+            SqlBackend::PostgreSQL => sqlx::query(&format!(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='{CATALOG_TABLE_NAME}'"
+            ))
+            .fetch_all(&pool)
+            .await
+            .map_err(from_sqlx_error)?
+            .iter()
+            .map(|x| x.get(0))
+            .collect(),
+            SqlBackend::MySQL => sqlx::query(&format!(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='{CATALOG_TABLE_NAME}'"
+            ))
+            .fetch_all(&pool)
+            .await
+            .map_err(from_sqlx_error)?
+            .iter()
+            .map(|x| x.get(0))
+            .collect(),
+        };
+        let schema_version = if column_names.contains(CATALOG_FIELD_RECORD_TYPE) {
+            SqlSchemaVersion::V1
+        } else {
+            SqlSchemaVersion::V0
+        };
+
         Ok(SqlCatalog {
             name: config.name.to_owned(),
-            backend,
+            upgrade_schema: config.upgrade_schema,
+            schema_version,
             connection: pool,
             warehouse_location: config.warehouse_location,
             fileio,
@@ -368,50 +592,12 @@ impl SqlCatalog {
             }
         }
     }
-    /// Method for getting table column names for MySQL, Postgres, or SQLite
-    async fn get_table_columns(&self, table: impl ToString) -> Result<HashSet<String>> {
-        let table = table.to_string();
-        Ok(match self.backend {
-            SqlBackend::SQLite => sqlx::query(&format!("PRAGMA table_info('{table}')"))
-                .fetch_all(&self.connection)
-                .await
-                .map_err(from_sqlx_error)?
-                .iter()
-                .map(|x| x.get(1))
-                .collect(),
-            SqlBackend::PostgreSQL => sqlx::query(&format!(
-                "SELECT column_name FROM information_schema.columns WHERE table_name='{table}'"
-            ))
-            .fetch_all(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?
-            .iter()
-            .map(|x| x.get(0))
-            .collect(),
-            SqlBackend::MySQL => sqlx::query(&format!(
-                "SELECT column_name FROM information_schema.columns WHERE table_name='{table}'"
-            ))
-            .fetch_all(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?
-            .iter()
-            .map(|x| x.get(0))
-            .collect(),
-        })
-    }
-    async fn field_type_check_query(&self) -> Result<String> {
-        let has_type_info = self
-            .get_table_columns(CATALOG_TABLE_NAME)
-            .await?
-            .contains(CATALOG_FIELD_RECORD_TYPE);
-
-        Ok(if has_type_info {
-            format!(
-                "AND ({CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' OR {CATALOG_FIELD_RECORD_TYPE} IS NULL)"
-            )
-        } else {
-            String::new()
-        })
+    /// Upgrade `iceberg-tables` schema if needed.
+    async fn upgrade_schema(&self) -> Result<()> {
+        if self.upgrade_schema && matches!(self.schema_version, SqlSchemaVersion::V0) {
+            self.execute(&format!("ALTER TABLE {CATALOG_TABLE_NAME} ADD {CATALOG_FIELD_RECORD_TYPE}"), Vec::new(), None).await?;
+        } 
+        Ok(())
     }
 }
 
@@ -714,12 +900,7 @@ impl Catalog for SqlCatalog {
         if exists {
             let rows = self
                 .fetch_rows(
-                    &format!(
-                        "SELECT *
-                         FROM {CATALOG_TABLE_NAME}
-                         WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                          AND {CATALOG_FIELD_CATALOG_NAME} = ?",
-                    ),
+                    &query_list_tables(self.schema_version),
                     vec![Some(&namespace.join(".")), Some(&self.name)],
                 )
                 .await?;
@@ -727,14 +908,7 @@ impl Catalog for SqlCatalog {
             let mut tables = HashSet::<TableIdent>::with_capacity(rows.len());
 
             for row in rows.iter() {
-                // If `iceberg_type` column exists AND ≠ "TABLE", continue to next row.
-                if row
-                    .try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
-                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
-                    != CATALOG_FIELD_TABLE_RECORD_TYPE
-                {
-                    continue;
-                }
+                
 
                 let tbl = row
                     .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
@@ -755,28 +929,14 @@ impl Catalog for SqlCatalog {
     async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
         let namespace = identifier.namespace().join(".");
         let table_name = identifier.name();
-        let rows = self
+        let tables = self
             .fetch_rows(
-                &format!(
-                    "SELECT *
-                     FROM {CATALOG_TABLE_NAME}
-                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAME} = ?"
-                ),
+                &query_table_exists(self.schema_version),
                 vec![Some(&namespace), Some(&self.name), Some(table_name)],
             )
             .await?;
 
-        // Filter for rows where `iceberg_type` is "TABLE" or not present.
-        let tables: Vec<_> = rows
-            .iter()
-            .filter(|row| {
-                row.try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
-                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
-                    == CATALOG_FIELD_TABLE_RECORD_TYPE
-            })
-            .collect();
+        
 
         if !tables.is_empty() {
             Ok(true)
@@ -790,16 +950,14 @@ impl Catalog for SqlCatalog {
             return no_such_table_err(identifier);
         }
 
-        let field_type_check = self.field_type_check_query().await?;
+        if !self.table_exists(identifier).await? {
+            return no_such_table_err(identifier);
+        }
+        
+        self.upgrade_schema().await?;
 
         self.execute(
-            &format!(
-                "DELETE FROM {CATALOG_TABLE_NAME}
-                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
-                  AND {CATALOG_FIELD_TABLE_NAME} = ?
-                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                  {field_type_check}"
-            ),
+            &query_drop_table(self.schema_version),
             vec![
                 Some(&self.name),
                 Some(identifier.name()),
@@ -819,13 +977,7 @@ impl Catalog for SqlCatalog {
 
         let rows = self
             .fetch_rows(
-                &format!(
-                    "SELECT *
-                     FROM {CATALOG_TABLE_NAME}
-                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?"
-                ),
+                &query_load_table(self.schema_version),
                 vec![
                     Some(&self.name),
                     Some(identifier.name()),
@@ -833,16 +985,6 @@ impl Catalog for SqlCatalog {
                 ],
             )
             .await?;
-
-        // Filter for rows where `iceberg_type` is "TABLE" or not present.
-        let rows: Vec<_> = rows
-            .iter()
-            .filter(|row| {
-                row.try_get::<&str, _>(CATALOG_FIELD_RECORD_TYPE)
-                    .unwrap_or(CATALOG_FIELD_TABLE_RECORD_TYPE)
-                    == CATALOG_FIELD_TABLE_RECORD_TYPE
-            })
-            .collect();
 
         if rows.is_empty() {
             return no_such_table_err(identifier);
@@ -871,6 +1013,8 @@ impl Catalog for SqlCatalog {
         if !self.namespace_exists(namespace).await? {
             return no_such_namespace_err(namespace);
         }
+
+        self.upgrade_schema().await?;
 
         let tbl_name = creation.name.clone();
         let tbl_ident = TableIdent::new(namespace.clone(), tbl_name.clone());
@@ -918,12 +1062,12 @@ impl Catalog for SqlCatalog {
             .write_to(&self.fileio, &tbl_metadata_location)
             .await?;
 
-        self.execute(&format!(
-            "INSERT INTO {CATALOG_TABLE_NAME}
-             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
-             VALUES (?, ?, ?, ?, ?)
-            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
-
+        // Handle different number if placeholders in different schema versions
+        match self.schema_version {
+            SqlSchemaVersion::V0 => self.execute(&query_create_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location)], None).await?,
+            SqlSchemaVersion::V1 => self.execute(&query_create_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?,
+        };
+        
         Ok(Table::builder()
             .file_io(self.fileio.clone())
             .metadata_location(tbl_metadata_location)
@@ -937,6 +1081,8 @@ impl Catalog for SqlCatalog {
             return Ok(());
         }
 
+        self.upgrade_schema().await?;
+
         if !self.table_exists(src).await? {
             return no_such_table_err(src);
         }
@@ -949,17 +1095,8 @@ impl Catalog for SqlCatalog {
             return table_already_exists_err(dest);
         }
 
-        let field_type_check = self.field_type_check_query().await?;
         self.execute(
-            &format!(
-                "UPDATE {CATALOG_TABLE_NAME}
-                 SET {CATALOG_FIELD_TABLE_NAME} = ?, {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
-                  AND {CATALOG_FIELD_TABLE_NAME} = ?
-                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                  {field_type_check}
-                  "
-            ),
+            &query_rename_table(self.schema_version),
             vec![
                 Some(dest.name()),
                 Some(&dest.namespace().join(".")),
@@ -983,17 +1120,18 @@ impl Catalog for SqlCatalog {
             return table_already_exists_err(table_ident);
         }
 
+        self.upgrade_schema().await?;
+
         let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
 
         let namespace = table_ident.namespace();
         let tbl_name = table_ident.name().to_string();
 
-        self.execute(&format!(
-            "INSERT INTO {CATALOG_TABLE_NAME}
-             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
-             VALUES (?, ?, ?, ?, ?)
-            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
-
+        match self.schema_version {
+            SqlSchemaVersion::V0 => self.execute(&query_register_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location)], None).await?,
+            SqlSchemaVersion::V1 => self.execute(&query_register_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?,
+        };
+        
         Ok(Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
@@ -1004,6 +1142,8 @@ impl Catalog for SqlCatalog {
 
     /// Updates an existing table within the SQL catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        self.upgrade_schema().await?;
+
         let table_ident = commit.identifier().clone();
         let current_table = self.load_table(&table_ident).await?;
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
@@ -1018,18 +1158,7 @@ impl Catalog for SqlCatalog {
 
         let update_result = self
             .execute(
-                &format!(
-                    "UPDATE {CATALOG_TABLE_NAME}
-                     SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?, {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} = ?
-                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAME} = ?
-                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
-                      AND (
-                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}'
-                        OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
-                      )
-                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
-                ),
+                &query_update_table(self.schema_version),
                 vec![
                     Some(staged_metadata_location),
                     Some(current_metadata_location.as_str()),
