@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
-use iceberg::spec::{ TableMetadata, TableMetadataBuilder};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
@@ -67,7 +67,7 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 pub enum SqlSchemaVersion {
     /// Corresponds to 'V0' in Java impl. Does not support `iceberg_type` column.
     V0,
-    /// Corresponds to 'V1' in Java impl. Supports `iceberg_type` for distinguishing between VIEWs and TABLEs
+    /// Corresponds to 'V1' in Java impl. Supports `iceberg_type` for distinguishing between VIEW and TABLE
     V1,
 }
 
@@ -285,7 +285,7 @@ impl SqlCatalogBuilder {
     }
 
     /// Configure whether database schema will be upgraded on write if outdated
-    /// 
+    ///
     /// Currently only applies to `iceberg_tables` schema
     pub fn upgrade_schema(mut self, upgrade_schema: bool) -> Self {
         self.0.upgrade_schema = upgrade_schema;
@@ -485,9 +485,8 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
-
         // Determine schema version for `iceberg_tables`
-        let column_names: HashSet<String> = match backend { 
+        let column_names: HashSet<String> = match backend {
             SqlBackend::SQLite => sqlx::query(&format!("PRAGMA table_info('{CATALOG_TABLE_NAME}')"))
                 .fetch_all(&pool)
                 .await
@@ -595,8 +594,13 @@ impl SqlCatalog {
     /// Upgrade `iceberg-tables` schema if needed.
     async fn upgrade_schema(&self) -> Result<()> {
         if self.upgrade_schema && matches!(self.schema_version, SqlSchemaVersion::V0) {
-            self.execute(&format!("ALTER TABLE {CATALOG_TABLE_NAME} ADD {CATALOG_FIELD_RECORD_TYPE}"), Vec::new(), None).await?;
-        } 
+            self.execute(
+                &format!("ALTER TABLE {CATALOG_TABLE_NAME} ADD {CATALOG_FIELD_RECORD_TYPE}"),
+                Vec::new(),
+                None,
+            )
+            .await?;
+        }
         Ok(())
     }
 }
@@ -899,17 +903,15 @@ impl Catalog for SqlCatalog {
         let exists = self.namespace_exists(namespace).await?;
         if exists {
             let rows = self
-                .fetch_rows(
-                    &query_list_tables(self.schema_version),
-                    vec![Some(&namespace.join(".")), Some(&self.name)],
-                )
+                .fetch_rows(&query_list_tables(self.schema_version), vec![
+                    Some(&namespace.join(".")),
+                    Some(&self.name),
+                ])
                 .await?;
 
             let mut tables = HashSet::<TableIdent>::with_capacity(rows.len());
 
             for row in rows.iter() {
-                
-
                 let tbl = row
                     .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
                     .map_err(from_sqlx_error)?;
@@ -930,13 +932,12 @@ impl Catalog for SqlCatalog {
         let namespace = identifier.namespace().join(".");
         let table_name = identifier.name();
         let tables = self
-            .fetch_rows(
-                &query_table_exists(self.schema_version),
-                vec![Some(&namespace), Some(&self.name), Some(table_name)],
-            )
+            .fetch_rows(&query_table_exists(self.schema_version), vec![
+                Some(&namespace),
+                Some(&self.name),
+                Some(table_name),
+            ])
             .await?;
-
-        
 
         if !tables.is_empty() {
             Ok(true)
@@ -953,7 +954,7 @@ impl Catalog for SqlCatalog {
         if !self.table_exists(identifier).await? {
             return no_such_table_err(identifier);
         }
-        
+
         self.upgrade_schema().await?;
 
         self.execute(
@@ -976,14 +977,11 @@ impl Catalog for SqlCatalog {
         }
 
         let rows = self
-            .fetch_rows(
-                &query_load_table(self.schema_version),
-                vec![
-                    Some(&self.name),
-                    Some(identifier.name()),
-                    Some(&identifier.namespace().join(".")),
-                ],
-            )
+            .fetch_rows(&query_load_table(self.schema_version), vec![
+                Some(&self.name),
+                Some(identifier.name()),
+                Some(&identifier.namespace().join(".")),
+            ])
             .await?;
 
         if rows.is_empty() {
@@ -1064,10 +1062,35 @@ impl Catalog for SqlCatalog {
 
         // Handle different number if placeholders in different schema versions
         match self.schema_version {
-            SqlSchemaVersion::V0 => self.execute(&query_create_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location)], None).await?,
-            SqlSchemaVersion::V1 => self.execute(&query_create_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?,
+            SqlSchemaVersion::V0 => {
+                self.execute(
+                    &query_create_table(self.schema_version),
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace.join(".")),
+                        Some(&tbl_name.clone()),
+                        Some(&tbl_metadata_location),
+                    ],
+                    None,
+                )
+                .await?
+            }
+            SqlSchemaVersion::V1 => {
+                self.execute(
+                    &query_create_table(self.schema_version),
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace.join(".")),
+                        Some(&tbl_name.clone()),
+                        Some(&tbl_metadata_location),
+                        Some(CATALOG_FIELD_TABLE_RECORD_TYPE),
+                    ],
+                    None,
+                )
+                .await?
+            }
         };
-        
+
         Ok(Table::builder()
             .file_io(self.fileio.clone())
             .metadata_location(tbl_metadata_location)
@@ -1128,10 +1151,35 @@ impl Catalog for SqlCatalog {
         let tbl_name = table_ident.name().to_string();
 
         match self.schema_version {
-            SqlSchemaVersion::V0 => self.execute(&query_register_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location)], None).await?,
-            SqlSchemaVersion::V1 => self.execute(&query_register_table(self.schema_version), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?,
+            SqlSchemaVersion::V0 => {
+                self.execute(
+                    &query_register_table(self.schema_version),
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace.join(".")),
+                        Some(&tbl_name),
+                        Some(&metadata_location),
+                    ],
+                    None,
+                )
+                .await?
+            }
+            SqlSchemaVersion::V1 => {
+                self.execute(
+                    &query_register_table(self.schema_version),
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace.join(".")),
+                        Some(&tbl_name),
+                        Some(&metadata_location),
+                        Some(CATALOG_FIELD_TABLE_RECORD_TYPE),
+                    ],
+                    None,
+                )
+                .await?
+            }
         };
-        
+
         Ok(Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
