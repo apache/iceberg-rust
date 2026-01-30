@@ -71,13 +71,17 @@ pub(crate) fn parse_metadata_file_compression(
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(lowercase_value))
-        .map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported."),
-            )
-        })?;
+    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
+        lowercase_value,
+    ))
+    .map_err(|_| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported."
+            ),
+        )
+    })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
@@ -433,8 +437,14 @@ mod tests {
             "lz4".to_string(),
         )]);
         let err = TableProperties::try_from(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec: lz4"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec: lz4")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
     }
 
     #[test]
@@ -444,8 +454,14 @@ mod tests {
             "zstd".to_string(),
         )]);
         let err = TableProperties::try_from(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec: zstd"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec: zstd")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
     }
 
     #[test]
@@ -455,8 +471,14 @@ mod tests {
             "snappy".to_string(),
         )]);
         let err = TableProperties::try_from(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec: snappy"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec: snappy")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
     }
 
     #[test]
@@ -542,8 +564,14 @@ mod tests {
             "lz4".to_string(),
         )]);
         let err = parse_metadata_file_compression(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
 
         // Test that Zstd is rejected
         let props = HashMap::from([(
@@ -551,8 +579,14 @@ mod tests {
             "zstd".to_string(),
         )]);
         let err = parse_metadata_file_compression(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
 
         // Test that arbitrary invalid values are rejected
         let props = HashMap::from([(
@@ -560,7 +594,13 @@ mod tests {
             "snappy".to_string(),
         )]);
         let err = parse_metadata_file_compression(&props).unwrap_err();
-        assert!(err.to_string().contains("Invalid metadata compression codec"));
-        assert!(err.to_string().contains("Only 'none' and 'gzip' are supported"));
+        assert!(
+            err.to_string()
+                .contains("Invalid metadata compression codec")
+        );
+        assert!(
+            err.to_string()
+                .contains("Only 'none' and 'gzip' are supported")
+        );
     }
 }

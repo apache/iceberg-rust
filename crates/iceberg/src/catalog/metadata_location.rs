@@ -22,7 +22,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
-use crate::spec::{parse_metadata_file_compression, TableMetadata};
+use crate::spec::{TableMetadata, parse_metadata_file_compression};
 use crate::{Error, ErrorKind, Result};
 
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`

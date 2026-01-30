@@ -35,9 +35,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    parse_metadata_file_compression, DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef,
-    PartitionStatisticsFile, SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, TableProperties,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
+    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties, parse_metadata_file_compression,
 };
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
@@ -516,7 +516,7 @@ impl TableMetadata {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!("Unsupported metadata compression codec: {:?}", codec),
-                ))
+                ));
             }
         };
 
