@@ -294,6 +294,7 @@ mod test {
         TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
+    use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
@@ -848,7 +849,7 @@ mod test {
         let bucket = Bucket::new(10);
         assert_eq!(
             bucket
-                .transform_literal(&Datum::decimal(1420).unwrap())
+                .transform_literal(&Datum::decimal(decimal_new(1420, 0)).unwrap())
                 .unwrap()
                 .unwrap(),
             Datum::int(9)
