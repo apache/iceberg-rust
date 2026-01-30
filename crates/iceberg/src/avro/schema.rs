@@ -240,6 +240,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::Decimal { precision, scale } => {
                 avro_decimal_schema(*precision as usize, *scale as usize)?
             }
+            PrimitiveType::Geometry { .. } | PrimitiveType::Geography { .. } => todo!(),
         };
         Ok(Either::Left(avro_schema))
     }
