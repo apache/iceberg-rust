@@ -89,7 +89,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded "><a href="api.html">API</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/podman.html">Using Podman instead of Docker</a></li><li class="chapter-item expanded "><a href="reference/orbstack.html">OrbStack as a docker alternative</a></li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded "><a href="api.html">API</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/container-runtimes.html">Container Runtimes</a></li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -796,9 +796,7 @@ refactor: Polish the implementation of read parquet
 cargo 1.69.0 (6e9a83356 2023-04-12)
 </code></pre>
 <h4 id="install-docker-or-podman"><a class="header" href="#install-docker-or-podman">Install Docker or Podman</a></h4>
-<p>Currently, iceberg-rust uses Docker to set up environment for integration tests. Native Docker has some limitations, please check (https://github.com/apache/iceberg-rust/pull/748). Please use Orbstack or Podman.</p>
-<p>For MacOS users, you can install <a href="website/src/reference/orbstack.html">OrbStack as a docker alternative</a>.
-For Podman users, refer to <a href="website/src/reference/podman.html">Using Podman instead of Docker</a></p>
+<p>Currently, iceberg-rust uses Docker to set up environment for integration tests. See <a href="website/src/reference/container-runtimes.html">Container Runtimes</a> for setup instructions.</p>
 <h2 id="build"><a class="header" href="#build">Build</a></h2>
 <ul>
 <li>To compile the project: <code>make build</code></li>
@@ -1183,32 +1181,79 @@ On behalf of Apache Iceberg Community
   ~ specific language governing permissions and limitations
   ~ under the License.
 -->
-<h1 id="using-podman-instead-of-docker"><a class="header" href="#using-podman-instead-of-docker">Using Podman instead of Docker</a></h1>
-<p>Iceberg-rust does not require containerization, except for integration tests, where &quot;docker&quot; and &quot;docker-compose&quot; are used to start containers for minio and various catalogs. Below instructions setup &quot;rootful podman&quot; and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack.</p>
+<h1 id="container-runtimes"><a class="header" href="#container-runtimes">Container Runtimes</a></h1>
+<p>Iceberg-rust uses containers for integration tests, where <code>docker</code> and <code>docker compose</code> start containers for MinIO and various catalogs. You can use any of the following container runtimes.</p>
+<h2 id="docker-desktop"><a class="header" href="#docker-desktop">Docker Desktop</a></h2>
+<p><a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a> is available for macOS, Windows, and Linux.</p>
 <ol>
-<li>Have podman v4 or newer.
+<li>
+<p>Install Docker Desktop by downloading the <a href="https://www.docker.com/products/docker-desktop/">installer</a> or using Homebrew on macOS.</p>
+<pre><code class="language-shell">brew install --cask docker
+</code></pre>
+</li>
+<li>
+<p>Launch Docker Desktop and complete the setup.</p>
+</li>
+<li>
+<p>Verify the installation.</p>
+<pre><code class="language-shell">docker --version
+docker compose version
+</code></pre>
+</li>
+<li>
+<p>Try some integration tests!</p>
+<pre><code class="language-shell">make test
+</code></pre>
+</li>
+</ol>
+<h2 id="orbstack-macos"><a class="header" href="#orbstack-macos">OrbStack (macOS)</a></h2>
+<p><a href="https://orbstack.dev/">OrbStack</a> is a lightweight alternative to Docker Desktop on macOS.</p>
+<ol>
+<li>
+<p>Install OrbStack by downloading the <a href="https://orbstack.dev/download">installer</a> or using Homebrew.</p>
+<pre><code class="language-shell">brew install orbstack
+</code></pre>
+</li>
+<li>
+<p>Migrate Docker data (if switching from Docker Desktop).</p>
+<pre><code class="language-shell">orb migrate docker
+</code></pre>
+</li>
+<li>
+<p>(Optional) Add registry mirrors.</p>
+<p>You can edit the config directly at <code>~/.orbstack/config/docker.json</code> and restart the engine with <code>orb restart docker</code>.</p>
+<pre><code class="language-json">{
+    &quot;registry-mirrors&quot;: [&quot;&lt;mirror_addr&gt;&quot;]
+}
+</code></pre>
+</li>
+<li>
+<p>Try some integration tests!</p>
+<pre><code class="language-shell">make test
+</code></pre>
+</li>
+</ol>
+<h2 id="podman"><a class="header" href="#podman">Podman</a></h2>
+<p><a href="https://podman.io/">Podman</a> is a daemonless container engine. The instructions below set up &quot;rootful podman&quot; with docker's official docker-compose plugin.</p>
+<ol>
+<li>
+<p>Have podman v4 or newer.</p>
 <pre><code class="language-shell">$ podman --version
 podman version 4.9.4-rhel
 </code></pre>
 </li>
-<li>Create a docker wrapper script:</li>
-</ol>
-<ul>
 <li>
+<p>Create a docker wrapper script:</p>
 <p>Create a fresh <code>/usr/bin/docker</code> file and add the below contents:</p>
 <pre><code class="language-bash">#!/bin/sh
 [ -e /etc/containers/nodocker ] || \
 echo &quot;Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg.&quot; &gt;&amp;2
 exec sudo /usr/bin/podman &quot;$@&quot;
 </code></pre>
-</li>
-<li>
 <p>Set new <code>/usr/bin/docker</code> file to executable.</p>
 <pre><code class="language-shell">sudo chmod +x /usr/bin/docker
 </code></pre>
 </li>
-</ul>
-<ol start="3">
 <li>
 <p>Install the <a href="https://docs.docker.com/compose/install/linux">docker compose plugin</a>. Check for successful installation.</p>
 <pre><code class="language-shell">$ docker compose version
@@ -1246,68 +1291,22 @@ lrwxrwxrwx 1 root root 27 Jul 24 12:18 /var/run/docker.sock -&gt; /var/run/podma
 </code></pre>
 </li>
 </ol>
-<h1 id="references"><a class="header" href="#references">References</a></h1>
-<ul>
-<li><a href="https://docs.docker.com/compose/install/linux">https://docs.docker.com/compose/install/linux</a></li>
-<li><a href="https://www.redhat.com/sysadmin/podman-docker-compose">https://www.redhat.com/sysadmin/podman-docker-compose</a></li>
-</ul>
-<h1 id="note-on-rootless-containers"><a class="header" href="#note-on-rootless-containers">Note on rootless containers</a></h1>
-<p>As of podman v4, <a href="https://www.redhat.com/sysadmin/container-ip-address-podman">&quot;To be succinct and simple, when running rootless containers, the container itself does not have an IP address&quot;</a> This causes issues with iceberg-rust's integration tests, which rely upon ip-addressable containers via docker-compose. As a result, podman &quot;rootful&quot; containers are required throughout to ensure containers have IP addresses. Perhaps as a future work or with updates to default podman networking, the need for &quot;rootful&quot; podman containers can be eliminated.</p>
-<ul>
-<li><a href="https://www.redhat.com/sysadmin/container-ip-address-podman">https://www.redhat.com/sysadmin/container-ip-address-podman</a></li>
-<li><a href="https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md">https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md</a></li>
-</ul>
-<h1 id="debugging-note"><a class="header" href="#debugging-note">Debugging Note:</a></h1>
-<ul>
-<li>Fix for error: <code>Error: short-name &quot;apache/iceberg-rest-fixture&quot; did not resolve to an alias and no unqualified-search registries are defined in &quot;/etc/containers/registries.conf&quot;</code>
-<ul>
-<li>Add or modify the <code>/etc/containers/registries.conf</code> file:</li>
-</ul>
+<h3 id="note-on-rootless-containers"><a class="header" href="#note-on-rootless-containers">Note on rootless containers</a></h3>
+<p>As of podman v4, <a href="https://www.redhat.com/sysadmin/container-ip-address-podman">&quot;To be succinct and simple, when running rootless containers, the container itself does not have an IP address&quot;</a>. This causes issues with iceberg-rust's integration tests, which rely upon IP-addressable containers via docker-compose. As a result, podman &quot;rootful&quot; containers are required to ensure containers have IP addresses.</p>
+<h3 id="podman-troubleshooting"><a class="header" href="#podman-troubleshooting">Podman troubleshooting</a></h3>
+<p><strong>Error:</strong> <code>short-name &quot;apache/iceberg-rest-fixture&quot; did not resolve to an alias and no unqualified-search registries are defined in &quot;/etc/containers/registries.conf&quot;</code></p>
+<p><strong>Fix:</strong> Add or modify the <code>/etc/containers/registries.conf</code> file:</p>
 <pre><code class="language-toml">[[registry]]
 prefix = &quot;docker.io&quot;
 location = &quot;docker.io&quot;
 </code></pre>
-</li>
+<h3 id="podman-references"><a class="header" href="#podman-references">Podman references</a></h3>
+<ul>
+<li><a href="https://docs.docker.com/compose/install/linux">https://docs.docker.com/compose/install/linux</a></li>
+<li><a href="https://www.redhat.com/sysadmin/podman-docker-compose">https://www.redhat.com/sysadmin/podman-docker-compose</a></li>
+<li><a href="https://www.redhat.com/sysadmin/container-ip-address-podman">https://www.redhat.com/sysadmin/container-ip-address-podman</a></li>
+<li><a href="https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md">https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md</a></li>
 </ul>
-<div style="break-before: page; page-break-before: always;"></div><!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<h1 id="orbstack-as-a-docker-alternative-on-macos"><a class="header" href="#orbstack-as-a-docker-alternative-on-macos">OrbStack as a docker alternative on macOS</a></h1>
-<ol>
-<li>
-<p>Install OrbStack by downloading <a href="https://orbstack.dev/download">installer</a> or using Homebrew.</p>
-<pre><code class="language-shell">brew install orbstack
-</code></pre>
-</li>
-<li>
-<p>Migrate Docker data</p>
-<pre><code class="language-shell">orb migrate docker
-</code></pre>
-</li>
-<li>
-<p>(Optional) Add registry mirrors</p>
-<p>You can edit the config directly at <code>~/.orbstack/config/docker.json</code> and restart the engine with <code>orb restart docker</code>.</p>
-<pre><code>{
-    &quot;registry-mirrors&quot;: [&quot;&lt;mirror_addr&gt;&quot;]
-}
-</code></pre>
-</li>
-</ol>
 <div style="break-before: page; page-break-before: always;"></div><!--
   ~ Licensed to the Apache Software Foundation (ASF) under one
   ~ or more contributor license agreements.  See the NOTICE file
