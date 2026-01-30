@@ -197,9 +197,9 @@ impl StorageFactory for OpenDalStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         match self {
             #[cfg(feature = "storage-memory")]
-            OpenDalStorageFactory::Memory => {
-                Ok(Arc::new(OpenDalStorage::Memory(super::memory_config_build()?)))
-            }
+            OpenDalStorageFactory::Memory => Ok(Arc::new(OpenDalStorage::Memory(
+                super::memory_config_build()?,
+            ))),
             #[cfg(feature = "storage-fs")]
             OpenDalStorageFactory::Fs => Ok(Arc::new(OpenDalStorage::LocalFs)),
             #[cfg(feature = "storage-s3")]
