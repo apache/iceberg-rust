@@ -85,6 +85,23 @@ impl CompressionCodec {
     pub(crate) fn is_none(&self) -> bool {
         matches!(self, CompressionCodec::None)
     }
+
+    /// Returns the file extension suffix for this compression codec.
+    /// Returns empty string for None, ".gz" for Gzip.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    pub fn suffix(&self) -> Result<&'static str> {
+        match self {
+            CompressionCodec::None => Ok(""),
+            CompressionCodec::Gzip => Ok(".gz"),
+            codec @ (CompressionCodec::Lz4 | CompressionCodec::Zstd) => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("suffix not defined for {codec:?}"),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +149,22 @@ mod tests {
                 format!("FeatureUnsupported => {name} decompression is not supported currently"),
             );
         }
+    }
+
+    #[test]
+    fn test_suffix() {
+        // Test supported codecs
+        assert_eq!(CompressionCodec::None.suffix().unwrap(), "");
+        assert_eq!(CompressionCodec::Gzip.suffix().unwrap(), ".gz");
+
+        // Test unsupported codecs return errors
+        assert!(CompressionCodec::Lz4.suffix().is_err());
+        assert!(CompressionCodec::Zstd.suffix().is_err());
+
+        let lz4_err = CompressionCodec::Lz4.suffix().unwrap_err();
+        assert!(lz4_err.to_string().contains("suffix not defined for Lz4"));
+
+        let zstd_err = CompressionCodec::Zstd.suffix().unwrap_err();
+        assert!(zstd_err.to_string().contains("suffix not defined for Zstd"));
     }
 }
