@@ -71,16 +71,17 @@ enum MetadataCacheState {
 }
 
 /// Cache for Parquet file metadata, shared across concurrent FileScanTasks
-/// Prevents redundant metadata loading when multiple tasks reference the same file
+/// Prevents redundant metadata loading when multiple tasks reference the same file.
+/// Cache key is (file_path, should_load_page_index) since metadata content differs.
 #[derive(Clone, Default)]
 pub(crate) struct ParquetMetadataCache {
-    state: Arc<RwLock<HashMap<String, MetadataCacheState>>>,
+    state: Arc<RwLock<HashMap<(String, bool), MetadataCacheState>>>,
 }
 
 impl std::fmt::Debug for ParquetMetadataCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetMetadataCache")
-            .field("cached_files", &self.state.read().unwrap().len())
+            .field("cached_entries", &self.state.read().unwrap().len())
             .finish()
     }
 }
@@ -98,10 +99,15 @@ pub(crate) enum MetadataLoadAction {
 
 impl ParquetMetadataCache {
     /// Try to get cached metadata or determine if we should load it
-    pub(crate) fn try_get_or_start_loading(&self, file_path: &str) -> MetadataLoadAction {
+    pub(crate) fn try_get_or_start_loading(
+        &self,
+        file_path: &str,
+        load_page_index: bool,
+    ) -> MetadataLoadAction {
         let mut state = self.state.write().unwrap();
+        let key = (file_path.to_string(), load_page_index);
 
-        if let Some(cached) = state.get(file_path) {
+        if let Some(cached) = state.get(&key) {
             return match cached {
                 MetadataCacheState::Loaded(metadata) => {
                     MetadataLoadAction::Loaded(Arc::clone(metadata))
@@ -114,24 +120,33 @@ impl ParquetMetadataCache {
 
         // Mark as loading to prevent duplicate work
         let notify = Arc::new(Notify::new());
-        state.insert(
-            file_path.to_string(),
-            MetadataCacheState::Loading(Arc::clone(&notify)),
-        );
+        state.insert(key, MetadataCacheState::Loading(Arc::clone(&notify)));
 
         MetadataLoadAction::Load
     }
 
     /// Store loaded metadata and notify waiters
-    pub(crate) fn finish_loading(&self, file_path: &str, metadata: Arc<ParquetMetaData>) {
+    pub(crate) fn finish_loading(
+        &self,
+        file_path: &str,
+        load_page_index: bool,
+        metadata: Arc<ParquetMetaData>,
+    ) {
         let mut state = self.state.write().unwrap();
+        let key = (file_path.to_string(), load_page_index);
 
         // Get the notify handle before replacing
-        if let Some(MetadataCacheState::Loading(notify)) = state.get(file_path) {
+        if let Some(MetadataCacheState::Loading(notify)) = state.get(&key) {
             notify.notify_waiters();
         }
 
-        state.insert(file_path.to_string(), MetadataCacheState::Loaded(metadata));
+        state.insert(key, MetadataCacheState::Loaded(metadata));
+    }
+
+    /// Returns the number of cached entries (for testing)
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.state.read().unwrap().len()
     }
 }
 
@@ -565,7 +580,7 @@ impl ArrowReader {
 
         // Get or load ParquetMetaData from cache
         let parquet_metadata: Arc<ParquetMetaData> = loop {
-            match metadata_cache.try_get_or_start_loading(data_file_path) {
+            match metadata_cache.try_get_or_start_loading(data_file_path, should_load_page_index) {
                 MetadataLoadAction::Loaded(metadata) => break metadata,
                 MetadataLoadAction::WaitFor(notify) => {
                     notify.notified().await;
@@ -590,7 +605,11 @@ impl ArrowReader {
                             })?;
 
                     let metadata = Arc::clone(temp_arrow_metadata.metadata());
-                    metadata_cache.finish_loading(data_file_path, Arc::clone(&metadata));
+                    metadata_cache.finish_loading(
+                        data_file_path,
+                        should_load_page_index,
+                        Arc::clone(&metadata),
+                    );
                     break metadata;
                 }
             }
@@ -1913,7 +1932,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, Int32Array, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -1927,7 +1946,9 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::ErrorKind;
-    use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
+    use crate::arrow::reader::{
+        CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY, ParquetMetadataCache,
+    };
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::delete_vector::DeleteVector;
     use crate::expr::visitors::bound_predicate_visitor::visit;
@@ -4369,5 +4390,73 @@ message schema {
         assert_eq!(name_col.value(1), "Bob");
         assert_eq!(name_col.value(2), "Charlie");
         assert_eq!(name_col.value(3), "Dave");
+    }
+
+    #[tokio::test]
+    async fn test_parquet_metadata_cache_prevents_duplicate_loads() {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        // Create a Parquet file
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let id_data = Arc::new(Int32Array::from_iter_values(0..10)) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![id_data]).unwrap();
+
+        let file_path = format!("{table_location}/test.parquet");
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        // Create a shared cache
+        let cache = ParquetMetadataCache::default();
+        assert_eq!(cache.len(), 0);
+
+        // First call should load and cache metadata
+        let _builder1 = ArrowReader::create_parquet_record_batch_stream_builder(
+            &file_path,
+            file_io.clone(),
+            false, // should_load_page_index
+            None,
+            &cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cache.len(), 1);
+
+        // Second call with same parameters should hit cache
+        let _builder2 = ArrowReader::create_parquet_record_batch_stream_builder(
+            &file_path,
+            file_io.clone(),
+            false,
+            None,
+            &cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cache.len(), 1); // Still 1 - cache hit
+
+        // Third call with different should_load_page_index creates new cache entry
+        let _builder3 = ArrowReader::create_parquet_record_batch_stream_builder(
+            &file_path,
+            file_io.clone(),
+            true, // Different should_load_page_index
+            None,
+            &cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cache.len(), 2); // Now 2 - different key
     }
 }
