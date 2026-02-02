@@ -460,3 +460,15 @@ impl FileWrite for opendal::Writer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "storage-memory")]
+    #[test]
+    fn test_default_memory_operator() {
+        let op = default_memory_operator();
+        assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+}
