@@ -23,7 +23,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use url::Url;
 
-use super::storage::{OpenDalStorage, Storage};
+use super::opendal::OpenDalStorage;
+use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.

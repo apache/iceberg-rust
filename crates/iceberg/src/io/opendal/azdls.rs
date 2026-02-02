@@ -321,8 +321,7 @@ mod tests {
 
     use opendal::services::AzdlsConfig;
 
-    use super::{AzureStoragePath, AzureStorageScheme, azdls_create_operator};
-    use crate::io::azdls_config_parse;
+    use super::{AzureStoragePath, AzureStorageScheme, azdls_config_parse, azdls_create_operator};
 
     #[test]
     fn test_azdls_config_parse() {
