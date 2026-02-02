@@ -24,7 +24,7 @@ use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
     BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
-    TimestampMicrosecondArray,
+    TimestampMicrosecondArray, TimestampNanosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -741,6 +741,12 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
             TimestampMicrosecondArray::new(vec![*value; 1].into(), None).with_timezone_utc(),
+        ))),
+        (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(value)) => {
+            Ok(Arc::new(TimestampNanosecondArray::new_scalar(*value)))
+        }
+        (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
+            TimestampNanosecondArray::new(vec![*value; 1].into(), None).with_timezone_utc(),
         ))),
         (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(value)) => {
             let array = Decimal128Array::from_value(*value, 1)
