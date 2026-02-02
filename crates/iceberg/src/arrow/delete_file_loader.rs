@@ -20,6 +20,7 @@ use std::sync::Arc;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::arrow::ArrowReader;
+use crate::arrow::reader::ParquetMetadataCache;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
@@ -43,12 +44,16 @@ pub trait DeleteFileLoader {
 #[derive(Clone, Debug)]
 pub(crate) struct BasicDeleteFileLoader {
     file_io: FileIO,
+    metadata_cache: ParquetMetadataCache,
 }
 
 #[allow(unused_variables)]
 impl BasicDeleteFileLoader {
     pub fn new(file_io: FileIO) -> Self {
-        BasicDeleteFileLoader { file_io }
+        BasicDeleteFileLoader {
+            file_io,
+            metadata_cache: ParquetMetadataCache::default(),
+        }
     }
     /// Loads a RecordBatchStream for a given datafile.
     pub(crate) async fn parquet_to_batch_stream(
@@ -64,6 +69,7 @@ impl BasicDeleteFileLoader {
             self.file_io.clone(),
             false,
             None,
+            &self.metadata_cache,
         )
         .await?
         .build()?

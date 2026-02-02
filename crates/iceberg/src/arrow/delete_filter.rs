@@ -100,9 +100,10 @@ impl DeleteFilter {
 
         // Mark as loading to prevent duplicate work
         let notifier = Arc::new(Notify::new());
-        state
-            .equality_deletes
-            .insert(file_path.to_string(), EqDelState::Loading(notifier.clone()));
+        state.equality_deletes.insert(
+            file_path.to_string(),
+            EqDelState::Loading(Arc::clone(&notifier)),
+        );
 
         Some(notifier)
     }
