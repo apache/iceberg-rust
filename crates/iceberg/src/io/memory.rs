@@ -18,7 +18,7 @@
 //! Pure Rust in-memory storage implementation for testing.
 //!
 //! This module provides a `MemoryStorage` implementation that stores data
-//! in a thread-safe `HashMap`, without any external dependencies like OpenDAL.
+//! in a thread-safe `HashMap`, without any external dependencies.
 //! It is primarily intended for unit testing and scenarios where persistent
 //! storage is not needed.
 
