@@ -212,7 +212,7 @@
 <a href=#212 id=212 data-nosnippet>212</a></span><span class="kw">pub struct </span>ParquetWriter {
 <a href=#213 id=213 data-nosnippet>213</a>    schema: SchemaRef,
 <a href=#214 id=214 data-nosnippet>214</a>    output_file: OutputFile,
-<a href=#215 id=215 data-nosnippet>215</a>    inner_writer: <span class="prelude-ty">Option</span>&lt;AsyncArrowWriter&lt;AsyncFileWriter&lt;Box&lt;<span class="kw">dyn </span>FileWrite&gt;&gt;&gt;&gt;,
+<a href=#215 id=215 data-nosnippet>215</a>    inner_writer: <span class="prelude-ty">Option</span>&lt;AsyncArrowWriter&lt;AsyncFileWriter&gt;&gt;,
 <a href=#216 id=216 data-nosnippet>216</a>    writer_properties: WriterProperties,
 <a href=#217 id=217 data-nosnippet>217</a>    current_row_num: usize,
 <a href=#218 id=218 data-nosnippet>218</a>    nan_value_count_visitor: NanValueCountVisitor,
@@ -577,16 +577,16 @@
 <a href=#577 id=577 data-nosnippet>577</a>/// # NOTES
 <a href=#578 id=578 data-nosnippet>578</a>///
 <a href=#579 id=579 data-nosnippet>579</a>/// We keep this wrapper been used inside only.
-<a href=#580 id=580 data-nosnippet>580</a></span><span class="kw">struct </span>AsyncFileWriter&lt;W: FileWrite&gt;(W);
+<a href=#580 id=580 data-nosnippet>580</a></span><span class="kw">struct </span>AsyncFileWriter(Box&lt;<span class="kw">dyn </span>FileWrite&gt;);
 <a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a><span class="kw">impl</span>&lt;W: FileWrite&gt; AsyncFileWriter&lt;W&gt; {
+<a href=#582 id=582 data-nosnippet>582</a><span class="kw">impl </span>AsyncFileWriter {
 <a href=#583 id=583 data-nosnippet>583</a>    <span class="doccomment">/// Create a new `AsyncFileWriter` with the given writer.
-<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">pub fn </span>new(writer: W) -&gt; <span class="self">Self </span>{
+<a href=#584 id=584 data-nosnippet>584</a>    </span><span class="kw">pub fn </span>new(writer: Box&lt;<span class="kw">dyn </span>FileWrite&gt;) -&gt; <span class="self">Self </span>{
 <a href=#585 id=585 data-nosnippet>585</a>        <span class="self">Self</span>(writer)
 <a href=#586 id=586 data-nosnippet>586</a>    }
 <a href=#587 id=587 data-nosnippet>587</a>}
 <a href=#588 id=588 data-nosnippet>588</a>
-<a href=#589 id=589 data-nosnippet>589</a><span class="kw">impl</span>&lt;W: FileWrite&gt; ArrowAsyncFileWriter <span class="kw">for </span>AsyncFileWriter&lt;W&gt; {
+<a href=#589 id=589 data-nosnippet>589</a><span class="kw">impl </span>ArrowAsyncFileWriter <span class="kw">for </span>AsyncFileWriter {
 <a href=#590 id=590 data-nosnippet>590</a>    <span class="kw">fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bs: Bytes) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;()&gt;&gt; {
 <a href=#591 id=591 data-nosnippet>591</a>        Box::pin(<span class="kw">async </span>{
 <a href=#592 id=592 data-nosnippet>592</a>            <span class="self">self</span>.<span class="number">0

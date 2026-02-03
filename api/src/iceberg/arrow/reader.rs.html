@@ -474,7 +474,7 @@
 <a href=#474 id=474 data-nosnippet>474</a>        file_io: FileIO,
 <a href=#475 id=475 data-nosnippet>475</a>        should_load_page_index: bool,
 <a href=#476 id=476 data-nosnippet>476</a>        arrow_reader_options: <span class="prelude-ty">Option</span>&lt;ArrowReaderOptions&gt;,
-<a href=#477 id=477 data-nosnippet>477</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;ParquetRecordBatchStreamBuilder&lt;ArrowFileReader&lt;<span class="kw">impl </span>FileRead + Sized&gt;&gt;&gt; {
+<a href=#477 id=477 data-nosnippet>477</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;ParquetRecordBatchStreamBuilder&lt;ArrowFileReader&gt;&gt; {
 <a href=#478 id=478 data-nosnippet>478</a>        <span class="comment">// Get the metadata for the Parquet file we need to read and build
 <a href=#479 id=479 data-nosnippet>479</a>        // a reader for the data within
 <a href=#480 id=480 data-nosnippet>480</a>        </span><span class="kw">let </span>parquet_file = file_io.new_input(data_file_path)<span class="question-mark">?</span>;
@@ -1673,18 +1673,18 @@
 <a href=#1673 id=1673 data-nosnippet>1673</a>}
 <a href=#1674 id=1674 data-nosnippet>1674</a>
 <a href=#1675 id=1675 data-nosnippet>1675</a><span class="doccomment">/// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-<a href=#1676 id=1676 data-nosnippet>1676</a></span><span class="kw">pub struct </span>ArrowFileReader&lt;R: FileRead&gt; {
+<a href=#1676 id=1676 data-nosnippet>1676</a></span><span class="kw">pub struct </span>ArrowFileReader {
 <a href=#1677 id=1677 data-nosnippet>1677</a>    meta: FileMetadata,
 <a href=#1678 id=1678 data-nosnippet>1678</a>    preload_column_index: bool,
 <a href=#1679 id=1679 data-nosnippet>1679</a>    preload_offset_index: bool,
 <a href=#1680 id=1680 data-nosnippet>1680</a>    preload_page_index: bool,
 <a href=#1681 id=1681 data-nosnippet>1681</a>    metadata_size_hint: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#1682 id=1682 data-nosnippet>1682</a>    r: R,
+<a href=#1682 id=1682 data-nosnippet>1682</a>    r: Box&lt;<span class="kw">dyn </span>FileRead&gt;,
 <a href=#1683 id=1683 data-nosnippet>1683</a>}
 <a href=#1684 id=1684 data-nosnippet>1684</a>
-<a href=#1685 id=1685 data-nosnippet>1685</a><span class="kw">impl</span>&lt;R: FileRead&gt; ArrowFileReader&lt;R&gt; {
+<a href=#1685 id=1685 data-nosnippet>1685</a><span class="kw">impl </span>ArrowFileReader {
 <a href=#1686 id=1686 data-nosnippet>1686</a>    <span class="doccomment">/// Create a new ArrowFileReader
-<a href=#1687 id=1687 data-nosnippet>1687</a>    </span><span class="kw">pub fn </span>new(meta: FileMetadata, r: R) -&gt; <span class="self">Self </span>{
+<a href=#1687 id=1687 data-nosnippet>1687</a>    </span><span class="kw">pub fn </span>new(meta: FileMetadata, r: Box&lt;<span class="kw">dyn </span>FileRead&gt;) -&gt; <span class="self">Self </span>{
 <a href=#1688 id=1688 data-nosnippet>1688</a>        <span class="self">Self </span>{
 <a href=#1689 id=1689 data-nosnippet>1689</a>            meta,
 <a href=#1690 id=1690 data-nosnippet>1690</a>            preload_column_index: <span class="bool-val">false</span>,
@@ -1723,7 +1723,7 @@
 <a href=#1723 id=1723 data-nosnippet>1723</a>    </span>}
 <a href=#1724 id=1724 data-nosnippet>1724</a>}
 <a href=#1725 id=1725 data-nosnippet>1725</a>
-<a href=#1726 id=1726 data-nosnippet>1726</a><span class="kw">impl</span>&lt;R: FileRead&gt; AsyncFileReader <span class="kw">for </span>ArrowFileReader&lt;R&gt; {
+<a href=#1726 id=1726 data-nosnippet>1726</a><span class="kw">impl </span>AsyncFileReader <span class="kw">for </span>ArrowFileReader {
 <a href=#1727 id=1727 data-nosnippet>1727</a>    <span class="kw">fn </span>get_bytes(<span class="kw-2">&amp;mut </span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Bytes&gt;&gt; {
 <a href=#1728 id=1728 data-nosnippet>1728</a>        Box::pin(
 <a href=#1729 id=1729 data-nosnippet>1729</a>            <span class="self">self</span>.r
