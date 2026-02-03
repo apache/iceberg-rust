@@ -68,6 +68,7 @@
 
 mod config;
 mod file_io;
+mod memory;
 mod opendal;
 mod storage;
 
@@ -78,7 +79,6 @@ pub use opendal::CustomAwsCredentialLoader;
 pub use opendal::{OpenDalStorage, OpenDalStorageFactory};
 pub use storage::{Storage, StorageConfig, StorageFactory};
 
-mod memory;
 pub(crate) mod object_cache;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
