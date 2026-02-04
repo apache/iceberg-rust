@@ -68,6 +68,7 @@
 
 mod config;
 mod file_io;
+mod local_fs;
 mod memory;
 mod opendal;
 mod storage;
