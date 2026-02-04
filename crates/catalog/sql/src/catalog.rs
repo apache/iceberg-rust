@@ -974,21 +974,33 @@ impl Catalog for SqlCatalog {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+    use std::hash::Hash;
 
-    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::table::Table;
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use itertools::Itertools;
+    use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
     use crate::catalog::{
-        SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
+        NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI,
+        SQL_CATALOG_PROP_WAREHOUSE,
     };
     use crate::{SqlBindStyle, SqlCatalogBuilder};
+
+    const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
         temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+        HashSet::from_iter(vec)
     }
 
     fn default_properties() -> HashMap<String, String> {
@@ -1062,6 +1074,51 @@ mod tests {
         for table_ident in table_idents {
             create_table(catalog, table_ident).await;
         }
+    }
+
+    fn assert_table_eq(table: &Table, expected_table_ident: &TableIdent, expected_schema: &Schema) {
+        assert_eq!(table.identifier(), expected_table_ident);
+
+        let metadata = table.metadata();
+
+        assert_eq!(metadata.current_schema().as_ref(), expected_schema);
+
+        let expected_partition_spec = PartitionSpec::builder(expected_schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            metadata
+                .partition_specs_iter()
+                .map(|p| p.as_ref())
+                .collect_vec(),
+            vec![&expected_partition_spec]
+        );
+
+        let expected_sorted_order = SortOrder::builder()
+            .with_order_id(0)
+            .with_fields(vec![])
+            .build(expected_schema)
+            .unwrap();
+
+        assert_eq!(
+            metadata
+                .sort_orders_iter()
+                .map(|s| s.as_ref())
+                .collect_vec(),
+            vec![&expected_sorted_order]
+        );
+
+        assert_eq!(metadata.properties(), &HashMap::new());
+
+        assert!(!table.readonly());
+    }
+
+    fn assert_table_metadata_location_matches(table: &Table, regex_str: &str) {
+        let actual = table.metadata_location().unwrap().to_string();
+        let regex = Regex::new(regex_str).unwrap();
+        assert!(regex.is_match(&actual))
     }
 
     #[tokio::test]
@@ -1292,20 +1349,6 @@ mod tests {
 
         let catalog2 = new_sql_catalog(warehouse_loc, Some("test")).await;
         assert_eq!(catalog2.list_namespaces(None).await.unwrap(), vec![]);
-    }
-
-    #[tokio::test]
-    async fn test_list_namespaces_returns_multiple_namespaces() {
-        let warehouse_loc = temp_path();
-        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
-        let namespace_ident_1 = NamespaceIdent::new("a".into());
-        let namespace_ident_2 = NamespaceIdent::new("b".into());
-        create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
-
-        assert_eq!(
-            to_set(catalog.list_namespaces(None).await.unwrap()),
-            to_set(vec![namespace_ident_1, namespace_ident_2])
-        );
     }
 
     #[tokio::test]

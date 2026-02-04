@@ -493,6 +493,44 @@ async fn test_catalog_namespace_listing_with_parent(#[case] kind: CatalogKind) -
     Ok(())
 }
 
+// Common behavior: listing top-level namespaces includes created namespaces.
+#[rstest]
+#[tokio::test]
+#[case::rest(CatalogKind::Rest)]
+#[case::glue(CatalogKind::Glue)]
+#[case::hms(CatalogKind::Hms)]
+#[case::sql(CatalogKind::Sql)]
+#[case::s3tables(CatalogKind::S3Tables)]
+#[case::memory(CatalogKind::Memory)]
+async fn test_catalog_list_namespaces_contains_created(#[case] kind: CatalogKind) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let ns_one = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_list_namespaces_contains_created",
+        harness.label,
+        "one"
+    ));
+    let ns_two = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_list_namespaces_contains_created",
+        harness.label,
+        "two"
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &ns_one).await;
+    cleanup_namespace_dyn(catalog.as_ref(), &ns_two).await;
+
+    catalog.create_namespace(&ns_one, HashMap::new()).await?;
+    catalog.create_namespace(&ns_two, HashMap::new()).await?;
+
+    let namespaces = catalog.list_namespaces(None).await?;
+    assert!(namespaces.contains(&ns_one));
+    assert!(namespaces.contains(&ns_two));
+
+    Ok(())
+}
+
 // Common behavior: creating an existing namespace should error.
 #[rstest]
 #[tokio::test]
