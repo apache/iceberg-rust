@@ -37,6 +37,7 @@ pub struct ReplaceDataFilesAction {
     snapshot_properties: HashMap<String, String>,
     files_to_delete: Vec<DataFile>,
     files_to_add: Vec<DataFile>,
+    validate_from_snapshot_id: Option<i64>,
 }
 
 impl ReplaceDataFilesAction {
@@ -47,6 +48,7 @@ impl ReplaceDataFilesAction {
             snapshot_properties: HashMap::default(),
             files_to_delete: vec![],
             files_to_add: vec![],
+            validate_from_snapshot_id: None,
         }
     }
 
@@ -79,6 +81,12 @@ impl ReplaceDataFilesAction {
         self.snapshot_properties = props;
         self
     }
+
+    /// Validate that files to delete exist from this snapshot.
+    pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
+        self.validate_from_snapshot_id = Some(snapshot_id);
+        self
+    }
 }
 
 #[async_trait]
@@ -98,6 +106,11 @@ impl TransactionAction for ReplaceDataFilesAction {
             ));
         }
 
+        // Validate files exist from specified snapshot
+        if let Some(snapshot_id) = self.validate_from_snapshot_id {
+            Self::validate_files_exist(table, snapshot_id, &self.files_to_delete).await?;
+        }
+
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -115,6 +128,53 @@ impl TransactionAction for ReplaceDataFilesAction {
         snapshot_producer
             .commit(replace_op, DefaultManifestProcess)
             .await
+    }
+}
+
+impl ReplaceDataFilesAction {
+    async fn validate_files_exist(
+        table: &Table,
+        snapshot_id: i64,
+        files_to_delete: &[DataFile],
+    ) -> Result<()> {
+        let snapshot = table.metadata().snapshot_by_id(snapshot_id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Snapshot {} not found", snapshot_id),
+            )
+        })?;
+
+        let files_to_find: std::collections::HashSet<&str> =
+            files_to_delete.iter().map(|f| f.file_path.as_str()).collect();
+
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), &table.metadata_ref())
+            .await?;
+
+        let mut found_files = std::collections::HashSet::new();
+        for entry in manifest_list.entries() {
+            let manifest = entry.load_manifest(table.file_io()).await?;
+            for e in manifest.entries() {
+                if e.is_alive() && files_to_find.contains(e.file_path()) {
+                    found_files.insert(e.file_path().to_string());
+                }
+            }
+        }
+
+        let missing: Vec<_> = files_to_delete
+            .iter()
+            .filter(|f| !found_files.contains(&f.file_path))
+            .map(|f| f.file_path.as_str())
+            .collect();
+
+        if !missing.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Files not found in snapshot {}: {}", snapshot_id, missing.join(", ")),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -387,5 +447,58 @@ mod integration_tests {
         }
         all_files.sort();
         assert_eq!(all_files, vec!["data/file1_compacted.parquet", "data/file2.parquet"]);
+    }
+
+    #[tokio::test]
+    async fn test_validate_from_snapshot_success() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let file1 = create_file("data/file1.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Replace with validation from correct snapshot
+        let compacted = create_file("data/compacted.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_data_files()
+            .validate_from_snapshot(snapshot_id)
+            .delete_files(vec![file1])
+            .add_files(vec![compacted]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_from_snapshot_missing_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let file1 = create_file("data/file1.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Try to delete a file that doesn't exist
+        let nonexistent = create_file("data/nonexistent.parquet", 100);
+        let compacted = create_file("data/compacted.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_data_files()
+            .validate_from_snapshot(snapshot_id)
+            .delete_files(vec![nonexistent])
+            .add_files(vec![compacted]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+        assert!(result.is_err());
     }
 }
