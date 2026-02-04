@@ -69,18 +69,19 @@
 <a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">mod </span>config;
 <a href=#70 id=70 data-nosnippet>70</a><span class="kw">mod </span>file_io;
 <a href=#71 id=71 data-nosnippet>71</a><span class="kw">mod </span>local_fs;
-<a href=#72 id=72 data-nosnippet>72</a><span class="kw">mod </span>opendal;
-<a href=#73 id=73 data-nosnippet>73</a><span class="kw">mod </span>storage;
-<a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a><span class="kw">pub use </span>config::<span class="kw-2">*</span>;
-<a href=#76 id=76 data-nosnippet>76</a><span class="kw">pub use </span>file_io::<span class="kw-2">*</span>;
-<a href=#77 id=77 data-nosnippet>77</a><span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
-<a href=#78 id=78 data-nosnippet>78</a></span><span class="kw">pub use </span>opendal::CustomAwsCredentialLoader;
-<a href=#79 id=79 data-nosnippet>79</a><span class="kw">pub use </span>opendal::{OpenDalStorage, OpenDalStorageFactory};
-<a href=#80 id=80 data-nosnippet>80</a><span class="kw">pub use </span>storage::{Storage, StorageConfig, StorageFactory};
-<a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>object_cache;
-<a href=#83 id=83 data-nosnippet>83</a>
-<a href=#84 id=84 data-nosnippet>84</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
-<a href=#85 id=85 data-nosnippet>85</a>    [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value.to_lowercase().as_str())
-<a href=#86 id=86 data-nosnippet>86</a>}</code></pre></div></section></main></body></html>
+<a href=#72 id=72 data-nosnippet>72</a><span class="kw">mod </span>memory;
+<a href=#73 id=73 data-nosnippet>73</a><span class="kw">mod </span>opendal;
+<a href=#74 id=74 data-nosnippet>74</a><span class="kw">mod </span>storage;
+<a href=#75 id=75 data-nosnippet>75</a>
+<a href=#76 id=76 data-nosnippet>76</a><span class="kw">pub use </span>config::<span class="kw-2">*</span>;
+<a href=#77 id=77 data-nosnippet>77</a><span class="kw">pub use </span>file_io::<span class="kw-2">*</span>;
+<a href=#78 id=78 data-nosnippet>78</a><span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
+<a href=#79 id=79 data-nosnippet>79</a></span><span class="kw">pub use </span>opendal::CustomAwsCredentialLoader;
+<a href=#80 id=80 data-nosnippet>80</a><span class="kw">pub use </span>opendal::{OpenDalStorage, OpenDalStorageFactory};
+<a href=#81 id=81 data-nosnippet>81</a><span class="kw">pub use </span>storage::{Storage, StorageConfig, StorageFactory};
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>object_cache;
+<a href=#84 id=84 data-nosnippet>84</a>
+<a href=#85 id=85 data-nosnippet>85</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<a href=#86 id=86 data-nosnippet>86</a>    [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value.to_lowercase().as_str())
+<a href=#87 id=87 data-nosnippet>87</a>}</code></pre></div></section></main></body></html>
