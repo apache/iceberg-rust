@@ -269,3 +269,123 @@ mod tests {
         assert_eq!(new_snapshot.summary().operation, Operation::Replace);
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Operation, Struct,
+    };
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+
+    fn create_file(path: &str, record_count: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(record_count)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_replace_after_append() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // First append some files
+        let file1 = create_file("data/file1.parquet", 100);
+        let file2 = create_file("data/file2.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file1.clone(), file2.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(table.metadata().snapshots().count(), 1);
+
+        // Now replace file1 and file2 with a single compacted file
+        let compacted = create_file("data/compacted.parquet", 200);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_data_files()
+            .delete_files(vec![file1, file2])
+            .add_files(vec![compacted]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(table.metadata().snapshots().count(), 2);
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.summary().operation, Operation::Replace);
+
+        // Verify manifest has only the compacted file
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 1);
+
+        let manifest = manifest_list.entries()[0]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(manifest.entries()[0].file_path(), "data/compacted.parquet");
+    }
+
+    #[tokio::test]
+    async fn test_replace_preserves_unrelated_files() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Append file1
+        let file1 = create_file("data/file1.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Append file2 in separate transaction
+        let file2 = create_file("data/file2.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file2.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Replace only file1
+        let file1_compacted = create_file("data/file1_compacted.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_data_files()
+            .delete_files(vec![file1])
+            .add_files(vec![file1_compacted]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Verify both file2 manifest and new compacted manifest exist
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        // Should have 2 manifests: one for file2 (preserved), one for compacted
+        assert_eq!(manifest_list.entries().len(), 2);
+
+        // Collect all file paths
+        let mut all_files = Vec::new();
+        for entry in manifest_list.entries() {
+            let manifest = entry.load_manifest(table.file_io()).await.unwrap();
+            for e in manifest.entries() {
+                if e.is_alive() {
+                    all_files.push(e.file_path().to_string());
+                }
+            }
+        }
+        all_files.sort();
+        assert_eq!(all_files, vec!["data/file1_compacted.parquet", "data/file2.parquet"]);
+    }
+}
