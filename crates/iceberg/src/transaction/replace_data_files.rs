@@ -38,6 +38,7 @@ pub struct ReplaceDataFilesAction {
     files_to_delete: Vec<DataFile>,
     files_to_add: Vec<DataFile>,
     validate_from_snapshot_id: Option<i64>,
+    data_sequence_number: Option<i64>,
 }
 
 impl ReplaceDataFilesAction {
@@ -49,6 +50,7 @@ impl ReplaceDataFilesAction {
             files_to_delete: vec![],
             files_to_add: vec![],
             validate_from_snapshot_id: None,
+            data_sequence_number: None,
         }
     }
 
@@ -87,6 +89,12 @@ impl ReplaceDataFilesAction {
         self.validate_from_snapshot_id = Some(snapshot_id);
         self
     }
+
+    /// Set data sequence number for new files (for handling concurrent equality deletes).
+    pub fn data_sequence_number(mut self, seq_num: i64) -> Self {
+        self.data_sequence_number = Some(seq_num);
+        self
+    }
 }
 
 #[async_trait]
@@ -111,13 +119,17 @@ impl TransactionAction for ReplaceDataFilesAction {
             Self::validate_files_exist(table, snapshot_id, &self.files_to_delete).await?;
         }
 
-        let snapshot_producer = SnapshotProducer::new(
+        let mut snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.files_to_add.clone(),
         );
+
+        if let Some(seq_num) = self.data_sequence_number {
+            snapshot_producer = snapshot_producer.with_data_sequence_number(seq_num);
+        }
 
         snapshot_producer.validate_added_data_files()?;
 
@@ -500,5 +512,46 @@ mod integration_tests {
         let tx = action.apply(tx).unwrap();
         let result = tx.commit(&catalog).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_data_sequence_number() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let file1 = create_file("data/file1.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let original_seq = table.metadata().current_snapshot().unwrap().sequence_number();
+
+        // Replace with custom sequence number
+        let compacted = create_file("data/compacted.parquet", 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_data_files()
+            .data_sequence_number(original_seq)
+            .delete_files(vec![file1])
+            .add_files(vec![compacted]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Verify the new manifest entry has the custom sequence number
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        for entry in manifest_list.entries() {
+            let manifest = entry.load_manifest(table.file_io()).await.unwrap();
+            for e in manifest.entries() {
+                if e.file_path() == "data/compacted.parquet" {
+                    assert_eq!(e.sequence_number(), Some(original_seq));
+                }
+            }
+        }
     }
 }
