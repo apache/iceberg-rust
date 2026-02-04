@@ -137,9 +137,12 @@ services:
     networks:
       iceberg_test:
     ports:
-      - "5000:5000"
+      - "5001:5001"
+    environment:
+      # Use port 5001 instead of default 5000 to avoid conflict with macOS AirPlay Receiver.
+      - MOTO_PORT=5001
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/moto-api/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/moto-api/"]
       interval: 5s
       timeout: 5s
       retries: 5
