@@ -80,6 +80,11 @@ impl MetadataLocation {
         }
     }
 
+    /// Returns the compression codec used for this metadata location.
+    pub fn compression_codec(&self) -> CompressionCodec {
+        self.compression_codec
+    }
+
     fn parse_metadata_path_prefix(path: &str) -> Result<String> {
         let prefix = path.strip_suffix("/metadata").ok_or(Error::new(
             ErrorKind::Unexpected,
