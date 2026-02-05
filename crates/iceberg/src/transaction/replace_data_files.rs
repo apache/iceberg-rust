@@ -149,15 +149,20 @@ impl ReplaceDataFilesAction {
         snapshot_id: i64,
         files_to_delete: &[DataFile],
     ) -> Result<()> {
-        let snapshot = table.metadata().snapshot_by_id(snapshot_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Snapshot {} not found", snapshot_id),
-            )
-        })?;
+        let snapshot = table
+            .metadata()
+            .snapshot_by_id(snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot {snapshot_id} not found"),
+                )
+            })?;
 
-        let files_to_find: std::collections::HashSet<&str> =
-            files_to_delete.iter().map(|f| f.file_path.as_str()).collect();
+        let files_to_find: std::collections::HashSet<&str> = files_to_delete
+            .iter()
+            .map(|f| f.file_path.as_str())
+            .collect();
 
         let manifest_list = snapshot
             .load_manifest_list(table.file_io(), &table.metadata_ref())
@@ -182,7 +187,11 @@ impl ReplaceDataFilesAction {
         if !missing.is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Files not found in snapshot {}: {}", snapshot_id, missing.join(", ")),
+                format!(
+                    "Files not found in snapshot {}: {}",
+                    snapshot_id,
+                    missing.join(", ")
+                ),
             ));
         }
 
@@ -234,7 +243,9 @@ impl SnapshotProduceOperation for ReplaceOperation {
                 continue;
             }
 
-            let manifest = entry.load_manifest(snapshot_produce.table.file_io()).await?;
+            let manifest = entry
+                .load_manifest(snapshot_produce.table.file_io())
+                .await?;
             let has_deleted_file = manifest
                 .entries()
                 .iter()
@@ -253,12 +264,12 @@ impl SnapshotProduceOperation for ReplaceOperation {
 mod tests {
     use std::sync::Arc;
 
+    use crate::TableUpdate;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Operation, Struct,
     };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::TableUpdate;
 
     fn create_data_file(table: &crate::table::Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
@@ -373,7 +384,9 @@ mod integration_tests {
         let file1 = create_file("data/file1.parquet", 100);
         let file2 = create_file("data/file2.parquet", 100);
         let tx = Transaction::new(&table);
-        let action = tx.fast_append().add_data_files(vec![file1.clone(), file2.clone()]);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file1.clone(), file2.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
@@ -458,7 +471,10 @@ mod integration_tests {
             }
         }
         all_files.sort();
-        assert_eq!(all_files, vec!["data/file1_compacted.parquet", "data/file2.parquet"]);
+        assert_eq!(all_files, vec![
+            "data/file1_compacted.parquet",
+            "data/file2.parquet"
+        ]);
     }
 
     #[tokio::test]
@@ -525,7 +541,11 @@ mod integration_tests {
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
-        let original_seq = table.metadata().current_snapshot().unwrap().sequence_number();
+        let original_seq = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
 
         // Replace with custom sequence number
         let compacted = create_file("data/compacted.parquet", 100);

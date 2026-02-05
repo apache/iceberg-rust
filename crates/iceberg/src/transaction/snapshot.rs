@@ -311,23 +311,21 @@ impl<'a> SnapshotProducer<'a> {
         let data_sequence_number = self.data_sequence_number;
         let manifest_entries: Vec<_> = added_data_files
             .into_iter()
-            .map(|data_file| {
-                match (format_version, data_sequence_number) {
-                    (FormatVersion::V1, _) => ManifestEntry::builder()
-                        .status(crate::spec::ManifestStatus::Added)
-                        .snapshot_id(snapshot_id)
-                        .data_file(data_file)
-                        .build(),
-                    (_, Some(seq_num)) => ManifestEntry::builder()
-                        .status(crate::spec::ManifestStatus::Added)
-                        .sequence_number(seq_num)
-                        .data_file(data_file)
-                        .build(),
-                    (_, None) => ManifestEntry::builder()
-                        .status(crate::spec::ManifestStatus::Added)
-                        .data_file(data_file)
-                        .build(),
-                }
+            .map(|data_file| match (format_version, data_sequence_number) {
+                (FormatVersion::V1, _) => ManifestEntry::builder()
+                    .status(crate::spec::ManifestStatus::Added)
+                    .snapshot_id(snapshot_id)
+                    .data_file(data_file)
+                    .build(),
+                (_, Some(seq_num)) => ManifestEntry::builder()
+                    .status(crate::spec::ManifestStatus::Added)
+                    .sequence_number(seq_num)
+                    .data_file(data_file)
+                    .build(),
+                (_, None) => ManifestEntry::builder()
+                    .status(crate::spec::ManifestStatus::Added)
+                    .data_file(data_file)
+                    .build(),
             })
             .collect();
         let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
