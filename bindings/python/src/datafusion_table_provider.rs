@@ -46,7 +46,7 @@ fn storage_factory_from_path(path: &str) -> PyResult<Arc<dyn StorageFactory>> {
         _ => {
             return Err(PyRuntimeError::new_err(format!(
                 "Unsupported storage scheme: {scheme}"
-            )))
+            )));
         }
     };
 
