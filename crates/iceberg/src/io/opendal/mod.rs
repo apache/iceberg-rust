@@ -24,6 +24,8 @@ use async_trait::async_trait;
 #[cfg(feature = "storage-azdls")]
 use azdls::AzureStorageScheme;
 use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
@@ -427,6 +429,28 @@ impl Storage for OpenDalStorage {
             format!("{relative_path}/")
         };
         Ok(op.remove_all(&path).await?)
+    }
+
+    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
+        // Get the first path to create the operator
+        let Some(first_path) = paths.next().await else {
+            return Ok(());
+        };
+
+        let storage = self.clone();
+        let (op, first_relative) = self.create_operator(&first_path)?;
+
+        // Create a stream of relative paths, starting with the first one
+        let relative_paths = futures::stream::once(async move { first_relative.to_string() })
+            .chain(paths.map(move |path| {
+                let (_, relative_path) = storage
+                    .create_operator(&path)
+                    .expect("Failed to create operator");
+                relative_path.to_string()
+            }));
+
+        op.delete_stream(relative_paths).await?;
+        Ok(())
     }
 
     #[allow(unreachable_code, unused_variables)]

@@ -28,6 +28,8 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -217,6 +219,13 @@ impl Storage for MemoryStorage {
             data.remove(&key);
         }
 
+        Ok(())
+    }
+
+    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
+        while let Some(path) = paths.next().await {
+            self.delete(&path).await?;
+        }
         Ok(())
     }
 
@@ -593,5 +602,57 @@ mod tests {
         assert_eq!(storage.read("memory:/path/to/file").await.unwrap(), content);
         assert_eq!(storage.read("/path/to/file").await.unwrap(), content);
         assert_eq!(storage.read("path/to/file").await.unwrap(), content);
+    }
+
+    #[tokio::test]
+    async fn test_memory_storage_delete_stream() {
+        use futures::stream;
+
+        let storage = MemoryStorage::new();
+
+        // Create multiple files
+        storage
+            .write("memory://file1.txt", Bytes::from("1"))
+            .await
+            .unwrap();
+        storage
+            .write("memory://file2.txt", Bytes::from("2"))
+            .await
+            .unwrap();
+        storage
+            .write("memory://file3.txt", Bytes::from("3"))
+            .await
+            .unwrap();
+
+        // Verify files exist
+        assert!(storage.exists("memory://file1.txt").await.unwrap());
+        assert!(storage.exists("memory://file2.txt").await.unwrap());
+        assert!(storage.exists("memory://file3.txt").await.unwrap());
+
+        // Delete multiple files using stream
+        let paths = vec![
+            "memory://file1.txt".to_string(),
+            "memory://file2.txt".to_string(),
+        ];
+        let path_stream = stream::iter(paths).boxed();
+        storage.delete_stream(path_stream).await.unwrap();
+
+        // Verify deleted files no longer exist
+        assert!(!storage.exists("memory://file1.txt").await.unwrap());
+        assert!(!storage.exists("memory://file2.txt").await.unwrap());
+
+        // Verify file3 still exists
+        assert!(storage.exists("memory://file3.txt").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_memory_storage_delete_stream_empty() {
+        use futures::stream;
+
+        let storage = MemoryStorage::new();
+
+        // Delete with empty stream should succeed
+        let path_stream = stream::iter(Vec::<String>::new()).boxed();
+        storage.delete_stream(path_stream).await.unwrap();
     }
 }
