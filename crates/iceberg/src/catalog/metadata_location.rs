@@ -32,21 +32,14 @@ pub struct MetadataLocation {
     table_location: String,
     version: i32,
     id: Uuid,
-    compression_suffix: Option<String>,
+    compression_codec: CompressionCodec,
 }
 
 impl MetadataLocation {
-    /// Determines the compression suffix from table properties.
-    fn compression_suffix_from_properties(
-        properties: &HashMap<String, String>,
-    ) -> Result<Option<String>> {
-        let codec = parse_metadata_file_compression(properties)?;
-
-        Ok(if codec.is_none() {
-            None
-        } else {
-            Some(codec.suffix()?.to_string())
-        })
+    /// Determines the compression codec from table properties.
+    /// Parse errors result in CompressionCodec::None.
+    fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
+        parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
     }
 
     /// Creates a completely new metadata location starting at version 0.
@@ -60,7 +53,7 @@ impl MetadataLocation {
             table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
-            compression_suffix: None,
+            compression_codec: CompressionCodec::None,
         }
     }
 
@@ -72,24 +65,19 @@ impl MetadataLocation {
             table_location: table_location.to_string(),
             version: 0,
             id: Uuid::new_v4(),
-            // This will go away https://github.com/apache/iceberg-rust/issues/2028 is resolved, so for now
-            // we use a default value.
-            compression_suffix: Self::compression_suffix_from_properties(metadata.properties())
-                .unwrap_or(None),
+            compression_codec: Self::compression_from_properties(metadata.properties()),
         }
     }
 
     /// Creates a new metadata location for an updated metadata file.
     /// Uses compression settings from the new metadata.
-    pub fn with_next_version(&self, new_metadata: &TableMetadata) -> Result<Self> {
-        Ok(Self {
+    pub fn with_next_version(&self, new_metadata: &TableMetadata) -> Self {
+        Self {
             table_location: self.table_location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
-            compression_suffix: Self::compression_suffix_from_properties(
-                new_metadata.properties(),
-            )?,
-        })
+            compression_codec: Self::compression_from_properties(new_metadata.properties()),
+        }
     }
 
     fn parse_metadata_path_prefix(path: &str) -> Result<String> {
@@ -103,7 +91,8 @@ impl MetadataLocation {
 
     /// Parses a file name of the format `<version>-<uuid>.metadata.json`
     /// or with compression: `<version>-<uuid>.gz.metadata.json`.
-    fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, Option<String>)> {
+    /// Parse errors for compression codec result in CompressionCodec::None.
+    fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, CompressionCodec)> {
         let stripped = file_name.strip_suffix(".metadata.json").ok_or(Error::new(
             ErrorKind::Unexpected,
             format!("Invalid metadata file ending: {file_name}"),
@@ -111,10 +100,10 @@ impl MetadataLocation {
 
         // Check for compression suffix (e.g., .gz)
         let gzip_suffix = CompressionCodec::Gzip.suffix()?;
-        let (stripped, compression_suffix) = if let Some(s) = stripped.strip_suffix(gzip_suffix) {
-            (s, Some(gzip_suffix.to_string()))
+        let (stripped, compression_codec) = if let Some(s) = stripped.strip_suffix(gzip_suffix) {
+            (s, CompressionCodec::Gzip)
         } else {
-            (stripped, None)
+            (stripped, CompressionCodec::None)
         };
 
         let (version, id) = stripped.split_once('-').ok_or(Error::new(
@@ -125,14 +114,14 @@ impl MetadataLocation {
         Ok((
             version.parse::<i32>()?,
             Uuid::parse_str(id)?,
-            compression_suffix,
+            compression_codec,
         ))
     }
 }
 
 impl Display for MetadataLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let suffix = self.compression_suffix.as_deref().unwrap_or("");
+        let suffix = self.compression_codec.suffix().unwrap_or("");
         write!(
             f,
             "{}/metadata/{:0>5}-{}{}.metadata.json",
@@ -151,13 +140,13 @@ impl FromStr for MetadataLocation {
         ))?;
 
         let prefix = Self::parse_metadata_path_prefix(path)?;
-        let (version, id, compression_suffix) = Self::parse_file_name(file_name)?;
+        let (version, id, compression_codec) = Self::parse_file_name(file_name)?;
 
         Ok(MetadataLocation {
             table_location: prefix,
             version,
             id,
-            compression_suffix,
+            compression_codec,
         })
     }
 }
@@ -197,7 +186,7 @@ mod test {
                     table_location: "".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // Some prefix
@@ -207,7 +196,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // Longer prefix
@@ -217,7 +206,7 @@ mod test {
                     table_location: "/abc/def".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // Prefix with special characters
@@ -227,7 +216,7 @@ mod test {
                     table_location: "https://127.0.0.1".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // Another id
@@ -237,7 +226,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // Version 0
@@ -247,7 +236,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 0,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: None,
+                    compression_codec: CompressionCodec::None,
                 }),
             ),
             // With gzip compression
@@ -257,7 +246,7 @@ mod test {
                     table_location: "/abc".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
-                    compression_suffix: Some(CompressionCodec::Gzip.suffix().unwrap().to_string()),
+                    compression_codec: CompressionCodec::Gzip,
                 }),
             ),
             // Negative version
@@ -316,8 +305,7 @@ mod test {
         for input in test_cases {
             let next = MetadataLocation::from_str(&input.to_string())
                 .unwrap()
-                .with_next_version(&metadata)
-                .unwrap();
+                .with_next_version(&metadata);
             assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
@@ -336,7 +324,7 @@ mod test {
         ];
 
         for input in test_cases {
-            let next = input.with_next_version(&metadata).unwrap();
+            let next = input.with_next_version(&metadata);
             assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
@@ -351,7 +339,7 @@ mod test {
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_none);
         assert_eq!(location.table_location, "/test/table");
         assert_eq!(location.version, 0);
-        assert_eq!(location.compression_suffix, None);
+        assert_eq!(location.compression_codec, CompressionCodec::None);
         assert_eq!(
             location.to_string(),
             format!("/test/table/metadata/00000-{}.metadata.json", location.id)
@@ -366,7 +354,7 @@ mod test {
         let metadata_gzip = create_test_metadata(props_gzip);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
         let gzip_suffix = CompressionCodec::Gzip.suffix().unwrap();
-        assert_eq!(location.compression_suffix, Some(gzip_suffix.to_string()));
+        assert_eq!(location.compression_codec, CompressionCodec::Gzip);
         assert_eq!(
             location.to_string(),
             format!(
@@ -383,7 +371,7 @@ mod test {
         );
         let metadata_none_explicit = create_test_metadata(props_explicit_none);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_none_explicit);
-        assert_eq!(location.compression_suffix, None);
+        assert_eq!(location.compression_codec, CompressionCodec::None);
 
         // Test case insensitivity
         let mut props_gzip_upper = HashMap::new();
@@ -393,10 +381,7 @@ mod test {
         );
         let metadata_gzip_upper = create_test_metadata(props_gzip_upper);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip_upper);
-        assert_eq!(
-            location.compression_suffix,
-            Some(CompressionCodec::Gzip.suffix().unwrap().to_string())
-        );
+        assert_eq!(location.compression_codec, CompressionCodec::Gzip);
     }
 
     #[test]
@@ -409,7 +394,7 @@ mod test {
         let initial_location = MetadataLocation::new_with_metadata("/test/table", &metadata_none);
 
         // Update with no compression (should stay uncompressed)
-        let next_none = initial_location.with_next_version(&metadata_none).unwrap();
+        let next_none = initial_location.with_next_version(&metadata_none);
         let next_none_str = next_none.to_string();
         assert!(next_none_str.contains("/test/table/metadata/00001-"));
         assert!(!next_none_str.contains(&format!("{gzip_suffix}.")));
@@ -422,7 +407,7 @@ mod test {
             "gzip".to_string(),
         );
         let metadata_gzip = create_test_metadata(props_gzip);
-        let next_gzip = initial_location.with_next_version(&metadata_gzip).unwrap();
+        let next_gzip = initial_location.with_next_version(&metadata_gzip);
         let next_gzip_str = next_gzip.to_string();
         assert!(next_gzip_str.contains("/test/table/metadata/00001-"));
         assert!(next_gzip_str.contains(&format!("{gzip_suffix}.")));
@@ -432,7 +417,7 @@ mod test {
         let initial_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
 
         // Update with no compression (should become uncompressed)
-        let next_uncompressed = initial_gzip.with_next_version(&metadata_none).unwrap();
+        let next_uncompressed = initial_gzip.with_next_version(&metadata_none);
         let next_uncompressed_str = next_uncompressed.to_string();
         assert!(next_uncompressed_str.contains("/test/table/metadata/00001-"));
         assert!(!next_uncompressed_str.contains(&format!("{gzip_suffix}.")));
@@ -445,9 +430,7 @@ mod test {
             "none".to_string(),
         );
         let metadata_none_explicit = create_test_metadata(props_explicit_none);
-        let next_explicit_none = initial_gzip
-            .with_next_version(&metadata_none_explicit)
-            .unwrap();
+        let next_explicit_none = initial_gzip.with_next_version(&metadata_none_explicit);
         assert!(
             !next_explicit_none
                 .to_string()
@@ -461,9 +444,7 @@ mod test {
             "GZIP".to_string(),
         );
         let metadata_gzip_upper = create_test_metadata(props_gzip_upper);
-        let next_gzip_upper = initial_location
-            .with_next_version(&metadata_gzip_upper)
-            .unwrap();
+        let next_gzip_upper = initial_location.with_next_version(&metadata_gzip_upper);
         assert!(
             next_gzip_upper
                 .to_string()
@@ -477,12 +458,12 @@ mod test {
         let props_none = HashMap::new();
         let metadata_none = create_test_metadata(props_none);
         let location = MetadataLocation::new_with_metadata("/test/table", &metadata_none);
-        assert_eq!(location.compression_suffix, None);
+        assert_eq!(location.compression_codec, CompressionCodec::None);
         assert_eq!(location.version, 0);
 
         // Update to next version with uncompressed metadata
-        let next_location = location.with_next_version(&metadata_none).unwrap();
-        assert_eq!(next_location.compression_suffix, None);
+        let next_location = location.with_next_version(&metadata_none);
+        assert_eq!(next_location.compression_codec, CompressionCodec::None);
         assert_eq!(next_location.version, 1);
         assert_eq!(
             next_location.to_string(),
@@ -501,17 +482,11 @@ mod test {
         let metadata_gzip = create_test_metadata(props_gzip);
         let location_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
         let gzip_suffix = CompressionCodec::Gzip.suffix().unwrap();
-        assert_eq!(
-            location_gzip.compression_suffix,
-            Some(gzip_suffix.to_string())
-        );
+        assert_eq!(location_gzip.compression_codec, CompressionCodec::Gzip);
 
         // Update to next version with gzip metadata - compression is based on new metadata
-        let next_location_gzip = location_gzip.with_next_version(&metadata_gzip).unwrap();
-        assert_eq!(
-            next_location_gzip.compression_suffix,
-            Some(gzip_suffix.to_string())
-        );
+        let next_location_gzip = location_gzip.with_next_version(&metadata_gzip);
+        assert_eq!(next_location_gzip.compression_codec, CompressionCodec::Gzip);
         assert_eq!(next_location_gzip.version, 1);
         assert_eq!(
             next_location_gzip.to_string(),
@@ -522,8 +497,8 @@ mod test {
         );
 
         // Test that compression can change between versions
-        let next_uncompressed = location_gzip.with_next_version(&metadata_none).unwrap();
-        assert_eq!(next_uncompressed.compression_suffix, None);
+        let next_uncompressed = location_gzip.with_next_version(&metadata_none);
+        assert_eq!(next_uncompressed.compression_codec, CompressionCodec::None);
         assert_eq!(next_uncompressed.version, 1);
     }
 }

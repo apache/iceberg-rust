@@ -357,7 +357,7 @@ impl TableCommit {
         let new_metadata = metadata_builder.build()?.metadata;
 
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
-            .with_next_version(&new_metadata)?
+            .with_next_version(&new_metadata)
             .to_string();
 
         Ok(table
