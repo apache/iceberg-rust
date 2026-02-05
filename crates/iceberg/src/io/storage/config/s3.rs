@@ -125,7 +125,6 @@ pub struct S3Config {
     pub disable_config_load: bool,
 }
 
-
 impl TryFrom<&StorageConfig> for S3Config {
     type Error = crate::Error;
 

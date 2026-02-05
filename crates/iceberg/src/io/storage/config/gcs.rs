@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::StorageConfig;
-use crate::io::is_truthy;
 use crate::Result;
+use crate::io::is_truthy;
 
 /// Google Cloud Project ID.
 pub const GCS_PROJECT_ID: &str = "gcs.project-id";

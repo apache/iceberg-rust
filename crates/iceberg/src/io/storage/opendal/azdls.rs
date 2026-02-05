@@ -49,7 +49,6 @@ pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Res
         config.account_key = Some(account_key);
     }
 
-
     if let Some(sas_token) = properties.remove(ADLS_SAS_TOKEN) {
         config.sas_token = Some(sas_token);
     }
@@ -109,7 +108,6 @@ pub enum AzureStorageScheme {
     Wasb,
     Wasbs,
 }
-
 
 impl AzureStorageScheme {
     // Returns the respective encrypted or plain-text HTTP scheme.
@@ -171,7 +169,6 @@ fn match_path_with_config(
         );
     }
 
-
     if let Some(ref configured_endpoint) = config.endpoint {
         let passed_http_scheme = path.scheme.as_http_scheme();
         ensure_data_valid!(
@@ -227,7 +224,6 @@ struct AzureStoragePath {
     /// It is relative to the `root` of the `AzdlsConfig`.
     path: String,
 }
-
 
 impl AzureStoragePath {
     /// Converts the AzureStoragePath into a full endpoint URL.
@@ -285,7 +281,6 @@ fn parse_azure_storage_endpoint(url: &Url) -> Result<(&str, &str, &str)> {
             "AzureStoragePath: No account name",
         ));
     }
-
 
     let (storage, endpoint_suffix) = endpoint.split_once('.').ok_or(Error::new(
         ErrorKind::DataInvalid,
@@ -387,7 +382,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_azdls_create_operator() {
         let test_cases = vec![
@@ -488,7 +482,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn test_azure_storage_path_parse() {

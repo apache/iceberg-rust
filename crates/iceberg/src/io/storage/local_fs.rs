@@ -50,7 +50,6 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalFsStorage;
 
-
 impl LocalFsStorage {
     /// Create a new `LocalFsStorage` instance.
     pub fn new() -> Self {
@@ -106,7 +105,6 @@ impl Storage for LocalFsStorage {
             size: metadata.len(),
         })
     }
-
 
     async fn read(&self, path: &str) -> Result<Bytes> {
         let path = Self::normalize_path(path);
@@ -165,7 +163,6 @@ impl Storage for LocalFsStorage {
             })?;
         }
 
-
         let file = fs::File::create(&path).map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
@@ -215,7 +212,6 @@ impl Storage for LocalFsStorage {
 pub struct LocalFsFileRead {
     file: std::sync::Mutex<fs::File>,
 }
-
 
 impl LocalFsFileRead {
     /// Create a new `LocalFsFileRead` with the given file.
@@ -270,7 +266,6 @@ impl LocalFsFileWrite {
         Self { file: Some(file) }
     }
 }
-
 
 #[async_trait]
 impl FileWrite for LocalFsFileWrite {
@@ -327,7 +322,6 @@ impl StorageFactory for LocalFsStorageFactory {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -376,7 +370,6 @@ mod tests {
         let read_content = storage.read(path_str).await.unwrap();
         assert_eq!(read_content, content);
     }
-
 
     #[tokio::test]
     async fn test_local_fs_storage_exists() {
@@ -450,7 +443,6 @@ mod tests {
         // Directory should be deleted
         assert!(!dir_path.exists());
     }
-
 
     #[tokio::test]
     async fn test_local_fs_storage_reader() {
