@@ -19,7 +19,7 @@ use tokio::sync::OnceCell;
 
 use super::validate_puffin_compression;
 use crate::Result;
-use crate::io::{FileRead, InputFile};
+use crate::io::InputFile;
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
 

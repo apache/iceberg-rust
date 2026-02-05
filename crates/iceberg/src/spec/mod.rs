@@ -53,6 +53,7 @@ pub(crate) use table_metadata_builder::FIRST_FIELD_ID;
 pub(crate) use table_properties::parse_metadata_file_compression;
 pub use table_properties::*;
 pub use transform::*;
+pub(crate) use values::decimal_utils;
 pub use values::*;
 pub use view_metadata::*;
 pub use view_version::*;
