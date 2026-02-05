@@ -114,6 +114,32 @@ pub trait Catalog: Debug + Sync + Send {
 pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// The catalog type that this builder creates.
     type C: Catalog;
+
+    /// Set a custom StorageFactory to use for storage operations.
+    ///
+    /// When a StorageFactory is provided, the catalog will use it to build FileIO
+    /// instances for all storage operations instead of using the default factory.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage_factory` - The StorageFactory to use for creating storage instances
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::CatalogBuilder;
+    /// use iceberg::io::{OpenDalStorageFactory, StorageFactory};
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = MyCatalogBuilder::default()
+    ///     .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+    ///         customized_credential_load: None,
+    ///     }))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    fn with_storage_factory(self, storage_factory: Arc<dyn crate::io::StorageFactory>) -> Self;
+
     /// Create a new catalog instance.
     fn load(
         self,

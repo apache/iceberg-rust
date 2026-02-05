@@ -17,13 +17,13 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::io::{self, FileIO};
+use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
@@ -57,60 +57,71 @@ const PATH_V1: &str = "v1";
 
 /// Builder for [`RestCatalog`].
 #[derive(Debug)]
-pub struct RestCatalogBuilder(RestCatalogConfig);
+pub struct RestCatalogBuilder {
+    config: RestCatalogConfig,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 impl Default for RestCatalogBuilder {
     fn default() -> Self {
-        Self(RestCatalogConfig {
-            name: None,
-            uri: "".to_string(),
-            warehouse: None,
-            props: HashMap::new(),
-            client: None,
-        })
+        Self {
+            config: RestCatalogConfig {
+                name: None,
+                uri: "".to_string(),
+                warehouse: None,
+                props: HashMap::new(),
+                client: None,
+            },
+            storage_factory: None,
+        }
     }
 }
 
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.config.name = Some(name.into());
 
         if props.contains_key(REST_CATALOG_PROP_URI) {
-            self.0.uri = props
+            self.config.uri = props
                 .get(REST_CATALOG_PROP_URI)
                 .cloned()
                 .unwrap_or_default();
         }
 
         if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
+            self.config.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.config.props = props
             .into_iter()
             .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
             .collect();
 
         let result = {
-            if self.0.name.is_none() {
+            if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.uri.is_empty() {
+            } else if self.config.uri.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog uri is required",
                 ))
             } else {
-                Ok(RestCatalog::new(self.0))
+                Ok(RestCatalog::new(self.config, self.storage_factory))
             }
         };
 
@@ -121,7 +132,7 @@ impl CatalogBuilder for RestCatalogBuilder {
 impl RestCatalogBuilder {
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
-        self.0.client = Some(client);
+        self.config.client = Some(client);
         self
     }
 }
@@ -325,24 +336,18 @@ pub struct RestCatalog {
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
     ctx: OnceCell<RestContext>,
-    /// Extensions for the FileIOBuilder.
-    file_io_extensions: io::Extensions,
+    /// Storage factory for creating FileIO instances.
+    storage_factory: Option<Arc<dyn StorageFactory>>,
 }
 
 impl RestCatalog {
     /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
-    fn new(config: RestCatalogConfig) -> Self {
+    fn new(config: RestCatalogConfig, storage_factory: Option<Arc<dyn StorageFactory>>) -> Self {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
-            file_io_extensions: io::Extensions::default(),
+            storage_factory,
         }
-    }
-
-    /// Add an extension to the file IO builder.
-    pub fn with_file_io_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.file_io_extensions.add(ext);
-        self
     }
 
     /// Gets the [`RestContext`] from the catalog.
@@ -400,18 +405,20 @@ impl RestCatalog {
             None => None,
         };
 
-        let file_io = match metadata_location.or(warehouse_path) {
-            Some(url) => FileIO::from_path(url)?
-                .with_props(props)
-                .with_extensions(self.file_io_extensions.clone())
-                .build()?,
-            None => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Unable to load file io, neither warehouse nor metadata location is set!",
-                ))?;
-            }
-        };
+        if metadata_location.or(warehouse_path).is_none() {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Unable to load file io, neither warehouse nor metadata location is set!",
+            ));
+        }
+
+        // Use provided factory or default to LocalFsStorageFactory
+        let factory = self
+            .storage_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+
+        let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
         Ok(file_io)
     }
@@ -2422,7 +2429,7 @@ mod tests {
                 .metadata(resp.metadata)
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-                .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+                .file_io(FileIO::new_with_fs())
                 .build()
                 .unwrap()
         };
@@ -2562,7 +2569,7 @@ mod tests {
                 .metadata(resp.metadata)
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-                .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+                .file_io(FileIO::new_with_fs())
                 .build()
                 .unwrap()
         };
