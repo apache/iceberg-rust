@@ -23,7 +23,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use url::Url;
 
-use super::opendal::OpenDalStorage;
+use super::storage::OpenDalStorage;
 use super::storage::Storage;
 use crate::{Error, ErrorKind, Result};
 

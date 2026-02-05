@@ -30,10 +30,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageFactory,
-};
+use super::{Storage, StorageConfig, StorageFactory};
+use crate::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::{Error, ErrorKind, Result};
 
 /// In-memory storage implementation.
@@ -106,6 +104,7 @@ impl Storage for MemoryStorage {
         Ok(data.contains_key(&normalized))
     }
 
+
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
         let normalized = Self::normalize_path(path);
         let data = self.data.read().map_err(|e| {
@@ -158,6 +157,7 @@ impl Storage for MemoryStorage {
             )),
         }
     }
+
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let normalized = Self::normalize_path(path);
@@ -229,6 +229,7 @@ impl Storage for MemoryStorage {
     }
 }
 
+
 /// Factory for creating `MemoryStorage` instances.
 ///
 /// This factory implements `StorageFactory` and creates `MemoryStorage`
@@ -278,6 +279,7 @@ impl FileRead for MemoryFileRead {
         Ok(self.data.slice(start..end))
     }
 }
+
 
 /// File writer for in-memory storage.
 ///
@@ -338,6 +340,7 @@ impl FileWrite for MemoryFileWrite {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +397,7 @@ mod tests {
         let read_content = storage.read(path).await.unwrap();
         assert_eq!(read_content, content);
     }
+
 
     #[tokio::test]
     async fn test_memory_storage_exists() {
@@ -462,6 +466,7 @@ mod tests {
         // File in other dir should still exist
         assert!(storage.exists("memory://other/file.txt").await.unwrap());
     }
+
 
     #[tokio::test]
     async fn test_memory_storage_reader() {
@@ -533,6 +538,7 @@ mod tests {
         let result = reader.read(0..100).await;
         assert!(result.is_err());
     }
+
 
     #[test]
     fn test_memory_storage_serialization() {

@@ -24,7 +24,7 @@ use opendal::services::AzdlsConfig;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::io::config::{
+use crate::io::storage::config::{
     ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
     ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
 };
@@ -48,6 +48,7 @@ pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Res
     if let Some(account_key) = properties.remove(ADLS_ACCOUNT_KEY) {
         config.account_key = Some(account_key);
     }
+
 
     if let Some(sas_token) = properties.remove(ADLS_SAS_TOKEN) {
         config.sas_token = Some(sas_token);
@@ -109,6 +110,7 @@ pub enum AzureStorageScheme {
     Wasbs,
 }
 
+
 impl AzureStorageScheme {
     // Returns the respective encrypted or plain-text HTTP scheme.
     pub fn as_http_scheme(&self) -> &str {
@@ -169,6 +171,7 @@ fn match_path_with_config(
         );
     }
 
+
     if let Some(ref configured_endpoint) = config.endpoint {
         let passed_http_scheme = path.scheme.as_http_scheme();
         ensure_data_valid!(
@@ -224,6 +227,7 @@ struct AzureStoragePath {
     /// It is relative to the `root` of the `AzdlsConfig`.
     path: String,
 }
+
 
 impl AzureStoragePath {
     /// Converts the AzureStoragePath into a full endpoint URL.
@@ -281,6 +285,7 @@ fn parse_azure_storage_endpoint(url: &Url) -> Result<(&str, &str, &str)> {
             "AzureStoragePath: No account name",
         ));
     }
+
 
     let (storage, endpoint_suffix) = endpoint.split_once('.').ok_or(Error::new(
         ErrorKind::DataInvalid,
@@ -382,6 +387,7 @@ mod tests {
         }
     }
 
+
     #[test]
     fn test_azdls_create_operator() {
         let test_cases = vec![
@@ -482,6 +488,7 @@ mod tests {
             }
         }
     }
+
 
     #[test]
     fn test_azure_storage_path_parse() {
