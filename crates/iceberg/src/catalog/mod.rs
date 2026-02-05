@@ -25,6 +25,7 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::mem::take;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use _serde::{deserialize_snapshot, serialize_snapshot};
@@ -355,8 +356,9 @@ impl TableCommit {
         // Build the new metadata
         let new_metadata = metadata_builder.build()?.metadata;
 
-        let new_metadata_location =
-            MetadataLocation::next_version(current_metadata_location, &new_metadata)?.to_string();
+        let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
+            .with_next_version(&new_metadata)?
+            .to_string();
 
         Ok(table
             .with_metadata(Arc::new(new_metadata))

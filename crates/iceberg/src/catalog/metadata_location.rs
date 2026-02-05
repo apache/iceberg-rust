@@ -81,35 +81,15 @@ impl MetadataLocation {
 
     /// Creates a new metadata location for an updated metadata file.
     /// Uses compression settings from the new metadata.
-    pub fn next_version(
-        current_location: impl ToString,
-        new_metadata: &TableMetadata,
-    ) -> Result<Self> {
-        let current = Self::from_str(&current_location.to_string())?;
-        let next = Self {
-            table_location: current.table_location,
-            version: current.version + 1,
+    pub fn with_next_version(&self, new_metadata: &TableMetadata) -> Result<Self> {
+        Ok(Self {
+            table_location: self.table_location.clone(),
+            version: self.version + 1,
             id: Uuid::new_v4(),
             compression_suffix: Self::compression_suffix_from_properties(
                 new_metadata.properties(),
             )?,
-        };
-        Ok(next)
-    }
-
-    /// Creates a new metadata location for an updated metadata file.
-    /// Preserves the compression settings from the current location.
-    #[deprecated(
-        since = "0.8.0",
-        note = "Use `next_version` instead to properly handle compression settings"
-    )]
-    pub fn with_next_version(&self) -> Self {
-        Self {
-            table_location: self.table_location.clone(),
-            version: self.version + 1,
-            id: Uuid::new_v4(),
-            compression_suffix: self.compression_suffix.clone(),
-        }
+        })
     }
 
     fn parse_metadata_path_prefix(path: &str) -> Result<String> {
@@ -323,10 +303,10 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_metadata_location_with_next_version() {
+        let metadata = create_test_metadata(HashMap::new());
         let test_cases = vec![
-            MetadataLocation::new_with_table_location("/abc"),
+            MetadataLocation::new_with_metadata("/abc", &metadata),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )
@@ -336,7 +316,8 @@ mod test {
         for input in test_cases {
             let next = MetadataLocation::from_str(&input.to_string())
                 .unwrap()
-                .with_next_version();
+                .with_next_version(&metadata)
+                .unwrap();
             assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
@@ -344,10 +325,10 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_metadata_location_next_version() {
+        let metadata = create_test_metadata(HashMap::new());
         let test_cases = vec![
-            MetadataLocation::new_with_table_location("/abc"),
+            MetadataLocation::new_with_metadata("/abc", &metadata),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )
@@ -355,11 +336,7 @@ mod test {
         ];
 
         for input in test_cases {
-            let next = MetadataLocation::next_version(
-                input.to_string(),
-                &create_test_metadata(HashMap::new()),
-            )
-            .unwrap();
+            let next = input.with_next_version(&metadata).unwrap();
             assert_eq!(next.table_location, input.table_location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
@@ -430,10 +407,9 @@ mod test {
         let props_none = HashMap::new();
         let metadata_none = create_test_metadata(props_none);
         let initial_location = MetadataLocation::new_with_metadata("/test/table", &metadata_none);
-        let initial_path = initial_location.to_string();
 
         // Update with no compression (should stay uncompressed)
-        let next_none = MetadataLocation::next_version(&initial_path, &metadata_none).unwrap();
+        let next_none = initial_location.with_next_version(&metadata_none).unwrap();
         let next_none_str = next_none.to_string();
         assert!(next_none_str.contains("/test/table/metadata/00001-"));
         assert!(!next_none_str.contains(&format!("{gzip_suffix}.")));
@@ -446,7 +422,7 @@ mod test {
             "gzip".to_string(),
         );
         let metadata_gzip = create_test_metadata(props_gzip);
-        let next_gzip = MetadataLocation::next_version(&initial_path, &metadata_gzip).unwrap();
+        let next_gzip = initial_location.with_next_version(&metadata_gzip).unwrap();
         let next_gzip_str = next_gzip.to_string();
         assert!(next_gzip_str.contains("/test/table/metadata/00001-"));
         assert!(next_gzip_str.contains(&format!("{gzip_suffix}.")));
@@ -454,11 +430,9 @@ mod test {
 
         // Start with a compressed location
         let initial_gzip = MetadataLocation::new_with_metadata("/test/table", &metadata_gzip);
-        let initial_gzip_path = initial_gzip.to_string();
 
         // Update with no compression (should become uncompressed)
-        let next_uncompressed =
-            MetadataLocation::next_version(&initial_gzip_path, &metadata_none).unwrap();
+        let next_uncompressed = initial_gzip.with_next_version(&metadata_none).unwrap();
         let next_uncompressed_str = next_uncompressed.to_string();
         assert!(next_uncompressed_str.contains("/test/table/metadata/00001-"));
         assert!(!next_uncompressed_str.contains(&format!("{gzip_suffix}.")));
@@ -471,8 +445,9 @@ mod test {
             "none".to_string(),
         );
         let metadata_none_explicit = create_test_metadata(props_explicit_none);
-        let next_explicit_none =
-            MetadataLocation::next_version(&initial_gzip_path, &metadata_none_explicit).unwrap();
+        let next_explicit_none = initial_gzip
+            .with_next_version(&metadata_none_explicit)
+            .unwrap();
         assert!(
             !next_explicit_none
                 .to_string()
@@ -486,8 +461,9 @@ mod test {
             "GZIP".to_string(),
         );
         let metadata_gzip_upper = create_test_metadata(props_gzip_upper);
-        let next_gzip_upper =
-            MetadataLocation::next_version(&initial_path, &metadata_gzip_upper).unwrap();
+        let next_gzip_upper = initial_location
+            .with_next_version(&metadata_gzip_upper)
+            .unwrap();
         assert!(
             next_gzip_upper
                 .to_string()
@@ -496,7 +472,6 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_with_next_version() {
         // Start with a location without compression
         let props_none = HashMap::new();
@@ -505,8 +480,8 @@ mod test {
         assert_eq!(location.compression_suffix, None);
         assert_eq!(location.version, 0);
 
-        // Update to next version - compression is preserved
-        let next_location = location.with_next_version();
+        // Update to next version with uncompressed metadata
+        let next_location = location.with_next_version(&metadata_none).unwrap();
         assert_eq!(next_location.compression_suffix, None);
         assert_eq!(next_location.version, 1);
         assert_eq!(
@@ -531,8 +506,8 @@ mod test {
             Some(gzip_suffix.to_string())
         );
 
-        // Update to next version - gzip compression is preserved
-        let next_location_gzip = location_gzip.with_next_version();
+        // Update to next version with gzip metadata - compression is based on new metadata
+        let next_location_gzip = location_gzip.with_next_version(&metadata_gzip).unwrap();
         assert_eq!(
             next_location_gzip.compression_suffix,
             Some(gzip_suffix.to_string())
@@ -545,5 +520,10 @@ mod test {
                 next_location_gzip.id
             )
         );
+
+        // Test that compression can change between versions
+        let next_uncompressed = location_gzip.with_next_version(&metadata_none).unwrap();
+        assert_eq!(next_uncompressed.compression_suffix, None);
+        assert_eq!(next_uncompressed.version, 1);
     }
 }
