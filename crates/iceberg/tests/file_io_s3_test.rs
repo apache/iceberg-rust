@@ -25,8 +25,8 @@ mod tests {
 
     use async_trait::async_trait;
     use iceberg::io::{
-        CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-        S3_SECRET_ACCESS_KEY,
+        CustomAwsCredentialLoader, FileIO, FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID,
+        S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     };
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
@@ -37,15 +37,16 @@ mod tests {
 
         let minio_endpoint = get_minio_endpoint();
 
-        FileIOBuilder::new("s3")
-            .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
-                (S3_ACCESS_KEY_ID, "admin".to_string()),
-                (S3_SECRET_ACCESS_KEY, "password".to_string()),
-                (S3_REGION, "us-east-1".to_string()),
-            ])
-            .build()
-            .unwrap()
+        FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }))
+        .with_props(vec![
+            (S3_ENDPOINT, minio_endpoint),
+            (S3_ACCESS_KEY_ID, "admin".to_string()),
+            (S3_SECRET_ACCESS_KEY, "password".to_string()),
+            (S3_REGION, "us-east-1".to_string()),
+        ])
+        .build()
     }
 
     #[tokio::test]
@@ -124,37 +125,15 @@ mod tests {
     #[test]
     fn test_file_io_builder_extension_system() {
         // Test adding and retrieving extensions
-        let test_string = "test_extension_value".to_string();
-        let builder = FileIOBuilder::new_fs_io().with_extension(test_string.clone());
-
-        // Test retrieving the extension
-        let extension: Option<Arc<String>> = builder.extension();
-        assert!(extension.is_some());
-        assert_eq!(*extension.unwrap(), test_string);
-
-        // Test that non-existent extension returns None
-        let non_existent: Option<Arc<i32>> = builder.extension();
-        assert!(non_existent.is_none());
+        // Note: Extension system is not part of the new FileIOBuilder API
+        // This test is removed as the extension system was part of the old API
     }
 
     #[test]
     fn test_file_io_builder_multiple_extensions() {
         // Test adding multiple different types of extensions
-        let test_string = "test_value".to_string();
-        let test_number = 42i32;
-
-        let builder = FileIOBuilder::new_fs_io()
-            .with_extension(test_string.clone())
-            .with_extension(test_number);
-
-        // Retrieve both extensions
-        let string_ext: Option<Arc<String>> = builder.extension();
-        let number_ext: Option<Arc<i32>> = builder.extension();
-
-        assert!(string_ext.is_some());
-        assert!(number_ext.is_some());
-        assert_eq!(*string_ext.unwrap(), test_string);
-        assert_eq!(*number_ext.unwrap(), test_number);
+        // Note: Extension system is not part of the new FileIOBuilder API
+        // This test is removed as the extension system was part of the old API
     }
 
     #[test]
@@ -163,18 +142,15 @@ mod tests {
         let mock_loader = MockCredentialLoader::new_minio();
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
 
-        // Test that the loader can be used in FileIOBuilder
-        let builder = FileIOBuilder::new("s3")
-            .with_extension(custom_loader.clone())
-            .with_props(vec![
-                (S3_ENDPOINT, "http://localhost:9000".to_string()),
-                ("bucket", "test-bucket".to_string()),
-                (S3_REGION, "us-east-1".to_string()),
-            ]);
-
-        // Verify the extension was stored
-        let retrieved_loader: Option<Arc<CustomAwsCredentialLoader>> = builder.extension();
-        assert!(retrieved_loader.is_some());
+        // Test that the loader can be used in FileIOBuilder with OpenDalStorageFactory
+        let _builder = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(custom_loader),
+        }))
+        .with_props(vec![
+            (S3_ENDPOINT, "http://localhost:9000".to_string()),
+            ("bucket", "test-bucket".to_string()),
+            (S3_REGION, "us-east-1".to_string()),
+        ]);
     }
 
     #[tokio::test]
@@ -187,15 +163,15 @@ mod tests {
 
         let minio_endpoint = get_minio_endpoint();
 
-        // Build FileIO with custom credential loader
-        let file_io_with_custom_creds = FileIOBuilder::new("s3")
-            .with_extension(custom_loader)
-            .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
-                (S3_REGION, "us-east-1".to_string()),
-            ])
-            .build()
-            .unwrap();
+        // Build FileIO with custom credential loader via OpenDalStorageFactory
+        let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(custom_loader),
+        }))
+        .with_props(vec![
+            (S3_ENDPOINT, minio_endpoint),
+            (S3_REGION, "us-east-1".to_string()),
+        ])
+        .build();
 
         // Test that the FileIO was built successfully with the custom loader
         match file_io_with_custom_creds.exists("s3://bucket1/any").await {
@@ -214,15 +190,15 @@ mod tests {
 
         let minio_endpoint = get_minio_endpoint();
 
-        // Build FileIO with custom credential loader
-        let file_io_with_custom_creds = FileIOBuilder::new("s3")
-            .with_extension(custom_loader)
-            .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
-                (S3_REGION, "us-east-1".to_string()),
-            ])
-            .build()
-            .unwrap();
+        // Build FileIO with custom credential loader via OpenDalStorageFactory
+        let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(custom_loader),
+        }))
+        .with_props(vec![
+            (S3_ENDPOINT, minio_endpoint),
+            (S3_REGION, "us-east-1".to_string()),
+        ])
+        .build();
 
         // Test that the FileIO was built successfully with the custom loader
         match file_io_with_custom_creds.exists("s3://bucket1/any").await {
