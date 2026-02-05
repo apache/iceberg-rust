@@ -22,10 +22,9 @@ use opendal::Operator;
 use opendal::services::GcsConfig;
 use url::Url;
 
-use crate::io::is_truthy;
-use crate::io::storage::config::{
+use crate::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
-    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
+    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN, is_truthy,
 };
 use crate::{Error, ErrorKind, Result};
 

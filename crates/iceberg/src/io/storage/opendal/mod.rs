@@ -38,8 +38,10 @@ use opendal::{Operator, Scheme};
 pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
-use super::{Storage, StorageConfig, StorageFactory};
-use crate::io::{FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
+use crate::io::{
+    FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
+    StorageConfig, StorageFactory,
+};
 use crate::{Error, ErrorKind, Result};
 
 #[cfg(feature = "storage-azdls")]

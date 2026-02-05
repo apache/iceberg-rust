@@ -31,8 +31,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{Storage, StorageConfig, StorageFactory};
-use crate::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
+use crate::io::{
+    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    StorageFactory,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Local filesystem storage implementation.
