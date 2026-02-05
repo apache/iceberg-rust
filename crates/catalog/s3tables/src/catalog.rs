@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use aws_sdk_s3tables::operation::create_table::CreateTableOutput;
@@ -476,17 +477,17 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location =
-            MetadataLocation::new_with_metadata(table_location, &metadata).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(table_location, &metadata);
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
+        let metadata_location_str = metadata_location.to_string();
         self.s3tables_client
             .update_table_metadata_location()
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(namespace.to_url_string())
             .name(table_ident.name())
-            .metadata_location(metadata_location.clone())
+            .metadata_location(metadata_location_str.clone())
             .version_token(create_resp.version_token())
             .send()
             .await
@@ -494,7 +495,7 @@ impl Catalog for S3TablesCatalog {
 
         let table = Table::builder()
             .identifier(table_ident)
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
             .build()?;
@@ -605,11 +606,12 @@ impl Catalog for S3TablesCatalog {
             self.load_table_with_version_token(&table_ident).await?;
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         let builder = self
@@ -619,7 +621,7 @@ impl Catalog for S3TablesCatalog {
             .namespace(table_namespace.to_url_string())
             .name(table_ident.name())
             .version_token(version_token)
-            .metadata_location(staged_metadata_location);
+            .metadata_location(staged_metadata_location_str);
 
         let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
