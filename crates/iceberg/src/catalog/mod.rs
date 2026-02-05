@@ -1052,7 +1052,7 @@ mod tests {
     use uuid::uuid;
 
     use super::ViewUpdate;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, EncryptedKey, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
@@ -2378,7 +2378,7 @@ mod tests {
                 .metadata(resp)
                 .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-                .file_io(FileIOBuilder::new("memory").build().unwrap())
+                .file_io(FileIO::new_with_memory())
                 .build()
                 .unwrap()
         };

@@ -409,7 +409,7 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
@@ -1911,7 +1911,7 @@ pub(crate) mod tests {
     }
 
     fn build_table(ident: TableIdent) -> Table {
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let temp_dir = TempDir::new().unwrap();
         let location = temp_dir.path().to_str().unwrap().to_string();
