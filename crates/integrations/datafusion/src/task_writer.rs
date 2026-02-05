@@ -267,7 +267,7 @@ mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
-    use iceberg::io::FileIOBuilder;
+    use iceberg::io::FileIO;
     use iceberg::spec::{DataFileFormat, NestedField, PartitionSpec, PrimitiveType, Type};
     use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -349,7 +349,7 @@ mod tests {
             DefaultFileNameGenerator,
         >,
     > {
-        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );

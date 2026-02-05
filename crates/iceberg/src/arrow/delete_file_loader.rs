@@ -130,10 +130,7 @@ mod tests {
     async fn test_basic_delete_file_loader_read_delete_file() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
 

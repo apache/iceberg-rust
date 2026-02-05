@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -25,7 +26,7 @@ use hive_metastore::{
     ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
 };
-use iceberg::io::FileIO;
+use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -50,38 +51,49 @@ pub const THRIFT_TRANSPORT_BUFFERED: &str = "buffered";
 /// HMS Catalog warehouse location
 pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
-/// Builder for [`RestCatalog`].
+/// Builder for [`HmsCatalog`].
 #[derive(Debug)]
-pub struct HmsCatalogBuilder(HmsCatalogConfig);
+pub struct HmsCatalogBuilder {
+    config: HmsCatalogConfig,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 impl Default for HmsCatalogBuilder {
     fn default() -> Self {
-        Self(HmsCatalogConfig {
-            name: None,
-            address: "".to_string(),
-            thrift_transport: HmsThriftTransport::default(),
-            warehouse: "".to_string(),
-            props: HashMap::new(),
-        })
+        Self {
+            config: HmsCatalogConfig {
+                name: None,
+                address: "".to_string(),
+                thrift_transport: HmsThriftTransport::default(),
+                warehouse: "".to_string(),
+                props: HashMap::new(),
+            },
+            storage_factory: None,
+        }
     }
 }
 
 impl CatalogBuilder for HmsCatalogBuilder {
     type C = HmsCatalog;
 
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.config.name = Some(name.into());
 
         if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.0.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
+            self.config.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
         }
 
         if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
-            self.0.thrift_transport = match tt.to_lowercase().as_str() {
+            self.config.thrift_transport = match tt.to_lowercase().as_str() {
                 THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
                 THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
                 _ => HmsThriftTransport::default(),
@@ -89,13 +101,13 @@ impl CatalogBuilder for HmsCatalogBuilder {
         }
 
         if props.contains_key(HMS_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
+            self.config.warehouse = props
                 .get(HMS_CATALOG_PROP_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default();
         }
 
-        self.0.props = props
+        self.config.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != HMS_CATALOG_PROP_URI
@@ -105,23 +117,23 @@ impl CatalogBuilder for HmsCatalogBuilder {
             .collect();
 
         let result = {
-            if self.0.name.is_none() {
+            if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.address.is_empty() {
+            } else if self.config.address.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
                 ))
-            } else if self.0.warehouse.is_empty() {
+            } else if self.config.warehouse.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ))
             } else {
-                HmsCatalog::new(self.0)
+                HmsCatalog::new(self.config, self.storage_factory)
             }
         };
 
@@ -169,7 +181,10 @@ impl Debug for HmsCatalog {
 
 impl HmsCatalog {
     /// Create a new hms catalog.
-    fn new(config: HmsCatalogConfig) -> Result<Self> {
+    fn new(
+        config: HmsCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+    ) -> Result<Self> {
         let address = config
             .address
             .as_str()
@@ -194,9 +209,11 @@ impl HmsCatalog {
                 .build(),
         };
 
-        let file_io = FileIO::from_path(&config.warehouse)?
+        // Use provided factory or default to LocalFsStorageFactory
+        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let file_io = FileIOBuilder::new(factory)
             .with_props(&config.props)
-            .build()?;
+            .build();
 
         Ok(Self {
             config,

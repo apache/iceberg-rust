@@ -21,8 +21,12 @@
 //! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
+    S3_SECRET_ACCESS_KEY,
+};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{
@@ -59,11 +63,11 @@ async fn get_catalog() -> GlueCatalog {
     ]);
 
     // Wait for bucket to actually exist
-    let file_io = iceberg::io::FileIO::from_path("s3a://")
-        .unwrap()
-        .with_props(props.clone())
-        .build()
-        .unwrap();
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        customized_credential_load: None,
+    }))
+    .with_props(props.clone())
+    .build();
 
     let mut retries = 0;
     while retries < 30 {

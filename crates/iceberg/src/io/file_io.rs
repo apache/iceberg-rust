@@ -15,23 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use url::Url;
 
-use super::storage::{OpenDalStorage, Storage};
-use crate::{Error, ErrorKind, Result};
+use super::storage::{
+    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
+};
+use crate::Result;
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
+/// FileIO wraps a `dyn Storage` with lazy initialization via `StorageFactory`.
+/// The storage is created on first use and cached for subsequent operations.
+///
 /// # Note
 ///
-/// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
-/// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
+/// All paths passed to `FileIO` must be absolute paths starting with the scheme string
+/// appropriate for the storage backend being used.
 ///
 /// Supported storages:
 ///
@@ -43,43 +45,92 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
 /// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
 /// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use iceberg::io::{FileIO, FileIOBuilder};
+/// use iceberg::io::{LocalFsStorageFactory, MemoryStorageFactory};
+/// use std::sync::Arc;
+///
+/// // Create FileIO with memory storage for testing
+/// let file_io = FileIO::new_with_memory();
+///
+/// // Create FileIO with local filesystem storage
+/// let file_io = FileIO::new_with_fs();
+///
+/// // Create FileIO with custom factory
+/// let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
+///     .with_prop("key", "value")
+///     .build();
+/// ```
 #[derive(Clone, Debug)]
 pub struct FileIO {
-    builder: FileIOBuilder,
-
-    inner: Arc<OpenDalStorage>,
+    /// Storage configuration containing properties
+    config: StorageConfig,
+    /// Factory for creating storage instances
+    factory: Arc<dyn StorageFactory>,
+    /// Cached storage instance (lazily initialized)
+    storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
 
 impl FileIO {
-    /// Convert FileIO into [`FileIOBuilder`] which used to build this FileIO.
+    /// Create a new FileIO backed by in-memory storage.
     ///
-    /// This function is useful when you want serialize and deserialize FileIO across
-    /// distributed systems.
-    pub fn into_builder(self) -> FileIOBuilder {
-        self.builder
+    /// This is useful for testing scenarios where persistent storage is not needed.
+    pub fn new_with_memory() -> Self {
+        Self {
+            config: StorageConfig::new(),
+            factory: Arc::new(MemoryStorageFactory),
+            storage: Arc::new(OnceLock::new()),
+        }
     }
 
-    /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
+    /// Create a new FileIO backed by local filesystem storage.
     ///
-    /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
-    /// - If it's not a valid url, will try to detect if it's a file path.
-    ///
-    /// Otherwise will return parsing error.
-    pub fn from_path(path: impl AsRef<str>) -> crate::Result<FileIOBuilder> {
-        let url = Url::parse(path.as_ref())
-            .map_err(Error::from)
-            .or_else(|e| {
-                Url::from_file_path(path.as_ref()).map_err(|_| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Input is neither a valid url nor path",
-                    )
-                    .with_context("input", path.as_ref().to_string())
-                    .with_source(e)
-                })
-            })?;
+    /// This is useful for local development and testing with real files.
+    pub fn new_with_fs() -> Self {
+        Self {
+            config: StorageConfig::new(),
+            factory: Arc::new(LocalFsStorageFactory),
+            storage: Arc::new(OnceLock::new()),
+        }
+    }
 
-        Ok(FileIOBuilder::new(url.scheme()))
+    /// Convert FileIO into [`FileIOBuilder`] which can be used to modify configuration.
+    ///
+    /// This function is useful when you want to serialize and deserialize FileIO across
+    /// distributed systems, or when you need to create a new FileIO with modified settings.
+    pub fn into_builder(self) -> FileIOBuilder {
+        FileIOBuilder {
+            factory: self.factory,
+            config: self.config,
+        }
+    }
+
+    /// Get the storage configuration.
+    pub fn config(&self) -> &StorageConfig {
+        &self.config
+    }
+
+    /// Get or create the storage instance.
+    ///
+    /// The factory is invoked on first access and the result is cached
+    /// for all subsequent operations.
+    fn get_storage(&self) -> Result<Arc<dyn Storage>> {
+        // Check if already initialized
+        if let Some(storage) = self.storage.get() {
+            return Ok(storage.clone());
+        }
+
+        // Build the storage
+        let storage = self.factory.build(&self.config)?;
+
+        // Try to set it (another thread might have set it first)
+        let _ = self.storage.set(storage.clone());
+
+        // Return whatever is in the cell (either ours or another thread's)
+        Ok(self.storage.get().unwrap().clone())
     }
 
     /// Deletes file.
@@ -88,7 +139,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.inner.delete(path.as_ref()).await
+        self.get_storage()?.delete(path.as_ref()).await
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -103,7 +154,7 @@ impl FileIO {
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.inner.delete_prefix(path.as_ref()).await
+        self.get_storage()?.delete_prefix(path.as_ref()).await
     }
 
     /// Check file exists.
@@ -112,7 +163,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.inner.exists(path.as_ref()).await
+        self.get_storage()?.exists(path.as_ref()).await
     }
 
     /// Creates input file.
@@ -121,7 +172,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.inner.new_input(path.as_ref())
+        self.get_storage()?.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -130,120 +181,76 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.inner.new_output(path.as_ref())
-    }
-}
-
-/// Container for storing type-safe extensions used to configure underlying FileIO behavior.
-#[derive(Clone, Debug, Default)]
-pub struct Extensions(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
-
-impl Extensions {
-    /// Add an extension.
-    pub fn add<T: Any + Send + Sync>(&mut self, ext: T) {
-        self.0.insert(TypeId::of::<T>(), Arc::new(ext));
-    }
-
-    /// Extends the current set of extensions with another set of extensions.
-    pub fn extend(&mut self, extensions: Extensions) {
-        self.0.extend(extensions.0);
-    }
-
-    /// Fetch an extension.
-    pub fn get<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        let type_id = TypeId::of::<T>();
-        self.0
-            .get(&type_id)
-            .and_then(|arc_any| Arc::clone(arc_any).downcast::<T>().ok())
+        self.get_storage()?.new_output(path.as_ref())
     }
 }
 
 /// Builder for [`FileIO`].
+///
+/// The builder accepts an explicit `StorageFactory` and configuration properties.
+/// Storage is lazily initialized on first use.
 #[derive(Clone, Debug)]
 pub struct FileIOBuilder {
-    /// This is used to infer scheme of operator.
-    ///
-    /// If this is `None`, then [`FileIOBuilder::build`](FileIOBuilder::build) will build a local file io.
-    scheme_str: Option<String>,
-    /// Arguments for operator.
-    props: HashMap<String, String>,
-    /// Optional extensions to configure the underlying FileIO behavior.
-    extensions: Extensions,
+    /// Factory for creating storage instances
+    factory: Arc<dyn StorageFactory>,
+    /// Storage configuration
+    config: StorageConfig,
 }
 
 impl FileIOBuilder {
-    /// Creates a new builder with scheme.
-    /// See [`FileIO`] for supported schemes.
-    pub fn new(scheme_str: impl ToString) -> Self {
-        Self {
-            scheme_str: Some(scheme_str.to_string()),
-            props: HashMap::default(),
-            extensions: Extensions::default(),
-        }
-    }
-
-    /// Creates a new builder for local file io.
-    pub fn new_fs_io() -> Self {
-        Self {
-            scheme_str: None,
-            props: HashMap::default(),
-            extensions: Extensions::default(),
-        }
-    }
-
-    /// Fetch the scheme string.
+    /// Creates a new builder with the given storage factory.
     ///
-    /// The scheme_str will be empty if it's None.
-    pub fn into_parts(self) -> (String, HashMap<String, String>, Extensions) {
-        (
-            self.scheme_str.unwrap_or_default(),
-            self.props,
-            self.extensions,
-        )
+    /// # Arguments
+    ///
+    /// * `factory` - The storage factory to use for creating storage instances
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::io::{FileIOBuilder, LocalFsStorageFactory};
+    /// use std::sync::Arc;
+    ///
+    /// let builder = FileIOBuilder::new(Arc::new(LocalFsStorageFactory));
+    /// ```
+    pub fn new(factory: Arc<dyn StorageFactory>) -> Self {
+        Self {
+            factory,
+            config: StorageConfig::new(),
+        }
     }
 
-    /// Add argument for operator.
+    /// Add a configuration property.
     pub fn with_prop(mut self, key: impl ToString, value: impl ToString) -> Self {
-        self.props.insert(key.to_string(), value.to_string());
+        self.config = self.config.with_prop(key.to_string(), value.to_string());
         self
     }
 
-    /// Add argument for operator.
+    /// Add multiple configuration properties.
     pub fn with_props(
         mut self,
         args: impl IntoIterator<Item = (impl ToString, impl ToString)>,
     ) -> Self {
-        self.props
-            .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
+        self.config = self
+            .config
+            .with_props(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
         self
     }
 
-    /// Add an extension to the file IO builder.
-    pub fn with_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
-        self.extensions.add(ext);
-        self
-    }
-
-    /// Adds multiple extensions to the file IO builder.
-    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions.extend(extensions);
-        self
-    }
-
-    /// Fetch an extension from the file IO builder.
-    pub fn extension<T>(&self) -> Option<Arc<T>>
-    where T: 'static + Send + Sync + Clone {
-        self.extensions.get::<T>()
+    /// Get the storage configuration.
+    pub fn config(&self) -> &StorageConfig {
+        &self.config
     }
 
     /// Builds [`FileIO`].
-    pub fn build(self) -> Result<FileIO> {
-        let storage = OpenDalStorage::build(self.clone())?;
-        Ok(FileIO {
-            builder: self,
-            inner: Arc::new(storage),
-        })
+    ///
+    /// Note: Storage is lazily initialized on first use, so this method
+    /// does not return a Result.
+    pub fn build(self) -> FileIO {
+        FileIO {
+            config: self.config,
+            factory: self.factory,
+            storage: Arc::new(OnceLock::new()),
+        }
     }
 }
 
@@ -395,6 +402,7 @@ mod tests {
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
+    use std::sync::Arc;
 
     use bytes::Bytes;
     use futures::AsyncReadExt;
@@ -402,9 +410,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
+    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
 
     fn create_local_file_io() -> FileIO {
-        FileIOBuilder::new_fs_io().build().unwrap()
+        FileIO::new_with_fs()
     }
 
     fn write_to_file<P: AsRef<Path>>(s: &str, path: P) {
@@ -434,7 +443,6 @@ mod tests {
         let input_file = file_io.new_input(&full_path).unwrap();
 
         assert!(input_file.exists().await.unwrap());
-        // Remove heading slash
         assert_eq!(&full_path, input_file.location());
         let read_content = read_from_file(full_path).await;
 
@@ -510,27 +518,9 @@ mod tests {
         assert_eq!(content, &read_content);
     }
 
-    #[test]
-    fn test_create_file_from_path() {
-        let io = FileIO::from_path("/tmp/a").unwrap();
-        assert_eq!("file", io.scheme_str.unwrap().as_str());
-
-        let io = FileIO::from_path("file:/tmp/b").unwrap();
-        assert_eq!("file", io.scheme_str.unwrap().as_str());
-
-        let io = FileIO::from_path("file:///tmp/c").unwrap();
-        assert_eq!("file", io.scheme_str.unwrap().as_str());
-
-        let io = FileIO::from_path("s3://bucket/a").unwrap();
-        assert_eq!("s3", io.scheme_str.unwrap().as_str());
-
-        let io = FileIO::from_path("tmp/||c");
-        assert!(io.is_err());
-    }
-
     #[tokio::test]
     async fn test_memory_io() {
-        let io = FileIOBuilder::new("memory").build().unwrap();
+        let io = FileIO::new_with_memory();
 
         let path = format!("{}/1.txt", TempDir::new().unwrap().path().to_str().unwrap());
 
@@ -544,5 +534,46 @@ mod tests {
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_file_io_builder_with_props() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("key1", "value1")
+            .with_prop("key2", "value2")
+            .build();
+
+        assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
+        assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_io_builder_with_multiple_props() {
+        let factory = Arc::new(LocalFsStorageFactory);
+        let props = vec![("key1", "value1"), ("key2", "value2")];
+        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+
+        assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
+        assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_io_into_builder() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("key", "value")
+            .build();
+
+        let builder = file_io.into_builder();
+        assert_eq!(builder.config().get("key"), Some(&"value".to_string()));
+
+        // Can build a new FileIO from the builder
+        let new_file_io = builder.with_prop("key2", "value2").build();
+        assert_eq!(new_file_io.config().get("key"), Some(&"value".to_string()));
+        assert_eq!(
+            new_file_io.config().get("key2"),
+            Some(&"value2".to_string())
+        );
     }
 }
