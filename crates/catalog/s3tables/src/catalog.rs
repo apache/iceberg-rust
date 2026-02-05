@@ -693,7 +693,7 @@ mod tests {
             props: HashMap::new(),
         };
 
-        Ok(Some(S3TablesCatalog::new(config).await?))
+        Ok(Some(S3TablesCatalog::new(config, None).await?))
     }
 
     #[tokio::test]
