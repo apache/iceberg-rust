@@ -94,18 +94,6 @@ pub trait Storage: Debug + Send + Sync {
     async fn delete_prefix(&self, path: &str) -> Result<()>;
 
     /// Delete multiple files from a stream of paths.
-    ///
-    /// This method supports streaming batch deletion which can be more efficient
-    /// on object storage backends that support bulk delete operations, and is
-    /// memory-efficient for large numbers of files.
-    ///
-    /// # Arguments
-    ///
-    /// * `paths` - A boxed stream of paths to delete.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if all deletions succeeded, or the first error encountered.
     async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()>;
 
     /// Create a new input file for reading
