@@ -38,6 +38,7 @@ use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::io::StorageFactory;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
@@ -138,7 +139,7 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///     .load("my_catalog", props)
     ///     .await?;
     /// ```
-    fn with_storage_factory(self, storage_factory: Arc<dyn crate::io::StorageFactory>) -> Self;
+    fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
 
     /// Create a new catalog instance.
     fn load(

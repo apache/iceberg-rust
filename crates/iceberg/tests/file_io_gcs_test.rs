@@ -25,7 +25,9 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIO, FileIOBuilder, OpenDalStorageFactory, GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::{
+        FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, OpenDalStorageFactory,
+    };
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
 
     static FAKE_GCS_BUCKET: &str = "test-bucket";

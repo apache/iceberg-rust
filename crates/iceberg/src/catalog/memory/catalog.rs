@@ -25,7 +25,7 @@ use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
-use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory};
+use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
@@ -43,7 +43,7 @@ const LOCATION: &str = "location";
 #[derive(Debug)]
 pub struct MemoryCatalogBuilder {
     config: MemoryCatalogConfig,
-    storage_factory: Option<Arc<dyn crate::io::StorageFactory>>,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
 }
 
 impl Default for MemoryCatalogBuilder {
@@ -62,7 +62,7 @@ impl Default for MemoryCatalogBuilder {
 impl CatalogBuilder for MemoryCatalogBuilder {
     type C = MemoryCatalog;
 
-    fn with_storage_factory(mut self, storage_factory: Arc<dyn crate::io::StorageFactory>) -> Self {
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
         self
     }
@@ -126,16 +126,14 @@ impl MemoryCatalog {
     /// Creates a memory catalog.
     fn new(
         config: MemoryCatalogConfig,
-        storage_factory: Option<Arc<dyn crate::io::StorageFactory>>,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
     ) -> Result<Self> {
         // Use provided factory or default to MemoryStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
 
         Ok(Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIOBuilder::new(factory)
-                .with_props(config.props)
-                .build(),
+            file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
             warehouse_location: config.warehouse,
         })
     }

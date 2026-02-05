@@ -533,14 +533,8 @@ mod tests {
             .with_prop("key2", "value2")
             .build();
 
-        assert_eq!(
-            file_io.config().get("key1"),
-            Some(&"value1".to_string())
-        );
-        assert_eq!(
-            file_io.config().get("key2"),
-            Some(&"value2".to_string())
-        );
+        assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
+        assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
     }
 
     #[tokio::test]
@@ -549,14 +543,8 @@ mod tests {
         let props = vec![("key1", "value1"), ("key2", "value2")];
         let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
-        assert_eq!(
-            file_io.config().get("key1"),
-            Some(&"value1".to_string())
-        );
-        assert_eq!(
-            file_io.config().get("key2"),
-            Some(&"value2".to_string())
-        );
+        assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
+        assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
     }
 
     #[tokio::test]
@@ -571,10 +559,7 @@ mod tests {
 
         // Can build a new FileIO from the builder
         let new_file_io = builder.with_prop("key2", "value2").build();
-        assert_eq!(
-            new_file_io.config().get("key"),
-            Some(&"value".to_string())
-        );
+        assert_eq!(new_file_io.config().get("key"), Some(&"value".to_string()));
         assert_eq!(
             new_file_io.config().get("key2"),
             Some(&"value2".to_string())

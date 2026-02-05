@@ -25,8 +25,8 @@ mod tests {
 
     use async_trait::async_trait;
     use iceberg::io::{
-        CustomAwsCredentialLoader, FileIO, FileIOBuilder,
-        OpenDalStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+        CustomAwsCredentialLoader, FileIO, FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID,
+        S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     };
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
