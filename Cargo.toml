@@ -52,9 +52,15 @@ arrow-select = "57.0"
 arrow-string = "57.0"
 as-any = "0.3.2"
 async-trait = "0.1.89"
-aws-config = "1.8.7"
-aws-sdk-glue = "1.39"
-aws-sdk-s3tables = "1.28.0"
+aws-config = "1.8.13"
+aws-sdk-glue = { version = "1.136.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
+aws-sdk-s3tables = { version = "1.48.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
 backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"
