@@ -687,6 +687,10 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             crate::spec::PrimitiveType::Binary => {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
             }
+            crate::spec::PrimitiveType::Geometry { .. }
+            | crate::spec::PrimitiveType::Geography { .. } => {
+                Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
+            }
         }
     }
 }
@@ -1123,6 +1127,9 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
         PrimitiveType::Uuid => make_ree(DataType::Binary),
         PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
         PrimitiveType::Binary => make_ree(DataType::Binary),
+        PrimitiveType::Geometry { .. } | PrimitiveType::Geography { .. } => {
+            make_ree(DataType::Binary)
+        }
         PrimitiveType::Decimal { precision, scale } => {
             make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
         }

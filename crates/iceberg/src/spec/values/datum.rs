@@ -270,6 +270,18 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(val),
+                PrimitiveLiteral::Binary(other_val),
+                PrimitiveType::Geometry { .. },
+                PrimitiveType::Geometry { .. },
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Binary(val),
+                PrimitiveLiteral::Binary(other_val),
+                PrimitiveType::Geography { .. },
+                PrimitiveType::Geography { .. },
+            ) => val.partial_cmp(other_val),
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -419,6 +431,8 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Geometry { .. } => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Geography { .. } => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => {
                 PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
