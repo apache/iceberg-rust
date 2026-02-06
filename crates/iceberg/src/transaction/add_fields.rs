@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use crate::spec::NestedFieldRef;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Result, TableRequirement, TableUpdate};
+use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 /// A transaction action for adding new fields to the table's current schema.
 ///
@@ -49,6 +49,27 @@ impl AddFieldsAction {
 #[async_trait]
 impl TransactionAction for AddFieldsAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        // Validate that new required fields have an initial_default value.
+        // Without initial_default, old Parquet files (written before the schema change)
+        // cannot provide a value for the required column, leading to silent data corruption
+        // (a non-nullable Arrow column filled with nulls).
+        if let Some(field) = self
+            .fields
+            .iter()
+            .find(|f| f.required && f.initial_default.is_none())
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add required field '{}' (id={}) without an initial_default value. \
+                     Existing data files do not contain this field, so a default is needed \
+                     to populate it when reading older data. Either make the field optional \
+                     or set an initial_default.",
+                    field.name, field.id
+                ),
+            ));
+        }
+
         let base_schema = table.metadata().current_schema();
         let schema = base_schema
             .as_ref()
@@ -76,23 +97,22 @@ mod tests {
 
     use as_any::Downcast;
 
-    use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
+    use crate::spec::{Literal, NestedField, NestedFieldRef, PrimitiveType, Type};
     use crate::transaction::Transaction;
     use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
     use crate::transaction::add_fields::AddFieldsAction;
     use crate::transaction::tests::make_v2_table;
-    use crate::{TableRequirement, TableUpdate};
+    use crate::{ErrorKind, TableRequirement, TableUpdate};
 
     #[tokio::test]
     async fn test_add_field() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let new_field = NestedFieldRef::new(NestedField::new(
+        let new_field = NestedFieldRef::new(NestedField::optional(
             4,
             "new_field",
             Type::Primitive(PrimitiveType::Int),
-            true,
         ));
 
         let action = tx.add_fields(vec![new_field.clone()]);
@@ -129,11 +149,10 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let new_field = NestedFieldRef::new(NestedField::new(
+        let new_field = NestedFieldRef::new(NestedField::optional(
             4,
             "new_field",
             Type::Primitive(PrimitiveType::Int),
-            true,
         ));
 
         let tx = tx.add_fields(vec![new_field]).apply(tx).unwrap();
@@ -162,6 +181,55 @@ mod tests {
         assert!(
             result.is_err(),
             "should fail because field_id 1 is already taken"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_required_field_without_initial_default_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // required=true but no initial_default
+        let required_field = NestedFieldRef::new(NestedField::required(
+            4,
+            "required_no_default",
+            Type::Primitive(PrimitiveType::Int),
+        ));
+
+        let action = tx.add_fields(vec![required_field]);
+        let result = Arc::new(action).commit(&table).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should reject required field without initial_default"),
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("required_no_default"),
+            "error should mention the field name, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_required_field_with_initial_default_succeeds() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // required=true with initial_default set
+        let required_field_with_default = NestedFieldRef::new(
+            NestedField::required(
+                4,
+                "required_with_default",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .with_initial_default(Literal::int(0)),
+        );
+
+        let action = tx.add_fields(vec![required_field_with_default]);
+        let result = Arc::new(action).commit(&table).await;
+        assert!(
+            result.is_ok(),
+            "required field with initial_default should be accepted"
         );
     }
 }

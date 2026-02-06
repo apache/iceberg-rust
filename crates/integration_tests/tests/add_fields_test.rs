@@ -208,8 +208,4 @@ async fn test_add_field() {
     let append_action = tx.fast_append().add_data_files(data_file.clone());
     let tx = append_action.apply(tx).unwrap();
     let _table = tx.commit(&rest_catalog).await.unwrap();
-
-    // Note: Reading all data back would require the scan to handle schema evolution across
-    // parquet files (i.e. optional fields that don't exist in older files). This is a known
-    // limitation of the current implementation.
 }
