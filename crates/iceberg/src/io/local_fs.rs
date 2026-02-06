@@ -29,6 +29,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -196,6 +198,13 @@ impl Storage for LocalFsStorage {
                     format!("Failed to delete directory {}: {}", path.display(), e),
                 )
             })?;
+        }
+        Ok(())
+    }
+
+    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
+        while let Some(path) = paths.next().await {
+            self.delete(&path).await?;
         }
         Ok(())
     }
@@ -533,5 +542,62 @@ mod tests {
         storage.write(path_str, Bytes::from("test")).await.unwrap();
 
         assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_local_fs_storage_delete_stream() {
+        use futures::stream;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let storage = LocalFsStorage::new();
+
+        // Create multiple files
+        let file1 = tmp_dir.path().join("file1.txt");
+        let file2 = tmp_dir.path().join("file2.txt");
+        let file3 = tmp_dir.path().join("file3.txt");
+
+        storage
+            .write(file1.to_str().unwrap(), Bytes::from("1"))
+            .await
+            .unwrap();
+        storage
+            .write(file2.to_str().unwrap(), Bytes::from("2"))
+            .await
+            .unwrap();
+        storage
+            .write(file3.to_str().unwrap(), Bytes::from("3"))
+            .await
+            .unwrap();
+
+        // Verify files exist
+        assert!(storage.exists(file1.to_str().unwrap()).await.unwrap());
+        assert!(storage.exists(file2.to_str().unwrap()).await.unwrap());
+        assert!(storage.exists(file3.to_str().unwrap()).await.unwrap());
+
+        // Delete multiple files using stream
+        let paths = vec![
+            file1.to_str().unwrap().to_string(),
+            file2.to_str().unwrap().to_string(),
+        ];
+        let path_stream = stream::iter(paths).boxed();
+        storage.delete_stream(path_stream).await.unwrap();
+
+        // Verify deleted files no longer exist
+        assert!(!storage.exists(file1.to_str().unwrap()).await.unwrap());
+        assert!(!storage.exists(file2.to_str().unwrap()).await.unwrap());
+
+        // Verify file3 still exists
+        assert!(storage.exists(file3.to_str().unwrap()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_local_fs_storage_delete_stream_empty() {
+        use futures::stream;
+
+        let storage = LocalFsStorage::new();
+
+        // Delete with empty stream should succeed
+        let path_stream = stream::iter(Vec::<String>::new()).boxed();
+        storage.delete_stream(path_stream).await.unwrap();
     }
 }
