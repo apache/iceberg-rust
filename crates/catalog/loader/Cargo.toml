@@ -39,5 +39,8 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+reqwest = { workspace = true }
+rstest = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "migrate"] }
 tempfile = { workspace = true }

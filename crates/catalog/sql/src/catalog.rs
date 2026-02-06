@@ -1352,20 +1352,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_namespaces_returns_multiple_namespaces() {
-        let warehouse_loc = temp_path();
-        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
-        let namespace_ident_1 = NamespaceIdent::new("a".into());
-        let namespace_ident_2 = NamespaceIdent::new("b".into());
-        create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
-
-        assert_eq!(
-            to_set(catalog.list_namespaces(None).await.unwrap()),
-            to_set(vec![namespace_ident_1, namespace_ident_2])
-        );
-    }
-
-    #[tokio::test]
     async fn test_list_namespaces_returns_only_top_level_namespaces() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
