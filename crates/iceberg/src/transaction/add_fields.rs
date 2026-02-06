@@ -34,7 +34,6 @@ pub struct AddFieldsAction {
 }
 
 impl AddFieldsAction {
-    /// Creates a new `AddFieldsAction` with the given fields.
     pub(crate) fn new(fields: Vec<NestedFieldRef>) -> Self {
         Self { fields }
     }
@@ -189,7 +188,6 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        // required=true but no initial_default
         let required_field = NestedFieldRef::new(NestedField::required(
             4,
             "required_no_default",
@@ -215,7 +213,6 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        // required=true with initial_default set
         let required_field_with_default = NestedFieldRef::new(
             NestedField::required(
                 4,
