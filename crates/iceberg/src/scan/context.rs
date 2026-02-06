@@ -42,6 +42,7 @@ pub(crate) struct ManifestFileContext {
 
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
+    limit: Option<usize>,
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
@@ -60,6 +61,7 @@ pub(crate) struct ManifestEntryContext {
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
+    pub limit: Option<usize>,
     pub case_sensitive: bool,
 }
 
@@ -76,6 +78,7 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
+            limit,
             ..
         } = self;
 
@@ -91,6 +94,7 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
+                limit,
                 case_sensitive: self.case_sensitive,
             };
 
@@ -132,6 +136,7 @@ impl ManifestEntryContext {
 
             deletes,
 
+            limit: self.limit,
             // Include partition data and spec from manifest entry
             partition: Some(self.manifest_entry.data_file.partition.clone()),
             // TODO: Pass actual PartitionSpec through context chain for native flow
@@ -153,6 +158,7 @@ pub(crate) struct PlanContext {
     pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
+    pub limit: Option<usize>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
     pub field_ids: Arc<Vec<i32>>,
@@ -276,6 +282,7 @@ impl PlanContext {
             manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
+            limit: self.limit,
             object_cache: self.object_cache.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
