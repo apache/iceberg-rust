@@ -53,6 +53,7 @@
 mod action;
 
 pub use action::*;
+mod add_fields;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -67,9 +68,10 @@ use std::time::Duration;
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 
 use crate::error::Result;
-use crate::spec::TableProperties;
+use crate::spec::{NestedFieldRef, TableProperties};
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
+use crate::transaction::add_fields::AddFieldsAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
@@ -134,6 +136,11 @@ impl Transaction {
     /// Update table's property.
     pub fn update_table_properties(&self) -> UpdatePropertiesAction {
         UpdatePropertiesAction::new()
+    }
+
+    /// Creates an add fields action.
+    pub fn add_fields(&self, fields: Vec<NestedFieldRef>) -> AddFieldsAction {
+        AddFieldsAction::new(fields)
     }
 
     /// Creates a fast append action.
