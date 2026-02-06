@@ -139,14 +139,13 @@ async fn test_add_field() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
 
-    // Add a new field to the table
+    // Add a new optional field to the table
     let tx = Transaction::new(&table);
     let add_action = tx.add_fields(vec![iceberg::spec::NestedFieldRef::new(
-        iceberg::spec::NestedField::new(
+        iceberg::spec::NestedField::optional(
             4,
-            "a".to_string(),
+            "a",
             iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::Int),
-            true,
         ),
     )]);
     let tx = add_action.apply(tx).unwrap();
