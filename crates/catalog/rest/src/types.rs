@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use http::StatusCode;
 use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
@@ -34,7 +35,27 @@ pub(super) struct CatalogConfig {
 #[derive(Debug, Serialize, Deserialize)]
 /// Wrapper for all non-2xx error responses from the REST API
 pub struct ErrorResponse {
-    error: ErrorModel,
+    /// Error model
+    pub error: ErrorModel,
+}
+
+impl ErrorResponse {
+    /// Build a fallback default error response.
+    pub fn build_default_response(status: StatusCode) -> Self {
+        let message = status
+            .canonical_reason()
+            .unwrap_or("Unknown Error")
+            .to_string();
+
+        Self {
+            error: ErrorModel {
+                message,
+                r#type: "RESTException".to_string(),
+                code: status.as_u16(),
+                stack: None,
+            },
+        }
+    }
 }
 
 impl From<ErrorResponse> for Error {
