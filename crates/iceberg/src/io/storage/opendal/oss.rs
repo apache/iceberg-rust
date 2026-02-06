@@ -21,7 +21,7 @@ use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
 
-use crate::io::config::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
+use crate::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
 use crate::{Error, ErrorKind, Result};
 
 /// Parse iceberg props to oss config.
