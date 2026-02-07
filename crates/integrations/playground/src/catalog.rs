@@ -23,6 +23,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
+use iceberg::memory::MemoryCatalogBuilder;
 use iceberg::CatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
@@ -78,10 +79,6 @@ impl IcebergCatalogList {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("type is not string"))?;
 
-        if r#type != "rest" {
-            return Err(anyhow::anyhow!("Only rest catalog is supported for now!"));
-        }
-
         let catalog_config = config
             .get("config")
             .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
@@ -96,11 +93,21 @@ impl IcebergCatalogList {
                 .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
             props.insert(key.to_string(), value_str.to_string());
         }
-        let catalog = RestCatalogBuilder::default().load(name, props).await?;
+
+        // Create catalog based on type using the appropriate builder
+        let catalog: Arc<dyn iceberg::Catalog> = match r#type {
+            "rest" => Arc::new(RestCatalogBuilder::default().load(name, props).await?),
+            "memory" => Arc::new(MemoryCatalogBuilder::default().load(name, props).await?),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported catalog type: '{type}'. Supported types: rest, memory"
+                ))
+            }
+        };
 
         Ok((
             name.to_string(),
-            Arc::new(IcebergCatalogProvider::try_new(Arc::new(catalog)).await?),
+            Arc::new(IcebergCatalogProvider::try_new(catalog).await?),
         ))
     }
 }
