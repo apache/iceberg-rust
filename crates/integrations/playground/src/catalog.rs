@@ -23,8 +23,8 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
-use iceberg::memory::MemoryCatalogBuilder;
 use iceberg::CatalogBuilder;
+use iceberg::memory::MemoryCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
@@ -101,7 +101,7 @@ impl IcebergCatalogList {
             _ => {
                 return Err(anyhow::anyhow!(
                     "Unsupported catalog type: '{type}'. Supported types: rest, memory"
-                ))
+                ));
             }
         };
 
@@ -134,5 +134,76 @@ impl CatalogProviderList for IcebergCatalogList {
         self.catalogs
             .get(name)
             .map(|c| c.clone() as Arc<dyn CatalogProvider>)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_parse_memory_catalog() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_memory"
+            type = "memory"
+            [catalogs.config]
+            warehouse = "/tmp/test-warehouse"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        assert!(
+            catalog_list
+                .catalog_names()
+                .contains(&"test_memory".to_string())
+        );
+        assert!(catalog_list.catalog("test_memory").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_unsupported_catalog_type() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_hive"
+            type = "hive"
+            [catalogs.config]
+            uri = "thrift://localhost:9083"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unsupported catalog type"));
+        assert!(err_msg.contains("hive"));
+        assert!(err_msg.contains("rest, memory"));
+    }
+
+    #[tokio::test]
+    async fn test_catalog_names() {
+        let config = r#"
+            [[catalogs]]
+            name = "catalog_one"
+            type = "memory"
+            [catalogs.config]
+            warehouse = "/tmp/warehouse1"
+
+            [[catalogs]]
+            name = "catalog_two"
+            type = "memory"
+            [catalogs.config]
+            warehouse = "/tmp/warehouse2"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        let names = catalog_list.catalog_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"catalog_one".to_string()));
+        assert!(names.contains(&"catalog_two".to_string()));
     }
 }
