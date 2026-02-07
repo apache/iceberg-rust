@@ -25,6 +25,7 @@ use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
 use iceberg::CatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_sql::SqlCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
 
@@ -78,10 +79,6 @@ impl IcebergCatalogList {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("type is not string"))?;
 
-        if r#type != "rest" {
-            return Err(anyhow::anyhow!("Only rest catalog is supported for now!"));
-        }
-
         let catalog_config = config
             .get("config")
             .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
@@ -96,11 +93,21 @@ impl IcebergCatalogList {
                 .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
             props.insert(key.to_string(), value_str.to_string());
         }
-        let catalog = RestCatalogBuilder::default().load(name, props).await?;
+
+        // Create catalog based on type using the appropriate builder
+        let catalog: Arc<dyn iceberg::Catalog> = match r#type {
+            "rest" => Arc::new(RestCatalogBuilder::default().load(name, props).await?),
+            "sql" => Arc::new(SqlCatalogBuilder::default().load(name, props).await?),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported catalog type: '{type}'. Supported types: rest, sql"
+                ));
+            }
+        };
 
         Ok((
             name.to_string(),
-            Arc::new(IcebergCatalogProvider::try_new(Arc::new(catalog)).await?),
+            Arc::new(IcebergCatalogProvider::try_new(catalog).await?),
         ))
     }
 }
@@ -127,5 +134,105 @@ impl CatalogProviderList for IcebergCatalogList {
         self.catalogs
             .get(name)
             .map(|c| c.clone() as Arc<dyn CatalogProvider>)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::migrate::MigrateDatabase;
+
+    use super::*;
+
+    fn temp_path() -> String {
+        let uuid = uuid::Uuid::new_v4();
+        format!("/tmp/iceberg-test-{}", uuid)
+    }
+
+    #[tokio::test]
+    async fn test_parse_sql_catalog() {
+        let db_path = temp_path();
+        let sql_uri = format!("sqlite:{db_path}");
+
+        // Create the SQLite database file first
+        sqlx::Sqlite::create_database(&sql_uri).await.unwrap();
+
+        let config = format!(
+            r#"
+            [[catalogs]]
+            name = "test_sql"
+            type = "sql"
+            [catalogs.config]
+            uri = "{sql_uri}"
+            warehouse = "/tmp/sql-warehouse"
+        "#
+        );
+
+        let toml_table: TomlTable = toml::from_str(&config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        assert!(
+            catalog_list
+                .catalog_names()
+                .contains(&"test_sql".to_string())
+        );
+        assert!(catalog_list.catalog("test_sql").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_unsupported_catalog_type() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_hive"
+            type = "hive"
+            [catalogs.config]
+            uri = "thrift://localhost:9083"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unsupported catalog type"));
+        assert!(err_msg.contains("hive"));
+        assert!(err_msg.contains("rest, sql"));
+    }
+
+    #[tokio::test]
+    async fn test_catalog_names() {
+        let db_path1 = temp_path();
+        let db_path2 = temp_path();
+        let sql_uri1 = format!("sqlite:{db_path1}");
+        let sql_uri2 = format!("sqlite:{db_path2}");
+
+        // Create SQLite database files first
+        sqlx::Sqlite::create_database(&sql_uri1).await.unwrap();
+        sqlx::Sqlite::create_database(&sql_uri2).await.unwrap();
+
+        let config = format!(
+            r#"
+            [[catalogs]]
+            name = "catalog_one"
+            type = "sql"
+            [catalogs.config]
+            uri = "{sql_uri1}"
+            warehouse = "/tmp/warehouse1"
+
+            [[catalogs]]
+            name = "catalog_two"
+            type = "sql"
+            [catalogs.config]
+            uri = "{sql_uri2}"
+            warehouse = "/tmp/warehouse2"
+        "#
+        );
+
+        let toml_table: TomlTable = toml::from_str(&config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        let names = catalog_list.catalog_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"catalog_one".to_string()));
+        assert!(names.contains(&"catalog_two".to_string()));
     }
 }

@@ -3591,13 +3591,16 @@ dependencies = [
  "home",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-catalog-sql",
  "iceberg-datafusion",
  "mimalloc",
+ "sqlx",
  "stacker",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
