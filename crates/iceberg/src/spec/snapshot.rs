@@ -296,6 +296,7 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
+        #[serde(default)]
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,
