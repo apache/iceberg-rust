@@ -24,16 +24,15 @@ use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
     BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
-    TimestampMicrosecondArray,
+    TimestampMicrosecondArray, TimestampNanosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
-use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
-use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
     Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
     PrimitiveType, Schema, SchemaVisitor, StructType, Type,
@@ -680,7 +679,8 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 DataType::FixedSizeBinary(16),
             )),
             crate::spec::PrimitiveType::Fixed(len) => Ok(ArrowSchemaOrFieldOrType::Type(
-                len.to_i32()
+                i32::try_from(*len)
+                    .ok()
                     .map(DataType::FixedSizeBinary)
                     .unwrap_or(DataType::LargeBinary),
             )),
@@ -722,10 +722,10 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
             Ok(Arc::new(Int64Array::new_scalar(*value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
-            Ok(Arc::new(Float32Array::new_scalar(value.to_f32().unwrap())))
+            Ok(Arc::new(Float32Array::new_scalar(value.into_inner())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
-            Ok(Arc::new(Float64Array::new_scalar(value.to_f64().unwrap())))
+            Ok(Arc::new(Float64Array::new_scalar(value.into_inner())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Arc::new(StringArray::new_scalar(value.as_str())))
@@ -741,6 +741,12 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
             TimestampMicrosecondArray::new(vec![*value; 1].into(), None).with_timezone_utc(),
+        ))),
+        (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(value)) => {
+            Ok(Arc::new(TimestampNanosecondArray::new_scalar(*value)))
+        }
+        (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(value)) => Ok(Arc::new(Scalar::new(
+            TimestampNanosecondArray::new(vec![*value; 1].into(), None).with_timezone_utc(),
         ))),
         (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(value)) => {
             let array = Decimal128Array::from_value(*value, 1)
@@ -835,10 +841,9 @@ pub(crate) fn get_parquet_stat_min_as_datum(
             let Some(bytes) = stats.min_bytes_opt() else {
                 return Ok(None);
             };
-            let unscaled_value = BigInt::from_signed_bytes_be(bytes);
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Can't convert bytes to i128: {bytes:?}"),
@@ -982,10 +987,9 @@ pub(crate) fn get_parquet_stat_max_as_datum(
             let Some(bytes) = stats.max_bytes_opt() else {
                 return Ok(None);
             };
-            let unscaled_value = BigInt::from_signed_bytes_be(bytes);
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Can't convert bytes to i128: {bytes:?}"),
@@ -1321,9 +1325,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
-    use rust_decimal::Decimal;
 
     use super::*;
+    use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{Literal, Schema};
 
     /// Create a simple field with metadata.
@@ -2153,7 +2157,7 @@ mod tests {
             assert_eq!(array.value(0), 42);
         }
         {
-            let datum = Datum::decimal_with_precision(Decimal::new(123, 2), 30).unwrap();
+            let datum = Datum::decimal_with_precision(decimal_new(123, 2), 30).unwrap();
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();

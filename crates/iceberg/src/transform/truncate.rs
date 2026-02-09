@@ -22,6 +22,7 @@ use arrow_schema::DataType;
 
 use super::TransformFunction;
 use crate::Error;
+use crate::spec::decimal_utils::decimal_from_i128_with_scale;
 use crate::spec::{Datum, PrimitiveLiteral};
 
 #[derive(Debug)]
@@ -163,7 +164,10 @@ impl TransformFunction for Truncate {
             })),
             PrimitiveLiteral::Int128(v) => Ok(Some({
                 let width = self.width as i128;
-                Datum::decimal(Self::truncate_decimal_i128(*v, width))?
+                Datum::decimal(decimal_from_i128_with_scale(
+                    Self::truncate_decimal_i128(*v, width),
+                    0,
+                ))?
             })),
             PrimitiveLiteral::String(v) => Ok(Some({
                 let len = self.width as usize;
@@ -195,6 +199,7 @@ mod test {
         TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
+    use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
@@ -831,12 +836,12 @@ mod test {
 
     #[test]
     fn test_decimal_literal() {
-        let input = Datum::decimal(1065).unwrap();
+        let input = Datum::decimal(decimal_new(1065, 0)).unwrap();
         let res = super::Truncate::new(50)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(res, Datum::decimal(1050).unwrap(),);
+        assert_eq!(res, Datum::decimal(decimal_new(1050, 0)).unwrap(),);
     }
 
     #[test]

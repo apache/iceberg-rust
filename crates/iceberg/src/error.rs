@@ -409,12 +409,6 @@ define_from_err!(
 );
 
 define_from_err!(
-    rust_decimal::Error,
-    ErrorKind::DataInvalid,
-    "Failed to convert decimal literal to rust decimal"
-);
-
-define_from_err!(
     parquet::errors::ParquetError,
     ErrorKind::Unexpected,
     "Failed to read a Parquet file"
