@@ -66,37 +66,21 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
+mod config;
 mod file_io;
+mod local_fs;
+mod memory;
+mod opendal;
 mod storage;
 
+pub use config::*;
 pub use file_io::*;
+#[cfg(feature = "storage-s3")]
+pub use opendal::CustomAwsCredentialLoader;
+pub use opendal::{OpenDalStorage, OpenDalStorageFactory};
+pub use storage::{Storage, StorageConfig, StorageFactory};
+
 pub(crate) mod object_cache;
-
-#[cfg(feature = "storage-azdls")]
-mod storage_azdls;
-#[cfg(feature = "storage-fs")]
-mod storage_fs;
-#[cfg(feature = "storage-gcs")]
-mod storage_gcs;
-#[cfg(feature = "storage-memory")]
-mod storage_memory;
-#[cfg(feature = "storage-oss")]
-mod storage_oss;
-#[cfg(feature = "storage-s3")]
-mod storage_s3;
-
-#[cfg(feature = "storage-azdls")]
-pub use storage_azdls::*;
-#[cfg(feature = "storage-fs")]
-use storage_fs::*;
-#[cfg(feature = "storage-gcs")]
-pub use storage_gcs::*;
-#[cfg(feature = "storage-memory")]
-use storage_memory::*;
-#[cfg(feature = "storage-oss")]
-pub use storage_oss::*;
-#[cfg(feature = "storage-s3")]
-pub use storage_s3::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

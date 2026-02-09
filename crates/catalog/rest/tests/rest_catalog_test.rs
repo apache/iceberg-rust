@@ -16,13 +16,14 @@
 // under the License.
 
 //! Integration tests for rest catalog.
+//!
+//! These tests assume Docker containers are started externally via `make docker-up`.
+//! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{
@@ -32,45 +33,39 @@ use iceberg::{
 use iceberg_catalog_rest::{
     CustomAuthenticator, REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder,
 };
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{normalize_test_name, set_up};
-use port_scanner::scan_port_addr;
+use iceberg_test_utils::{
+    cleanup_namespace, get_rest_catalog_endpoint, normalize_test_name_with_parts, set_up,
+};
 use tokio::time::sleep;
 use tracing::info;
-
-const REST_CATALOG_PORT: u16 = 8181;
-static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
-
-#[ctor]
-fn before_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(module_path!()),
-        format!("{}/testdata/rest_catalog", env!("CARGO_MANIFEST_DIR")),
-    );
-    docker_compose.up();
-    guard.replace(docker_compose);
-}
-
-#[dtor]
-fn after_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    guard.take();
-}
 
 async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> RestCatalog {
     set_up();
 
-    let rest_catalog_ip = {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        docker_compose.get_container_ip("rest")
-    };
+    let rest_endpoint = get_rest_catalog_endpoint();
 
-    let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
-    while !scan_port_addr(rest_socket_addr) {
-        info!("Waiting for 1s rest catalog to ready...");
-        sleep(std::time::Duration::from_millis(1000)).await;
+    // Wait for catalog to be ready
+    let client = reqwest::Client::new();
+    let mut retries = 0;
+    while retries < 30 {
+        match client
+            .get(format!("{rest_endpoint}/v1/config"))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!("REST catalog is ready at {}", rest_endpoint);
+                break;
+            }
+            _ => {
+                info!(
+                    "Waiting for REST catalog to be ready... (attempt {})",
+                    retries + 1
+                );
+                sleep(std::time::Duration::from_millis(1000)).await;
+                retries += 1;
+            }
+        }
     }
 
     let mut builder = RestCatalogBuilder::default();
@@ -81,10 +76,7 @@ async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> Res
     builder
         .load(
             "rest",
-            HashMap::from([(
-                REST_CATALOG_PROP_URI.to_string(),
-                format!("http://{rest_socket_addr}"),
-            )]),
+            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_endpoint)]),
         )
         .await
         .unwrap()
@@ -94,9 +86,14 @@ async fn get_catalog(authenticator: Option<Arc<dyn CustomAuthenticator>>) -> Res
 async fn test_get_non_exist_namespace() {
     let catalog = get_catalog(None).await;
 
-    let result = catalog
-        .get_namespace(&NamespaceIdent::from_strs(["test_get_non_exist_namespace"]).unwrap())
-        .await;
+    // Use unique namespace name to ensure it doesn't exist
+    let ns_ident = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "test_get_non_exist_namespace"
+    ));
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, &ns_ident).await;
+
+    let result = catalog.get_namespace(&ns_ident).await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("does not exist"));
@@ -106,13 +103,22 @@ async fn test_get_non_exist_namespace() {
 async fn test_get_namespace() {
     let catalog = get_catalog(None).await;
 
+    // Use unique namespace to avoid conflicts with other tests
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs([
+            "apple",
+            "ios",
+            &normalize_test_name_with_parts!("test_get_namespace"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns.name()).await;
 
     // Verify that namespace doesn't exist
     assert!(catalog.get_namespace(ns.name()).await.is_err());
@@ -136,8 +142,12 @@ async fn test_get_namespace() {
 async fn test_list_namespace() {
     let catalog = get_catalog(None).await;
 
+    // Use unique parent namespace to avoid conflicts
+    let parent_ns_name = normalize_test_name_with_parts!("test_list_namespace");
+    let parent_ident = NamespaceIdent::from_strs([&parent_ns_name]).unwrap();
+
     let ns1 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "ios"]).unwrap(),
+        NamespaceIdent::from_strs([&parent_ns_name, "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -145,22 +155,20 @@ async fn test_list_namespace() {
     );
 
     let ns2 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "macos"]).unwrap(),
+        NamespaceIdent::from_strs([&parent_ns_name, "macos"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "xuanwo".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
 
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns1.name()).await;
+    cleanup_namespace(&catalog, ns2.name()).await;
+    cleanup_namespace(&catalog, &parent_ident).await;
+
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(
-        catalog
-            .list_namespaces(Some(
-                &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
-            ))
-            .await
-            .is_err()
-    );
+    assert!(catalog.list_namespaces(Some(&parent_ident)).await.is_err());
 
     // Create namespaces
     catalog
@@ -173,12 +181,7 @@ async fn test_list_namespace() {
         .unwrap();
 
     // List namespace
-    let nss = catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap(),
-        ))
-        .await
-        .unwrap();
+    let nss = catalog.list_namespaces(Some(&parent_ident)).await.unwrap();
 
     assert!(nss.contains(ns1.name()));
     assert!(nss.contains(ns2.name()));
@@ -188,13 +191,22 @@ async fn test_list_namespace() {
 async fn test_list_empty_namespace() {
     let catalog = get_catalog(None).await;
 
+    // Use unique namespace to avoid conflicts
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_empty_namespace", "apple"]).unwrap(),
+        NamespaceIdent::from_strs([
+            "list_empty",
+            "apple",
+            &normalize_test_name_with_parts!("test_list_empty_namespace"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns_apple.name()).await;
 
     // Currently this namespace doesn't exist, so it should return error.
     assert!(
@@ -222,8 +234,12 @@ async fn test_list_empty_namespace() {
 async fn test_list_root_namespace() {
     let catalog = get_catalog(None).await;
 
+    // Use unique root namespace to avoid conflicts
+    let root_ns_name = normalize_test_name_with_parts!("test_list_root_namespace");
+    let root_ident = NamespaceIdent::from_strs([&root_ns_name]).unwrap();
+
     let ns1 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs([&root_ns_name, "apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -231,22 +247,20 @@ async fn test_list_root_namespace() {
     );
 
     let ns2 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_root_namespace", "google", "android"]).unwrap(),
+        NamespaceIdent::from_strs([&root_ns_name, "google", "android"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "xuanwo".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
 
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns1.name()).await;
+    cleanup_namespace(&catalog, ns2.name()).await;
+    cleanup_namespace(&catalog, &root_ident).await;
+
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(
-        catalog
-            .list_namespaces(Some(
-                &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
-            ))
-            .await
-            .is_err()
-    );
+    assert!(catalog.list_namespaces(Some(&root_ident)).await.is_err());
 
     // Create namespaces
     catalog
@@ -260,20 +274,30 @@ async fn test_list_root_namespace() {
 
     // List namespace
     let nss = catalog.list_namespaces(None).await.unwrap();
-    assert!(nss.contains(&NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()));
+    assert!(nss.contains(&root_ident));
 }
 
 #[tokio::test]
 async fn test_create_table() {
     let catalog = get_catalog(None).await;
 
+    // Use unique namespace to avoid conflicts
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_create_table", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs([
+            "create_table",
+            "apple",
+            "ios",
+            &normalize_test_name_with_parts!("test_create_table"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns.name()).await;
 
     // Create namespaces
     catalog
@@ -322,13 +346,23 @@ async fn test_create_table() {
 async fn test_update_table() {
     let catalog = get_catalog(None).await;
 
+    // Use unique namespace to avoid conflicts
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_update_table", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs([
+            "update_table",
+            "apple",
+            "ios",
+            &normalize_test_name_with_parts!("test_update_table"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns.name()).await;
 
     // Create namespaces
     catalog
@@ -391,14 +425,23 @@ fn assert_map_contains(map1: &HashMap<String, String>, map2: &HashMap<String, St
 async fn test_list_empty_multi_level_namespace() {
     let catalog = get_catalog(None).await;
 
+    // Use unique namespace to avoid conflicts
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
-            .unwrap(),
+        NamespaceIdent::from_strs([
+            "multi_level",
+            "a_a",
+            "apple",
+            &normalize_test_name_with_parts!("test_list_empty_multi_level_namespace"),
+        ])
+        .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
         ]),
     );
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, ns_apple.name()).await;
 
     // Currently this namespace doesn't exist, so it should return error.
     assert!(
@@ -416,10 +459,7 @@ async fn test_list_empty_multi_level_namespace() {
 
     // List namespace
     let nss = catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
-                .unwrap(),
-        ))
+        .list_namespaces(Some(ns_apple.name()))
         .await
         .unwrap();
     assert!(nss.is_empty());
@@ -429,8 +469,12 @@ async fn test_list_empty_multi_level_namespace() {
 async fn test_register_table() {
     let catalog = get_catalog(None).await;
 
-    // Create namespace
-    let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
+    // Create unique namespace to avoid conflicts
+    let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_register_table"));
+
+    // Clean up from any previous test runs
+    cleanup_namespace(&catalog, &ns).await;
+
     catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
 
     // Create the table, store the metadata location, drop the table
@@ -445,7 +489,7 @@ async fn test_register_table() {
     let metadata_location = table.metadata_location().unwrap();
     catalog.drop_table(table.identifier()).await.unwrap();
 
-    let new_table_identifier = TableIdent::from_strs(["ns", "t2"]).unwrap();
+    let new_table_identifier = TableIdent::new(ns.clone(), "t2".to_string());
     let table_registered = catalog
         .register_table(&new_table_identifier, metadata_location.to_string())
         .await

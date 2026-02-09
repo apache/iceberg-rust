@@ -86,18 +86,6 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - name: Maximize build space (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        uses: easimon/maximize-build-space@master
-        with:
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          root-reserve-mb: 10240
-          temp-reserve-mb: 10240
-
       - uses: actions/checkout@v6
 
       - name: Setup Rust toolchain
@@ -134,26 +122,15 @@ jobs:
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
-  unit:
+  tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         test-suite:
           - { name: "default", args: "--all-targets --all-features --workspace" }
           - { name: "doc", args: "--doc --all-features --workspace" }
-    name: Unit Tests (${{ matrix.test-suite.name }})
+    name: Tests (${{ matrix.test-suite.name }})
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          root-reserve-mb: 10240
-          temp-reserve-mb: 10240
-
       - uses: actions/checkout@v6
 
       - name: Setup Rust toolchain
@@ -169,8 +146,30 @@ jobs:
         with:
           key: ${{ matrix.test-suite.name }}
 
-      - name: Test
-        run: cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+      - name: Install cargo-nextest
+        if: matrix.test-suite.name == 'default'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Start Docker containers
+        if: matrix.test-suite.name == 'default'
+        run: make docker-up
+
+      - name: Run tests
+        env:
+          # Disable debug info to speed up compilation and reduce artifact size
+          RUSTFLAGS: "-C debuginfo=0"
+        run: |
+          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
+            cargo nextest run ${{ matrix.test-suite.args }}
+          else
+            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+          fi
+
+      - name: Stop Docker containers
+        if: always() && matrix.test-suite.name == 'default'
+        run: make docker-down
 
   msrv:
     name: Verify MSRV
