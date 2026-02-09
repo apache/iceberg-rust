@@ -26,7 +26,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
-use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result as IcebergResult, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result as IcebergResult, TableCreation,
+    TableIdent,
+};
 use iceberg_catalog_rest::{
     CustomAuthenticator, REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder,
 };
