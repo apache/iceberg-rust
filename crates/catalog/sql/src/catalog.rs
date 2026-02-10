@@ -829,21 +829,22 @@ impl Catalog for SqlCatalog {
             .build()?
             .metadata;
         let tbl_metadata_location =
-            MetadataLocation::new_with_metadata(location.clone(), &tbl_metadata).to_string();
+            MetadataLocation::new_with_metadata(location.clone(), &tbl_metadata);
 
         tbl_metadata
             .write_to(&self.fileio, &tbl_metadata_location)
             .await?;
 
+        let tbl_metadata_location_str = tbl_metadata_location.to_string();
         self.execute(&format!(
             "INSERT INTO {CATALOG_TABLE_NAME}
              ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
              VALUES (?, ?, ?, ?, ?)
-            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
+            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location_str), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
 
         Ok(Table::builder()
             .file_io(self.fileio.clone())
-            .metadata_location(tbl_metadata_location)
+            .metadata_location(tbl_metadata_location_str)
             .identifier(tbl_ident)
             .metadata(tbl_metadata)
             .build()?)
@@ -927,13 +928,15 @@ impl Catalog for SqlCatalog {
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         staged_table
             .metadata()
             .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
+        let staged_metadata_location_str = staged_metadata_location.to_string();
         let update_result = self
             .execute(
                 &format!(
@@ -949,7 +952,7 @@ impl Catalog for SqlCatalog {
                       AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
                 ),
                 vec![
-                    Some(staged_metadata_location),
+                    Some(&staged_metadata_location_str),
                     Some(current_metadata_location.as_str()),
                     Some(&self.name),
                     Some(table_ident.name()),
