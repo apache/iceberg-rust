@@ -443,15 +443,12 @@ mod tests {
             let err = TableProperties::try_from(&props).unwrap_err();
             let err_msg = err.to_string();
             assert!(
-                err_msg.contains(&format!("Invalid metadata compression codec: {}", codec)),
-                "Expected error message to contain codec '{}', got: {}",
-                codec,
-                err_msg
+                err_msg.contains(&format!("Invalid metadata compression codec: {codec}")),
+                "Expected error message to contain codec '{codec}', got: {err_msg}"
             );
             assert!(
                 err_msg.contains("Only 'none' and 'gzip' are supported"),
-                "Expected error message to contain supported codecs, got: {}",
-                err_msg
+                "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }
     }
@@ -539,13 +536,11 @@ mod tests {
             let err_msg = err.to_string();
             assert!(
                 err_msg.contains("Invalid metadata compression codec"),
-                "Expected error message to contain 'Invalid metadata compression codec', got: {}",
-                err_msg
+                "Expected error message to contain 'Invalid metadata compression codec', got: {err_msg}"
             );
             assert!(
                 err_msg.contains("Only 'none' and 'gzip' are supported"),
-                "Expected error message to contain supported codecs, got: {}",
-                err_msg
+                "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }
     }
