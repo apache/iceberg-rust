@@ -140,4 +140,32 @@ mod tests {
         let result = load_engine_runner(config).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_load_datafusion_with_memory_catalog() {
+        let config = EngineConfig::Datafusion {
+            catalog: Some(DatafusionCatalogConfig {
+                catalog_type: "memory".to_string(),
+                props: std::collections::HashMap::from([
+                    ("warehouse".to_string(), "memory://test".to_string()),
+                ]),
+            }),
+        };
+
+        let result = load_engine_runner(config).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_datafusion_with_unsupported_catalog() {
+        let config = EngineConfig::Datafusion {
+            catalog: Some(DatafusionCatalogConfig {
+                catalog_type: "unsupported_catalog".to_string(),
+                props: std::collections::HashMap::new(),
+            }),
+        };
+
+        let result = load_engine_runner(config).await;
+        assert!(result.is_err());
+    }
 }

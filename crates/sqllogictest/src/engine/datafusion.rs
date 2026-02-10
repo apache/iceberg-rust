@@ -22,9 +22,10 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
-use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
-use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, NamespaceIdent, TableCreation};
+use iceberg_catalog_loader::CatalogLoader;
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 
@@ -75,38 +76,64 @@ impl DataFusionEngine {
     }
 
     async fn create_catalog(
-        _catalog_config: Option<&DatafusionCatalogConfig>,
+        catalog_config: Option<&DatafusionCatalogConfig>,
     ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
-        // See: https://github.com/apache/iceberg-rust/issues/1780
-        let catalog = MemoryCatalogBuilder::default()
+        let catalog: Arc<dyn Catalog> = match catalog_config {
+            Some(config) => Self::load_catalog_from_config(config).await?,
+            None => Self::create_default_memory_catalog().await?,
+        };
+
+        // Create a test namespace for INSERT INTO tests
+        let namespace = NamespaceIdent::new("default".to_string());
+        if catalog.create_namespace(&namespace, HashMap::new()).await.is_err() {
+            // Namespace may already exist, ignore the error
+        }
+
+        // Create partitioned test table (unpartitioned tables are now created via SQL)
+        // Ignore errors as tables may already exist
+        let _ = Self::create_partitioned_table(catalog.as_ref(), &namespace).await;
+        let _ = Self::create_binary_table(catalog.as_ref(), &namespace).await;
+
+        Ok(Arc::new(
+            IcebergCatalogProvider::try_new(catalog).await?,
+        ))
+    }
+
+    async fn load_catalog_from_config(
+        config: &DatafusionCatalogConfig,
+    ) -> anyhow::Result<Arc<dyn Catalog>> {
+        let catalog_type = config.catalog_type.as_str();
+        let props = config.props.clone();
+
+        let catalog = CatalogLoader::from(catalog_type)
+            .load(catalog_type.to_string(), props)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to load catalog '{}': {}", catalog_type, e))?;
+
+        Ok(catalog)
+    }
+
+    /// Not sure if we want to keep a default memory catalog when no config is provided.
+    async fn create_default_memory_catalog() -> anyhow::Result<Arc<dyn Catalog>> {
+        let catalog = CatalogLoader::from("memory")
             .load(
-                "memory",
+                "memory".to_string(),
                 HashMap::from([(
                     MEMORY_CATALOG_WAREHOUSE.to_string(),
                     "memory://".to_string(),
                 )]),
             )
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create default memory catalog: {}", e))?;
 
-        // Create a test namespace for INSERT INTO tests
-        let namespace = NamespaceIdent::new("default".to_string());
-        catalog.create_namespace(&namespace, HashMap::new()).await?;
-
-        // Create partitioned test table (unpartitioned tables are now created via SQL)
-        Self::create_partitioned_table(&catalog, &namespace).await?;
-        Self::create_binary_table(&catalog, &namespace).await?;
-
-        Ok(Arc::new(
-            IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
-        ))
+        Ok(catalog)
     }
 
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
     /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
     async fn create_partitioned_table(
-        catalog: &impl Catalog,
+        catalog: &dyn Catalog,
         namespace: &NamespaceIdent,
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()
@@ -140,7 +167,7 @@ impl DataFusionEngine {
     /// Used for testing binary predicate pushdown
     /// TODO: this can be removed when we support CREATE TABLE
     async fn create_binary_table(
-        catalog: &impl Catalog,
+        catalog: &dyn Catalog,
         namespace: &NamespaceIdent,
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()

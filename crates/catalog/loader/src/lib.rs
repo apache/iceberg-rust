@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use iceberg::memory::MemoryCatalogBuilder;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
 use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_hms::HmsCatalogBuilder;
@@ -31,6 +32,7 @@ type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
 
 /// A registry of catalog builders.
 static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
+    ("memory", || Box::new(MemoryCatalogBuilder::default())),
     ("rest", || Box::new(RestCatalogBuilder::default())),
     ("glue", || Box::new(GlueCatalogBuilder::default())),
     ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
@@ -119,6 +121,23 @@ mod tests {
     async fn test_load_unsupported_catalog() {
         let result = load("unsupported");
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_catalog_loader_pattern_memory_catalog() {
+        use iceberg::memory::MEMORY_CATALOG_WAREHOUSE;
+
+        let catalog = CatalogLoader::from("memory")
+            .load(
+                "memory".to_string(),
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    "memory://test".to_string(),
+                )]),
+            )
+            .await;
+
+        assert!(catalog.is_ok());
     }
 
     #[tokio::test]
