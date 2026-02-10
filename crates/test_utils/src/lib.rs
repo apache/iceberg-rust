@@ -47,7 +47,7 @@ mod common {
     pub const DEFAULT_MINIO_PORT: u16 = 9000;
     pub const DEFAULT_REST_CATALOG_PORT: u16 = 8181;
     pub const DEFAULT_HMS_PORT: u16 = 9083;
-    pub const DEFAULT_GLUE_PORT: u16 = 5000;
+    pub const DEFAULT_GLUE_PORT: u16 = 5001;
     pub const DEFAULT_GCS_PORT: u16 = 4443;
 
     /// Returns the MinIO S3-compatible endpoint.

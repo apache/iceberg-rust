@@ -51,8 +51,18 @@ pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
 fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
     match to_iceberg_predicate(expr) {
         TransformedResult::Predicate(predicate) => Some(predicate),
-        TransformedResult::Column(_) | TransformedResult::Literal(_) => {
-            unreachable!("Not a valid expression: {:?}", expr)
+        TransformedResult::Column(column) => {
+            // A bare column in a filter context represents a boolean column check
+            // Convert it to: column = true
+            Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                column,
+                Datum::bool(true),
+            )))
+        }
+        TransformedResult::Literal(_) => {
+            // Literal values in filter context cannot be pushed down
+            None
         }
         _ => None,
     }
@@ -75,6 +85,14 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             let expr = to_iceberg_predicate(exp);
             match expr {
                 TransformedResult::Predicate(p) => TransformedResult::Predicate(!p),
+                TransformedResult::Column(column) => {
+                    // NOT of a bare boolean column: NOT col => col = false
+                    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(
+                        PredicateOperator::Eq,
+                        column,
+                        Datum::bool(false),
+                    )))
+                }
                 _ => TransformedResult::NotTransformed,
             }
         }
@@ -251,9 +269,11 @@ fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
 }
 
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+
 /// Convert a scalar value to an iceberg datum.
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
     match value {
+        ScalarValue::Boolean(Some(v)) => Some(Datum::bool(*v)),
         ScalarValue::Int8(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int16(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
@@ -266,6 +286,13 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
+        // Timestamp conversions
+        // Note: TimestampSecond and TimestampMillisecond are not handled here because
+        // DataFusion's type coercion always converts them to match the column type
+        // (either TimestampMicrosecond or TimestampNanosecond) before predicate pushdown.
+        // See unit tests for how those conversions would work if needed.
+        ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
+        ScalarValue::TimestampNanosecond(Some(v), _) => Some(Datum::timestamp_nanos(*v)),
         _ => None,
     }
 }
@@ -483,6 +510,42 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_value_to_datum_timestamp() {
+        use datafusion::common::ScalarValue;
+
+        // Test TimestampMicrosecond - maps directly to Datum::timestamp_micros
+        let ts_micros = 1672876800000000i64; // 2023-01-05 00:00:00 UTC in microseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(Some(ts_micros), None));
+        assert_eq!(datum, Some(Datum::timestamp_micros(ts_micros)));
+
+        // Test TimestampNanosecond - maps to Datum::timestamp_nanos to preserve precision
+        let ts_nanos = 1672876800000000500i64; // 2023-01-05 00:00:00.000000500 UTC in nanoseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampNanosecond(Some(ts_nanos), None));
+        assert_eq!(datum, Some(Datum::timestamp_nanos(ts_nanos)));
+
+        // Test None timestamp
+        let datum = super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(None, None));
+        assert_eq!(datum, None);
+
+        // Note: TimestampSecond and TimestampMillisecond are not supported because
+        // DataFusion's type coercion converts them to TimestampMicrosecond or TimestampNanosecond
+        // before they reach scalar_value_to_datum in SQL queries.
+        //
+        // These return None (not pushed down):
+        let ts_seconds = 1672876800i64; // 2023-01-05 00:00:00 UTC in seconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampSecond(Some(ts_seconds), None));
+        assert_eq!(datum, None);
+
+        let ts_millis = 1672876800000i64; // 2023-01-05 00:00:00 UTC in milliseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampMillisecond(Some(ts_millis), None));
+        assert_eq!(datum, None);
+    }
+
+    #[test]
     fn test_scalar_value_to_datum_binary() {
         use datafusion::common::ScalarValue;
 
@@ -507,6 +570,23 @@ mod tests {
             .equal_to(Datum::long(1))
             .and(Reference::new("bar").equal_to(Datum::binary(vec![1u8, 2u8])));
         assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_boolean() {
+        use datafusion::common::ScalarValue;
+
+        // Test boolean true
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(true)));
+        assert_eq!(datum, Some(Datum::bool(true)));
+
+        // Test boolean false
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(false)));
+        assert_eq!(datum, Some(Datum::bool(false)));
+
+        // Test None boolean
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(None));
+        assert_eq!(datum, None);
     }
 
     #[test]

@@ -25,13 +25,17 @@ classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
 ]
 name = "pyiceberg-core"
 readme = "project-description.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<4"
 dynamic = ["version"]
 license = { file = "LICENSE" }
 
@@ -52,6 +56,6 @@ dev = [
     "maturin>=1.0,<2.0",
     "pytest>=8.3.2",
     "datafusion==50.*",
-    "pyiceberg[sql-sqlite,pyarrow] @ git+https://github.com/apache/iceberg-python.git@d3eb149fe99b14e714a06e727b69cd617c6c052d",
+    "pyiceberg[sql-sqlite,pyarrow]",
     "fastavro>=1.11.1",
 ]

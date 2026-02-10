@@ -50,22 +50,24 @@ def fetch_manifest_entry(
     # have the write part in there as well
     def _convert_entry(entry: Any) -> ManifestEntry:
         data_file = DataFile(
-            DataFileContent(entry.data_file.content),
-            entry.data_file.file_path,
-            FileFormat(entry.data_file.file_format),
-            [p.value() if p is not None else None for p in entry.data_file.partition],
-            entry.data_file.record_count,
-            entry.data_file.file_size_in_bytes,
-            entry.data_file.column_sizes,
-            entry.data_file.value_counts,
-            entry.data_file.null_value_counts,
-            entry.data_file.nan_value_counts,
-            entry.data_file.lower_bounds,
-            entry.data_file.upper_bounds,
-            entry.data_file.key_metadata,
-            entry.data_file.split_offsets,
-            entry.data_file.equality_ids,
-            entry.data_file.sort_order_id,
+            content=DataFileContent(entry.data_file.content),
+            file_path=entry.data_file.file_path,
+            file_format=FileFormat(entry.data_file.file_format),
+            partition=[
+                p.value() if p is not None else None for p in entry.data_file.partition
+            ],
+            record_count=entry.data_file.record_count,
+            file_size_in_bytes=entry.data_file.file_size_in_bytes,
+            column_sizes=entry.data_file.column_sizes,
+            value_counts=entry.data_file.value_counts,
+            null_value_counts=entry.data_file.null_value_counts,
+            nan_value_counts=entry.data_file.nan_value_counts,
+            lower_bounds=entry.data_file.lower_bounds,
+            upper_bounds=entry.data_file.upper_bounds,
+            key_metadata=entry.data_file.key_metadata,
+            split_offsets=entry.data_file.split_offsets,
+            equality_ids=entry.data_file.equality_ids,
+            sort_order_id=entry.data_file.sort_order_id,
         )
 
         return ManifestEntry(
