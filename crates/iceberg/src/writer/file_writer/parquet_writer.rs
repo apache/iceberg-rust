@@ -212,7 +212,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     output_file: OutputFile,
-    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
@@ -577,16 +577,16 @@ impl CurrentFileStatus for ParquetWriter {
 /// # NOTES
 ///
 /// We keep this wrapper been used inside only.
-struct AsyncFileWriter<W: FileWrite>(W);
+struct AsyncFileWriter(Box<dyn FileWrite>);
 
-impl<W: FileWrite> AsyncFileWriter<W> {
+impl AsyncFileWriter {
     /// Create a new `AsyncFileWriter` with the given writer.
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: Box<dyn FileWrite>) -> Self {
         Self(writer)
     }
 }
 
-impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
+impl ArrowAsyncFileWriter for AsyncFileWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
             self.0
