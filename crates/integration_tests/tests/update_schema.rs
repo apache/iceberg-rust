@@ -178,8 +178,13 @@ async fn test_add_field() {
 
     // Verify the struct column was added
     let schema = table.metadata().current_schema();
-    let info_field = schema.field_by_name("info").expect("info field should exist");
-    assert!(matches!(info_field.field_type.as_ref(), iceberg::spec::Type::Struct(_)));
+    let info_field = schema
+        .field_by_name("info")
+        .expect("info field should exist");
+    assert!(matches!(
+        info_field.field_type.as_ref(),
+        iceberg::spec::Type::Struct(_)
+    ));
     let city_field = schema
         .field_by_name("info.city")
         .expect("info.city field should exist");
@@ -392,10 +397,7 @@ async fn test_delete_field() {
     let delete_action = tx.update_schema().delete_column("bar");
     let tx = delete_action.apply(tx).unwrap();
     let result = tx.commit(&rest_catalog).await;
-    assert!(
-        result.is_err(),
-        "deleting an identifier field should fail"
-    );
+    assert!(result.is_err(), "deleting an identifier field should fail");
 
     // Deleting a non-existent column should fail
     let tx = Transaction::new(&table);
