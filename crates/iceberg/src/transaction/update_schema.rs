@@ -703,7 +703,7 @@ mod tests {
         // Extract the new schema from the AddSchema update.
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         // The new field should have ID = last_column_id + 1 = 4.
@@ -745,7 +745,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         let field = new_schema
@@ -772,7 +772,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         let field = new_schema
@@ -819,7 +819,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         assert!(
@@ -866,7 +866,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         assert!(
@@ -894,7 +894,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         let z = new_schema
@@ -942,7 +942,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         // "email" should be nested under "person" with ID = last_column_id + 1 = 15.
@@ -975,7 +975,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         let phone = new_schema
@@ -1003,7 +1003,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         // The list element struct should now contain "score".
@@ -1036,7 +1036,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         let version = new_schema
@@ -1133,7 +1133,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         // Root column gets the first fresh ID.
@@ -1170,7 +1170,7 @@ mod tests {
 
         let new_schema = match &updates[0] {
             TableUpdate::AddSchema { schema } => schema,
-            other => panic!("expected AddSchema, got {:?}", other),
+            other => panic!("expected AddSchema, got {other:?}"),
         };
 
         // "address" gets ID 4 (last_column_id=3, +1).
