@@ -258,6 +258,12 @@ impl Catalog for HmsCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace already exists",
+            ));
+        }
         let database = convert_to_database(namespace, &properties)?;
 
         self.client
@@ -341,6 +347,12 @@ impl Catalog for HmsCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace does not exist",
+            ));
+        }
         let db = convert_to_database(namespace, &properties)?;
 
         let name = match &db.name {
@@ -372,6 +384,13 @@ impl Catalog for HmsCatalog {
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let name = validate_namespace(namespace)?;
 
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace does not exist",
+            ));
+        }
+
         self.client
             .0
             .drop_database(name.into(), false, false)
@@ -392,6 +411,12 @@ impl Catalog for HmsCatalog {
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = validate_namespace(namespace)?;
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace does not exist",
+            ));
+        }
 
         let tables = self
             .client
@@ -520,6 +545,15 @@ impl Catalog for HmsCatalog {
     /// - Any network or communication error occurs with the database backend.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let db_name = validate_namespace(table.namespace())?;
+        if !self.namespace_exists(table.namespace()).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace does not exist",
+            ));
+        }
+        if !self.table_exists(table).await? {
+            return Err(Error::new(ErrorKind::DataInvalid, "Table does not exist"));
+        }
 
         self.client
             .0
@@ -568,6 +602,12 @@ impl Catalog for HmsCatalog {
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         let src_dbname = validate_namespace(src.namespace())?;
         let dest_dbname = validate_namespace(dest.namespace())?;
+        if self.table_exists(dest).await? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Destination table already exists",
+            ));
+        }
 
         let src_tbl_name = src.name.clone();
         let dest_tbl_name = dest.name.clone();
