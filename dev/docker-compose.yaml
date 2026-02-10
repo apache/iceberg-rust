@@ -137,9 +137,12 @@ services:
     networks:
       iceberg_test:
     ports:
-      - "5000:5000"
+      - "5001:5001"
+    environment:
+      # Use port 5001 instead of default 5000 to avoid conflict with macOS AirPlay Receiver.
+      - MOTO_PORT=5001
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/moto-api/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/moto-api/"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -185,18 +188,22 @@ services:
 
   # Provision service - creates test data via Spark
   provision:
-    image: python:3.12-slim
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     networks:
       iceberg_test:
     depends_on:
       spark-iceberg:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "pip install -q 'pyspark[connect]==4.0.1' && python3 /opt/spark/provision.py && touch /tmp/provision_complete && tail -f /dev/null"]
+    entrypoint: ["/bin/sh", "-c", "uv run /opt/spark/provision.py && touch /tmp/provision_complete && tail -f /dev/null"]
     volumes:
       - ./spark/provision.py:/opt/spark/provision.py:ro
+      - uv-cache:/root/.cache/uv
     healthcheck:
       test: ["CMD-SHELL", "[ -f /tmp/provision_complete ]"]
       interval: 2s
       timeout: 2s
       retries: 90
       start_period: 20s
+
+volumes:
+  uv-cache:
