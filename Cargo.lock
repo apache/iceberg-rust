@@ -3445,7 +3445,6 @@ dependencies = [
  "iceberg_test_utils",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3505,7 +3504,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tokio",
- "tracing",
  "typed-builder",
  "uuid",
 ]

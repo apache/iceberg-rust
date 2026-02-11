@@ -300,7 +300,7 @@ impl Catalog for HmsCatalog {
             MaybeException::Exception(ThriftHiveMetastoreGetDatabaseException::O1(_)) => {
                 return Err(Error::new(
                     ErrorKind::NamespaceNotFound,
-                    format!("Namespace {:?} not found", namespace),
+                    format!("Namespace {namespace:?} not found"),
                 ));
             }
             MaybeException::Exception(exception) => {
