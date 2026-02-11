@@ -656,6 +656,11 @@ where T: std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
+    use aws_credential_types::Credentials;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
+    use aws_smithy_runtime_api::http::{Request, Response, StatusCode};
+    use aws_smithy_types::body::SdkBody;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
@@ -1123,5 +1128,132 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog name cannot be empty");
         }
+    }
+
+    // Helper functions for testing
+
+    /// Creates a mock HTTP response with the given JSON body
+    fn mock_http_response(json_body: &str) -> HttpResponse {
+        HttpResponse::try_from(
+            Response::new(StatusCode::try_from(200).unwrap(), SdkBody::from(json_body))
+        ).unwrap()
+    }
+
+    /// Creates a test catalog with mocked S3 Tables client that returns the given HTTP responses
+    fn create_test_catalog_with_responses(responses: Vec<HttpResponse>) -> S3TablesCatalog {
+        // Create mocked S3 Tables client
+        let events: Vec<ReplayEvent> = responses
+            .into_iter()
+            .map(|response| {
+                ReplayEvent::new(Request::new(SdkBody::empty()), response)
+            })
+            .collect();
+
+        let http_client = StaticReplayClient::new(events);
+        let creds = Credentials::new("test", "test", None, None, "test");
+
+        let config = aws_sdk_s3tables::Config::builder()
+            .region(aws_sdk_s3tables::config::Region::new("us-east-1"))
+            .credentials_provider(creds)
+            .http_client(http_client)
+            .behavior_version(aws_sdk_s3tables::config::BehaviorVersion::latest())
+            .build();
+
+        let s3tables_client = aws_sdk_s3tables::Client::from_conf(config);
+
+        // Create in-memory file IO
+        let file_io = FileIOBuilder::new("memory").build().unwrap();
+
+        // Assemble catalog
+        S3TablesCatalog {
+            config: S3TablesCatalogConfig {
+                name: Some("test".to_string()),
+                table_bucket_arn: "arn:aws:s3tables:us-east-1:123456789012:bucket/test"
+                    .to_string(),
+                endpoint_url: None,
+                client: Some(s3tables_client.clone()),
+                props: HashMap::new(),
+            },
+            s3tables_client,
+            file_io,
+        }
+    }
+
+    /// Creates a simple test table creation with id and name fields
+    fn create_test_table_creation(table_name: &str) -> TableCreation {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        TableCreation::builder()
+            .name(table_name.to_string())
+            .properties(HashMap::new())
+            .schema(schema)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_create_table_with_mocked_client() {
+        // Test values - these are the key business logic being tested
+        let warehouse_location = "s3://test-warehouse-bucket/table-xyz";
+        let version_token = "test-version-token-123";
+
+        // Mock the three HTTP responses from S3 Tables API in create_table flow:
+        // 1. CreateTable - returns version token
+        // 2. GetTable - returns warehouse location and version token
+        // 3. UpdateTableMetadataLocation - success response
+        let mock_responses = vec![
+            mock_http_response(&format!(r#"{{"versionToken": "{}"}}"#, version_token)),
+            mock_http_response(&format!(
+                r#"{{"warehouseLocation": "{}", "versionToken": "{}"}}"#,
+                warehouse_location, version_token
+            )),
+            mock_http_response("{}"),
+        ];
+
+        // Create catalog with mocked S3 Tables responses
+        let catalog = create_test_catalog_with_responses(mock_responses);
+
+        // Call the actual create_table method
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        let creation = create_test_table_creation("test_table");
+        let result = catalog.create_table(&namespace, creation).await;
+
+        // Verify the table was created successfully
+        assert!(
+            result.is_ok(),
+            "Table creation should succeed, got error: {:?}",
+            result.err()
+        );
+
+        let table = result.unwrap();
+
+        // Verify: table location is set to warehouse location from S3 Tables
+        assert_eq!(
+            table.metadata().location(),
+            warehouse_location,
+            "Table location should be set to warehouse location from S3 Tables"
+        );
+
+        // Verify: metadata location is constructed FROM table location (the key fix in PR #2115)
+        let metadata_location = table.metadata_location().expect("metadata location should be set");
+        let expected_prefix = format!("{}/metadata/00000-", warehouse_location);
+        assert!(
+            metadata_location.starts_with(&expected_prefix),
+            "Metadata location should be constructed from warehouse location. Expected prefix: {}, Got: {}",
+            expected_prefix,
+            metadata_location
+        );
+
+        // Verify: metadata location follows the expected pattern
+        assert!(
+            metadata_location.ends_with(".metadata.json"),
+            "Metadata location should end with .metadata.json"
+        );
     }
 }
