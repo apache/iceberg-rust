@@ -412,7 +412,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::Unexpected,
+                iceberg::ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {namespace:?} already exists"),
             ));
         }
@@ -1511,7 +1511,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "Unexpected => Namespace {:?} already exists",
+                "NamespaceAlreadyExists => Namespace {:?} already exists",
                 &namespace_ident
             )
         );
@@ -1773,7 +1773,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1791,7 +1791,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}")
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}")
         )
     }
 
@@ -1838,7 +1838,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such namespace: {non_existent_namespace_ident:?}"),
+            format!("NamespaceNotFound => No such namespace: {non_existent_namespace_ident:?}"),
         );
     }
 
@@ -2079,7 +2079,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => Table {:?} already exists.", &table_ident)
+            format!("TableAlreadyExists => Table {:?} already exists.", &table_ident)
         );
     }
 
@@ -2195,7 +2195,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such namespace: {non_existent_dst_namespace_ident:?}"),
+            format!("NamespaceNotFound => No such namespace: {non_existent_dst_namespace_ident:?}"),
         );
     }
 
@@ -2214,7 +2214,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => No such table: {src_table_ident:?}"),
+            format!("TableNotFound => No such table: {src_table_ident:?}"),
         );
     }
 
@@ -2234,7 +2234,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => Table {:?} already exists.", &dst_table_ident),
+            format!("TableAlreadyExists => Table {:?} already exists.", &dst_table_ident),
         );
     }
 
@@ -2254,7 +2254,7 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+            "TableNotFound => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
         );
     }
 
@@ -2290,7 +2290,7 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+            "TableNotFound => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
         );
     }
 
@@ -2310,7 +2310,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("Unexpected => Table {:?} already exists.", &table_ident)
+            format!("TableAlreadyExists => Table {:?} already exists.", &table_ident)
         );
     }
 

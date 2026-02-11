@@ -28,21 +28,21 @@ pub fn from_sqlx_error(error: sqlx::Error) -> Error {
 
 pub fn no_such_namespace_err<T>(namespace: &NamespaceIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::NamespaceNotFound,
         format!("No such namespace: {namespace:?}"),
     ))
 }
 
 pub fn no_such_table_err<T>(table_ident: &TableIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableNotFound,
         format!("No such table: {table_ident:?}"),
     ))
 }
 
 pub fn table_already_exists_err<T>(table_ident: &TableIdent) -> Result<T> {
     Err(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableAlreadyExists,
         format!("Table {table_ident:?} already exists."),
     ))
 }

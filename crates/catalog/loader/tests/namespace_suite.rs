@@ -49,7 +49,8 @@ async fn test_catalog_namespace_missing_returns_error(#[case] kind: CatalogKind)
 
     cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
 
-    assert!(catalog.get_namespace(&namespace).await.is_err());
+    let err = catalog.get_namespace(&namespace).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
 
     Ok(())
 }
@@ -103,7 +104,6 @@ async fn test_catalog_namespace_lifecycle(#[case] kind: CatalogKind) -> Result<(
 #[case::glue_catalog(CatalogKind::Glue)]
 #[case::hms_catalog(CatalogKind::Hms)]
 #[case::sql_catalog(CatalogKind::Sql)]
-#[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[case::memory_catalog(CatalogKind::Memory)]
 #[tokio::test]
 async fn test_catalog_update_namespace_supported(#[case] kind: CatalogKind) -> Result<()> {
@@ -133,6 +133,7 @@ async fn test_catalog_update_namespace_supported(#[case] kind: CatalogKind) -> R
 // Common behavior: update_namespace returns FeatureUnsupported when not implemented.
 #[rstest]
 #[case::rest_catalog(CatalogKind::Rest)]
+#[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[tokio::test]
 async fn test_catalog_update_namespace_unsupported(#[case] kind: CatalogKind) -> Result<()> {
     let Some(harness) = load_catalog(kind).await else {
@@ -289,22 +290,19 @@ async fn test_catalog_create_namespace_duplicate_fails(#[case] kind: CatalogKind
     cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
     catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-    assert!(
-        catalog
-            .create_namespace(&namespace, HashMap::new())
-            .await
-            .is_err()
-    );
+    let err = catalog
+        .create_namespace(&namespace, HashMap::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceAlreadyExists);
     Ok(())
 }
 
-// Common behavior: update on a missing namespace should error.
+// Common behavior: update on a missing namespace should return NamespaceNotFound.
 #[rstest]
-#[case::rest_catalog(CatalogKind::Rest)]
 #[case::glue_catalog(CatalogKind::Glue)]
 #[case::hms_catalog(CatalogKind::Hms)]
 #[case::sql_catalog(CatalogKind::Sql)]
-#[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[case::memory_catalog(CatalogKind::Memory)]
 #[tokio::test]
 async fn test_catalog_update_namespace_missing_errors(#[case] kind: CatalogKind) -> Result<()> {
@@ -319,15 +317,14 @@ async fn test_catalog_update_namespace_missing_errors(#[case] kind: CatalogKind)
 
     cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
 
-    assert!(
-        catalog
-            .update_namespace(
-                &namespace,
-                HashMap::from([("key".to_string(), "value".to_string())]),
-            )
-            .await
-            .is_err()
-    );
+    let err = catalog
+        .update_namespace(
+            &namespace,
+            HashMap::from([("key".to_string(), "value".to_string())]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
 
     Ok(())
 }
@@ -353,6 +350,7 @@ async fn test_catalog_drop_namespace_missing_errors(#[case] kind: CatalogKind) -
 
     cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
 
-    assert!(catalog.drop_namespace(&namespace).await.is_err());
+    let err = catalog.drop_namespace(&namespace).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
     Ok(())
 }

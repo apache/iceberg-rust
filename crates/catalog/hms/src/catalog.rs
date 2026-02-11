@@ -260,8 +260,8 @@ impl Catalog for HmsCatalog {
     ) -> Result<Namespace> {
         if self.namespace_exists(namespace).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace already exists",
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
             ));
         }
         let database = convert_to_database(namespace, &properties)?;
@@ -288,13 +288,29 @@ impl Catalog for HmsCatalog {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
         let name = validate_namespace(namespace)?;
 
-        let db = self
+        let resp = self
             .client
             .0
             .get_database(name.into())
             .await
-            .map(from_thrift_exception)
-            .map_err(from_thrift_error)??;
+            .map_err(from_thrift_error)?;
+
+        let db = match resp {
+            MaybeException::Ok(db) => db,
+            MaybeException::Exception(ThriftHiveMetastoreGetDatabaseException::O1(_)) => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Namespace {:?} not found", namespace),
+                ));
+            }
+            MaybeException::Exception(exception) => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Operation failed for hitting thrift error".to_string(),
+                )
+                .with_source(anyhow!("thrift error: {exception:?}")));
+            }
+        };
 
         let ns = convert_to_namespace(&db)?;
 
@@ -349,8 +365,8 @@ impl Catalog for HmsCatalog {
     ) -> Result<()> {
         if !self.namespace_exists(namespace).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace does not exist",
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
             ));
         }
         let db = convert_to_database(namespace, &properties)?;
@@ -386,8 +402,8 @@ impl Catalog for HmsCatalog {
 
         if !self.namespace_exists(namespace).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace does not exist",
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
             ));
         }
 
@@ -413,8 +429,8 @@ impl Catalog for HmsCatalog {
         let name = validate_namespace(namespace)?;
         if !self.namespace_exists(namespace).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace does not exist",
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
             ));
         }
 
@@ -547,12 +563,15 @@ impl Catalog for HmsCatalog {
         let db_name = validate_namespace(table.namespace())?;
         if !self.namespace_exists(table.namespace()).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace does not exist",
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {:?} does not exist", table.namespace()),
             ));
         }
         if !self.table_exists(table).await? {
-            return Err(Error::new(ErrorKind::DataInvalid, "Table does not exist"));
+            return Err(Error::new(
+                ErrorKind::TableNotFound,
+                format!("Table {table:?} does not exist"),
+            ));
         }
 
         self.client
@@ -604,8 +623,8 @@ impl Catalog for HmsCatalog {
         let dest_dbname = validate_namespace(dest.namespace())?;
         if self.table_exists(dest).await? {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Destination table already exists",
+                ErrorKind::TableAlreadyExists,
+                format!("Destination table {dest:?} already exists"),
             ));
         }
 
