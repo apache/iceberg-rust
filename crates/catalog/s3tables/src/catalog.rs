@@ -1134,9 +1134,11 @@ mod tests {
 
     /// Creates a mock HTTP response with the given JSON body
     fn mock_http_response(json_body: &str) -> HttpResponse {
-        HttpResponse::try_from(
-            Response::new(StatusCode::try_from(200).unwrap(), SdkBody::from(json_body))
-        ).unwrap()
+        HttpResponse::try_from(Response::new(
+            StatusCode::try_from(200).unwrap(),
+            SdkBody::from(json_body),
+        ))
+        .unwrap()
     }
 
     /// Creates a test catalog with mocked S3 Tables client that returns the given HTTP responses
@@ -1144,9 +1146,7 @@ mod tests {
         // Create mocked S3 Tables client
         let events: Vec<ReplayEvent> = responses
             .into_iter()
-            .map(|response| {
-                ReplayEvent::new(Request::new(SdkBody::empty()), response)
-            })
+            .map(|response| ReplayEvent::new(Request::new(SdkBody::empty()), response))
             .collect();
 
         let http_client = StaticReplayClient::new(events);
@@ -1168,8 +1168,7 @@ mod tests {
         S3TablesCatalog {
             config: S3TablesCatalogConfig {
                 name: Some("test".to_string()),
-                table_bucket_arn: "arn:aws:s3tables:us-east-1:123456789012:bucket/test"
-                    .to_string(),
+                table_bucket_arn: "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
                 endpoint_url: None,
                 client: Some(s3tables_client.clone()),
                 props: HashMap::new(),
@@ -1208,10 +1207,9 @@ mod tests {
         // 2. GetTable - returns warehouse location and version token
         // 3. UpdateTableMetadataLocation - success response
         let mock_responses = vec![
-            mock_http_response(&format!(r#"{{"versionToken": "{}"}}"#, version_token)),
+            mock_http_response(&format!(r#"{{"versionToken": "{version_token}"}}"#)),
             mock_http_response(&format!(
-                r#"{{"warehouseLocation": "{}", "versionToken": "{}"}}"#,
-                warehouse_location, version_token
+                r#"{{"warehouseLocation": "{warehouse_location}", "versionToken": "{version_token}"}}"#
             )),
             mock_http_response("{}"),
         ];
@@ -1241,13 +1239,13 @@ mod tests {
         );
 
         // Verify: metadata location is constructed FROM table location (the key fix in PR #2115)
-        let metadata_location = table.metadata_location().expect("metadata location should be set");
-        let expected_prefix = format!("{}/metadata/00000-", warehouse_location);
+        let metadata_location = table
+            .metadata_location()
+            .expect("metadata location should be set");
+        let expected_prefix = format!("{warehouse_location}/metadata/00000-");
         assert!(
             metadata_location.starts_with(&expected_prefix),
-            "Metadata location should be constructed from warehouse location. Expected prefix: {}, Got: {}",
-            expected_prefix,
-            metadata_location
+            "Metadata location should be constructed from warehouse location. Expected prefix: {expected_prefix}, Got: {metadata_location}"
         );
 
         // Verify: metadata location follows the expected pattern
