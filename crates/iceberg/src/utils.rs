@@ -416,8 +416,9 @@ impl ReachableFileCleanupStrategy {
             }
         }
 
-        self.delete_files(manifest_lists_to_delete.into_iter().map(|s| s.to_string()))
-            .await?;
+        let manifest_list_strings: Vec<String> =
+            manifest_lists_to_delete.into_iter().map(str::to_owned).collect();
+        self.delete_files(manifest_list_strings).await?;
 
         Ok(())
     }

@@ -264,7 +264,25 @@ impl Table {
         before_metadata: &TableMetadataRef,
         concurrency_limit: usize,
     ) -> Result<()> {
-        let cleanup_strategy = ReachableFileCleanupStrategy::new(self.file_io.clone())
+        self.cleanup_expired_files_with_file_io(
+            before_metadata,
+            concurrency_limit,
+            self.file_io.clone(),
+        )
+            .await
+    }
+
+    /// Cleans up files from expired snapshots using an explicit `FileIO`.
+    ///
+    /// Use this when the table's own `file_io` may lack configuration (e.g. S3 region)
+    /// that was present on the original table before a transaction commit.
+    pub async fn cleanup_expired_files_with_file_io(
+        &self,
+        before_metadata: &TableMetadataRef,
+        concurrency_limit: usize,
+        file_io: FileIO,
+    ) -> Result<()> {
+        let cleanup_strategy = ReachableFileCleanupStrategy::new(file_io)
             .with_delete_concurrency(concurrency_limit);
 
         cleanup_strategy
