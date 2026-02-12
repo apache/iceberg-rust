@@ -128,7 +128,7 @@ impl MemoryCatalog {
         config: MemoryCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
     ) -> Result<Self> {
-        // Use provided factory or default to MemoryStorageFactory
+        // Use provided factory or default to LocalFsStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
 
         Ok(Self {

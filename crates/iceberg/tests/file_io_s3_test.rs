@@ -123,20 +123,6 @@ mod tests {
     }
 
     #[test]
-    fn test_file_io_builder_extension_system() {
-        // Test adding and retrieving extensions
-        // Note: Extension system is not part of the new FileIOBuilder API
-        // This test is removed as the extension system was part of the old API
-    }
-
-    #[test]
-    fn test_file_io_builder_multiple_extensions() {
-        // Test adding multiple different types of extensions
-        // Note: Extension system is not part of the new FileIOBuilder API
-        // This test is removed as the extension system was part of the old API
-    }
-
-    #[test]
     fn test_custom_aws_credential_loader_instantiation() {
         // Test creating CustomAwsCredentialLoader with mock loader
         let mock_loader = MockCredentialLoader::new_minio();

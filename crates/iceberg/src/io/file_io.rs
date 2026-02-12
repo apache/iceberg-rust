@@ -199,19 +199,6 @@ pub struct FileIOBuilder {
 
 impl FileIOBuilder {
     /// Creates a new builder with the given storage factory.
-    ///
-    /// # Arguments
-    ///
-    /// * `factory` - The storage factory to use for creating storage instances
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use iceberg::io::{FileIOBuilder, LocalFsStorageFactory};
-    /// use std::sync::Arc;
-    ///
-    /// let builder = FileIOBuilder::new(Arc::new(LocalFsStorageFactory));
-    /// ```
     pub fn new(factory: Arc<dyn StorageFactory>) -> Self {
         Self {
             factory,
@@ -242,9 +229,6 @@ impl FileIOBuilder {
     }
 
     /// Builds [`FileIO`].
-    ///
-    /// Note: Storage is lazily initialized on first use, so this method
-    /// does not return a Result.
     pub fn build(self) -> FileIO {
         FileIO {
             config: self.config,
