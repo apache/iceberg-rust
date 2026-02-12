@@ -286,9 +286,42 @@ impl HttpClient {
 
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
+    //
+    // If a custom authenticator is configured, the first request is sent without authentication.
+    // If it fails with a 401/403 permission denied error, the custom authenticator is called
+    // to get a fresh token and the request is retried.
+    //
+    // For other authentication methods (static token, OAuth credentials), authentication
+    // is applied to all requests as before.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
-        self.authenticate(&mut request).await?;
-        self.execute(request).await
+        let has_custom_authenticator = self.authenticator.is_some();
+        let token_is_set = self.token.lock().await.is_some();
+
+        if has_custom_authenticator && token_is_set {
+            // For custom authenticators with a cached token, try without authentication first
+            // to avoid unnecessary token fetches
+            let cloned_request = request
+                .try_clone()
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Unable to clone request"))?;
+            let response = self.execute(cloned_request).await?;
+
+            // Check if we got a permission denied error
+            if matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                // Retry with authentication from the custom authenticator
+                self.authenticate(&mut request).await?;
+                return self.execute(request).await;
+            }
+
+            Ok(response)
+        } else {
+            // For custom authenticators without a token, or other auth methods:
+            // authenticate on every request
+            self.authenticate(&mut request).await?;
+            self.execute(request).await
+        }
     }
 }
 
