@@ -442,17 +442,17 @@ impl Catalog for HmsCatalog {
             .build()?
             .metadata;
 
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
+        let metadata_location_str = metadata_location.to_string();
         let hive_table = convert_to_hive_table(
             db_name.clone(),
             metadata.current_schema(),
             table_name.clone(),
             location,
-            metadata_location.clone(),
+            metadata_location_str.clone(),
             metadata.properties(),
         )?;
 
@@ -464,7 +464,7 @@ impl Catalog for HmsCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .build()
