@@ -17,25 +17,15 @@
 
 //! Storage interfaces for Iceberg.
 
-pub mod config;
-mod local_fs;
-mod memory;
-pub mod opendal;
-
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-pub use config::*;
-pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
-pub use memory::{MemoryStorage, MemoryStorageFactory};
-#[cfg(feature = "storage-s3")]
-pub use opendal::CustomAwsCredentialLoader;
-pub use opendal::{OpenDalStorage, OpenDalStorageFactory};
 
 use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::Result;
+pub use crate::io::config::StorageConfig;
 
 /// Trait for storage operations in Iceberg.
 ///

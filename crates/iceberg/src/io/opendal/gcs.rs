@@ -22,7 +22,7 @@ use opendal::Operator;
 use opendal::services::GcsConfig;
 use url::Url;
 
-use super::super::config::{
+use crate::io::config::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
     GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
 };

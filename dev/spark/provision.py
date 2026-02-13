@@ -15,13 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "pyspark[connect]==4.0.1",
-# ]
-# ///
-
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_date, date_add, expr
 

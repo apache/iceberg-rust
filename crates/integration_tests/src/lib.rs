@@ -18,9 +18,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use iceberg::io::storage::config::{
-    S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
-};
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 use iceberg_test_utils::{get_minio_endpoint, get_rest_catalog_endpoint, set_up};
 
