@@ -244,6 +244,8 @@ impl HttpClient {
         // Try authenticator first (highest priority)
         if let Some(authenticator) = &self.authenticator {
             let token = authenticator.get_token().await?;
+            // Cache the token so that subsequent requests can use it without calling the authenticator
+            *self.token.lock().await = Some(token.clone());
             Self::set_bearer_token(req, &token, "Invalid custom token")?;
             return Ok(());
         }
@@ -284,41 +286,53 @@ impl HttpClient {
         Ok(self.client.execute(request).await?)
     }
 
-    // Queries the Iceberg REST catalog after authentication with the given `Request` and
-    // returns a `Response`.
+    // Queries the Iceberg REST catalog with authentication and returns a `Response`.
     //
-    // If a custom authenticator is configured, the first request is sent without authentication.
-    // If it fails with a 401/403 permission denied error, the custom authenticator is called
-    // to get a fresh token and the request is retried.
+    // For custom authenticators:
+    // - On the first request, fetches a token from the authenticator and caches it.
+    // - On subsequent requests, reuses the cached token without calling the authenticator.
+    // - If a request returns 401/403, invalidates the cache and fetches a fresh token.
     //
     // For other authentication methods (static token, OAuth credentials), authentication
     // is applied to all requests as before.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
-        let has_custom_authenticator = self.authenticator.is_some();
-        let token_is_set = self.token.lock().await.is_some();
+        if self.authenticator.is_some() {
+            // For custom authenticators, use cached token if available
+            let token_is_set = self.token.lock().await.is_some();
 
-        if has_custom_authenticator && token_is_set {
-            // For custom authenticators with a cached token, try without authentication first
-            // to avoid unnecessary token fetches
-            let cloned_request = request
-                .try_clone()
-                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Unable to clone request"))?;
-            let response = self.execute(cloned_request).await?;
+            if token_is_set {
+                // We have a cached token, use it by applying the cached authorization
+                // without calling the authenticator again
+                let cached_token = self.token.lock().await.clone();
+                if let Some(token) = cached_token {
+                    HttpClient::set_bearer_token(&mut request, &token, "Invalid cached token")?;
+                }
+            } else {
+                // No cached token, fetch one from the authenticator
+                self.authenticate(&mut request).await?;
+            }
+
+            // Send request with authentication
+            let response =
+                self.execute(request.try_clone().ok_or_else(|| {
+                    Error::new(ErrorKind::DataInvalid, "Unable to clone request")
+                })?)
+                .await?;
 
             // Check if we got a permission denied error
             if matches!(
                 response.status(),
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
             ) {
-                // Retry with authentication from the custom authenticator
+                // Token was rejected, invalidate and get a fresh one from the authenticator
+                self.invalidate_token().await?;
                 self.authenticate(&mut request).await?;
                 return self.execute(request).await;
             }
 
             Ok(response)
         } else {
-            // For custom authenticators without a token, or other auth methods:
-            // authenticate on every request
+            // Other auth methods: authenticate on every request
             self.authenticate(&mut request).await?;
             self.execute(request).await
         }
