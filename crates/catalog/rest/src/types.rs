@@ -226,18 +226,8 @@ pub struct LoadTableResult {
     pub storage_credentials: Option<Vec<StorageCredential>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Storage credential for a specific location prefix.
-///
-/// Indicates a storage location prefix where the credential is relevant. Clients should
-/// choose the most specific prefix (by selecting the longest prefix) if several credentials
-/// of the same type are available.
-pub struct StorageCredential {
-    /// Storage location prefix where this credential is relevant
-    pub prefix: String,
-    /// Configuration map containing credential information
-    pub config: HashMap<String, String>,
-}
+// Re-export from iceberg
+pub use iceberg::io::StorageCredential;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]

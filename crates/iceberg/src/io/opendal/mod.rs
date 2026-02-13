@@ -17,6 +17,7 @@
 
 //! OpenDAL-based storage implementation.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -38,9 +39,11 @@ use opendal::{Operator, Scheme};
 pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
+use super::file_io::Extensions;
+use super::refreshable_storage::RefreshableOpenDalStorageBuilder;
 use super::{
-    FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageConfig, StorageFactory,
+    FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, MetadataLocation, OutputFile,
+    Storage, StorageConfig, StorageCredential, StorageCredentialsLoader, StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -207,6 +210,13 @@ pub enum OpenDalStorage {
         /// Azure DLS configuration.
         config: Arc<AzdlsConfig>,
     },
+    /// Wraps any storage with credential refresh capability.
+    Refreshable {
+        /// The refreshable storage backend.
+        /// `None` only after deserialization (cannot be reconstructed from serialized form).
+        #[serde(skip)]
+        backend: Option<Arc<super::refreshable_storage::RefreshableOpenDalStorage>>,
+    },
 }
 
 impl OpenDalStorage {
@@ -215,8 +225,41 @@ impl OpenDalStorage {
     /// TODO Switch to use OpenDalStorageFactory::build()
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props, extensions) = file_io_builder.into_parts();
+
+        // Check if credential refresh is requested
+        if let Some(loader) = extensions.get::<Arc<dyn StorageCredentialsLoader>>() {
+            let initial_creds = extensions.get::<StorageCredential>().map(|c| (*c).clone());
+            let location = extensions
+                .get::<MetadataLocation>()
+                .map(|l| l.0.clone())
+                .unwrap_or_default();
+            let backend = RefreshableOpenDalStorageBuilder::new()
+                .scheme(scheme_str)
+                .base_props(props)
+                .credentials_loader(Arc::clone(&loader))
+                .initial_credentials(initial_creds)
+                .location(location)
+                .extensions(extensions)
+                .build()?;
+            return Ok(Self::Refreshable {
+                backend: Some(backend),
+            });
+        }
+
+        // Otherwise, build storage normally
+        Self::build_from_props(&scheme_str, props, &extensions)
+    }
+
+    /// Build storage from scheme, properties, and extensions.
+    ///
+    /// This is the core builder used by both `build()` and `RefreshableOpenDalStorage`.
+    pub(crate) fn build_from_props(
+        scheme_str: &str,
+        props: HashMap<String, String>,
+        extensions: &Extensions,
+    ) -> Result<Self> {
         let _ = (&props, &extensions);
-        let scheme = Self::parse_scheme(&scheme_str)?;
+        let scheme = Self::parse_scheme(scheme_str)?;
 
         match scheme {
             #[cfg(feature = "storage-memory")]
@@ -225,7 +268,7 @@ impl OpenDalStorage {
             Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
-                configured_scheme: scheme_str,
+                configured_scheme: scheme_str.to_string(),
                 config: s3_config_parse(props)?.into(),
                 customized_credential_load: extensions
                     .get::<CustomAwsCredentialLoader>()
@@ -342,6 +385,19 @@ impl OpenDalStorage {
                 configured_scheme,
                 config,
             } => azdls_create_operator(path, config, configured_scheme)?,
+            OpenDalStorage::Refreshable { backend } => {
+                let backend = backend.as_ref().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Deserialized RefreshableOpenDalStorage cannot create operators",
+                    )
+                })?;
+                let (operator, relative_path) = backend.refreshable_create_operator(path)?;
+                // relative_path is always a suffix of `path`, so slice the
+                // input directly to avoid an allocation.
+                let relative_path_ref = &path[path.len() - relative_path.len()..];
+                (operator, relative_path_ref)
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
@@ -464,11 +520,95 @@ impl FileWrite for opendal::Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::{FileIOBuilder, StorageCredential, StorageCredentialsLoader};
 
     #[cfg(feature = "storage-memory")]
     #[test]
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[derive(Debug)]
+    struct TestCredentialLoader;
+
+    #[async_trait::async_trait]
+    impl StorageCredentialsLoader for TestCredentialLoader {
+        async fn load_credentials(&self, _location: &str) -> crate::Result<StorageCredential> {
+            Ok(StorageCredential {
+                prefix: "s3://test/".to_string(),
+                config: HashMap::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_storage_build_with_credentials_loader_creates_refreshable() {
+        let loader: Arc<dyn StorageCredentialsLoader> = Arc::new(TestCredentialLoader);
+
+        let file_io_builder = FileIOBuilder::new("s3")
+            .with_prop("bucket", "test-bucket")
+            .with_extension(loader);
+
+        let storage = OpenDalStorage::build(file_io_builder).unwrap();
+
+        // Verify it created a Refreshable variant
+        match storage {
+            OpenDalStorage::Refreshable { backend: Some(_) } => {} // Success
+            _ => panic!("Expected Refreshable variant"),
+        }
+    }
+
+    #[cfg(feature = "storage-memory")]
+    #[test]
+    fn test_storage_build_without_loader_creates_normal_storage() {
+        let file_io_builder = FileIOBuilder::new("memory");
+        let storage = OpenDalStorage::build(file_io_builder).unwrap();
+
+        // Verify it created a normal Memory variant
+        match storage {
+            OpenDalStorage::Memory(_) => {} // Success
+            _ => panic!("Expected Memory variant"),
+        }
+    }
+
+    #[test]
+    fn test_storage_build_with_both_loader_and_initial_credentials() {
+        let loader: Arc<dyn StorageCredentialsLoader> = Arc::new(TestCredentialLoader);
+        let initial_cred = StorageCredential {
+            prefix: "s3://initial/".to_string(),
+            config: HashMap::new(),
+        };
+
+        let file_io_builder = FileIOBuilder::new("s3")
+            .with_prop("bucket", "test-bucket")
+            .with_extension(loader)
+            .with_extension(initial_cred);
+
+        let storage = OpenDalStorage::build(file_io_builder).unwrap();
+
+        // Verify it created a Refreshable variant
+        match storage {
+            OpenDalStorage::Refreshable { backend: Some(_) } => {} // Success
+            _ => panic!("Expected Refreshable variant"),
+        }
+    }
+
+    #[cfg(feature = "storage-s3")]
+    #[test]
+    fn test_storage_build_from_props_never_creates_refreshable() {
+        let mut props = HashMap::new();
+        props.insert("bucket".to_string(), "test-bucket".to_string());
+
+        let storage = OpenDalStorage::build_from_props("s3", props, &Default::default()).unwrap();
+
+        // Verify it created a normal S3 variant, not Refreshable
+        match storage {
+            OpenDalStorage::S3 { .. } => {} // Success
+            OpenDalStorage::Refreshable { .. } => {
+                panic!("build_from_props should not create Refreshable")
+            }
+            _ => panic!("Expected S3 variant"),
+        }
     }
 }
