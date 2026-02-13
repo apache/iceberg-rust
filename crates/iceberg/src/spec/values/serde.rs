@@ -509,6 +509,12 @@ pub(crate) mod _serde {
                             ))
                         }
                     }
+                    Type::Primitive(PrimitiveType::Geometry { .. }) => Ok(Some(
+                        Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec())),
+                    )),
+                    Type::Primitive(PrimitiveType::Geography { .. }) => Ok(Some(
+                        Literal::Primitive(PrimitiveLiteral::Binary(v.to_vec())),
+                    )),
                     _ => Err(invalid_err("bytes")),
                 },
                 RawLiteralEnum::List(v) => match ty {
@@ -626,7 +632,9 @@ pub(crate) mod _serde {
                         }
                         Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
                     }
-                    Type::Primitive(PrimitiveType::Binary) => {
+                    Type::Primitive(PrimitiveType::Binary)
+                    | Type::Primitive(PrimitiveType::Geometry { .. })
+                    | Type::Primitive(PrimitiveType::Geography { .. }) => {
                         let bytes = v
                             .list
                             .into_iter()

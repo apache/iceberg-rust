@@ -29,7 +29,9 @@ use crate::ErrorKind;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::Schema;
 use crate::spec::Type::Primitive;
-use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::datatypes::{
+    EdgeAlgorithm, ListType, MapType, NestedField, PrimitiveType, StructType, Type,
+};
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
 use crate::spec::values::serde::_serde;
 use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
@@ -325,6 +327,33 @@ fn json_map() {
 }
 
 #[test]
+fn json_geometry() {
+    let record = r#""0001020304""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 2, 3, 4])),
+        &Type::Primitive(PrimitiveType::Geometry {
+            crs: "OGC:CRS84".to_string(),
+        }),
+    );
+}
+
+#[test]
+fn json_geography() {
+    let record = r#""0001020304""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 2, 3, 4])),
+        &Type::Primitive(PrimitiveType::Geography {
+            crs: "OGC:CRS84".to_string(),
+            algorithm: EdgeAlgorithm::Spherical,
+        }),
+    );
+}
+
+#[test]
 fn avro_bytes_boolean() {
     let bytes = vec![1u8];
 
@@ -420,6 +449,42 @@ fn avro_bytes_decimal_expect_error() {
             "expect error DataInvalid",
         );
     }
+}
+
+#[test]
+fn avro_bytes_geometry() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8, 5u8];
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(
+            PrimitiveType::Geometry {
+                crs: "OGC:CRS84".to_string(),
+            },
+            PrimitiveLiteral::Binary(bytes.clone()),
+        ),
+        &PrimitiveType::Geometry {
+            crs: "OGC:CRS84".to_string(),
+        },
+    );
+}
+
+#[test]
+fn avro_bytes_geography() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8, 5u8];
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(
+            PrimitiveType::Geography {
+                crs: "OGC:CRS84".to_string(),
+                algorithm: EdgeAlgorithm::Spherical,
+            },
+            PrimitiveLiteral::Binary(bytes.clone()),
+        ),
+        &PrimitiveType::Geography {
+            crs: "OGC:CRS84".to_string(),
+            algorithm: EdgeAlgorithm::Spherical,
+        },
+    );
 }
 
 fn check_raw_literal_bytes_serde_via_avro(
@@ -1053,6 +1118,23 @@ fn test_datum_ser_deser() {
     let datum = Datum::binary(vec![1, 2, 3, 4, 5]);
     test_fn(datum);
     let datum = Datum::fixed(vec![1, 2, 3, 4, 5]);
+    test_fn(datum);
+
+    let datum = Datum::new(
+        PrimitiveType::Geometry {
+            crs: "OGC:CRS84".to_string(),
+        },
+        PrimitiveLiteral::Binary(vec![1, 2, 3, 4, 5]),
+    );
+    test_fn(datum);
+
+    let datum = Datum::new(
+        PrimitiveType::Geography {
+            crs: "OGC:CRS84".to_string(),
+            algorithm: EdgeAlgorithm::Spherical,
+        },
+        PrimitiveLiteral::Binary(vec![1, 2, 3, 4, 5]),
+    );
     test_fn(datum);
 }
 

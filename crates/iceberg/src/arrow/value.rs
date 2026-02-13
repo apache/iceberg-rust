@@ -406,7 +406,9 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                     .map(|v| v.map(|v| Literal::fixed(v.iter().cloned())))
                     .collect())
             }
-            PrimitiveType::Binary => {
+            PrimitiveType::Binary
+            | PrimitiveType::Geometry { .. }
+            | PrimitiveType::Geography { .. } => {
                 if let Some(array) = partner.as_any().downcast_ref::<LargeBinaryArray>() {
                     Ok(array
                         .iter()
@@ -420,7 +422,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        "The partner is not a binary array",
+                        format!("The partner is not a binary array: {:?}", p),
                     ))
                 }
             }
