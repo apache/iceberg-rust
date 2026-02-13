@@ -25,6 +25,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::opendal::OpenDalStorage;
 use super::refreshable_accessor::RefreshableAccessor;
+use crate::catalog::TableIdent;
 use crate::io::file_io::Extensions;
 use crate::io::{StorageCredential, StorageCredentialsLoader};
 use crate::{Error, ErrorKind, Result};
@@ -51,6 +52,9 @@ pub struct RefreshableOpenDalStorage {
 
     /// Metadata location passed to `load_credentials`
     location: String,
+
+    /// Table identifier passed to `load_credentials`
+    table_ident: TableIdent,
 
     /// Cached AccessorInfo (created lazily from first operator)
     cached_info: Mutex<Option<Arc<AccessorInfo>>>,
@@ -88,6 +92,7 @@ impl RefreshableOpenDalStorage {
         credentials_loader: Arc<dyn StorageCredentialsLoader>,
         initial_credentials: Option<StorageCredential>,
         location: String,
+        table_ident: TableIdent,
         extensions: Extensions,
     ) -> Result<Self> {
         // Build initial inner_storage from base_props + initial_credentials
@@ -104,6 +109,7 @@ impl RefreshableOpenDalStorage {
             credentials_loader,
             extensions,
             location,
+            table_ident,
             cached_info: Mutex::new(None),
             credential_version: AtomicU64::new(0),
             refresh_lock: AsyncMutex::new(()),
@@ -197,7 +203,7 @@ impl RefreshableOpenDalStorage {
         // We are the one who should call the loader
         let new_creds = self
             .credentials_loader
-            .load_credentials(&self.location)
+            .load_credentials(&self.table_ident, &self.location)
             .await?;
         self.do_refresh(new_creds)?;
         Ok(self.credential_version.load(Ordering::Acquire))
@@ -212,6 +218,7 @@ pub struct RefreshableOpenDalStorageBuilder {
     credentials_loader: Option<Arc<dyn StorageCredentialsLoader>>,
     initial_credentials: Option<StorageCredential>,
     location: String,
+    table_ident: Option<TableIdent>,
     extensions: Extensions,
 }
 
@@ -251,6 +258,12 @@ impl RefreshableOpenDalStorageBuilder {
         self
     }
 
+    /// Set the table identifier passed to `load_credentials`
+    pub fn table_ident(mut self, table_ident: TableIdent) -> Self {
+        self.table_ident = Some(table_ident);
+        self
+    }
+
     /// Set the extensions
     pub fn extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
@@ -268,6 +281,8 @@ impl RefreshableOpenDalStorageBuilder {
             })?,
             self.initial_credentials,
             self.location,
+            self.table_ident
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "table_ident is required"))?,
             self.extensions,
         )?))
     }
@@ -278,6 +293,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::NamespaceIdent;
     use crate::io::StorageCredential;
 
     // --- Test helpers ---
@@ -288,7 +304,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StorageCredentialsLoader for SimpleLoader {
-        async fn load_credentials(&self, _location: &str) -> Result<StorageCredential> {
+        async fn load_credentials(
+            &self,
+            _table_ident: &TableIdent,
+            _location: &str,
+        ) -> Result<StorageCredential> {
             Ok(StorageCredential {
                 prefix: "memory:/refreshed/".to_string(),
                 config: HashMap::from([("refreshed_key".to_string(), "refreshed_val".to_string())]),
@@ -322,13 +342,24 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StorageCredentialsLoader for TrackingRefreshLoader {
-        async fn load_credentials(&self, _location: &str) -> Result<StorageCredential> {
+        async fn load_credentials(
+            &self,
+            _table_ident: &TableIdent,
+            _location: &str,
+        ) -> Result<StorageCredential> {
             let n = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(StorageCredential {
                 prefix: format!("memory:/refresh-{n}/"),
                 config: HashMap::from([("call".to_string(), n.to_string())]),
             })
         }
+    }
+
+    fn test_table_ident() -> TableIdent {
+        TableIdent::new(
+            NamespaceIdent::new("test_ns".to_string()),
+            "test_table".to_string(),
+        )
     }
 
     fn build_memory_refreshable(
@@ -338,6 +369,7 @@ mod tests {
             .scheme("memory".to_string())
             .base_props(HashMap::new())
             .credentials_loader(loader)
+            .table_ident(test_table_ident())
             .build()
             .expect("Failed to build RefreshableOpenDalStorage for memory")
     }
@@ -346,7 +378,7 @@ mod tests {
     async fn refresh(storage: &RefreshableOpenDalStorage) -> Result<()> {
         let new_creds = storage
             .credentials_loader
-            .load_credentials(&storage.location)
+            .load_credentials(&storage.table_ident, &storage.location)
             .await?;
         storage.do_refresh(new_creds)
     }

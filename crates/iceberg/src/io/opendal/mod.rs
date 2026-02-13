@@ -45,6 +45,7 @@ use super::{
     FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, MetadataLocation, OutputFile,
     Storage, StorageConfig, StorageCredential, StorageCredentialsLoader, StorageFactory,
 };
+use crate::catalog::TableIdent;
 use crate::{Error, ErrorKind, Result};
 
 #[cfg(feature = "storage-azdls")]
@@ -233,12 +234,22 @@ impl OpenDalStorage {
                 .get::<MetadataLocation>()
                 .map(|l| l.0.clone())
                 .unwrap_or_default();
+            let table_ident = extensions
+                .get::<TableIdent>()
+                .map(|arc| (*arc).clone())
+                .unwrap_or_else(|| {
+                    TableIdent::new(
+                        crate::NamespaceIdent::new("unknown".to_string()),
+                        "unknown".to_string(),
+                    )
+                });
             let backend = RefreshableOpenDalStorageBuilder::new()
                 .scheme(scheme_str)
                 .base_props(props)
                 .credentials_loader(Arc::clone(&loader))
                 .initial_credentials(initial_creds)
                 .location(location)
+                .table_ident(table_ident)
                 .extensions(extensions)
                 .build()?;
             return Ok(Self::Refreshable {
@@ -534,7 +545,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StorageCredentialsLoader for TestCredentialLoader {
-        async fn load_credentials(&self, _location: &str) -> crate::Result<StorageCredential> {
+        async fn load_credentials(
+            &self,
+            _table_ident: &TableIdent,
+            _location: &str,
+        ) -> crate::Result<StorageCredential> {
             Ok(StorageCredential {
                 prefix: "s3://test/".to_string(),
                 config: HashMap::new(),

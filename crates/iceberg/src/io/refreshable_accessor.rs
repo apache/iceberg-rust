@@ -227,6 +227,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::NamespaceIdent;
+    use crate::catalog::TableIdent;
     use crate::io::refreshable_storage::RefreshableOpenDalStorageBuilder;
     use crate::io::{StorageCredential, StorageCredentialsLoader};
 
@@ -259,7 +261,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StorageCredentialsLoader for SequenceLoader {
-        async fn load_credentials(&self, _location: &str) -> crate::Result<StorageCredential> {
+        async fn load_credentials(
+            &self,
+            _table_ident: &TableIdent,
+            _location: &str,
+        ) -> crate::Result<StorageCredential> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             let mut responses = self.responses.lock().unwrap();
             Ok(responses.pop_front().unwrap_or_else(dummy_credential))
@@ -382,6 +388,10 @@ mod tests {
             .scheme("memory".to_string())
             .base_props(HashMap::new())
             .credentials_loader(Arc::clone(&loader))
+            .table_ident(TableIdent::new(
+                NamespaceIdent::new("test_ns".to_string()),
+                "test_table".to_string(),
+            ))
             .build()
             .expect("Failed to build storage");
 
@@ -477,6 +487,10 @@ mod tests {
             .scheme("memory".to_string())
             .base_props(HashMap::new())
             .credentials_loader(Arc::clone(&loader) as _)
+            .table_ident(TableIdent::new(
+                NamespaceIdent::new("test_ns".to_string()),
+                "test_table".to_string(),
+            ))
             .build()
             .expect("Failed to build storage");
 

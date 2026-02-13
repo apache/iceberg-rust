@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use crate::Result;
+use crate::catalog::TableIdent;
 
 /// Storage credentials for accessing cloud storage.
 ///
@@ -54,7 +55,11 @@ pub struct MetadataLocation(pub String);
 ///
 /// #[async_trait::async_trait]
 /// impl StorageCredentialsLoader for MyCredentialLoader {
-///     async fn load_credentials(&self, location: &str) -> iceberg::Result<StorageCredential> {
+///     async fn load_credentials(
+///         &self,
+///         _table_ident: &iceberg::TableIdent,
+///         location: &str,
+///     ) -> iceberg::Result<StorageCredential> {
 ///         // Fetch fresh credentials from your credential service
 ///         let mut config = HashMap::new();
 ///         config.insert("access_key_id".to_string(), "fresh-key".to_string());
@@ -85,6 +90,11 @@ pub trait StorageCredentialsLoader: Send + Sync + Debug {
     /// Load storage credentials using custom user-defined logic.
     ///
     /// # Arguments
+    /// * `table_ident` - The table identifier for which credentials are being loaded
     /// * `location` - The full path being accessed (e.g., "s3://bucket/path/file.parquet")
-    async fn load_credentials(&self, location: &str) -> Result<StorageCredential>;
+    async fn load_credentials(
+        &self,
+        table_ident: &TableIdent,
+        location: &str,
+    ) -> Result<StorageCredential>;
 }

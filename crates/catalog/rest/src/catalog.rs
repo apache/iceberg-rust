@@ -376,6 +376,15 @@ impl RestCatalog {
         }
     }
 
+    /// Set a custom storage credentials loader.
+    ///
+    /// This is intended to be called after catalog construction, so the loader
+    /// can hold a reference to the catalog (e.g., `Arc<RestCatalog>`) and call
+    /// catalog-specific methods like `load_table_with_credentials`.
+    pub fn set_storage_credentials_loader(&mut self, loader: Arc<dyn StorageCredentialsLoader>) {
+        self.user_config.storage_credentials_loader = Some(loader);
+    }
+
     /// Add an extension to the file IO builder.
     pub fn with_file_io_extension<T: Any + Send + Sync>(mut self, ext: T) -> Self {
         self.file_io_extensions.add(ext);
@@ -430,6 +439,7 @@ impl RestCatalog {
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
         storage_credential: Option<StorageCredential>,
+        table_ident: Option<&TableIdent>,
     ) -> Result<FileIO> {
         let mut props = self.context().await?.config.props.clone();
         if let Some(config) = extra_config {
@@ -457,6 +467,9 @@ impl RestCatalog {
                     if let Some(loc) = metadata_location {
                         file_io_builder =
                             file_io_builder.with_extension(MetadataLocation(loc.to_string()));
+                    }
+                    if let Some(ident) = table_ident {
+                        file_io_builder = file_io_builder.with_extension(ident.clone());
                     }
                     file_io_builder = file_io_builder.with_extension(loader.clone());
                 }
@@ -570,7 +583,10 @@ impl RestCatalog {
             &self.user_config.storage_credentials_loader
         {
             let credential = storage_credentials_loader
-                .load_credentials(response.metadata_location.as_deref().unwrap_or(""))
+                .load_credentials(
+                    table_ident,
+                    response.metadata_location.as_deref().unwrap_or(""),
+                )
                 .await?;
             config.extend(credential.config.clone());
             Some(credential)
@@ -583,6 +599,7 @@ impl RestCatalog {
                 response.metadata_location.as_deref(),
                 Some(config),
                 final_credential,
+                Some(table_ident),
             )
             .await?;
 
@@ -891,7 +908,7 @@ impl Catalog for RestCatalog {
 
         // TODO: Support vended credentials here.
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config), None)
+            .load_file_io(Some(metadata_location), Some(config), None, None)
             .await?;
 
         let table_builder = Table::builder()
@@ -1033,7 +1050,7 @@ impl Catalog for RestCatalog {
 
         // TODO: Support vended credentials here.
         let file_io = self
-            .load_file_io(Some(metadata_location), None, None)
+            .load_file_io(Some(metadata_location), None, None, None)
             .await?;
 
         Table::builder()
@@ -1100,7 +1117,7 @@ impl Catalog for RestCatalog {
 
         // TODO: Support vended credentials here.
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None, None)
+            .load_file_io(Some(&response.metadata_location), None, None, None)
             .await?;
 
         Table::builder()
@@ -3034,7 +3051,11 @@ mod tests {
 
         #[async_trait::async_trait]
         impl StorageCredentialsLoader for DummyCredentialLoader {
-            async fn load_credentials(&self, _location: &str) -> Result<StorageCredential> {
+            async fn load_credentials(
+                &self,
+                _table_ident: &TableIdent,
+                _location: &str,
+            ) -> Result<StorageCredential> {
                 self.was_called.store(true, Ordering::SeqCst);
                 let mut config = HashMap::new();
                 config.insert("custom.key".to_string(), "custom.value".to_string());
