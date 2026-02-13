@@ -1568,7 +1568,7 @@ mod tests {
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::compression::CompressionCodec;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
@@ -3541,7 +3541,7 @@ mod tests {
         let temp_path = temp_dir.path().to_str().unwrap();
 
         // Create a FileIO instance
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Use an existing test metadata from the test files
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
@@ -3581,7 +3581,7 @@ mod tests {
         std::fs::write(&metadata_location, &compressed).expect("failed to write metadata");
 
         // Read the metadata back
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let metadata_location = metadata_location.to_str().unwrap();
         let read_metadata = TableMetadata::read_from(&file_io, metadata_location)
             .await
@@ -3594,7 +3594,7 @@ mod tests {
     #[tokio::test]
     async fn test_table_metadata_read_nonexistent_file() {
         // Create a FileIO instance
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Try to read a non-existent file
         let result = TableMetadata::read_from(&file_io, "/nonexistent/path/metadata.json").await;

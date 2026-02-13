@@ -17,7 +17,10 @@
 
 //! Integration tests for rest catalog.
 
+use std::sync::Arc;
+
 use futures::TryStreamExt;
+use iceberg::io::OpenDalStorageFactory;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
@@ -26,6 +29,9 @@ use iceberg_integration_tests::get_test_fixture;
 async fn test_read_table_with_positional_deletes() {
     let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }))
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();

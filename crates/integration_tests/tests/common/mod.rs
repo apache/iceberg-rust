@@ -16,7 +16,9 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use iceberg::io::OpenDalStorageFactory;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -25,6 +27,9 @@ use iceberg_integration_tests::get_test_fixture;
 pub async fn random_ns() -> Namespace {
     let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }))
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
