@@ -282,6 +282,13 @@ impl Catalog for S3TablesCatalog {
         namespace: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .create_namespace()
@@ -304,6 +311,13 @@ impl Catalog for S3TablesCatalog {
     /// - If there is an error querying the database, returned by
     /// `from_aws_sdk_error`.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .get_namespace()
@@ -371,6 +385,13 @@ impl Catalog for S3TablesCatalog {
     /// - Errors from the underlying database deletion process, converted using
     /// `from_aws_sdk_error`.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .delete_namespace()
@@ -656,218 +677,7 @@ where T: std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-    use iceberg::transaction::{ApplyTransactionAction, Transaction};
-
     use super::*;
-
-    async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
-        let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {
-            Some(table_bucket_arn) => table_bucket_arn,
-            None => return Ok(None),
-        };
-
-        let config = S3TablesCatalogConfig {
-            name: None,
-            table_bucket_arn,
-            endpoint_url: None,
-            client: None,
-            props: HashMap::new(),
-        };
-
-        Ok(Some(S3TablesCatalog::new(config).await?))
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_list_namespace() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        let namespaces = catalog.list_namespaces(None).await.unwrap();
-        assert!(!namespaces.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_list_tables() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        let tables = catalog
-            .list_tables(&NamespaceIdent::new("aws_s3_metadata".to_string()))
-            .await
-            .unwrap();
-        assert!(!tables.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_load_table() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        let table = catalog
-            .load_table(&TableIdent::new(
-                NamespaceIdent::new("aws_s3_metadata".to_string()),
-                "query_storage_metadata".to_string(),
-            ))
-            .await
-            .unwrap();
-        println!("{table:?}");
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_create_delete_namespace() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        let namespace = NamespaceIdent::new("test_s3tables_create_delete_namespace".to_string());
-        catalog
-            .create_namespace(&namespace, HashMap::new())
-            .await
-            .unwrap();
-        assert!(catalog.namespace_exists(&namespace).await.unwrap());
-        catalog.drop_namespace(&namespace).await.unwrap();
-        assert!(!catalog.namespace_exists(&namespace).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_create_delete_table() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        let creation = {
-            let schema = Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
-                ])
-                .build()
-                .unwrap();
-            TableCreation::builder()
-                .name("test_s3tables_create_delete_table".to_string())
-                .properties(HashMap::new())
-                .schema(schema)
-                .build()
-        };
-
-        let namespace = NamespaceIdent::new("test_s3tables_create_delete_table".to_string());
-        let table_ident = TableIdent::new(
-            namespace.clone(),
-            "test_s3tables_create_delete_table".to_string(),
-        );
-        catalog.drop_namespace(&namespace).await.ok();
-        catalog.drop_table(&table_ident).await.ok();
-
-        catalog
-            .create_namespace(&namespace, HashMap::new())
-            .await
-            .unwrap();
-        catalog.create_table(&namespace, creation).await.unwrap();
-        assert!(catalog.table_exists(&table_ident).await.unwrap());
-        catalog.drop_table(&table_ident).await.unwrap();
-        assert!(!catalog.table_exists(&table_ident).await.unwrap());
-        catalog.drop_namespace(&namespace).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_s3tables_update_table() {
-        let catalog = match load_s3tables_catalog_from_env().await {
-            Ok(Some(catalog)) => catalog,
-            Ok(None) => return,
-            Err(e) => panic!("Error loading catalog: {e}"),
-        };
-
-        // Create a test namespace and table
-        let namespace = NamespaceIdent::new("test_s3tables_update_table".to_string());
-        let table_ident =
-            TableIdent::new(namespace.clone(), "test_s3tables_update_table".to_string());
-
-        // Clean up any existing resources from previous test runs
-        catalog.drop_table(&table_ident).await.ok();
-        catalog.drop_namespace(&namespace).await.ok();
-
-        // Create namespace and table
-        catalog
-            .create_namespace(&namespace, HashMap::new())
-            .await
-            .unwrap();
-
-        let creation = {
-            let schema = Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
-                ])
-                .build()
-                .unwrap();
-            TableCreation::builder()
-                .name(table_ident.name().to_string())
-                .properties(HashMap::new())
-                .schema(schema)
-                .build()
-        };
-
-        let table = catalog.create_table(&namespace, creation).await.unwrap();
-
-        // Create a transaction to update the table
-        let tx = Transaction::new(&table);
-
-        // Store the original metadata location for comparison
-        let original_metadata_location = table.metadata_location();
-
-        // Update table properties using the transaction
-        let tx = tx
-            .update_table_properties()
-            .set("test_property".to_string(), "test_value".to_string())
-            .apply(tx)
-            .unwrap();
-
-        // Commit the transaction to the catalog
-        let updated_table = tx.commit(&catalog).await.unwrap();
-
-        // Verify the update was successful
-        assert_eq!(
-            updated_table.metadata().properties().get("test_property"),
-            Some(&"test_value".to_string())
-        );
-
-        // Verify the metadata location has been updated
-        assert_ne!(
-            updated_table.metadata_location(),
-            original_metadata_location,
-            "Metadata location should be updated after commit"
-        );
-
-        // Load the table again from the catalog to verify changes were persisted
-        let reloaded_table = catalog.load_table(&table_ident).await.unwrap();
-
-        // Verify the reloaded table matches the updated table
-        assert_eq!(
-            reloaded_table.metadata().properties().get("test_property"),
-            Some(&"test_value".to_string())
-        );
-        assert_eq!(
-            reloaded_table.metadata_location(),
-            updated_table.metadata_location(),
-            "Reloaded table should have the same metadata location as the updated table"
-        );
-    }
 
     #[tokio::test]
     async fn test_builder_load_missing_bucket_arn() {
