@@ -24,10 +24,10 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use iceberg::io::{
-        CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-        S3_SECRET_ACCESS_KEY,
+    use iceberg::io::storage::config::{
+        S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     };
+    use iceberg::io::{CustomAwsCredentialLoader, FileIO, FileIOBuilder};
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
     use reqwest::Client;

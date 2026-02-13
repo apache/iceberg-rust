@@ -23,8 +23,8 @@ use opendal::Operator;
 use opendal::raw::*;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::opendal::OpenDalStorage;
 use super::refreshable_accessor::RefreshableAccessor;
+use super::storage::opendal::OpenDalStorage;
 use crate::catalog::TableIdent;
 use crate::io::file_io::Extensions;
 use crate::io::{StorageCredential, StorageCredentialsLoader};

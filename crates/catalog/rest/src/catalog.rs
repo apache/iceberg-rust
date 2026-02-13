@@ -54,6 +54,8 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// Disable header redaction in error logs (defaults to false for security)
+pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -330,6 +332,17 @@ impl RestCatalogConfig {
         params
     }
 
+    /// Check if header redaction is disabled in error logs.
+    ///
+    /// Returns true if the `disable-header-redaction` property is set to "true".
+    /// Defaults to false for security (headers are redacted by default).
+    pub(crate) fn disable_header_redaction(&self) -> bool {
+        self.props
+            .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
         if let Some(uri) = config.overrides.remove("uri") {
@@ -430,7 +443,11 @@ impl RestCatalog {
 
         match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await,
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -534,7 +551,13 @@ impl RestCatalog {
                     "Tried to load a table that does not exist",
                 ));
             }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
         };
 
         // Build config with proper precedence, with each next config overriding previous one:
@@ -634,7 +657,11 @@ impl RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to load credentials for a table that does not exist",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -694,7 +721,13 @@ impl Catalog for RestCatalog {
                         "The parent parameter of the namespace provided does not exist",
                     ));
                 }
-                _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+                _ => {
+                    return Err(deserialize_unexpected_catalog_error(
+                        http_response,
+                        context.client.disable_header_redaction(),
+                    )
+                    .await);
+                }
             }
         }
 
@@ -729,7 +762,11 @@ impl Catalog for RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to create a namespace that already exists",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -753,7 +790,11 @@ impl Catalog for RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to get a namespace that does not exist",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -770,7 +811,11 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -801,7 +846,11 @@ impl Catalog for RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to drop a namespace that does not exist",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -838,7 +887,13 @@ impl Catalog for RestCatalog {
                         "Tried to list tables of a namespace that does not exist",
                     ));
                 }
-                _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+                _ => {
+                    return Err(deserialize_unexpected_catalog_error(
+                        http_response,
+                        context.client.disable_header_redaction(),
+                    )
+                    .await);
+                }
             }
         }
 
@@ -892,7 +947,13 @@ impl Catalog for RestCatalog {
                     "The table already exists",
                 ));
             }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
         };
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
@@ -949,7 +1010,11 @@ impl Catalog for RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to drop a table that does not exist",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -967,7 +1032,11 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -996,7 +1065,11 @@ impl Catalog for RestCatalog {
                 ErrorKind::Unexpected,
                 "Tried to rename a table to a name that already exists",
             )),
-            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
         }
     }
 
@@ -1040,7 +1113,13 @@ impl Catalog for RestCatalog {
                     "The given table already exists.",
                 ));
             }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
         };
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
@@ -1112,7 +1191,13 @@ impl Catalog for RestCatalog {
                     "A server-side gateway timeout occurred; the commit state is unknown.",
                 ));
             }
-            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
         };
 
         // TODO: Support vended credentials here.

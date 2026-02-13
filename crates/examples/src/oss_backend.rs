@@ -18,6 +18,10 @@
 use std::collections::HashMap;
 
 use futures::stream::StreamExt;
+use iceberg::io::storage::config::{
+    OSS_ACCESS_KEY_ID as OSS_ACCESS_KEY_ID_PROP,
+    OSS_ACCESS_KEY_SECRET as OSS_ACCESS_KEY_SECRET_PROP, OSS_ENDPOINT as OSS_ENDPOINT_PROP,
+};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 
@@ -47,16 +51,13 @@ async fn main() {
             "rest",
             HashMap::from([
                 (REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string()),
+                (OSS_ENDPOINT_PROP.to_string(), OSS_ENDPOINT.to_string()),
                 (
-                    iceberg::io::OSS_ENDPOINT.to_string(),
-                    OSS_ENDPOINT.to_string(),
-                ),
-                (
-                    iceberg::io::OSS_ACCESS_KEY_ID.to_string(),
+                    OSS_ACCESS_KEY_ID_PROP.to_string(),
                     OSS_ACCESS_KEY_ID.to_string(),
                 ),
                 (
-                    iceberg::io::OSS_ACCESS_KEY_SECRET.to_string(),
+                    OSS_ACCESS_KEY_SECRET_PROP.to_string(),
                     OSS_ACCESS_KEY_SECRET.to_string(),
                 ),
             ]),

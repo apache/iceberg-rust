@@ -24,7 +24,8 @@ mod tests {
     use std::collections::HashMap;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::storage::config::{GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::{FileIO, FileIOBuilder};
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
 
     static FAKE_GCS_BUCKET: &str = "test-bucket";
