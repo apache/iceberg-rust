@@ -37,6 +37,8 @@ jobs:
     name: typos check
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      max-parallel: 15
     env:
       FORCE_COLOR: 1
     steps:

@@ -33,6 +33,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
     permissions:
       contents: write
     steps:

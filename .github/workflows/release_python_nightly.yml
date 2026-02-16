@@ -28,6 +28,8 @@ permissions:
 jobs:
   set-version:
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
     outputs:
       timestamp: ${{ steps.set-ts.outputs.TIMESTAMP }}
     steps:
@@ -39,6 +41,8 @@ jobs:
     needs: set-version
     if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -63,6 +67,7 @@ jobs:
     if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
+      max-parallel: 15
       matrix:
         include:
           - { os: windows-latest }
@@ -111,6 +116,8 @@ jobs:
   testpypi-publish:
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
 
     environment:
       name: testpypi
