@@ -63,7 +63,7 @@ fn create_schema() -> Schema {
 
 fn generate_batch(arrow_schema: &ArrowSchemaRef, start_id: i64, num_rows: usize) -> RecordBatch {
     let ids: Vec<i64> = (start_id..start_id + num_rows as i64).collect();
-    let names: Vec<String> = ids.iter().map(|i| format!("name_{}", i)).collect();
+    let names: Vec<String> = ids.iter().map(|i| format!("name_{i}")).collect();
     let values: Vec<i64> = ids.iter().map(|i| i * 100).collect();
     let categories: Vec<String> = ids.iter().map(|i| format!("cat_{}", i % 10)).collect();
     let timestamps: Vec<i64> = ids.iter().map(|i| 1700000000 + i).collect();
@@ -83,8 +83,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
     let total_rows = num_files * rows_per_file;
     println!("==========================================================================");
     println!(
-        "Native Compaction Benchmark: {} files x {} rows = {} total rows",
-        num_files, rows_per_file, total_rows
+        "Native Compaction Benchmark: {num_files} files x {rows_per_file} rows = {total_rows} total rows"
     );
     println!("==========================================================================");
 
@@ -127,7 +126,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
 
         let location_gen = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
         let file_name_gen = DefaultFileNameGenerator::new(
-            format!("frag_{:04}", file_idx),
+            format!("frag_{file_idx:04}"),
             None,
             iceberg::spec::DataFileFormat::Parquet,
         );
