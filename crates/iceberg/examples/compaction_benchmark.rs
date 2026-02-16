@@ -34,17 +34,15 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use futures::TryStreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
-use iceberg::memory::{MemoryCatalogBuilder, MEMORY_CATALOG_WAREHOUSE};
-use iceberg::spec::{
-    NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type,
-};
+use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use parquet::file::properties::WriterProperties;
@@ -103,10 +101,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
         .unwrap();
 
     let ns = iceberg::NamespaceIdent::new("bench_ns".to_string());
-    catalog
-        .create_namespace(&ns, HashMap::new())
-        .await
-        .unwrap();
+    catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
 
     let schema = create_schema();
     let table_creation = TableCreation::builder()
@@ -119,9 +114,8 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
     let mut table = catalog.create_table(&ns, table_creation).await.unwrap();
 
     // Derive Arrow schema from Iceberg schema (includes field ID metadata)
-    let arrow_schema: ArrowSchemaRef = Arc::new(
-        schema_to_arrow_schema(table.metadata().current_schema()).unwrap(),
-    );
+    let arrow_schema: ArrowSchemaRef =
+        Arc::new(schema_to_arrow_schema(table.metadata().current_schema()).unwrap());
 
     // Phase 1: Write N small files (simulating micro-batch ingestion)
     let write_start = Instant::now();
@@ -131,8 +125,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
         let start_id = (file_idx * rows_per_file) as i64;
         let batch = generate_batch(&arrow_schema, start_id, rows_per_file);
 
-        let location_gen =
-            DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let location_gen = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
         let file_name_gen = DefaultFileNameGenerator::new(
             format!("frag_{:04}", file_idx),
             None,
@@ -189,8 +182,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
 
     // Phase 3: Write compacted file -- this is the compaction WRITE path
     let compact_write_start = Instant::now();
-    let location_gen =
-        DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let location_gen = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
     let file_name_gen = DefaultFileNameGenerator::new(
         "compacted".to_string(),
         None,
@@ -222,11 +214,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
 
     // Phase 4: Commit replacement via ReplaceDataFilesAction
     let commit_start = Instant::now();
-    let snapshot_id = table
-        .metadata()
-        .current_snapshot()
-        .unwrap()
-        .snapshot_id();
+    let snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
     let tx = Transaction::new(&table);
     let action = tx
@@ -285,10 +273,7 @@ async fn run_benchmark(num_files: usize, rows_per_file: usize) {
 
     // Snapshot verification
     let snapshots: Vec<_> = table.metadata().snapshots().collect();
-    println!(
-        "Snapshots: {} (append + replace)",
-        snapshots.len()
-    );
+    println!("Snapshots: {} (append + replace)", snapshots.len());
     let current = table.metadata().current_snapshot().unwrap();
     println!(
         "Current snapshot operation: {:?}",
