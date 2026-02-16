@@ -30,8 +30,6 @@ jobs:
   stale:
     if: github.repository_owner == 'apache'
     runs-on: ubuntu-22.04
-    strategy:
-      max-parallel: 15
     steps:
       - uses: actions/stale@v10.1.1
         with:

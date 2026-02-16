@@ -178,8 +178,6 @@ jobs:
   msrv:
     name: Verify MSRV
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 15
     steps:
       - uses: actions/checkout@v6
       - name: Install protoc
