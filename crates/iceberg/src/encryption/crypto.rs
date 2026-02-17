@@ -21,6 +21,7 @@ use std::str::FromStr;
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes128Gcm, Key, Nonce};
+use rand::RngCore;
 use zeroize::Zeroizing;
 
 use crate::{Error, ErrorKind, Result};
@@ -101,7 +102,6 @@ impl SecureKey {
     /// Generates a new random key for the specified algorithm.
     pub fn generate(algorithm: EncryptionAlgorithm) -> Self {
         let mut key = vec![0u8; algorithm.key_length()];
-        use rand::RngCore;
         OsRng.fill_bytes(&mut key);
         Self {
             key: Zeroizing::new(key),

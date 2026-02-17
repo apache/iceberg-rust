@@ -134,6 +134,6 @@ typetag = "0.2"
 url = "2.5.7"
 uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
-zeroize = "1.7"
 volo-thrift = "0.10.8"
+zeroize = "1.7"
 zstd = "0.13.3"
