@@ -18,10 +18,10 @@
 use std::vec;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_expr::{Expr, Operator};
+use datafusion::logical_expr::{Expr, Like, Operator};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
-use iceberg::spec::Datum;
+use iceberg::spec::{Datum, PrimitiveLiteral};
 
 // A datafusion expression could be an Iceberg predicate, column, or literal.
 enum TransformedResult {
@@ -51,8 +51,18 @@ pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
 fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
     match to_iceberg_predicate(expr) {
         TransformedResult::Predicate(predicate) => Some(predicate),
-        TransformedResult::Column(_) | TransformedResult::Literal(_) => {
-            unreachable!("Not a valid expression: {:?}", expr)
+        TransformedResult::Column(column) => {
+            // A bare column in a filter context represents a boolean column check
+            // Convert it to: column = true
+            Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                column,
+                Datum::bool(true),
+            )))
+        }
+        TransformedResult::Literal(_) => {
+            // Literal values in filter context cannot be pushed down
+            None
         }
         _ => None,
     }
@@ -75,6 +85,14 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             let expr = to_iceberg_predicate(exp);
             match expr {
                 TransformedResult::Predicate(p) => TransformedResult::Predicate(!p),
+                TransformedResult::Column(column) => {
+                    // NOT of a bare boolean column: NOT col => col = false
+                    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(
+                        PredicateOperator::Eq,
+                        column,
+                        Datum::bool(false),
+                    )))
+                }
                 _ => TransformedResult::NotTransformed,
             }
         }
@@ -127,6 +145,56 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                 return TransformedResult::NotTransformed;
             }
             to_iceberg_predicate(&c.expr)
+        }
+        Expr::Like(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            case_insensitive,
+        }) => {
+            // Only support simple prefix patterns (e.g., 'prefix%')
+            // Note: Iceberg's StartsWith operator is case-sensitive, so we cannot
+            // push down case-insensitive LIKE (ILIKE) patterns
+            // Escape characters are also not supported for pushdown
+            if escape_char.is_some() || *case_insensitive {
+                return TransformedResult::NotTransformed;
+            }
+
+            // Extract the pattern string
+            let pattern_str = match to_iceberg_predicate(pattern) {
+                TransformedResult::Literal(d) => match d.literal() {
+                    PrimitiveLiteral::String(s) => s.clone(),
+                    _ => return TransformedResult::NotTransformed,
+                },
+                _ => return TransformedResult::NotTransformed,
+            };
+
+            // Check if it's a simple prefix pattern (ends with % and no other wildcards)
+            if pattern_str.ends_with('%')
+                && !pattern_str[..pattern_str.len() - 1].contains(['%', '_'])
+            {
+                // Extract the prefix (remove trailing %)
+                let prefix = pattern_str[..pattern_str.len() - 1].to_string();
+
+                // Get the column reference
+                let column = match to_iceberg_predicate(expr) {
+                    TransformedResult::Column(r) => r,
+                    _ => return TransformedResult::NotTransformed,
+                };
+
+                // Create the appropriate predicate
+                let predicate = if *negated {
+                    column.not_starts_with(Datum::string(prefix))
+                } else {
+                    column.starts_with(Datum::string(prefix))
+                };
+
+                TransformedResult::Predicate(predicate)
+            } else {
+                // Complex LIKE patterns cannot be pushed down
+                TransformedResult::NotTransformed
+            }
         }
         _ => TransformedResult::NotTransformed,
     }
@@ -201,9 +269,11 @@ fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
 }
 
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+
 /// Convert a scalar value to an iceberg datum.
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
     match value {
+        ScalarValue::Boolean(Some(v)) => Some(Datum::bool(*v)),
         ScalarValue::Int8(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int16(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
@@ -212,8 +282,17 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::Float64(Some(v)) => Some(Datum::double(*v)),
         ScalarValue::Utf8(Some(v)) => Some(Datum::string(v.clone())),
         ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
+        ScalarValue::Binary(Some(v)) => Some(Datum::binary(v.clone())),
+        ScalarValue::LargeBinary(Some(v)) => Some(Datum::binary(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
+        // Timestamp conversions
+        // Note: TimestampSecond and TimestampMillisecond are not handled here because
+        // DataFusion's type coercion always converts them to match the column type
+        // (either TimestampMicrosecond or TimestampNanosecond) before predicate pushdown.
+        // See unit tests for how those conversions would work if needed.
+        ScalarValue::TimestampMicrosecond(Some(v), _) => Some(Datum::timestamp_micros(*v)),
+        ScalarValue::TimestampNanosecond(Some(v), _) => Some(Datum::timestamp_nanos(*v)),
         _ => None,
     }
 }
@@ -428,5 +507,178 @@ mod tests {
         let sql = "ts >= date '2023-01-05T11:00:00'";
         let predicate = convert_to_iceberg_predicate(sql);
         assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_timestamp() {
+        use datafusion::common::ScalarValue;
+
+        // Test TimestampMicrosecond - maps directly to Datum::timestamp_micros
+        let ts_micros = 1672876800000000i64; // 2023-01-05 00:00:00 UTC in microseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(Some(ts_micros), None));
+        assert_eq!(datum, Some(Datum::timestamp_micros(ts_micros)));
+
+        // Test TimestampNanosecond - maps to Datum::timestamp_nanos to preserve precision
+        let ts_nanos = 1672876800000000500i64; // 2023-01-05 00:00:00.000000500 UTC in nanoseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampNanosecond(Some(ts_nanos), None));
+        assert_eq!(datum, Some(Datum::timestamp_nanos(ts_nanos)));
+
+        // Test None timestamp
+        let datum = super::scalar_value_to_datum(&ScalarValue::TimestampMicrosecond(None, None));
+        assert_eq!(datum, None);
+
+        // Note: TimestampSecond and TimestampMillisecond are not supported because
+        // DataFusion's type coercion converts them to TimestampMicrosecond or TimestampNanosecond
+        // before they reach scalar_value_to_datum in SQL queries.
+        //
+        // These return None (not pushed down):
+        let ts_seconds = 1672876800i64; // 2023-01-05 00:00:00 UTC in seconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampSecond(Some(ts_seconds), None));
+        assert_eq!(datum, None);
+
+        let ts_millis = 1672876800000i64; // 2023-01-05 00:00:00 UTC in milliseconds
+        let datum =
+            super::scalar_value_to_datum(&ScalarValue::TimestampMillisecond(Some(ts_millis), None));
+        assert_eq!(datum, None);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_binary() {
+        use datafusion::common::ScalarValue;
+
+        let bytes = vec![1u8, 2u8, 3u8];
+        let datum = super::scalar_value_to_datum(&ScalarValue::Binary(Some(bytes.clone())));
+        assert_eq!(datum, Some(Datum::binary(bytes.clone())));
+
+        let datum = super::scalar_value_to_datum(&ScalarValue::LargeBinary(Some(bytes.clone())));
+        assert_eq!(datum, Some(Datum::binary(bytes)));
+
+        let datum = super::scalar_value_to_datum(&ScalarValue::Binary(None));
+        assert_eq!(datum, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_binary() {
+        let sql = "foo = 1 and bar = X'0102'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        // Binary literals are converted to Datum::binary
+        // Note: SQL literal 1 is converted to Long by DataFusion
+        let expected_predicate = Reference::new("foo")
+            .equal_to(Datum::long(1))
+            .and(Reference::new("bar").equal_to(Datum::binary(vec![1u8, 2u8])));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_scalar_value_to_datum_boolean() {
+        use datafusion::common::ScalarValue;
+
+        // Test boolean true
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(true)));
+        assert_eq!(datum, Some(Datum::bool(true)));
+
+        // Test boolean false
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(Some(false)));
+        assert_eq!(datum, Some(Datum::bool(false)));
+
+        // Test None boolean
+        let datum = super::scalar_value_to_datum(&ScalarValue::Boolean(None));
+        assert_eq!(datum, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_starts_with() {
+        let sql = "bar LIKE 'test%'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        assert_eq!(
+            predicate,
+            Reference::new("bar").starts_with(Datum::string("test"))
+        );
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_not_like_starts_with() {
+        let sql = "bar NOT LIKE 'test%'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        assert_eq!(
+            predicate,
+            Reference::new("bar").not_starts_with(Datum::string("test"))
+        );
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_empty_prefix() {
+        let sql = "bar LIKE '%'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        assert_eq!(
+            predicate,
+            Reference::new("bar").starts_with(Datum::string(""))
+        );
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_complex_pattern() {
+        // Patterns with wildcards in the middle cannot be pushed down
+        let sql = "bar LIKE 'te%st'";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_underscore_wildcard() {
+        // Patterns with underscore wildcard cannot be pushed down
+        let sql = "bar LIKE 'test_'";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_no_wildcard() {
+        // Patterns without trailing % cannot be pushed down as StartsWith
+        let sql = "bar LIKE 'test'";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_ilike() {
+        // Case-insensitive LIKE (ILIKE) is not supported
+        let sql = "bar ILIKE 'test%'";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_and_other_conditions() {
+        let sql = "bar LIKE 'test%' AND foo > 1";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate = Predicate::and(
+            Reference::new("bar").starts_with(Datum::string("test")),
+            Reference::new("foo").greater_than(Datum::long(1)),
+        );
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_special_characters() {
+        // Test LIKE with special characters in prefix
+        let sql = "bar LIKE 'test-abc_123%'";
+        let predicate = convert_to_iceberg_predicate(sql);
+        // This should not be pushed down because it contains underscore
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_like_unicode() {
+        // Test LIKE with unicode characters in prefix
+        let sql = "bar LIKE '测试%'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        assert_eq!(
+            predicate,
+            Reference::new("bar").starts_with(Datum::string("测试"))
+        );
     }
 }

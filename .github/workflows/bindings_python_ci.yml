@@ -75,6 +75,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest

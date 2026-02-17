@@ -68,7 +68,6 @@ futures = { workspace = true }
 itertools = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
-num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
@@ -77,7 +76,7 @@ rand = { workspace = true }
 reqsign = { version = "0.16.3", optional = true, default-features = false }
 reqwest = { workspace = true }
 roaring = { workspace = true }
-rust_decimal = { workspace = true }
+fastnum = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_derive = { workspace = true }
@@ -87,13 +86,13 @@ serde_with = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
+typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
-ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 mockall = { workspace = true }
