@@ -145,7 +145,7 @@ mod tests {
 
     fn temp_path() -> String {
         let uuid = uuid::Uuid::new_v4();
-        format!("/tmp/iceberg-test-{}", uuid)
+        format!("/tmp/iceberg-test-{uuid}")
     }
 
     #[tokio::test]
