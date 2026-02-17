@@ -244,9 +244,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "57.2.0"
+version = "57.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "288015089e7931843c80ed4032c5274f02b37bcb720c4a42096d50b390e70372"
+checksum = "f7b3141e0ec5145a22d8694ea8b6d6f69305971c4fa1c1a13ef0195aef2d678b"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -289,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "57.2.0"
+version = "57.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c8e372ed52bd4ee88cc1e6c3859aa7ecea204158ac640b10e187936e7e87074"
+checksum = "646bbb821e86fd57189c10b4fcdaa941deaf4181924917b0daa92735baa6ada5"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
