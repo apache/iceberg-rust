@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       # Publish package one by one instead of flooding the registry
-      max-parallel: 1
+      max-parallel: 15
       matrix:
         # Order here is sensitive, as it will be used to determine the order of publishing
         package:

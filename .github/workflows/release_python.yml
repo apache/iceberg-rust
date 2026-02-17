@@ -142,6 +142,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     needs: [validate-release-tag]
     strategy:
+      max-parallel: 15
       matrix:
         include:
           - { os: windows-latest }
