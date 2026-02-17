@@ -19,7 +19,8 @@
 
 use std::str::FromStr;
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use aes_gcm::aead::generic_array::typenum::Unsigned;
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, KeySizeUser, OsRng, Payload};
 use aes_gcm::{Aes128Gcm, Key, Nonce};
 use rand::RngCore;
 use zeroize::Zeroizing;
@@ -39,13 +40,15 @@ impl EncryptionAlgorithm {
     /// Returns the key length in bytes for this algorithm.
     pub fn key_length(&self) -> usize {
         match self {
-            Self::Aes128Gcm => 16,
+            Self::Aes128Gcm => <Aes128Gcm as KeySizeUser>::KeySize::USIZE,
         }
     }
 
     /// Returns the nonce/IV length in bytes for this algorithm.
     pub fn nonce_length(&self) -> usize {
-        12 // GCM uses 96-bit nonces
+        match self {
+            Self::Aes128Gcm => <Aes128Gcm as AeadCore>::NonceSize::USIZE,
+        }
     }
 
     /// Returns the string identifier for this algorithm.
