@@ -70,7 +70,6 @@ impl FromStr for EncryptionAlgorithm {
 }
 
 /// A secure encryption key that zeroes its memory on drop.
-#[derive(Debug)]
 pub struct SecureKey {
     key: Zeroizing<Vec<u8>>,
     algorithm: EncryptionAlgorithm,
