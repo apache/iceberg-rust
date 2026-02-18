@@ -246,6 +246,7 @@ pub struct UnboundPartitionField {
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
     #[builder(default, setter(strip_option(fallback = field_id_opt)))]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub field_id: Option<i32>,
     /// A partition name.
     pub name: String,
@@ -260,6 +261,7 @@ pub struct UnboundPartitionField {
 #[serde(rename_all = "kebab-case")]
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) spec_id: Option<i32>,
     /// Details of the partition spec
     pub(crate) fields: Vec<UnboundPartitionField>,

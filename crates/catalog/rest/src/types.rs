@@ -251,14 +251,18 @@ pub struct CreateTableRequest {
     /// Name of the table to create
     pub name: String,
     /// Optional table location. If not provided, the server will choose a location.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
     /// Table schema
     pub schema: Schema,
     /// Optional partition specification. If not provided, the table will be unpartitioned.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// Optional sort order for the table
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub write_order: Option<SortOrder>,
     /// Whether to stage the create for a transaction (true) or create immediately (false)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_create: Option<bool>,
     /// Optional properties to set on the table
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
