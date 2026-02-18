@@ -25,11 +25,11 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache,
+    PartitionFilterCache, SnapshotRange,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, ManifestStatus, SchemaRef,
+    SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -47,6 +47,8 @@ pub(crate) struct ManifestFileContext {
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
     case_sensitive: bool,
+    /// Optional snapshot range for incremental scans
+    snapshot_range: Option<Arc<SnapshotRange>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -76,12 +78,36 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
-            ..
+            case_sensitive,
+            snapshot_range,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
+            // For incremental scans, filter entries to only include those:
+            // 1. With status ADDED (not EXISTING or DELETED)
+            // 2. With a snapshot_id that falls within the range
+            if let Some(ref range) = snapshot_range {
+                // Only include entries with status ADDED
+                if manifest_entry.status() != ManifestStatus::Added {
+                    continue;
+                }
+
+                // Only include entries from snapshots in the range
+                match manifest_entry.snapshot_id() {
+                    Some(entry_snapshot_id) => {
+                        if !range.contains(entry_snapshot_id) {
+                            continue;
+                        }
+                    }
+                    None => {
+                        // Skip entries without a snapshot_id in incremental mode
+                        continue;
+                    }
+                }
+            }
+
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -91,7 +117,7 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
-                case_sensitive: self.case_sensitive,
+                case_sensitive,
             };
 
             sender
@@ -160,6 +186,8 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    /// Optional snapshot range for incremental scans
+    pub snapshot_range: Option<Arc<SnapshotRange>>,
 }
 
 impl PlanContext {
@@ -282,6 +310,7 @@ impl PlanContext {
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
             case_sensitive: self.case_sensitive,
+            snapshot_range: self.snapshot_range.clone(),
         }
     }
 }
