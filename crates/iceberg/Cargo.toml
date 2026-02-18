@@ -100,6 +100,10 @@ regex = { workspace = true }
 tempfile = { workspace = true }
 minijinja = { workspace = true }
 
+[[example]]
+name = "compaction_benchmark"
+path = "examples/compaction_benchmark.rs"
+
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]
