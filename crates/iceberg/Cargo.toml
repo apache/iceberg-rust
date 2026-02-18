@@ -33,6 +33,7 @@ default = []
 
 
 [dependencies]
+aes = { workspace = true }
 aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 apache-avro = { workspace = true }

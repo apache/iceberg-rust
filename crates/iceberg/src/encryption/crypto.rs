@@ -20,9 +20,9 @@
 use std::str::FromStr;
 
 use aes_gcm::aead::generic_array::typenum::Unsigned;
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, KeySizeUser, OsRng, Payload};
 use aes_gcm::{Aes128Gcm, Key, Nonce};
-use rand::RngCore;
 use zeroize::Zeroizing;
 
 use crate::{Error, ErrorKind, Result};
@@ -123,15 +123,30 @@ impl SecureKey {
     }
 }
 
+enum CipherImpl {
+    Aes128Gcm(Aes128Gcm),
+}
+
 /// AES-GCM encryptor for encrypting and decrypting data.
+///
+/// The cipher is initialized once at construction time.
 pub struct AesGcmEncryptor {
-    key: SecureKey,
+    cipher: CipherImpl,
 }
 
 impl AesGcmEncryptor {
     /// Creates a new encryptor with the specified key.
+    ///
+    /// The key schedule is expanded once here. The `aes` crate's `zeroize`
+    /// feature ensures the expanded key schedule is zeroed on drop.
     pub fn new(key: SecureKey) -> Self {
-        Self { key }
+        let cipher = match key.algorithm() {
+            EncryptionAlgorithm::Aes128Gcm => {
+                let aes_key = Key::<Aes128Gcm>::from_slice(key.as_bytes());
+                CipherImpl::Aes128Gcm(Aes128Gcm::new(aes_key))
+            }
+        };
+        Self { cipher }
     }
 
     /// Encrypts data using AES-GCM.
@@ -144,8 +159,8 @@ impl AesGcmEncryptor {
     /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
     /// This matches the Java implementation format for compatibility.
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
-        match self.key.algorithm() {
-            EncryptionAlgorithm::Aes128Gcm => self.encrypt_aes128_gcm(plaintext, aad),
+        match &self.cipher {
+            CipherImpl::Aes128Gcm(cipher) => self.encrypt_aes128_gcm(cipher, plaintext, aad),
         }
     }
 
@@ -174,14 +189,19 @@ impl AesGcmEncryptor {
 
         let nonce = &ciphertext[..NONCE_LEN];
         let encrypted_data = &ciphertext[NONCE_LEN..];
-        match self.key.algorithm() {
-            EncryptionAlgorithm::Aes128Gcm => self.decrypt_aes128_gcm(nonce, encrypted_data, aad),
+        match &self.cipher {
+            CipherImpl::Aes128Gcm(cipher) => {
+                self.decrypt_aes128_gcm(cipher, nonce, encrypted_data, aad)
+            }
         }
     }
 
-    fn encrypt_aes128_gcm(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
-        let key = Key::<Aes128Gcm>::from_slice(self.key.as_bytes());
-        let cipher = Aes128Gcm::new(key);
+    fn encrypt_aes128_gcm(
+        &self,
+        cipher: &Aes128Gcm,
+        plaintext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
         let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
 
         let ciphertext = if let Some(aad) = aad {
@@ -209,12 +229,11 @@ impl AesGcmEncryptor {
 
     fn decrypt_aes128_gcm(
         &self,
+        cipher: &Aes128Gcm,
         nonce: &[u8],
         ciphertext: &[u8],
         aad: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
-        let key = Key::<Aes128Gcm>::from_slice(self.key.as_bytes());
-        let cipher = Aes128Gcm::new(key);
         let nonce = Nonce::from_slice(nonce);
 
         let plaintext = if let Some(aad) = aad {
