@@ -509,7 +509,7 @@ fn update_totals(
         .get(removed_property)
         .map(|value| value.parse::<u64>().unwrap())
     {
-        new_total -= value;
+        new_total = new_total.saturating_sub(value);
     }
     summary
         .additional_properties
@@ -1015,6 +1015,37 @@ mod tests {
             props
                 .iter()
                 .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX))
+        );
+    }
+
+    #[test]
+    fn test_update_totals_saturating_sub_no_panic() {
+        // removed > previous_total + added → should saturate to 0, not panic
+        let mut summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: HashMap::from([
+                (DELETED_DATA_FILES.to_string(), "15".to_string()),
+                (ADDED_DATA_FILES.to_string(), "1".to_string()),
+            ]),
+        };
+        let previous = Summary {
+            operation: Operation::Append,
+            additional_properties: HashMap::from([(
+                TOTAL_DATA_FILES.to_string(),
+                "10".to_string(),
+            )]),
+        };
+        // 10 + 1 - 15 = underflow on u64 → should be 0
+        update_totals(
+            &mut summary,
+            Some(&previous),
+            TOTAL_DATA_FILES,
+            ADDED_DATA_FILES,
+            DELETED_DATA_FILES,
+        );
+        assert_eq!(
+            summary.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
+            "0"
         );
     }
 }
