@@ -39,6 +39,8 @@ repository = "https://github.com/apache/iceberg-rust"
 rust-version = "1.88"
 
 [workspace.dependencies]
+aes = { version = "0.8", features = ["zeroize"] }
+aes-gcm = "0.10"
 anyhow = "1.0.72"
 apache-avro = { version = "0.21", features = ["zstandard"] }
 array-init = "2"
@@ -130,4 +132,5 @@ url = "2.5.7"
 uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
+zeroize = "1.7"
 zstd = "0.13.3"
