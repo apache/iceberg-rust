@@ -81,9 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let from_snapshot_id = snapshots[0].snapshot_id();
     let to_snapshot_id = snapshots[snapshots.len() - 1].snapshot_id();
 
-    println!(
-        "Performing incremental read from snapshot {from_snapshot_id} to {to_snapshot_id}",
-    );
+    println!("Performing incremental read from snapshot {from_snapshot_id} to {to_snapshot_id}",);
 
     // ANCHOR: incremental_read
     // Create a DataFusion session
