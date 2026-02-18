@@ -27,6 +27,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures",
+ "zeroize",
 ]
 
 [[package]]
@@ -3349,6 +3350,7 @@ dependencies = [
 name = "iceberg"
 version = "0.9.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "anyhow",
  "apache-avro",
