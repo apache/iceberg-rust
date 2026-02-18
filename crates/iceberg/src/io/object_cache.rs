@@ -185,6 +185,7 @@ impl ObjectCache {
 mod tests {
     use std::fs;
 
+    use apache_avro::Codec;
     use minijinja::value::Value;
     use minijinja::{AutoEscape, Environment, context};
     use tempfile::TempDir;
@@ -275,6 +276,7 @@ mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                Codec::Null,
             )
             .build_v2_data();
             writer
@@ -307,6 +309,7 @@ mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())

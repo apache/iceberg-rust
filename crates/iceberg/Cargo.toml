@@ -65,6 +65,8 @@ flate2 = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+log = { workspace = true }
+miniz_oxide = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }

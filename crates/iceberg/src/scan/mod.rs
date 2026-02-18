@@ -565,11 +565,12 @@ pub mod tests {
     //! shared tests for the table scan API
     #![allow(missing_docs)]
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
     use std::sync::Arc;
 
+    use apache_avro::Codec;
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch,
@@ -763,6 +764,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                Codec::Null,
             )
             .build_v2_data();
             writer
@@ -840,6 +842,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -975,6 +978,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                Codec::Null,
             )
             .build_v2_data();
 
@@ -1059,6 +1063,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -1186,6 +1191,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                Codec::Null,
             )
             .build_v2_data();
 
@@ -1221,6 +1227,7 @@ pub mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                Codec::Null,
             )
             .build_v2_deletes();
 
@@ -1255,6 +1262,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_manifest, delete_manifest].into_iter())
@@ -1910,8 +1918,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_select_with_file_column() {
-        use arrow_array::cast::AsArray;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
@@ -2033,8 +2039,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_file_column_with_multiple_files() {
-        use std::collections::HashSet;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
