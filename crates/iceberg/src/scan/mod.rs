@@ -23,6 +23,7 @@ mod context;
 use context::*;
 mod task;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -30,8 +31,6 @@ use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
-
-use std::collections::HashSet;
 
 use crate::arrow::ArrowReaderBuilder;
 pub use crate::arrow::{ScanMetrics, ScanResult};
@@ -83,10 +82,7 @@ impl SnapshotRange {
         // Walk backwards from to_snapshot to from_snapshot
         while let Some(id) = current_id {
             let snapshot = table_metadata.snapshot_by_id(id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Snapshot {} not found", id),
-                )
+                Error::new(ErrorKind::DataInvalid, format!("Snapshot {} not found", id))
             })?;
 
             // Validate operation is APPEND
@@ -389,7 +385,8 @@ impl<'a> TableScanBuilder<'a> {
                             file_io: self.table.file_io().clone(),
                             plan_context: None,
                             concurrency_limit_data_files: self.concurrency_limit_data_files,
-                            concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                            concurrency_limit_manifest_entries: self
+                                .concurrency_limit_manifest_entries,
                             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                             row_group_filtering_enabled: self.row_group_filtering_enabled,
                             row_selection_enabled: self.row_selection_enabled,
