@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod expire_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -65,6 +66,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
+pub use expire_snapshots::{ExpireSnapshotsAction, UnreferencedFiles, find_unreferenced_files};
 
 use crate::error::Result;
 use crate::spec::TableProperties;
@@ -139,6 +141,14 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates an expire snapshots action for removing old snapshots from metadata.
+    ///
+    /// Removes snapshots from table metadata but does NOT delete physical files.
+    /// Use `find_unreferenced_files()` after committing to identify files for deletion.
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
+        ExpireSnapshotsAction::new()
     }
 
     /// Creates replace sort order action.
