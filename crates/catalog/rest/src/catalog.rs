@@ -18,9 +18,10 @@
 //! This module contains the iceberg REST catalog implementation.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use iceberg::io::{self, FileIO};
@@ -37,6 +38,7 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
+use crate::Endpoint;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
@@ -57,6 +59,33 @@ const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
+static DEFAULT_ENDPOINTS: OnceLock<HashSet<Endpoint>> = OnceLock::new();
+
+fn default_endpoints() -> &'static HashSet<Endpoint> {
+    DEFAULT_ENDPOINTS.get_or_init(|| {
+        [
+            Endpoint::v1_config(),
+            Endpoint::v1_list_namespaces(),
+            Endpoint::v1_create_namespace(),
+            Endpoint::v1_load_namespace(),
+            Endpoint::v1_update_namespace(),
+            Endpoint::v1_delete_namespace(),
+            Endpoint::v1_list_tables(),
+            Endpoint::v1_create_table(),
+            Endpoint::v1_load_table(),
+            Endpoint::v1_update_table(),
+            Endpoint::v1_delete_table(),
+            Endpoint::v1_rename_table(),
+            Endpoint::v1_register_table(),
+            Endpoint::v1_report_metrics(),
+            Endpoint::v1_commit_transaction(),
+        ]
+        .into_iter()
+        .cloned()
+        .collect()
+    })
+}
+
 /// Builder for [`RestCatalog`].
 #[derive(Debug)]
 pub struct RestCatalogBuilder(RestCatalogConfig);
@@ -69,6 +98,7 @@ impl Default for RestCatalogBuilder {
             warehouse: None,
             props: HashMap::new(),
             client: None,
+            endpoints: default_endpoints().clone(),
         })
     }
 }
@@ -144,6 +174,9 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    #[builder(default)]
+    endpoints: HashSet<Endpoint>,
 }
 
 impl RestCatalogConfig {
@@ -317,6 +350,13 @@ impl RestCatalogConfig {
         props.extend(config.overrides);
 
         self.props = props;
+        self.endpoints = if config.endpoints.is_empty() {
+            default_endpoints().clone()
+        } else {
+            eprintln!("Endpoints are {:?}", config.endpoints);
+            config.endpoints
+        };
+
         self
     }
 }
@@ -366,7 +406,6 @@ impl RestCatalog {
                 let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
                 let client = client.update_with(&config)?;
-
                 Ok(RestContext { config, client })
             })
             .await
@@ -459,6 +498,7 @@ impl Catalog for RestCatalog {
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_list_namespaces())?;
         let endpoint = context.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
         let mut next_token = None;
@@ -515,6 +555,7 @@ impl Catalog for RestCatalog {
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_create_namespace())?;
 
         let request = context
             .client
@@ -547,6 +588,7 @@ impl Catalog for RestCatalog {
 
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_load_namespace())?;
 
         let request = context
             .client
@@ -575,6 +617,7 @@ impl Catalog for RestCatalog {
 
     async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_namespace_exists())?;
 
         let request = context
             .client
@@ -607,6 +650,7 @@ impl Catalog for RestCatalog {
 
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_delete_namespace())?;
 
         let request = context
             .client
@@ -631,6 +675,7 @@ impl Catalog for RestCatalog {
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_list_tables())?;
         let endpoint = context.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
         let mut next_token = None;
@@ -687,6 +732,7 @@ impl Catalog for RestCatalog {
         creation: TableCreation,
     ) -> Result<Table> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_create_table())?;
 
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
@@ -765,6 +811,15 @@ impl Catalog for RestCatalog {
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let context = self.context().await?;
+        eprintln!(
+            "DEBUG: endpoints value in load_table: {:?}",
+            context.config.endpoints
+        );
+        eprintln!(
+            "DEBUG: looking for endpoint: {:?}",
+            Endpoint::v1_load_table()
+        );
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_load_table())?;
 
         let request = context
             .client
@@ -817,6 +872,7 @@ impl Catalog for RestCatalog {
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_delete_table())?;
 
         let request = context
             .client
@@ -842,6 +898,7 @@ impl Catalog for RestCatalog {
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_table_exists())?;
 
         let request = context
             .client
@@ -864,6 +921,7 @@ impl Catalog for RestCatalog {
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_rename_table())?;
 
         let request = context
             .client
@@ -900,6 +958,7 @@ impl Catalog for RestCatalog {
         metadata_location: String,
     ) -> Result<Table> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_register_table())?;
 
         let request = context
             .client
@@ -960,6 +1019,7 @@ impl Catalog for RestCatalog {
 
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
         let context = self.context().await?;
+        Endpoint::check_supported(&context.config.endpoints, Endpoint::v1_update_table())?;
 
         let request = context
             .client
