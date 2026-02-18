@@ -135,10 +135,16 @@ impl SnapshotProduceOperation for FastAppendOperation {
             )
             .await?;
 
+        // Delete-only manifests must be preserved so that subsequent scans
+        // can see which file paths were removed (e.g. by a rewrite_files
+        // operation). Dropping them causes deleted files to reappear as
+        // alive in the next snapshot.
         Ok(manifest_list
             .entries()
             .iter()
-            .filter(|entry| entry.has_added_files() || entry.has_existing_files())
+            .filter(|entry| {
+                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
+            })
             .cloned()
             .collect())
     }
