@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if snapshots.len() < 2 {
-        println!("\nNeed at least 2 snapshots for incremental read demo.");
+        println!("Need at least 2 snapshots for incremental read demo.");
         println!("Try inserting some data into the table to create more snapshots.");
         return Ok(());
     }
@@ -82,8 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let to_snapshot_id = snapshots[snapshots.len() - 1].snapshot_id();
 
     println!(
-        "\nPerforming incremental read from snapshot {} to {}",
-        from_snapshot_id, to_snapshot_id
+        "Performing incremental read from snapshot {from_snapshot_id} to {to_snapshot_id}",
     );
 
     // ANCHOR: incremental_read
@@ -118,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx.register_table("new_data", Arc::new(provider))?;
 
     let df = ctx.sql("SELECT COUNT(*) as new_rows FROM new_data").await?;
-    println!("\nNew rows since snapshot {}:", from_snapshot_id);
+    println!("\nNew rows since snapshot {from_snapshot_id}:");
     df.show().await?;
     // ANCHOR_END: appends_after
 
