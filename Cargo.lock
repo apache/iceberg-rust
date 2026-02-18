@@ -3458,7 +3458,6 @@ dependencies = [
  "iceberg_test_utils",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3494,6 +3493,9 @@ dependencies = [
  "iceberg-catalog-rest",
  "iceberg-catalog-s3tables",
  "iceberg-catalog-sql",
+ "iceberg_test_utils",
+ "reqwest",
+ "rstest",
  "sqlx",
  "tempfile",
  "tokio",
@@ -3515,7 +3517,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tokio",
- "tracing",
  "typed-builder",
  "uuid",
 ]

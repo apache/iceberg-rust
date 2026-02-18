@@ -314,6 +314,13 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
+
         let db_input = convert_to_database(namespace, &properties)?;
 
         let builder = self.client.0.create_database().database_input(db_input);
@@ -340,7 +347,19 @@ impl Catalog for GlueCatalog {
         let builder = self.client.0.get_database().name(&db_name);
         let builder = with_catalog_id!(builder, self.config);
 
-        let resp = builder.send().await.map_err(from_aws_sdk_error)?;
+        let resp = builder.send().await.map_err(|err| {
+            if err
+                .as_service_error()
+                .map(|e| e.is_entity_not_found_exception())
+                == Some(true)
+            {
+                return Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Namespace {namespace:?} does not exist"),
+                );
+            }
+            from_aws_sdk_error(err)
+        })?;
 
         match resp.database() {
             Some(db) => {
@@ -348,7 +367,7 @@ impl Catalog for GlueCatalog {
                 Ok(namespace)
             }
             None => Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::NamespaceNotFound,
                 format!("Database with name: {db_name} does not exist"),
             )),
         }
@@ -404,6 +423,13 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let db_name = validate_namespace(namespace)?;
         let db_input = convert_to_database(namespace, &properties)?;
 
@@ -431,6 +457,13 @@ impl Catalog for GlueCatalog {
     /// - `Err(...)` signifies failure to drop the namespace due to validation
     /// errors, connectivity issues, or Glue Catalog constraints.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let db_name = validate_namespace(namespace)?;
         let table_list = self.list_tables(namespace).await?;
 
