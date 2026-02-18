@@ -998,30 +998,28 @@ mod tests {
         let snapshots: Vec<_> = table.metadata().snapshots().collect();
 
         // Need at least 2 snapshots for incremental scan
-        if snapshots.len() >= 2 {
-            let from_id = snapshots[0].snapshot_id();
-            let to_id = snapshots[snapshots.len() - 1].snapshot_id();
+        assert!(snapshots.len() >= 2);
+        let from_id = snapshots[0].snapshot_id();
+        let to_id = snapshots[snapshots.len() - 1].snapshot_id();
 
-            let provider =
-                IcebergStaticTableProvider::try_new_incremental(table.clone(), from_id, to_id)
-                    .await;
+        let provider =
+            IcebergStaticTableProvider::try_new_incremental(table.clone(), from_id, to_id).await;
 
-            // May fail due to non-APPEND operations in test data, that's OK
-            if let Ok(provider) = provider {
-                let ctx = SessionContext::new();
-                let state = ctx.state();
+        // May fail due to non-APPEND operations in test data, that's OK
+        if let Ok(provider) = provider {
+            let ctx = SessionContext::new();
+            let state = ctx.state();
 
-                let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
-                let iceberg_scan = scan_plan
-                    .as_any()
-                    .downcast_ref::<IcebergTableScan>()
-                    .expect("Expected IcebergTableScan");
+            let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+            let iceberg_scan = scan_plan
+                .as_any()
+                .downcast_ref::<IcebergTableScan>()
+                .expect("Expected IcebergTableScan");
 
-                // Verify incremental scan parameters are set
-                assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-                assert!(!iceberg_scan.from_snapshot_inclusive());
-                assert_eq!(iceberg_scan.snapshot_id(), Some(to_id));
-            }
+            // Verify incremental scan parameters are set
+            assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
+            assert!(!iceberg_scan.from_snapshot_inclusive());
+            assert_eq!(iceberg_scan.snapshot_id(), Some(to_id));
         }
     }
 
@@ -1032,31 +1030,30 @@ mod tests {
         let table = get_test_table_from_metadata_file().await;
         let snapshots: Vec<_> = table.metadata().snapshots().collect();
 
-        if snapshots.len() >= 2 {
-            let from_id = snapshots[0].snapshot_id();
-            let to_id = snapshots[snapshots.len() - 1].snapshot_id();
+        assert!(snapshots.len() >= 2);
+        let from_id = snapshots[0].snapshot_id();
+        let to_id = snapshots[snapshots.len() - 1].snapshot_id();
 
-            let provider = IcebergStaticTableProvider::try_new_incremental_inclusive(
-                table.clone(),
-                from_id,
-                to_id,
-            )
-            .await;
+        let provider = IcebergStaticTableProvider::try_new_incremental_inclusive(
+            table.clone(),
+            from_id,
+            to_id,
+        )
+        .await;
 
-            if let Ok(provider) = provider {
-                let ctx = SessionContext::new();
-                let state = ctx.state();
+        if let Ok(provider) = provider {
+            let ctx = SessionContext::new();
+            let state = ctx.state();
 
-                let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
-                let iceberg_scan = scan_plan
-                    .as_any()
-                    .downcast_ref::<IcebergTableScan>()
-                    .expect("Expected IcebergTableScan");
+            let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+            let iceberg_scan = scan_plan
+                .as_any()
+                .downcast_ref::<IcebergTableScan>()
+                .expect("Expected IcebergTableScan");
 
-                // Verify inclusive flag is set
-                assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-                assert!(iceberg_scan.from_snapshot_inclusive());
-            }
+            // Verify inclusive flag is set
+            assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
+            assert!(iceberg_scan.from_snapshot_inclusive());
         }
     }
 
@@ -1067,28 +1064,27 @@ mod tests {
         let table = get_test_table_from_metadata_file().await;
         let snapshots: Vec<_> = table.metadata().snapshots().collect();
 
-        if !snapshots.is_empty() {
-            let from_id = snapshots[0].snapshot_id();
+        assert!(!snapshots.is_empty());
+        let from_id = snapshots[0].snapshot_id();
 
-            let provider =
-                IcebergStaticTableProvider::try_new_appends_after(table.clone(), from_id).await;
+        let provider =
+            IcebergStaticTableProvider::try_new_appends_after(table.clone(), from_id).await;
 
-            if let Ok(provider) = provider {
-                let ctx = SessionContext::new();
-                let state = ctx.state();
+        if let Ok(provider) = provider {
+            let ctx = SessionContext::new();
+            let state = ctx.state();
 
-                let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
-                let iceberg_scan = scan_plan
-                    .as_any()
-                    .downcast_ref::<IcebergTableScan>()
-                    .expect("Expected IcebergTableScan");
+            let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+            let iceberg_scan = scan_plan
+                .as_any()
+                .downcast_ref::<IcebergTableScan>()
+                .expect("Expected IcebergTableScan");
 
-                // Verify appends_after configuration
-                assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-                assert!(!iceberg_scan.from_snapshot_inclusive());
-                // snapshot_id should be None (uses current)
-                assert_eq!(iceberg_scan.snapshot_id(), None);
-            }
+            // Verify appends_after configuration
+            assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
+            assert!(!iceberg_scan.from_snapshot_inclusive());
+            // snapshot_id should be None (uses current)
+            assert_eq!(iceberg_scan.snapshot_id(), None);
         }
     }
 
