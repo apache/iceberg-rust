@@ -61,6 +61,7 @@ pub struct IcebergTableScan {
 
 impl IcebergTableScan {
     /// Creates a new [`IcebergTableScan`] object.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         table: Table,
         snapshot_id: Option<i64>,
