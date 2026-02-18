@@ -41,6 +41,7 @@ storage-s3 = ["opendal/services-s3", "reqsign"]
 
 
 [dependencies]
+aes = { workspace = true }
 aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
