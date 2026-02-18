@@ -42,8 +42,12 @@ use crate::to_datafusion_error;
 pub struct IcebergTableScan {
     /// A table in the catalog.
     table: Table,
-    /// Snapshot of the table to scan.
+    /// Snapshot of the table to scan (to_snapshot for incremental scans).
     snapshot_id: Option<i64>,
+    /// Starting snapshot for incremental scans.
+    from_snapshot_id: Option<i64>,
+    /// Whether the from_snapshot is inclusive.
+    from_snapshot_inclusive: bool,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
@@ -60,6 +64,8 @@ impl IcebergTableScan {
     pub(crate) fn new(
         table: Table,
         snapshot_id: Option<i64>,
+        from_snapshot_id: Option<i64>,
+        from_snapshot_inclusive: bool,
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
@@ -76,6 +82,8 @@ impl IcebergTableScan {
         Self {
             table,
             snapshot_id,
+            from_snapshot_id,
+            from_snapshot_inclusive,
             plan_properties,
             projection,
             predicates,
@@ -89,6 +97,14 @@ impl IcebergTableScan {
 
     pub fn snapshot_id(&self) -> Option<i64> {
         self.snapshot_id
+    }
+
+    pub fn from_snapshot_id(&self) -> Option<i64> {
+        self.from_snapshot_id
+    }
+
+    pub fn from_snapshot_inclusive(&self) -> bool {
+        self.from_snapshot_inclusive
     }
 
     pub fn projection(&self) -> Option<&[String]> {
@@ -149,6 +165,8 @@ impl ExecutionPlan for IcebergTableScan {
         let fut = get_batch_stream(
             self.table.clone(),
             self.snapshot_id,
+            self.from_snapshot_id,
+            self.from_snapshot_inclusive,
             self.projection.clone(),
             self.predicates.clone(),
         );
@@ -205,24 +223,46 @@ impl DisplayAs for IcebergTableScan {
 ///
 /// This function initializes a [`TableScan`], builds it,
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
+///
+/// Supports both regular point-in-time scans and incremental scans.
 async fn get_batch_stream(
     table: Table,
     snapshot_id: Option<i64>,
+    from_snapshot_id: Option<i64>,
+    from_snapshot_inclusive: bool,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let scan_builder = match snapshot_id {
-        Some(snapshot_id) => table.scan().snapshot_id(snapshot_id),
-        None => table.scan(),
-    };
+    let mut scan_builder = table.scan();
 
-    let mut scan_builder = match column_names {
+    // Configure incremental scan if from_snapshot_id is specified
+    if let Some(from_id) = from_snapshot_id {
+        scan_builder = if from_snapshot_inclusive {
+            scan_builder.from_snapshot_inclusive(from_id)
+        } else {
+            scan_builder.from_snapshot_exclusive(from_id)
+        };
+
+        // Set to_snapshot if specified, otherwise uses current snapshot
+        if let Some(to_id) = snapshot_id {
+            scan_builder = scan_builder.to_snapshot(to_id);
+        }
+    } else if let Some(snapshot_id) = snapshot_id {
+        // Regular point-in-time scan
+        scan_builder = scan_builder.snapshot_id(snapshot_id);
+    }
+
+    // Apply column selection
+    scan_builder = match column_names {
         Some(column_names) => scan_builder.select(column_names),
         None => scan_builder.select_all(),
     };
+
+    // Apply predicates
     if let Some(pred) = predicates {
         scan_builder = scan_builder.with_filter(pred);
     }
+
     let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
     let stream = table_scan
