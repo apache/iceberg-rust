@@ -608,7 +608,7 @@ mod tests {
     async fn test_delete_file_loader_parse_equality_deletes() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
 
@@ -721,10 +721,7 @@ mod tests {
     async fn test_caching_delete_file_loader_load_deletes() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
 
@@ -807,7 +804,7 @@ mod tests {
             path
         };
 
-        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
 
         let batch_stream = basic_delete_file_loader
@@ -853,10 +850,7 @@ mod tests {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Create the data file schema
         let data_file_schema = Arc::new(
@@ -965,7 +959,7 @@ mod tests {
     async fn test_large_equality_delete_batch_stack_overflow() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Create a large batch of equality deletes
         let num_rows = 20_000;
@@ -1012,10 +1006,7 @@ mod tests {
     async fn test_caching_delete_file_loader_caches_results() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
 

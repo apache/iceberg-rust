@@ -17,9 +17,12 @@
 
 //! Integration tests for rest catalog.
 
+use std::sync::Arc;
+
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
+use iceberg::io::OpenDalStorageFactory;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -30,6 +33,9 @@ use ordered_float::OrderedFloat;
 async fn test_evolved_schema() {
     let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }))
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();

@@ -24,6 +24,7 @@ use async_trait::async_trait;
 #[cfg(feature = "storage-azdls")]
 use azdls::AzureStorageScheme;
 use bytes::Bytes;
+use opendal::Operator;
 use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-azdls")]
 use opendal::services::AzdlsConfig;
@@ -33,14 +34,13 @@ use opendal::services::GcsConfig;
 use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
-use opendal::{Operator, Scheme};
 #[cfg(feature = "storage-s3")]
 pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{
-    FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageConfig, StorageFactory,
+    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -73,8 +73,7 @@ pub use s3::*;
 /// OpenDAL-based storage factory.
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
-///
-/// TODO this is currently not used, we still use OpenDalStorage::build() for now
+/// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorageFactory {
     /// Memory storage factory.
@@ -210,51 +209,6 @@ pub enum OpenDalStorage {
 }
 
 impl OpenDalStorage {
-    /// Convert iceberg config to opendal config.
-    ///
-    /// TODO Switch to use OpenDalStorageFactory::build()
-    pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
-        let (scheme_str, props, extensions) = file_io_builder.into_parts();
-        let _ = (&props, &extensions);
-        let scheme = Self::parse_scheme(&scheme_str)?;
-
-        match scheme {
-            #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory(memory_config_build()?)),
-            #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(Self::LocalFs),
-            #[cfg(feature = "storage-s3")]
-            Scheme::S3 => Ok(Self::S3 {
-                configured_scheme: scheme_str,
-                config: s3_config_parse(props)?.into(),
-                customized_credential_load: extensions
-                    .get::<CustomAwsCredentialLoader>()
-                    .map(Arc::unwrap_or_clone),
-            }),
-            #[cfg(feature = "storage-gcs")]
-            Scheme::Gcs => Ok(Self::Gcs {
-                config: gcs_config_parse(props)?.into(),
-            }),
-            #[cfg(feature = "storage-oss")]
-            Scheme::Oss => Ok(Self::Oss {
-                config: oss_config_parse(props)?.into(),
-            }),
-            #[cfg(feature = "storage-azdls")]
-            Scheme::Azdls => {
-                let scheme = scheme_str.parse::<AzureStorageScheme>()?;
-                Ok(Self::Azdls {
-                    config: azdls_config_parse(props)?.into(),
-                    configured_scheme: scheme,
-                })
-            }
-            // Update doc on [`FileIO`] when adding new schemes.
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now",),
-            )),
-        }
-    }
-
     /// Creates operator from path.
     ///
     /// # Arguments
@@ -361,19 +315,6 @@ impl OpenDalStorage {
         // harm in retrying temporary failures for other storage backends as well.
         let operator = operator.layer(RetryLayer::new());
         Ok((operator, relative_path))
-    }
-
-    /// Parse scheme.
-    fn parse_scheme(scheme: &str) -> Result<Scheme> {
-        match scheme {
-            "memory" => Ok(Scheme::Memory),
-            "file" | "" => Ok(Scheme::Fs),
-            "s3" | "s3a" => Ok(Scheme::S3),
-            "gs" | "gcs" => Ok(Scheme::Gcs),
-            "oss" => Ok(Scheme::Oss),
-            "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
-            s => Ok(s.parse::<Scheme>()?),
-        }
     }
 }
 

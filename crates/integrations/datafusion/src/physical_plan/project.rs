@@ -446,7 +446,7 @@ mod tests {
         let table = iceberg::table::Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/metadata.json".to_string())
             .build()
             .unwrap();
@@ -504,7 +504,7 @@ mod tests {
         let table = iceberg::table::Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/metadata.json".to_string())
             .build()
             .unwrap();
@@ -576,7 +576,7 @@ mod tests {
         let table = iceberg::table::Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/metadata.json".to_string())
             .build()
             .unwrap();
