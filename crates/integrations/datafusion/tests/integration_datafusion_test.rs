@@ -171,6 +171,16 @@ async fn test_provider_list_table_names() -> Result<()> {
             "my_table",
             "my_table$snapshots",
             "my_table$manifests",
+            "my_table$history",
+            "my_table$metadata_log_entries",
+            "my_table$refs",
+            "my_table$files",
+            "my_table$data_files",
+            "my_table$delete_files",
+            "my_table$all_manifests",
+            "my_table$all_files",
+            "my_table$all_data_files",
+            "my_table$all_delete_files",
         ]
     "#]]
     .assert_debug_eq(&result);
