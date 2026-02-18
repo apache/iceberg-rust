@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
-use iceberg_catalog_rest::{RestCatalogBuilder, REST_CATALOG_PROP_URI};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 use iceberg_datafusion::IcebergStaticTableProvider;
 
 static REST_URI: &str = "http://localhost:8181";
@@ -102,7 +102,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx.register_table("incremental_changes", Arc::new(provider))?;
 
     // Query the incremental changes
-    let df = ctx.sql("SELECT * FROM incremental_changes LIMIT 10").await?;
+    let df = ctx
+        .sql("SELECT * FROM incremental_changes LIMIT 10")
+        .await?;
     println!("\nIncremental changes (first 10 rows):");
     df.show().await?;
     // ANCHOR_END: incremental_read
@@ -147,9 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example: Get only specific columns with a filter
     // (adjust column names based on your actual table schema)
-    let df = ctx
-        .sql("SELECT * FROM filtered_changes LIMIT 5")
-        .await?;
+    let df = ctx.sql("SELECT * FROM filtered_changes LIMIT 5").await?;
     println!("\nFiltered incremental data:");
     df.show().await?;
     // ANCHOR_END: with_filters
