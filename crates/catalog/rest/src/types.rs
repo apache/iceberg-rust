@@ -25,6 +25,10 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
+mod events;
+
+pub use events::*;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,
