@@ -78,6 +78,9 @@ pub struct FileScanTask {
     /// The list of delete files that may need to be applied to this data file
     pub deletes: Vec<FileScanTaskDeleteFile>,
 
+    /// Maximum number of records to return, None means no limit
+    pub limit: Option<usize>,
+
     /// Partition data from the manifest entry, used to identify which columns can use
     /// constant values from partition metadata vs. reading from the data file.
     /// Per the Iceberg spec, only identity-transformed partition fields should use constants.

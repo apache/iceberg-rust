@@ -206,8 +206,9 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (row_selection_enabled && task.predicate.is_some())
+            || !task.deletes.is_empty()
+            || task.limit.is_some();
 
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
@@ -453,6 +454,10 @@ impl ArrowReader {
                 record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
+        if let Some(limit) = task.limit {
+            record_batch_stream_builder = record_batch_stream_builder.with_limit(limit);
+        }
+
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let record_batch_stream =
@@ -486,7 +491,9 @@ impl ArrowReader {
             .with_preload_page_index(should_load_page_index);
 
         // Create the record batch stream builder, which wraps the parquet file reader
-        let options = arrow_reader_options.unwrap_or_default();
+        let options = arrow_reader_options
+            .unwrap_or_default()
+            .with_page_index(should_load_page_index);
         let record_batch_stream_builder =
             ParquetRecordBatchStreamBuilder::new_with_options(parquet_file_reader, options).await?;
         Ok(record_batch_stream_builder)
@@ -2106,6 +2113,7 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -2428,6 +2436,7 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -2445,6 +2454,7 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -2573,6 +2583,7 @@ message schema {
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -2745,6 +2756,7 @@ message schema {
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -2963,6 +2975,7 @@ message schema {
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -3174,6 +3187,7 @@ message schema {
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            limit: None,
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -3278,6 +3292,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3376,6 +3391,7 @@ message schema {
                 project_field_ids: vec![1, 3],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3463,6 +3479,7 @@ message schema {
                 project_field_ids: vec![1, 2, 3],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3564,6 +3581,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3694,6 +3712,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3791,6 +3810,7 @@ message schema {
                 project_field_ids: vec![1, 5, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3901,6 +3921,7 @@ message schema {
                 project_field_ids: vec![1, 2, 3],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -3992,6 +4013,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -4007,6 +4029,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -4022,6 +4045,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: None,
                 partition_spec: None,
                 name_mapping: None,
@@ -4201,6 +4225,7 @@ message schema {
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                limit: None,
                 partition: Some(partition_data),
                 partition_spec: Some(partition_spec),
                 name_mapping: None,
