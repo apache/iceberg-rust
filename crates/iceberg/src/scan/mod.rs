@@ -81,7 +81,7 @@ impl SnapshotRange {
         // Walk backwards from to_snapshot to from_snapshot
         while let Some(id) = current_id {
             let snapshot = table_metadata.snapshot_by_id(id).ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, format!("Snapshot {} not found", id))
+                Error::new(ErrorKind::DataInvalid, format!("Snapshot {id} not found"))
             })?;
 
             // Validate operation is APPEND
@@ -112,8 +112,7 @@ impl SnapshotRange {
         Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "from_snapshot {} is not an ancestor of to_snapshot {}",
-                from_snapshot_id, to_snapshot_id
+                "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
             ),
         ))
     }
