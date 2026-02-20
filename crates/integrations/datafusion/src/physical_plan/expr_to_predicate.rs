@@ -225,6 +225,7 @@ fn to_iceberg_operation(op: Operator) -> OpTransformedResult {
 /// identified by name at runtime, so we need to handle them here.
 fn scalar_function_to_iceberg_predicate(func_name: &str, args: &[Expr]) -> TransformedResult {
     match func_name {
+        // TODO: support complex expression arguments to scalar functions
         "isnan" if args.len() == 1 => {
             let operand = to_iceberg_predicate(&args[0]);
             match operand {
