@@ -359,4 +359,64 @@ mod tests {
             json_no_props
         );
     }
+
+    #[test]
+    fn test_create_table_request_serde() {
+        let json_full = serde_json::json!({
+            "name": "my_table",
+            "location": "s3://bucket/table",
+            "schema": {
+                "schema-id": 0,
+                "type": "struct",
+                "fields": [
+                    {"id": 1, "name": "id", "required": true, "type": "int"}
+                ]
+            },
+            "partition-spec": {
+                "fields": [
+                    {"source-id": 1, "name": "id_bucket", "transform": "bucket[16]"}
+                ]
+            },
+            "write-order": {
+                "order-id": 0,
+                "fields": []
+            },
+            "stage-create": true,
+            "properties": {"key": "value"}
+        });
+        let request_full: CreateTableRequest =
+            serde_json::from_value(json_full.clone()).expect("Deserialization failed");
+        assert_eq!(request_full.name, "my_table");
+        assert_eq!(request_full.location.as_deref(), Some("s3://bucket/table"));
+        assert!(request_full.partition_spec.is_some());
+        assert_eq!(request_full.stage_create, Some(true));
+        assert_eq!(
+            serde_json::to_value(&request_full).expect("Serialization failed"),
+            json_full
+        );
+
+        // Without optional fields — they must be omitted, not null
+        let json_minimal = serde_json::json!({
+            "name": "my_table",
+            "schema": {
+                "schema-id": 0,
+                "type": "struct",
+                "fields": [
+                    {"id": 1, "name": "id", "required": true, "type": "int"}
+                ]
+            }
+        });
+        let request_minimal: CreateTableRequest =
+            serde_json::from_value(json_minimal.clone()).expect("Deserialization failed");
+        assert_eq!(request_minimal.name, "my_table");
+        assert_eq!(request_minimal.location, None);
+        assert_eq!(request_minimal.partition_spec, None);
+        assert_eq!(request_minimal.write_order, None);
+        assert_eq!(request_minimal.stage_create, None);
+        assert!(request_minimal.properties.is_empty());
+        assert_eq!(
+            serde_json::to_value(&request_minimal).expect("Serialization failed"),
+            json_minimal
+        );
+    }
 }
