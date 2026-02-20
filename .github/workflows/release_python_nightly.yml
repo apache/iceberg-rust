@@ -63,6 +63,7 @@ jobs:
     if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
+      max-parallel: 15
       matrix:
         include:
           - { os: windows-latest }

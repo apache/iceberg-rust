@@ -38,7 +38,7 @@ use opendal::{Operator, Scheme};
 pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::io::{
     FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
     StorageConfig, StorageFactory,
 };

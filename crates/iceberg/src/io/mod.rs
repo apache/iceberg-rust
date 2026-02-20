@@ -66,19 +66,11 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
-mod config;
 mod file_io;
-mod local_fs;
-mod memory;
-mod opendal;
 mod storage;
 
-pub use config::*;
 pub use file_io::*;
-#[cfg(feature = "storage-s3")]
-pub use opendal::CustomAwsCredentialLoader;
-pub use opendal::{OpenDalStorage, OpenDalStorageFactory};
-pub use storage::{Storage, StorageConfig, StorageFactory};
+pub use storage::*;
 
 pub(crate) mod object_cache;
 
