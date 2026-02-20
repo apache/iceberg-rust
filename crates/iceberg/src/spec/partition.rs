@@ -856,27 +856,28 @@ mod tests {
 
     #[test]
     fn test_unbound_partition_spec() {
+        // With all optional fields present
         let spec = r#"
-		{
-		"spec-id": 1,
-		"fields": [ {
-			"source-id": 4,
-			"field-id": 1000,
-			"name": "ts_day",
-			"transform": "day"
-			}, {
-			"source-id": 1,
-			"field-id": 1001,
-			"name": "id_bucket",
-			"transform": "bucket[16]"
-			}, {
-			"source-id": 2,
-			"field-id": 1002,
-			"name": "id_truncate",
-			"transform": "truncate[4]"
-			} ]
-		}
-		"#;
+        {
+        "spec-id": 1,
+        "fields": [ {
+            "source-id": 4,
+            "field-id": 1000,
+            "name": "ts_day",
+            "transform": "day"
+            }, {
+            "source-id": 1,
+            "field-id": 1001,
+            "name": "id_bucket",
+            "transform": "bucket[16]"
+            }, {
+            "source-id": 2,
+            "field-id": 1002,
+            "name": "id_truncate",
+            "transform": "truncate[4]"
+            } ]
+        }
+        "#;
 
         let partition_spec: UnboundPartitionSpec = serde_json::from_str(spec).unwrap();
         assert_eq!(Some(1), partition_spec.spec_id);
@@ -896,15 +897,20 @@ mod tests {
         assert_eq!("id_truncate", partition_spec.fields[2].name);
         assert_eq!(Transform::Truncate(4), partition_spec.fields[2].transform);
 
+        let expected: serde_json::Value = serde_json::from_str(spec).unwrap();
+        assert_eq!(serde_json::to_value(&partition_spec).unwrap(), expected);
+
+        // Without optional fields — they must be omitted, not null
         let spec = r#"
-		{
-		"fields": [ {
-			"source-id": 4,
-			"name": "ts_day",
-			"transform": "day"
-			} ]
-		}
-		"#;
+        {
+        "fields": [ {
+            "source-id": 4,
+            "name": "ts_day",
+            "transform": "day"
+            } ]
+        }
+        "#;
+
         let partition_spec: UnboundPartitionSpec = serde_json::from_str(spec).unwrap();
         assert_eq!(None, partition_spec.spec_id);
 
@@ -912,6 +918,9 @@ mod tests {
         assert_eq!(None, partition_spec.fields[0].field_id);
         assert_eq!("ts_day", partition_spec.fields[0].name);
         assert_eq!(Transform::Day, partition_spec.fields[0].transform);
+
+        let expected: serde_json::Value = serde_json::from_str(spec).unwrap();
+        assert_eq!(serde_json::to_value(&partition_spec).unwrap(), expected);
     }
 
     #[test]
