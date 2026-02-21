@@ -36,13 +36,16 @@ use iceberg_test_utils::{
 use tokio::time::sleep;
 use tracing::info;
 
-async fn get_postgres_catalog(warehouse_location: &str) -> impl Catalog {
+async fn get_postgres_catalog() -> impl Catalog {
     set_up();
 
     let postgres_uri = get_postgres_endpoint();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let warehouse_location = tmp_dir.path().to_str().unwrap().to_string();
+    let _ = tmp_dir.keep();
 
     let mut retries = 0;
-    let catalog = loop {
+    loop {
         match SqlCatalogBuilder::default()
             .load(
                 "test_postgres",
@@ -50,7 +53,7 @@ async fn get_postgres_catalog(warehouse_location: &str) -> impl Catalog {
                     (SQL_CATALOG_PROP_URI.to_string(), postgres_uri.clone()),
                     (
                         SQL_CATALOG_PROP_WAREHOUSE.to_string(),
-                        warehouse_location.to_string(),
+                        warehouse_location.clone(),
                     ),
                     (
                         SQL_CATALOG_PROP_BIND_STYLE.to_string(),
@@ -73,18 +76,19 @@ async fn get_postgres_catalog(warehouse_location: &str) -> impl Catalog {
                 sleep(std::time::Duration::from_millis(1000)).await;
             }
         }
-    };
-
-    catalog
+    }
 }
 
-async fn get_mysql_catalog(warehouse_location: &str) -> impl Catalog {
+async fn get_mysql_catalog() -> impl Catalog {
     set_up();
 
     let mysql_uri = get_mysql_endpoint();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let warehouse_location = tmp_dir.path().to_str().unwrap().to_string();
+    let _ = tmp_dir.keep();
 
     let mut retries = 0;
-    let catalog = loop {
+    loop {
         match SqlCatalogBuilder::default()
             .load(
                 "test_mysql",
@@ -92,7 +96,7 @@ async fn get_mysql_catalog(warehouse_location: &str) -> impl Catalog {
                     (SQL_CATALOG_PROP_URI.to_string(), mysql_uri.clone()),
                     (
                         SQL_CATALOG_PROP_WAREHOUSE.to_string(),
-                        warehouse_location.to_string(),
+                        warehouse_location.clone(),
                     ),
                     (
                         SQL_CATALOG_PROP_BIND_STYLE.to_string(),
@@ -115,9 +119,7 @@ async fn get_mysql_catalog(warehouse_location: &str) -> impl Catalog {
                 sleep(std::time::Duration::from_millis(1000)).await;
             }
         }
-    };
-
-    catalog
+    }
 }
 
 fn simple_table_schema() -> Schema {
@@ -142,8 +144,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_create_namespace() {
-                let warehouse = normalize_test_name_with_parts!("test_create_namespace");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns =
                     NamespaceIdent::new(normalize_test_name_with_parts!("test_create_namespace"));
                 cleanup_namespace(&catalog, &ns).await;
@@ -156,9 +157,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_create_namespace_with_properties() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_create_namespace_with_properties");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_create_namespace_with_properties"
                 ));
@@ -179,9 +178,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_create_duplicate_namespace_fails() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_create_duplicate_namespace_fails");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_create_duplicate_namespace_fails"
                 ));
@@ -195,8 +192,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_get_namespace() {
-                let warehouse = normalize_test_name_with_parts!("test_get_namespace");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_get_namespace"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -208,9 +204,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_get_non_existent_namespace_fails() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_get_non_existent_namespace_fails");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_get_non_existent_namespace_fails"
                 ));
@@ -222,8 +216,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_namespace_exists() {
-                let warehouse = normalize_test_name_with_parts!("test_namespace_exists");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns =
                     NamespaceIdent::new(normalize_test_name_with_parts!("test_namespace_exists"));
                 cleanup_namespace(&catalog, &ns).await;
@@ -237,8 +230,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_list_namespaces() {
-                let warehouse = normalize_test_name_with_parts!("test_list_namespaces");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns1 = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_list_namespaces",
                     "ns1"
@@ -266,8 +258,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_list_nested_namespaces() {
-                let warehouse = normalize_test_name_with_parts!("test_list_nested_namespaces");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let parent = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_list_nested_namespaces",
                     "parent"
@@ -299,8 +290,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_update_namespace() {
-                let warehouse = normalize_test_name_with_parts!("test_update_namespace");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns =
                     NamespaceIdent::new(normalize_test_name_with_parts!("test_update_namespace"));
                 cleanup_namespace(&catalog, &ns).await;
@@ -324,8 +314,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_drop_namespace() {
-                let warehouse = normalize_test_name_with_parts!("test_drop_namespace");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns =
                     NamespaceIdent::new(normalize_test_name_with_parts!("test_drop_namespace"));
                 cleanup_namespace(&catalog, &ns).await;
@@ -339,9 +328,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_drop_non_existent_namespace_fails() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_drop_non_existent_namespace_fails");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_drop_non_existent_namespace_fails"
                 ));
@@ -353,8 +340,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_create_table() {
-                let warehouse = normalize_test_name_with_parts!("test_create_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_create_table"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -381,9 +367,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_create_duplicate_table_fails() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_create_duplicate_table_fails");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_create_duplicate_table_fails"
                 ));
@@ -409,8 +393,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_list_tables() {
-                let warehouse = normalize_test_name_with_parts!("test_list_tables");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_list_tables"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -436,8 +419,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_list_tables_returns_empty() {
-                let warehouse = normalize_test_name_with_parts!("test_list_tables_returns_empty");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_list_tables_returns_empty"
                 ));
@@ -451,8 +433,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_load_table() {
-                let warehouse = normalize_test_name_with_parts!("test_load_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_load_table"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -479,8 +460,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_rename_table() {
-                let warehouse = normalize_test_name_with_parts!("test_rename_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_rename_table"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -504,9 +484,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_rename_table_across_namespaces() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_rename_table_across_namespaces");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns1 = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_rename_table_across_namespaces",
                     "ns1"
@@ -545,8 +523,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_drop_table() {
-                let warehouse = normalize_test_name_with_parts!("test_drop_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_drop_table"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -567,9 +544,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_drop_non_existent_table_fails() {
-                let warehouse =
-                    normalize_test_name_with_parts!("test_drop_non_existent_table_fails");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!(
                     "test_drop_non_existent_table_fails"
                 ));
@@ -584,8 +559,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_table_exists() {
-                let warehouse = normalize_test_name_with_parts!("test_table_exists");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_table_exists"));
                 cleanup_namespace(&catalog, &ns).await;
 
@@ -605,8 +579,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_register_table() {
-                let warehouse = normalize_test_name_with_parts!("test_register_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns =
                     NamespaceIdent::new(normalize_test_name_with_parts!("test_register_table"));
                 cleanup_namespace(&catalog, &ns).await;
@@ -638,8 +611,7 @@ macro_rules! sql_catalog_tests {
 
             #[tokio::test]
             async fn test_update_table() {
-                let warehouse = normalize_test_name_with_parts!("test_update_table");
-                let catalog = $get_catalog(&warehouse).await;
+                let catalog = $get_catalog().await;
                 let ns = NamespaceIdent::new(normalize_test_name_with_parts!("test_update_table"));
                 cleanup_namespace(&catalog, &ns).await;
 
