@@ -431,6 +431,133 @@ impl Display for Schema {
     }
 }
 
+/// Check whether `file_schema` is compatible with `table_schema` for appending data files.
+///
+/// Walks the table schema and checks that every field is present and type-compatible
+/// in the file schema (looked up by field ID). Follows the same semantics as
+/// iceberg-python's `_check_schema_compatible`.
+///
+/// Compatibility rules per field:
+/// - If a table field is **required** and absent from the file schema: error
+/// - If a table field is **optional** and absent from the file schema: ok (reads as null)
+/// - If a table field is **required** but the file field is **optional**: error
+/// - If types are equal: ok
+/// - If file primitive type is promotable to table primitive type: ok
+/// - If both are the same container kind (struct/list/map): ok at this level (children checked recursively)
+/// - Otherwise: error
+pub fn check_schema_compatible(table_schema: &Schema, file_schema: &Schema) -> Result<()> {
+    let mut visitor = SchemaCompatibilityVisitor {
+        file_schema,
+        mismatches: Vec::new(),
+    };
+    visit_schema(table_schema, &mut visitor)?;
+    Ok(())
+}
+
+struct SchemaCompatibilityVisitor<'a> {
+    file_schema: &'a Schema,
+    mismatches: Vec<String>,
+}
+
+impl<'a> SchemaCompatibilityVisitor<'a> {
+    fn check_field(&mut self, field: &NestedFieldRef) {
+        let field_id = field.id;
+        match self.file_schema.field_by_id(field_id) {
+            None => {
+                if field.required {
+                    self.mismatches.push(format!(
+                        "Field {} ({}, id={}) is required in table schema but missing in file schema",
+                        field.name, field.field_type, field_id
+                    ));
+                }
+            }
+            Some(file_field) => {
+                if field.required && !file_field.required {
+                    self.mismatches.push(format!(
+                        "Field {} (id={}) is required in table schema but optional in file schema",
+                        field.name, field_id
+                    ));
+                }
+
+                if field.field_type != file_field.field_type {
+                    let compatible =
+                        match (field.field_type.as_ref(), file_field.field_type.as_ref()) {
+                            (Type::Primitive(table_p), Type::Primitive(file_p)) => {
+                                file_p.is_promotable_to(table_p)
+                            }
+                            (Type::Struct(_), Type::Struct(_))
+                            | (Type::List(_), Type::List(_))
+                            | (Type::Map(_), Type::Map(_)) => true,
+                            _ => false,
+                        };
+
+                    if !compatible {
+                        self.mismatches.push(format!(
+                            "Field {} (id={}) has incompatible types: table type is {}, file type is {}",
+                            field.name, field_id, field.field_type, file_field.field_type
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl SchemaVisitor for SchemaCompatibilityVisitor<'_> {
+    type T = ();
+
+    fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.check_field(field);
+        Ok(())
+    }
+
+    fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.check_field(field);
+        Ok(())
+    }
+
+    fn before_map_key(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.check_field(field);
+        Ok(())
+    }
+
+    fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.check_field(field);
+        Ok(())
+    }
+
+    fn schema(&mut self, _schema: &Schema, _value: Self::T) -> Result<Self::T> {
+        if self.mismatches.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Schema is not compatible:\n{}", self.mismatches.join("\n")),
+            ))
+        }
+    }
+
+    fn field(&mut self, _field: &NestedFieldRef, _value: Self::T) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn r#struct(&mut self, _struct: &StructType, _results: Vec<Self::T>) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn list(&mut self, _list: &ListType, _value: Self::T) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn map(&mut self, _map: &MapType, _key_value: Self::T, _value: Self::T) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -441,7 +568,7 @@ mod tests {
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
-    use crate::spec::schema::Schema;
+    use crate::spec::schema::{Schema, check_schema_compatible};
     use crate::spec::values::Map as MapValue;
     use crate::spec::{Datum, Literal};
 
@@ -1227,5 +1354,309 @@ table {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_schema_compatible_exact_match() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "name", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "name", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_missing_optional_column() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "name", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_missing_required_column() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = check_schema_compatible(&table_schema, &file_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("name"));
+        assert!(err.contains("required"));
+        assert!(err.contains("missing"));
+    }
+
+    #[test]
+    fn test_schema_compatible_type_mismatch() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = check_schema_compatible(&table_schema, &file_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("incompatible types"));
+    }
+
+    #[test]
+    fn test_schema_compatible_promotable_type() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "value", Primitive(PrimitiveType::Double)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "value", Primitive(PrimitiveType::Float)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_extra_columns_in_file() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "extra", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_required_table_optional_file() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::optional(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = check_schema_compatible(&table_schema, &file_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("required"));
+        assert!(err.contains("optional"));
+    }
+
+    #[test]
+    fn test_schema_compatible_decimal_promotion() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "amount",
+                    Primitive(PrimitiveType::Decimal {
+                        precision: 20,
+                        scale: 2,
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "amount",
+                    Primitive(PrimitiveType::Decimal {
+                        precision: 10,
+                        scale: 2,
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_decimal_scale_mismatch() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "amount",
+                    Primitive(PrimitiveType::Decimal {
+                        precision: 20,
+                        scale: 2,
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "amount",
+                    Primitive(PrimitiveType::Decimal {
+                        precision: 10,
+                        scale: 3,
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = check_schema_compatible(&table_schema, &file_schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_compatible_nested_struct() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "data",
+                    Struct(StructType::new(vec![
+                        NestedField::required(2, "x", Primitive(PrimitiveType::Long)).into(),
+                        NestedField::optional(3, "y", Primitive(PrimitiveType::String)).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "data",
+                    Struct(StructType::new(vec![
+                        NestedField::required(2, "x", Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(3, "y", Primitive(PrimitiveType::String)).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(check_schema_compatible(&table_schema, &file_schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_compatible_multiple_mismatches_reported() {
+        let table_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "name", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let file_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = check_schema_compatible(&table_schema, &file_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("id"));
+        assert!(err.contains("name"));
     }
 }

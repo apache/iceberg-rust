@@ -24,9 +24,9 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::arrow::{AsyncArrowWriter, PARQUET_FIELD_ID_META_KEY, parquet_to_arrow_schema};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
@@ -34,13 +34,14 @@ use parquet::file::statistics::Statistics;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
+    apply_name_mapping_to_arrow_schema, arrow_schema_to_schema, get_parquet_stat_max_as_datum,
+    get_parquet_stat_min_as_datum,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
-    DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema,
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType,
+    Literal, MapType, NameMapping, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, Type, check_schema_compatible, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -307,7 +308,10 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts parquet files to data files
+    /// Converts parquet files to data files.
+    ///
+    /// Validates that each parquet file's schema is compatible with the table schema
+    /// before converting. Returns an error if any file has an incompatible schema.
     #[allow(dead_code)]
     pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,
@@ -316,6 +320,19 @@ impl ParquetWriter {
     ) -> Result<Vec<DataFile>> {
         // TODO: support adding to partitioned table
         let mut data_files: Vec<DataFile> = Vec::new();
+
+        let table_schema = table_metadata.current_schema();
+        let name_mapping = table_metadata
+            .properties()
+            .get(DEFAULT_SCHEMA_NAME_MAPPING)
+            .map(|s| serde_json::from_str::<NameMapping>(s))
+            .transpose()
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to parse name mapping: {e}"),
+                )
+            })?;
 
         for file_path in file_paths {
             let input_file = file_io.new_input(&file_path)?;
@@ -330,6 +347,47 @@ impl ParquetWriter {
                     format!("Error reading Parquet metadata: {err}"),
                 )
             })?;
+
+            let arrow_schema = parquet_to_arrow_schema(
+                parquet_metadata.file_metadata().schema_descr(),
+                parquet_metadata.file_metadata().key_value_metadata(),
+            )
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Failed to convert Parquet schema to Arrow schema for {file_path}: {e}"
+                    ),
+                )
+            })?;
+
+            let missing_field_ids = arrow_schema
+                .fields()
+                .iter()
+                .next()
+                .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
+
+            let file_schema = if missing_field_ids {
+                if let Some(ref nm) = name_mapping {
+                    let mapped_schema =
+                        apply_name_mapping_to_arrow_schema(Arc::new(arrow_schema), nm)?;
+                    arrow_schema_to_schema(&mapped_schema)?
+                } else {
+                    let property = DEFAULT_SCHEMA_NAME_MAPPING;
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Parquet file {file_path} does not have field IDs and the table \
+                             does not have '{property}' defined"
+                        ),
+                    ));
+                }
+            } else {
+                arrow_schema_to_schema(&arrow_schema)?
+            };
+
+            check_schema_compatible(table_schema, &file_schema)?;
+
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
