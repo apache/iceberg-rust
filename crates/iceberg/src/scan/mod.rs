@@ -447,37 +447,33 @@ impl TableScan {
         Ok(file_scan_task_rx.boxed())
     }
 
+    fn arrow_reader(&self) -> crate::arrow::ArrowReader {
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
+            .with_row_selection_enabled(self.row_selection_enabled);
+        if let Some(batch_size) = self.batch_size {
+            arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
+        }
+        arrow_reader_builder.build()
+    }
+
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let plan_files = self.plan_files().await?;
 
         if self.minimum_reader_tasks == 0 {
-            let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
-                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
-
-            if let Some(batch_size) = self.batch_size {
-                arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
-            }
-
-            arrow_reader_builder.build().read(plan_files)
+            self.arrow_reader().read(plan_files)
         } else {
+            // spawn chunks into their own tasks for parallelism
             let files: Vec<_> = plan_files.try_collect().await?;
-
             let workers = std::thread::available_parallelism().map_or(4, |p| p.get());
             let chunk_size = files.len().div_ceil(workers).max(self.minimum_reader_tasks);
-
             let futs = files.chunks(chunk_size).map(|chunk| {
-                let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
-                    .with_data_file_concurrency_limit(self.concurrency_limit_manifest_files)
-                    .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                    .with_row_selection_enabled(self.row_selection_enabled);
-                if let Some(batch_size) = self.batch_size {
-                    arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
-                }
+                #[allow(clippy::unnecessary_to_owned)]
                 let tasks = stream::iter(chunk.to_vec().into_iter().map(Ok));
-                tokio::spawn(async move { arrow_reader_builder.build().read(Box::pin(tasks) as _) })
+                let reader = self.arrow_reader();
+                tokio::spawn(async move { reader.read(Box::pin(tasks) as _) })
             });
 
             let record_streams = future::try_join_all(futs)
