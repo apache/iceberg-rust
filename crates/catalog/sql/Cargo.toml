@@ -35,6 +35,7 @@ sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 strum = { workspace = true }
 
 [dev-dependencies]
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
 regex = { workspace = true }
 sqlx = { version = "0.8.1", features = [
@@ -42,7 +43,10 @@ sqlx = { version = "0.8.1", features = [
   "runtime-tokio",
   "any",
   "sqlite",
+  "postgres",
+  "mysql",
   "migrate",
 ], default-features = false }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
