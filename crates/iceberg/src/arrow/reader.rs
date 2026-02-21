@@ -1025,7 +1025,7 @@ fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32
 ///
 /// # Returns
 /// Arrow schema with field IDs assigned based on name mapping
-fn apply_name_mapping_to_arrow_schema(
+pub(crate) fn apply_name_mapping_to_arrow_schema(
     arrow_schema: ArrowSchemaRef,
     name_mapping: &NameMapping,
 ) -> Result<Arc<ArrowSchema>> {
