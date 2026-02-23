@@ -32,6 +32,9 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+
 jobs:
   typos-check:
     name: typos check
