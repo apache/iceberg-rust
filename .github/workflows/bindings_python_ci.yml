@@ -104,7 +104,7 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --reinstall dist/pyiceberg_core_rust-*.whl
+          uv pip install --reinstall dist/pyiceberg_core*.whl
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash
