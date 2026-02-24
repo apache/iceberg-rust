@@ -35,7 +35,7 @@ jobs:
       - uses: actions/stale@v10.2.0
         with:
           # stale issues
-          stale-issue-label: 'stale'
+          stale-issue-label: 'stale,security'
           exempt-issue-labels: 'not-stale'
           days-before-issue-stale: 180
           days-before-issue-close: 14
