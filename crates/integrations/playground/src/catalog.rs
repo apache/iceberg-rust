@@ -25,6 +25,7 @@ use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
 use iceberg::CatalogBuilder;
 use iceberg::memory::MemoryCatalogBuilder;
+use iceberg_catalog_hms::HmsCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
@@ -98,9 +99,10 @@ impl IcebergCatalogList {
         let catalog: Arc<dyn iceberg::Catalog> = match r#type {
             "rest" => Arc::new(RestCatalogBuilder::default().load(name, props).await?),
             "memory" => Arc::new(MemoryCatalogBuilder::default().load(name, props).await?),
+            "hms" => Arc::new(HmsCatalogBuilder::default().load(name, props).await?),
             _ => {
                 return Err(anyhow::anyhow!(
-                    "Unsupported catalog type: '{type}'. Supported types: rest, memory"
+                    "Unsupported catalog type: '{type}'. Supported types: rest, memory, hms"
                 ));
             }
         };
@@ -179,7 +181,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Unsupported catalog type"));
         assert!(err_msg.contains("hive"));
-        assert!(err_msg.contains("rest, memory"));
+        assert!(err_msg.contains("rest, memory, hms"));
     }
 
     #[tokio::test]
@@ -205,5 +207,113 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"catalog_one".to_string()));
         assert!(names.contains(&"catalog_two".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_parse_hms_catalog_config_error() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_hms"
+            type = "hms"
+            [catalogs.config]
+            uri = "127.0.0.1:9083"
+            warehouse = "s3://warehouse/hive"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parse_hms_catalog_missing_uri() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_hms"
+            type = "hms"
+            [catalogs.config]
+            warehouse = "s3://warehouse/hive"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parse_hms_catalog_missing_warehouse() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_hms"
+            type = "hms"
+            [catalogs.config]
+            uri = "127.0.0.1:9083"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parse_catalog_missing_name() {
+        let config = r#"
+            [[catalogs]]
+            type = "memory"
+            [catalogs.config]
+            warehouse = "/tmp/warehouse"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("name not found"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_catalog_missing_type() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_catalog"
+            [catalogs.config]
+            warehouse = "/tmp/warehouse"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("type not found"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_catalog_missing_config() {
+        let config = r#"
+            [[catalogs]]
+            name = "test_catalog"
+            type = "memory"
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let result = IcebergCatalogList::parse_table(&toml_table).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("config not found"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_catalogs() {
+        let config = r#"
+            catalogs = []
+        "#;
+
+        let toml_table: TomlTable = toml::from_str(config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        assert!(catalog_list.catalog_names().is_empty());
     }
 }
