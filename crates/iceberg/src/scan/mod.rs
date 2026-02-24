@@ -756,10 +756,9 @@ pub mod tests {
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
-            // Write the Parquet data files first so we can get the real file size
+            // Write the data files first, then use the file size in the manifest entries
             let parquet_file_size = self.write_parquet_data_files();
 
-            // Write manifest entries with the real file size
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
@@ -980,10 +979,10 @@ pub mod tests {
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = Arc::new(PartitionSpec::unpartition_spec());
 
-            // Write the Parquet data files first so we can get the real file size
+            // Write the data files first, then use the file size in the manifest entries
             let parquet_file_size = self.write_parquet_data_files();
 
-            // Write manifest entries with the real file size and  using an empty partition for unpartitioned tables.
+            // Write data files using an empty partition for unpartitioned tables.
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
