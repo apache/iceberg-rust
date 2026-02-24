@@ -900,38 +900,47 @@ pub mod tests {
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
-
+            // x: [1, 1, 1, 1, ...]
             let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
 
             let mut values = vec![2; 512];
             values.append(vec![3; 200].as_mut());
             values.append(vec![4; 300].as_mut());
             values.append(vec![5; 12].as_mut());
+
+            // y: [2, 2, 2, 2, ..., 3, 3, 3, 3, ..., 4, 4, 4, 4, ..., 5, 5, 5, 5]
             let col2 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
 
             let mut values = vec![3; 512];
             values.append(vec![4; 512].as_mut());
+
+            // z: [3, 3, 3, 3, ..., 4, 4, 4, 4]
             let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
 
+            // a: ["Apache", "Apache", "Apache", ..., "Iceberg", "Iceberg", "Iceberg"]
             let mut values = vec!["Apache"; 512];
             values.append(vec!["Iceberg"; 512].as_mut());
             let col4 = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
 
+            // dbl:
             let mut values = vec![100.0f64; 512];
             values.append(vec![150.0f64; 12].as_mut());
             values.append(vec![200.0f64; 500].as_mut());
             let col5 = Arc::new(Float64Array::from_iter_values(values)) as ArrayRef;
 
+            // i32:
             let mut values = vec![100i32; 512];
             values.append(vec![150i32; 12].as_mut());
             values.append(vec![200i32; 500].as_mut());
             let col6 = Arc::new(Int32Array::from_iter_values(values)) as ArrayRef;
 
+            // i64:
             let mut values = vec![100i64; 512];
             values.append(vec![150i64; 12].as_mut());
             values.append(vec![200i64; 500].as_mut());
             let col7 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
 
+            // bool:
             let mut values = vec![false; 512];
             values.append(vec![true; 512].as_mut());
             let values: BooleanArray = values.into();
@@ -942,6 +951,7 @@ pub mod tests {
             ])
             .unwrap();
 
+            // Write the Parquet files
             let props = WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
                 .build();
@@ -950,7 +960,10 @@ pub mod tests {
                 let file = File::create(format!("{}/{}.parquet", &self.table_location, n)).unwrap();
                 let mut writer =
                     ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
+
                 writer.write(&to_write).expect("Writing batch");
+
+                // writer must be closed to write footer
                 writer.close().unwrap();
             }
 
@@ -970,7 +983,7 @@ pub mod tests {
             // Write the Parquet data files first so we can get the real file size
             let parquet_file_size = self.write_parquet_data_files();
 
-            // Write manifest entries with the real file size
+            // Write manifest entries with the real file size and  using an empty partition for unpartitioned tables.
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
@@ -980,6 +993,7 @@ pub mod tests {
             )
             .build_v2_data();
 
+            // Create an empty partition value.
             let empty_partition = Struct::empty();
 
             writer
