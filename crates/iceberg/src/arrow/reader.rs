@@ -110,12 +110,10 @@ impl ArrowReaderBuilder {
         self
     }
 
-    /// Sets the number of bytes to prefetch when reading Parquet metadata.
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
     ///
-    /// Without this, the reader makes two round-trips to read the footer:
-    /// one for the 8-byte footer size and one for the footer itself.
-    /// Setting this allows the reader to fetch both in a single request,
-    /// reducing latency on object stores.
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
