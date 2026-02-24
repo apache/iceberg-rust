@@ -212,6 +212,12 @@ impl ArrowReader {
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
+        let file_size = if task.file_size_in_bytes > 0 {
+            Some(task.file_size_in_bytes)
+        } else {
+            None
+        };
+
         // Migrated tables lack field IDs, requiring us to inspect the schema to choose
         // between field-ID-based or position-based projection
         let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
@@ -219,6 +225,7 @@ impl ArrowReader {
             file_io.clone(),
             should_load_page_index,
             None,
+            file_size,
         )
         .await?;
 
@@ -271,6 +278,7 @@ impl ArrowReader {
                 file_io.clone(),
                 should_load_page_index,
                 Some(options),
+                file_size,
             )
             .await?
         } else {
@@ -474,12 +482,17 @@ impl ArrowReader {
         file_io: FileIO,
         should_load_page_index: bool,
         arrow_reader_options: Option<ArrowReaderOptions>,
+        file_size_in_bytes: Option<u64>,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
-        let (parquet_metadata, parquet_reader) =
-            try_join!(parquet_file.metadata(), parquet_file.reader())?;
+        let (parquet_metadata, parquet_reader) = if let Some(size) = file_size_in_bytes {
+            let reader = parquet_file.reader().await?;
+            (FileMetadata { size }, reader)
+        } else {
+            try_join!(parquet_file.metadata(), parquet_file.reader())?
+        };
         let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
             .with_preload_column_index(true)
             .with_preload_offset_index(true)
@@ -2097,6 +2110,7 @@ message schema {
     ) -> Vec<Option<String>> {
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -2419,6 +2433,7 @@ message schema {
 
         // Task 1: read only the first row group
         let task1 = FileScanTask {
+            file_size_in_bytes: 0,
             start: rg0_start,
             length: row_group_0.compressed_size() as u64,
             record_count: Some(100),
@@ -2436,6 +2451,7 @@ message schema {
 
         // Task 2: read the second and third row groups
         let task2 = FileScanTask {
+            file_size_in_bytes: 0,
             start: rg1_start,
             length: file_end - rg1_start,
             record_count: Some(200),
@@ -2564,6 +2580,7 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -2731,6 +2748,7 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let task = FileScanTask {
+            file_size_in_bytes: 0,
             start: 0,
             length: 0,
             record_count: Some(200),
@@ -2949,6 +2967,7 @@ message schema {
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
+            file_size_in_bytes: 0,
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -3160,6 +3179,7 @@ message schema {
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
+            file_size_in_bytes: 0,
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -3269,6 +3289,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3367,6 +3388,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3454,6 +3476,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3555,6 +3578,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3685,6 +3709,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3782,6 +3807,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3892,6 +3918,7 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3983,6 +4010,7 @@ message schema {
         // Create tasks in a specific order: file_0, file_1, file_2
         let tasks = vec![
             Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3998,6 +4026,7 @@ message schema {
                 case_sensitive: false,
             }),
             Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4013,6 +4042,7 @@ message schema {
                 case_sensitive: false,
             }),
             Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4192,6 +4222,7 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,

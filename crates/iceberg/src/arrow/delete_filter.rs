@@ -399,6 +399,7 @@ pub(crate) mod tests {
 
         let file_scan_tasks = vec![
             FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -414,6 +415,7 @@ pub(crate) mod tests {
                 case_sensitive: false,
             },
             FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -464,6 +466,7 @@ pub(crate) mod tests {
 
         // ---------- fake FileScanTask ----------
         let task = FileScanTask {
+            file_size_in_bytes: 0,
             start: 0,
             length: 0,
             record_count: None,

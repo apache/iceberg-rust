@@ -51,6 +51,10 @@ where D: serde::Deserializer<'de> {
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileScanTask {
+    /// The total size of the data file in bytes, from the manifest entry.
+    /// Used to skip a stat/HEAD request when reading Parquet footers.
+    /// 0 means unknown (falls back to stat).
+    pub file_size_in_bytes: u64,
     /// The start offset of the file to scan.
     pub start: u64,
     /// The length of the file to scan.

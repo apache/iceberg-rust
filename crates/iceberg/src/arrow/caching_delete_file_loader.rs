@@ -927,6 +927,7 @@ mod tests {
         };
 
         let file_scan_task = FileScanTask {
+            file_size_in_bytes: 0,
             start: 0,
             length: 0,
             record_count: None,
