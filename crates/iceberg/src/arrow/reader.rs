@@ -487,13 +487,13 @@ impl ArrowReader {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
-        let (parquet_metadata, parquet_reader) = if let Some(size) = file_size_in_bytes {
+        let (file_metadata, parquet_reader) = if let Some(size) = file_size_in_bytes {
             let reader = parquet_file.reader().await?;
             (FileMetadata { size }, reader)
         } else {
             try_join!(parquet_file.metadata(), parquet_file.reader())?
         };
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
+        let parquet_file_reader = ArrowFileReader::new(file_metadata, parquet_reader)
             .with_preload_column_index(true)
             .with_preload_offset_index(true)
             .with_preload_page_index(should_load_page_index);
