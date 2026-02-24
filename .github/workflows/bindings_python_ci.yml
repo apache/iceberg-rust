@@ -92,7 +92,6 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: "bindings/python"
-          maturin-version: "v1.12.2"
           command: build
           args: --out dist
       - uses: astral-sh/setup-uv@v7
