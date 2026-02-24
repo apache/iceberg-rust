@@ -27,11 +27,15 @@ on:
   schedule:
     - cron: '16 4 * * 1'
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze Actions
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
       packages: read
 

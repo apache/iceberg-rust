@@ -40,6 +40,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   check-rust:
     runs-on: ubuntu-latest
