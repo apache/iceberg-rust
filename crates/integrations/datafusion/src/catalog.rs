@@ -23,6 +23,7 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
+#[allow(deprecated)]
 use crate::schema::IcebergSchemaProvider;
 
 /// Provides an interface to manage and access multiple schemas
@@ -30,6 +31,20 @@ use crate::schema::IcebergSchemaProvider;
 ///
 /// Acts as a centralized catalog provider that aggregates
 /// multiple [`SchemaProvider`], each associated with distinct namespaces.
+///
+/// # Deprecation Notice
+///
+/// This provider captures a snapshot of catalog state at creation time and does not
+/// reflect subsequent changes to the catalog (new tables, dropped tables, etc.).
+///
+/// Use [`IcebergAsyncCatalogProvider`] instead for dynamic catalog support that
+/// fetches metadata on-demand.
+///
+/// [`IcebergAsyncCatalogProvider`]: crate::IcebergAsyncCatalogProvider
+#[deprecated(
+    since = "0.6.0",
+    note = "Use IcebergAsyncCatalogProvider instead for dynamic catalog support. This provider captures a snapshot at creation time and does not reflect catalog changes."
+)]
 #[derive(Debug)]
 pub struct IcebergCatalogProvider {
     /// A `HashMap` where keys are namespace names

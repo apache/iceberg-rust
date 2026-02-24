@@ -15,13 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod async_catalog;
+pub use async_catalog::*;
+
+#[allow(deprecated)]
 mod catalog;
+#[allow(deprecated)]
 pub use catalog::*;
 
 mod error;
 pub use error::*;
 
 pub mod physical_plan;
+#[allow(deprecated)]
 mod schema;
 pub mod table;
 pub use table::table_provider_factory::IcebergTableProviderFactory;
