@@ -103,8 +103,6 @@ impl IcebergCatalogList {
             _ => {
                 return Err(anyhow::anyhow!(
                     "Unsupported catalog type: '{type}'. Supported types: rest, sql, memory"
-                ));
-            }
         };
 
         Ok((
@@ -179,6 +177,8 @@ mod tests {
         );
         assert!(catalog_list.catalog("test_sql").is_some());
     }
+
+    use super::*;
 
     #[tokio::test]
     async fn test_parse_memory_catalog() {
