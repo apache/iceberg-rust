@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,35 +15,40 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-name: Typos Check
+name: "CodeQL"
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
   pull_request:
-    branches:
-      - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
+    branches: [ "main" ]
+  schedule:
+    - cron: '16 4 * * 1'
 
 permissions:
   contents: read
 
 jobs:
-  typos-check:
-    name: typos check
+  analyze:
+    name: Analyze Actions
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+
     steps:
-      - uses: actions/checkout@v6
-      - name: Check typos
-        uses: crate-ci/typos@v1.43.5
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: actions
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:actions"
