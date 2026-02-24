@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 
 use crate::arrow::ArrowReader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
@@ -59,12 +60,16 @@ impl BasicDeleteFileLoader {
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
            as that introduces a circular dependency.
         */
+        let parquet_metadata =
+            ArrowReader::load_parquet_metadata(data_file_path, &self.file_io, false, None).await?;
+
         let record_batch_stream = ArrowReader::create_parquet_record_batch_stream_builder(
             data_file_path,
             self.file_io.clone(),
             false,
+            ArrowReaderOptions::default(),
             None,
-            None,
+            parquet_metadata,
         )
         .await?
         .build()?
