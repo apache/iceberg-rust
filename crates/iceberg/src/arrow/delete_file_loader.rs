@@ -54,6 +54,7 @@ impl BasicDeleteFileLoader {
     pub(crate) async fn parquet_to_batch_stream(
         &self,
         data_file_path: &str,
+        file_size_in_bytes: u64,
     ) -> Result<ArrowRecordBatchStream> {
         /*
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
@@ -65,6 +66,7 @@ impl BasicDeleteFileLoader {
             false,
             None,
             None,
+            file_size_in_bytes,
         )
         .await?
         .build()?
@@ -102,7 +104,7 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
         task: &FileScanTaskDeleteFile,
         schema: SchemaRef,
     ) -> Result<ArrowRecordBatchStream> {
-        let raw_batch_stream = self.parquet_to_batch_stream(&task.file_path).await?;
+        let raw_batch_stream = self.parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes).await?;
 
         // For equality deletes, only evolve the equality_ids columns.
         // For positional deletes (equality_ids is None), use all field IDs.
