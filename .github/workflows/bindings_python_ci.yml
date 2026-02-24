@@ -90,7 +90,7 @@ jobs:
         with:
           working-directory: "bindings/python"
           command: build
-          args: --out dist --sdist
+          args: --out dist
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"
