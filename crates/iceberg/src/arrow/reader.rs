@@ -2128,7 +2128,9 @@ message schema {
     ) -> Vec<Option<String>> {
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -2451,7 +2453,7 @@ message schema {
 
         // Task 1: read only the first row group
         let task1 = FileScanTask {
-            file_size_in_bytes: 0,
+            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
             start: rg0_start,
             length: row_group_0.compressed_size() as u64,
             record_count: Some(100),
@@ -2469,7 +2471,7 @@ message schema {
 
         // Task 2: read the second and third row groups
         let task2 = FileScanTask {
-            file_size_in_bytes: 0,
+            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
             start: rg1_start,
             length: file_end - rg1_start,
             record_count: Some(200),
@@ -2598,7 +2600,9 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/old_file.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -2766,7 +2770,7 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let task = FileScanTask {
-            file_size_in_bytes: 0,
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: 0,
             length: 0,
             record_count: Some(200),
@@ -2986,7 +2990,7 @@ message schema {
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
-            file_size_in_bytes: 0,
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -3199,7 +3203,7 @@ message schema {
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
-            file_size_in_bytes: 0,
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -3310,7 +3314,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3409,7 +3415,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3497,7 +3505,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3599,7 +3609,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3730,7 +3742,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3828,7 +3842,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -3939,7 +3955,9 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4031,7 +4049,9 @@ message schema {
         // Create tasks in a specific order: file_0, file_1, file_2
         let tasks = vec![
             Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_0.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4047,7 +4067,9 @@ message schema {
                 case_sensitive: false,
             }),
             Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4063,7 +4085,9 @@ message schema {
                 case_sensitive: false,
             }),
             Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_2.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -4243,7 +4267,9 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
-                file_size_in_bytes: 0,
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/data.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
