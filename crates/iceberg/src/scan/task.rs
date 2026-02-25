@@ -168,3 +168,96 @@ pub struct FileScanTaskDeleteFile {
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     pub equality_ids: Option<Vec<i32>>,
 }
+
+/// A combined scan task that groups multiple [`FileScanTask`]s together.
+///
+/// This is the result of the bin-packing algorithm that combines small file
+/// scan tasks into larger groups for more efficient execution. Each combined
+/// task represents a unit of work that can be processed together.
+///
+/// The grouping considers:
+/// - Target split size: Tasks are combined until reaching the target size
+/// - Open file cost: The overhead of opening each file is factored into sizing
+/// - Lookback: Multiple open bins are maintained for better packing
+#[derive(Debug, Clone)]
+pub struct CombinedScanTask {
+    /// The individual file scan tasks in this combined task
+    tasks: Vec<FileScanTask>,
+    /// Total estimated size in bytes (including open file costs)
+    estimated_size: u64,
+}
+
+impl CombinedScanTask {
+    /// Creates a new empty combined scan task.
+    pub fn new() -> Self {
+        Self {
+            tasks: Vec::new(),
+            estimated_size: 0,
+        }
+    }
+
+    /// Creates a new combined scan task with the given tasks and estimated size.
+    pub fn with_tasks(tasks: Vec<FileScanTask>, estimated_size: u64) -> Self {
+        Self {
+            tasks,
+            estimated_size,
+        }
+    }
+
+    /// Returns the file scan tasks in this combined task.
+    pub fn tasks(&self) -> &[FileScanTask] {
+        &self.tasks
+    }
+
+    /// Consumes this combined task and returns the underlying file scan tasks.
+    pub fn into_tasks(self) -> Vec<FileScanTask> {
+        self.tasks
+    }
+
+    /// Returns the number of file scan tasks in this combined task.
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Returns true if this combined task has no file scan tasks.
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Returns the total estimated size in bytes.
+    pub fn estimated_size(&self) -> u64 {
+        self.estimated_size
+    }
+
+    /// Returns the total number of files referenced by tasks in this combined task.
+    /// Note: Multiple tasks may reference the same file (splits), so this counts
+    /// unique file paths.
+    pub fn files_count(&self) -> usize {
+        use std::collections::HashSet;
+        self.tasks
+            .iter()
+            .map(|t| &t.data_file_path)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    /// Adds a file scan task to this combined task.
+    pub(crate) fn add_task(&mut self, task: FileScanTask, weight: u64) {
+        self.tasks.push(task);
+        self.estimated_size += weight;
+    }
+
+    /// Returns true if adding a task with the given weight would exceed the target size.
+    pub(crate) fn would_exceed(&self, weight: u64, target_size: u64) -> bool {
+        self.estimated_size + weight > target_size
+    }
+}
+
+impl Default for CombinedScanTask {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A stream of [`CombinedScanTask`].
+pub type CombinedScanTaskStream = BoxStream<'static, Result<CombinedScanTask>>;
