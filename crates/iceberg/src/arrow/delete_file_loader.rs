@@ -64,6 +64,7 @@ impl BasicDeleteFileLoader {
             self.file_io.clone(),
             false,
             None,
+            None,
         )
         .await?
         .build()?
