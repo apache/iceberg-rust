@@ -215,10 +215,15 @@ impl Transaction {
 
         let table_props = self.table.metadata().table_properties()?;
 
+        // Preserve the original FileIO so that the returned table retains
+        // any configuration (e.g. S3 region) that the catalog's own FileIO
+        // may not carry.
+        let original_file_io = self.table.file_io().clone();
+
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
 
-        (|mut tx: Transaction| async {
+        let table = (|mut tx: Transaction| async {
             let result = tx.do_commit(catalog).await;
             (tx, result)
         })
@@ -227,7 +232,9 @@ impl Transaction {
         .context(tx)
         .when(|e| e.retryable())
         .await
-        .1
+        .1?;
+
+        Ok(table.with_file_io(original_file_io))
     }
 
     fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {

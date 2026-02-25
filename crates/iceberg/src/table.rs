@@ -175,6 +175,12 @@ impl Table {
         self
     }
 
+    /// Sets the [`Table`] file IO and returns an updated instance.
+    pub(crate) fn with_file_io(mut self, file_io: FileIO) -> Self {
+        self.file_io = file_io;
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()

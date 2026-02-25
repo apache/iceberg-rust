@@ -416,8 +416,11 @@ impl ReachableFileCleanupStrategy {
             }
         }
 
-        self.delete_files(manifest_lists_to_delete.into_iter().map(|s| s.to_string()))
-            .await?;
+        let manifest_list_strings: Vec<String> = manifest_lists_to_delete
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        self.delete_files(manifest_list_strings).await?;
 
         Ok(())
     }
@@ -568,6 +571,75 @@ mod cleanup_tests {
         assert_eq!(
             strategy.load_concurrency, custom_limit,
             "Custom load concurrency limit should be set correctly"
+        );
+    }
+
+    /// Verifies that `Table::with_file_io` restores the original FileIO after
+    /// a catalog commit strips S3 configuration.
+    ///
+    /// When a catalog's `update_table` returns a new `Table`, it uses the catalog's
+    /// own `FileIO` which may lack properties like `s3.region`.
+    /// `Transaction::commit` now calls `with_file_io` to restore the original FileIO
+    /// so that `cleanup_expired_files_with_concurrency` works correctly.
+    #[test]
+    fn test_with_file_io_preserves_s3_region_after_catalog_commit() {
+        use crate::io::S3_REGION;
+
+        let s3_region = "us-east-1";
+
+        let original_file_io = FileIOBuilder::new("memory")
+            .with_prop(S3_REGION, s3_region)
+            .build()
+            .unwrap();
+
+        let table_with_region = {
+            let table = make_v2_table_with_multi_snapshot();
+            Table::builder()
+                .metadata(table.metadata().clone())
+                .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+                .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+                .file_io(original_file_io.clone())
+                .build()
+                .unwrap()
+        };
+
+        let (_, props, _) = table_with_region
+            .file_io()
+            .clone()
+            .into_builder()
+            .into_parts();
+        assert_eq!(
+            props.get(S3_REGION).map(|s| s.as_str()),
+            Some(s3_region),
+            "Table built with original FileIO should carry the S3 region"
+        );
+
+        let catalog_file_io = FileIOBuilder::new("memory").build().unwrap();
+        let table_from_catalog = Table::builder()
+            .metadata(table_with_region.metadata().clone())
+            .metadata_location("s3://bucket/test/location/metadata/v2.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(catalog_file_io)
+            .build()
+            .unwrap();
+
+        let (_, committed_props, _) = table_from_catalog
+            .file_io()
+            .clone()
+            .into_builder()
+            .into_parts();
+        assert!(
+            committed_props.get(S3_REGION).is_none(),
+            "Catalog-returned table's FileIO should lack the S3 region property"
+        );
+
+        let restored_table = table_from_catalog.with_file_io(original_file_io);
+
+        let (_, restored_props, _) = restored_table.file_io().clone().into_builder().into_parts();
+        assert_eq!(
+            restored_props.get(S3_REGION).map(|s| s.as_str()),
+            Some(s3_region),
+            "After with_file_io the table's FileIO should carry the S3 region again"
         );
     }
 
