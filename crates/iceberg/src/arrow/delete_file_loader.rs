@@ -104,7 +104,9 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
         task: &FileScanTaskDeleteFile,
         schema: SchemaRef,
     ) -> Result<ArrowRecordBatchStream> {
-        let raw_batch_stream = self.parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes).await?;
+        let raw_batch_stream = self
+            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+            .await?;
 
         // For equality deletes, only evolve the equality_ids columns.
         // For positional deletes (equality_ids is None), use all field IDs.

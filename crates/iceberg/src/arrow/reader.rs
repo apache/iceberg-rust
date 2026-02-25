@@ -502,11 +502,15 @@ impl ArrowReader {
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
         let parquet_reader = parquet_file.reader().await?;
-        let mut parquet_file_reader =
-            ArrowFileReader::new(FileMetadata { size: file_size_in_bytes }, parquet_reader)
-            .with_preload_column_index(true)
-            .with_preload_offset_index(true)
-            .with_preload_page_index(should_load_page_index);
+        let mut parquet_file_reader = ArrowFileReader::new(
+            FileMetadata {
+                size: file_size_in_bytes,
+            },
+            parquet_reader,
+        )
+        .with_preload_column_index(true)
+        .with_preload_offset_index(true)
+        .with_preload_page_index(should_load_page_index);
 
         if let Some(hint) = metadata_size_hint {
             parquet_file_reader = parquet_file_reader.with_metadata_size_hint(hint);
@@ -2772,6 +2776,7 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
@@ -2991,6 +2996,7 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
@@ -3203,6 +3209,7 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
