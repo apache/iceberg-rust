@@ -15,24 +15,24 @@ ar_archive_writer@0.2.0			X
 array-init@2.1.0		X									X						
 arrayref@0.3.9				X													
 arrayvec@0.7.6		X									X						
-arrow@57.0.0		X															
-arrow-arith@57.0.0		X															
-arrow-array@57.0.0		X															
-arrow-buffer@57.0.0		X															
-arrow-cast@57.0.0		X															
-arrow-csv@57.0.0		X															
-arrow-data@57.0.0		X															
-arrow-ipc@57.0.0		X															
-arrow-json@57.0.0		X															
-arrow-ord@57.0.0		X															
-arrow-pyarrow@57.0.0		X															
-arrow-row@57.0.0		X															
-arrow-schema@57.0.0		X															
-arrow-select@57.0.0		X															
-arrow-string@57.0.0		X															
+arrow@57.1.0		X															
+arrow-arith@57.1.0		X															
+arrow-array@57.1.0		X															
+arrow-buffer@57.1.0		X															
+arrow-cast@57.1.0		X															
+arrow-csv@57.1.0		X															
+arrow-data@57.1.0		X															
+arrow-ipc@57.1.0		X															
+arrow-json@57.1.0		X															
+arrow-ord@57.1.0		X															
+arrow-pyarrow@57.1.0		X															
+arrow-row@57.1.0		X															
+arrow-schema@57.1.0		X															
+arrow-select@57.1.0		X															
+arrow-string@57.1.0		X															
 as-any@0.3.2		X									X						
 as_derive_utils@0.11.0		X									X						
-async-compression@0.4.19		X									X						
+async-compression@0.4.36		X									X						
 async-ffi@0.5.0											X						
 async-lock@3.4.1		X									X						
 async-trait@0.1.89		X									X						
@@ -47,6 +47,7 @@ bitflags@2.10.0		X									X
 blake2@0.10.6		X									X						
 blake3@1.8.2		X	X				X										
 block-buffer@0.10.4		X									X						
+bnum@0.12.1		X									X						
 bon@3.8.1		X									X						
 bon-macros@3.8.1		X									X						
 brotli@8.0.2					X						X						
@@ -54,15 +55,15 @@ brotli-decompressor@5.0.0					X						X
 bumpalo@3.19.0		X									X						
 bytemuck@1.24.0		X									X					X	
 byteorder@1.5.0											X				X		
-bytes@1.10.1											X						
-bzip2@0.5.2		X									X						
+bytes@1.11.0											X						
 bzip2@0.6.1		X									X						
-bzip2-sys@0.1.13+1.0.8		X									X						
 cc@1.2.43		X									X						
 cfg-if@1.0.4		X									X						
 chrono@0.4.42		X									X						
 chrono-tz@0.10.4		X									X						
 comfy-table@7.1.2											X						
+compression-codecs@0.4.35		X									X						
+compression-core@0.4.31		X									X						
 concurrent-queue@2.5.0		X									X						
 const-oid@0.9.6		X									X						
 const-random@0.1.18		X									X						
@@ -89,40 +90,40 @@ darling_core@0.21.3											X
 darling_macro@0.20.11											X						
 darling_macro@0.21.3											X						
 dashmap@6.1.0											X						
-datafusion@52.0.0		X															
-datafusion-catalog@52.0.0		X															
-datafusion-catalog-listing@52.0.0		X															
-datafusion-common@52.0.0		X															
-datafusion-common-runtime@52.0.0		X															
-datafusion-datasource@52.0.0		X															
-datafusion-datasource-arrow@52.0.0		X															
-datafusion-datasource-csv@52.0.0		X															
-datafusion-datasource-json@52.0.0		X															
-datafusion-datasource-parquet@52.0.0		X															
-datafusion-doc@52.0.0		X															
-datafusion-execution@52.0.0		X															
-datafusion-expr@52.0.0		X															
-datafusion-expr-common@52.0.0		X															
-datafusion-ffi@52.0.0		X															
-datafusion-functions@52.0.0		X															
-datafusion-functions-aggregate@52.0.0		X															
-datafusion-functions-aggregate-common@52.0.0		X															
-datafusion-functions-nested@52.0.0		X															
-datafusion-functions-table@52.0.0		X															
-datafusion-functions-window@52.0.0		X															
-datafusion-functions-window-common@52.0.0		X															
-datafusion-macros@52.0.0		X															
-datafusion-optimizer@52.0.0		X															
-datafusion-physical-expr@52.0.0		X															
-datafusion-physical-expr-adapter@52.0.0		X															
-datafusion-physical-expr-common@52.0.0		X															
-datafusion-physical-optimizer@52.0.0		X															
-datafusion-physical-plan@52.0.0		X															
-datafusion-proto@52.0.0		X															
-datafusion-proto-common@52.0.0		X															
-datafusion-pruning@52.0.0		X															
-datafusion-session@52.0.0		X															
-datafusion-sql@52.0.0		X															
+datafusion@52.1.0		X															
+datafusion-catalog@52.1.0		X															
+datafusion-catalog-listing@52.1.0		X															
+datafusion-common@52.1.0		X															
+datafusion-common-runtime@52.1.0		X															
+datafusion-datasource@52.1.0		X															
+datafusion-datasource-arrow@52.1.0		X															
+datafusion-datasource-csv@52.1.0		X															
+datafusion-datasource-json@52.1.0		X															
+datafusion-datasource-parquet@52.1.0		X															
+datafusion-doc@52.1.0		X															
+datafusion-execution@52.1.0		X															
+datafusion-expr@52.1.0		X															
+datafusion-expr-common@52.1.0		X															
+datafusion-ffi@52.1.0		X															
+datafusion-functions@52.1.0		X															
+datafusion-functions-aggregate@52.1.0		X															
+datafusion-functions-aggregate-common@52.1.0		X															
+datafusion-functions-nested@52.1.0		X															
+datafusion-functions-table@52.1.0		X															
+datafusion-functions-window@52.1.0		X															
+datafusion-functions-window-common@52.1.0		X															
+datafusion-macros@52.1.0		X															
+datafusion-optimizer@52.1.0		X															
+datafusion-physical-expr@52.1.0		X															
+datafusion-physical-expr-adapter@52.1.0		X															
+datafusion-physical-expr-common@52.1.0		X															
+datafusion-physical-optimizer@52.1.0		X															
+datafusion-physical-plan@52.1.0		X															
+datafusion-proto@52.1.0		X															
+datafusion-proto-common@52.1.0		X															
+datafusion-pruning@52.1.0		X															
+datafusion-session@52.1.0		X															
+datafusion-sql@52.1.0		X															
 derive_builder@0.20.2		X									X						
 derive_builder_core@0.20.2		X									X						
 derive_builder_macro@0.20.2		X									X						
@@ -131,10 +132,12 @@ displaydoc@0.2.5		X									X
 dissimilar@1.0.10		X															
 either@1.15.0		X									X						
 equivalent@1.0.2		X									X						
+erased-serde@0.4.9		X									X						
 errno@0.3.14		X									X						
 event-listener@5.4.1		X									X						
 event-listener-strategy@0.5.4		X									X						
 expect-test@1.5.1		X									X						
+fastnum@0.7.4		X									X						
 fastrand@2.3.0		X									X						
 find-msvc-tools@0.1.4		X									X						
 fixedbitset@0.5.7		X									X						
@@ -142,6 +145,7 @@ flatbuffers@25.9.23		X
 flate2@1.1.5		X									X						
 fnv@1.0.7		X									X						
 foldhash@0.1.5																X	
+foldhash@0.2.0																X	
 form_urlencoded@1.2.2		X									X						
 futures@0.3.31		X									X						
 futures-channel@0.3.31		X									X						
@@ -151,7 +155,6 @@ futures-io@0.3.31		X									X
 futures-macro@0.3.31		X									X						
 futures-sink@0.3.31		X									X						
 futures-task@0.3.31		X									X						
-futures-timer@3.0.3		X									X						
 futures-util@0.3.31		X									X						
 generational-arena@0.2.9													X				
 generic-array@0.14.9											X						
@@ -162,7 +165,7 @@ gloo-timers@0.3.0		X									X
 half@2.7.1		X									X						
 hashbrown@0.14.5		X									X						
 hashbrown@0.15.5		X									X						
-hashbrown@0.16.0		X									X						
+hashbrown@0.16.1		X									X						
 heck@0.5.0		X									X						
 hex@0.4.3		X									X						
 hmac@0.12.1		X									X						
@@ -189,9 +192,10 @@ icu_provider@2.1.0														X
 ident_case@1.0.1		X									X						
 idna@1.1.0		X									X						
 idna_adapter@1.2.1		X									X						
-indexmap@2.12.0		X									X						
+indexmap@2.12.1		X									X						
 indoc@2.0.7		X									X						
 integer-encoding@3.0.4											X						
+inventory@0.3.22		X									X						
 ipnet@2.11.0		X									X						
 iri-string@0.7.8		X									X						
 itertools@0.13.0		X									X						
@@ -211,14 +215,15 @@ lexical-write-integer@1.0.6		X									X
 libbz2-rs-sys@0.2.2																	X
 libc@0.2.177		X									X						
 libloading@0.7.4									X								
+liblzma@0.4.5		X									X						
+liblzma-sys@0.4.4		X									X						
 libm@0.2.15											X						
 libz-rs-sys@0.5.2																X	
 linux-raw-sys@0.11.0		X	X								X						
 litemap@0.8.1														X			
 lock_api@0.4.14		X									X						
 log@0.4.28		X									X						
-lz4_flex@0.11.5											X						
-lzma-sys@0.1.20		X									X						
+lz4_flex@0.12.0											X						
 md-5@0.10.6		X									X						
 memchr@2.7.6											X				X		
 memoffset@0.9.1											X						
@@ -239,7 +244,7 @@ ordered-float@4.6.0											X
 parking@2.2.1		X									X						
 parking_lot@0.12.5		X									X						
 parking_lot_core@0.9.12		X									X						
-parquet@57.0.0		X															
+parquet@57.1.0		X															
 paste@1.0.15		X									X						
 percent-encoding@2.3.2		X									X						
 petgraph@0.8.3		X									X						
@@ -253,7 +258,6 @@ portable-atomic-util@0.2.4		X									X
 potential_utf@0.1.4														X			
 ppv-lite86@0.2.21		X									X						
 prettyplease@0.2.37		X									X						
-proc-macro-crate@3.4.0		X									X						
 proc-macro2@1.0.103		X									X						
 prost@0.14.1		X															
 prost-derive@0.14.1		X															
@@ -281,15 +285,11 @@ regex@1.12.2		X									X
 regex-automata@0.4.13		X									X						
 regex-lite@0.1.8		X									X						
 regex-syntax@0.8.8		X									X						
-relative-path@1.9.3		X									X						
 repr_offset@0.2.2																X	
 reqsign@0.16.5		X															
 reqwest@0.12.24		X									X						
 ring@0.17.14		X							X								
 roaring@0.11.2		X									X						
-rstest@0.26.1		X									X						
-rstest_macros@0.26.1		X									X						
-rust_decimal@1.39.0											X						
 rustc_version@0.4.1		X									X						
 rustix@1.1.2		X	X								X						
 rustls@0.23.34		X							X		X						
@@ -302,6 +302,7 @@ scopeguard@1.2.0		X									X
 semver@1.0.27		X									X						
 seq-macro@0.3.6		X									X						
 serde@1.0.228		X									X						
+serde-big-array@0.5.1		X									X						
 serde_bytes@0.11.19		X									X						
 serde_core@1.0.228		X									X						
 serde_derive@1.0.228		X									X						
@@ -331,7 +332,7 @@ strum_macros@0.26.4											X
 strum_macros@0.27.2											X						
 subtle@2.6.1					X												
 syn@1.0.109		X									X						
-syn@2.0.108		X									X						
+syn@2.0.113		X									X						
 sync_wrapper@1.0.2		X															
 synstructure@0.13.2											X						
 tagptr@0.2.0		X									X						
@@ -345,10 +346,7 @@ tinystr@0.8.2														X
 tokio@1.48.0											X						
 tokio-macros@2.6.0											X						
 tokio-rustls@0.26.4		X									X						
-tokio-util@0.7.16											X						
-toml_datetime@0.7.3		X									X						
-toml_edit@0.23.7		X									X						
-toml_parser@1.0.4		X									X						
+tokio-util@0.7.18											X						
 tower@0.5.2											X						
 tower-http@0.6.6											X						
 tower-layer@0.3.3											X						
@@ -363,7 +361,10 @@ twox-hash@2.1.2											X
 typed-arena@2.0.2											X						
 typed-builder@0.20.1		X									X						
 typed-builder-macro@0.20.1		X									X						
+typeid@1.0.3		X									X						
 typenum@1.19.0		X									X						
+typetag@0.2.21		X									X						
+typetag-impl@0.2.21		X									X						
 typewit@1.14.2																X	
 unicode-ident@1.0.20		X									X			X			
 unicode-segmentation@1.12.0		X									X						
@@ -372,7 +373,7 @@ unindent@0.2.4		X									X
 untrusted@0.9.0									X								
 url@2.5.7		X									X						
 utf8_iter@1.0.4		X									X						
-uuid@1.18.1		X									X						
+uuid@1.19.0		X									X						
 version_check@0.9.5		X									X						
 walkdir@2.5.0											X				X		
 want@0.3.1											X						
@@ -419,10 +420,8 @@ windows_x86_64_gnullvm@0.52.6		X									X
 windows_x86_64_gnullvm@0.53.1		X									X						
 windows_x86_64_msvc@0.52.6		X									X						
 windows_x86_64_msvc@0.53.1		X									X						
-winnow@0.7.13											X						
 wit-bindgen@0.46.0		X	X								X						
 writeable@0.6.2														X			
-xz2@0.1.7		X									X						
 yoke@0.8.1														X			
 yoke-derive@0.8.1														X			
 zerocopy@0.8.27		X		X							X						

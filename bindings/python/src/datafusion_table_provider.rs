@@ -31,7 +31,7 @@ use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
 
-fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
+pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule.name()?;
     if capsule_name.is_none() {
         return Err(PyValueError::new_err(format!(
@@ -49,7 +49,9 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     Ok(())
 }
 
-fn ffi_logical_codec_from_pycapsule(obj: Bound<PyAny>) -> PyResult<FFI_LogicalExtensionCodec> {
+pub(crate) fn ffi_logical_codec_from_pycapsule(
+    obj: Bound<PyAny>,
+) -> PyResult<FFI_LogicalExtensionCodec> {
     let attr_name = "__datafusion_logical_extension_codec__";
     let capsule = if obj.hasattr(attr_name)? {
         obj.getattr(attr_name)?.call0()?
