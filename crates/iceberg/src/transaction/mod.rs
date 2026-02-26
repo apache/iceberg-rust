@@ -175,6 +175,9 @@ impl Transaction {
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
 
+        let table_ident = tx.table.identifier().clone();
+
+        log::info!("Starting transaction commit for {}", table_ident.clone());
         (|mut tx: Transaction| async {
             let result = tx.do_commit(catalog).await;
             (tx, result)
@@ -183,6 +186,14 @@ impl Transaction {
         .sleep(tokio::time::sleep)
         .context(tx)
         .when(|e| e.retryable())
+        .notify(move |err, dur| {
+            log::warn!(
+                "Transaction commit for {} failed with retryable error, retrying in {:?}: {}",
+                table_ident,
+                dur,
+                err
+            );
+        })
         .await
         .1
     }
