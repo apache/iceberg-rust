@@ -37,11 +37,10 @@ logical_plan
 01)Filter: default.default.test_boolean_table.is_active
 02)--TableScan: default.default.test_boolean_table projection=[id, is_active, description], partial_filters=[default.default.test_boolean_table.is_active]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: is_active@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = true]
+01)FilterExec: is_active@1
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = true]
 
 # Query with is_active = true
 query ITT rowsort
@@ -59,11 +58,10 @@ logical_plan
 01)Filter: NOT default.default.test_boolean_table.is_active
 02)--TableScan: default.default.test_boolean_table projection=[id, is_active, description], partial_filters=[NOT default.default.test_boolean_table.is_active]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: NOT is_active@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
+01)FilterExec: NOT is_active@1
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
 
 # Query with is_active = false
 query ITT rowsort
@@ -80,11 +78,10 @@ logical_plan
 01)Filter: NOT default.default.test_boolean_table.is_active
 02)--TableScan: default.default.test_boolean_table projection=[id, is_active, description], partial_filters=[NOT default.default.test_boolean_table.is_active]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: NOT is_active@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
+01)FilterExec: NOT is_active@1
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
 
 # Query with is_active != true (includes false and NULL)
 query ITT rowsort

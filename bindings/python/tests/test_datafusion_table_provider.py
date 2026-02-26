@@ -25,10 +25,13 @@ from pyiceberg.catalog import Catalog, load_catalog
 import pyarrow as pa
 from pathlib import Path
 import datafusion
+from packaging.version import Version
 
-assert (
-    datafusion.__version__ >= "45"
-)  # iceberg table provider only works for datafusion >= 45
+if Version(datafusion.__version__) < Version("52.0.0"):
+    pytest.skip(
+        "Iceberg table provider requires datafusion>=52 for FFI compatibility",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -142,12 +145,12 @@ def test_register_pyiceberg_table(
     iceberg_table.append(arrow_table_with_null)
 
     # monkey patch the __datafusion_table_provider__ method to the iceberg table
-    def __datafusion_table_provider__(self):
+    def __datafusion_table_provider__(self, session):
         return IcebergDataFusionTable(
             identifier=self.name(),
             metadata_location=self.metadata_location,
             file_io_properties=self.io.properties,
-        ).__datafusion_table_provider__()
+        ).__datafusion_table_provider__(session)
 
     iceberg_table.__datafusion_table_provider__ = MethodType(
         __datafusion_table_provider__, iceberg_table
