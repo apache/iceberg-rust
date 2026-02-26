@@ -51,6 +51,11 @@ include = [
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+  "error",
+]
+
 [dependency-groups]
 dev = [
     "maturin>=1.0,<2.0",

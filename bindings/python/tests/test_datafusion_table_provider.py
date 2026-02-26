@@ -109,7 +109,7 @@ def test_register_iceberg_table_provider(
     )
 
     ctx = SessionContext()
-    ctx.register_table_provider("test", iceberg_table_provider)
+    ctx.register_table("test", iceberg_table_provider)
 
     datafusion_table = ctx.table("test")
     assert datafusion_table is not None
@@ -157,7 +157,7 @@ def test_register_pyiceberg_table(
     )
 
     ctx = SessionContext()
-    ctx.register_table_provider("test", iceberg_table)
+    ctx.register_table("test", iceberg_table)
 
     datafusion_table = ctx.table("test")
     assert datafusion_table is not None
