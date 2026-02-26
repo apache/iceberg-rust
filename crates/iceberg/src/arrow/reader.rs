@@ -60,6 +60,13 @@ use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
+/// Default coalesce threshold for merging nearby byte ranges.
+/// Matches object_store's OBJECT_STORE_COALESCE_DEFAULT.
+pub(crate) const DEFAULT_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+/// Default number of merged byte ranges to fetch concurrently.
+/// Matches object_store's OBJECT_STORE_COALESCE_PARALLEL.
+pub(crate) const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
+
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
@@ -68,6 +75,8 @@ pub struct ArrowReaderBuilder {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     metadata_size_hint: Option<usize>,
+    range_coalesce_bytes: u64,
+    range_fetch_concurrency: usize,
 }
 
 impl ArrowReaderBuilder {
@@ -82,6 +91,8 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
             metadata_size_hint: None,
+            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
+            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
         }
     }
 
@@ -119,6 +130,23 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Sets the gap threshold for merging nearby byte ranges into a single request.
+    /// Ranges with gaps smaller than this value will be coalesced.
+    ///
+    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
+    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
+        self.range_coalesce_bytes = range_coalesce_bytes;
+        self
+    }
+
+    /// Sets the maximum number of merged byte ranges to fetch concurrently.
+    ///
+    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
+    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
+        self.range_fetch_concurrency = range_fetch_concurrency;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
@@ -132,6 +160,8 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
             metadata_size_hint: self.metadata_size_hint,
+            range_coalesce_bytes: self.range_coalesce_bytes,
+            range_fetch_concurrency: self.range_fetch_concurrency,
         }
     }
 }
@@ -149,6 +179,8 @@ pub struct ArrowReader {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     metadata_size_hint: Option<usize>,
+    range_coalesce_bytes: u64,
+    range_fetch_concurrency: usize,
 }
 
 impl ArrowReader {
@@ -161,6 +193,8 @@ impl ArrowReader {
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
         let metadata_size_hint = self.metadata_size_hint;
+        let range_coalesce_bytes = self.range_coalesce_bytes;
+        let range_fetch_concurrency = self.range_fetch_concurrency;
 
         // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
         let stream: ArrowRecordBatchStream = if concurrency_limit_data_files == 1 {
@@ -177,6 +211,8 @@ impl ArrowReader {
                             row_group_filtering_enabled,
                             row_selection_enabled,
                             metadata_size_hint,
+                            range_coalesce_bytes,
+                            range_fetch_concurrency,
                         )
                     })
                     .map_err(|err| {
@@ -199,6 +235,8 @@ impl ArrowReader {
                             row_group_filtering_enabled,
                             row_selection_enabled,
                             metadata_size_hint,
+                            range_coalesce_bytes,
+                            range_fetch_concurrency,
                         )
                     })
                     .map_err(|err| {
@@ -222,6 +260,8 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
         metadata_size_hint: Option<usize>,
+        range_coalesce_bytes: u64,
+        range_fetch_concurrency: usize,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
@@ -238,6 +278,8 @@ impl ArrowReader {
             None,
             metadata_size_hint,
             task.file_size_in_bytes,
+            range_coalesce_bytes,
+            range_fetch_concurrency,
         )
         .await?;
 
@@ -292,6 +334,8 @@ impl ArrowReader {
                 Some(options),
                 metadata_size_hint,
                 task.file_size_in_bytes,
+                range_coalesce_bytes,
+                range_fetch_concurrency,
             )
             .await?
         } else {
@@ -497,6 +541,8 @@ impl ArrowReader {
         arrow_reader_options: Option<ArrowReaderOptions>,
         metadata_size_hint: Option<usize>,
         file_size_in_bytes: u64,
+        range_coalesce_bytes: u64,
+        range_fetch_concurrency: usize,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
@@ -510,7 +556,9 @@ impl ArrowReader {
         )
         .with_preload_column_index(true)
         .with_preload_offset_index(true)
-        .with_preload_page_index(should_load_page_index);
+        .with_preload_page_index(should_load_page_index)
+        .with_range_coalesce_bytes(range_coalesce_bytes)
+        .with_range_fetch_concurrency(range_fetch_concurrency);
 
         if let Some(hint) = metadata_size_hint {
             parquet_file_reader = parquet_file_reader.with_metadata_size_hint(hint);
@@ -1710,6 +1758,8 @@ pub struct ArrowFileReader {
     preload_offset_index: bool,
     preload_page_index: bool,
     metadata_size_hint: Option<usize>,
+    range_coalesce_bytes: u64,
+    range_fetch_concurrency: usize,
     r: Box<dyn FileRead>,
 }
 
@@ -1722,6 +1772,8 @@ impl ArrowFileReader {
             preload_offset_index: false,
             preload_page_index: false,
             metadata_size_hint: None,
+            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
+            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
             r,
         }
     }
@@ -1752,6 +1804,18 @@ impl ArrowFileReader {
         self.metadata_size_hint = Some(hint);
         self
     }
+
+    /// Sets the gap threshold for merging nearby byte ranges into a single request.
+    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
+        self.range_coalesce_bytes = range_coalesce_bytes;
+        self
+    }
+
+    /// Sets the maximum number of merged byte ranges to fetch concurrently.
+    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
+        self.range_fetch_concurrency = range_fetch_concurrency;
+        self
+    }
 }
 
 impl AsyncFileReader for ArrowFileReader {
@@ -1771,14 +1835,12 @@ impl AsyncFileReader for ArrowFileReader {
         &mut self,
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
-        // Values match object_store's OBJECT_STORE_COALESCE_DEFAULT and
-        // OBJECT_STORE_COALESCE_PARALLEL.
-        const COALESCE_BYTES: u64 = 1024 * 1024;
-        const PARALLEL: usize = 10;
+        let coalesce_bytes = self.range_coalesce_bytes;
+        let concurrency = self.range_fetch_concurrency;
 
         async move {
             // Merge nearby ranges to reduce the number of object store requests.
-            let fetch_ranges = merge_ranges(&ranges, COALESCE_BYTES);
+            let fetch_ranges = merge_ranges(&ranges, coalesce_bytes);
             let r = &self.r;
 
             // Fetch merged ranges concurrently.
@@ -1788,7 +1850,7 @@ impl AsyncFileReader for ArrowFileReader {
                         .await
                         .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))
                 })
-                .buffered(PARALLEL)
+                .buffered(concurrency)
                 .try_collect()
                 .await?;
 
