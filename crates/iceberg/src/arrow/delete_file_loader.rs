@@ -20,7 +20,7 @@ use std::sync::Arc;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::arrow::ArrowReader;
-use crate::arrow::reader::{DEFAULT_RANGE_COALESCE_BYTES, DEFAULT_RANGE_FETCH_CONCURRENCY};
+use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
@@ -66,10 +66,8 @@ impl BasicDeleteFileLoader {
             self.file_io.clone(),
             false,
             None,
-            None,
             file_size_in_bytes,
-            DEFAULT_RANGE_COALESCE_BYTES,
-            DEFAULT_RANGE_FETCH_CONCURRENCY,
+            ParquetReadOptions::default(),
         )
         .await?
         .build()?

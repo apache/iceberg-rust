@@ -60,12 +60,27 @@ use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
-/// Default coalesce threshold for merging nearby byte ranges.
-/// Matches object_store's OBJECT_STORE_COALESCE_DEFAULT.
-pub(crate) const DEFAULT_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
-/// Default number of merged byte ranges to fetch concurrently.
-/// Matches object_store's OBJECT_STORE_COALESCE_PARALLEL.
-pub(crate) const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
+/// Options for tuning Parquet file I/O.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ParquetReadOptions {
+    pub metadata_size_hint: Option<usize>,
+    /// Gap threshold for merging nearby byte ranges into a single request.
+    pub range_coalesce_bytes: u64,
+    /// Maximum number of merged byte ranges to fetch concurrently.
+    pub range_fetch_concurrency: usize,
+}
+
+impl Default for ParquetReadOptions {
+    /// Defaults match object_store's OBJECT_STORE_COALESCE_DEFAULT and
+    /// OBJECT_STORE_COALESCE_PARALLEL.
+    fn default() -> Self {
+        Self {
+            metadata_size_hint: None,
+            range_coalesce_bytes: 1024 * 1024,
+            range_fetch_concurrency: 10,
+        }
+    }
+}
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -74,9 +89,7 @@ pub struct ArrowReaderBuilder {
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
-    metadata_size_hint: Option<usize>,
-    range_coalesce_bytes: u64,
-    range_fetch_concurrency: usize,
+    parquet_read_options: ParquetReadOptions,
 }
 
 impl ArrowReaderBuilder {
@@ -90,9 +103,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
-            metadata_size_hint: None,
-            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
-            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
+            parquet_read_options: ParquetReadOptions::default(),
         }
     }
 
@@ -126,7 +137,7 @@ impl ArrowReaderBuilder {
     /// This hint can help reduce the number of fetch requests. For more details see the
     /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
-        self.metadata_size_hint = Some(metadata_size_hint);
+        self.parquet_read_options.metadata_size_hint = Some(metadata_size_hint);
         self
     }
 
@@ -135,7 +146,7 @@ impl ArrowReaderBuilder {
     ///
     /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
     pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
-        self.range_coalesce_bytes = range_coalesce_bytes;
+        self.parquet_read_options.range_coalesce_bytes = range_coalesce_bytes;
         self
     }
 
@@ -143,7 +154,7 @@ impl ArrowReaderBuilder {
     ///
     /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
     pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
-        self.range_fetch_concurrency = range_fetch_concurrency;
+        self.parquet_read_options.range_fetch_concurrency = range_fetch_concurrency;
         self
     }
 
@@ -159,9 +170,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
-            metadata_size_hint: self.metadata_size_hint,
-            range_coalesce_bytes: self.range_coalesce_bytes,
-            range_fetch_concurrency: self.range_fetch_concurrency,
+            parquet_read_options: self.parquet_read_options,
         }
     }
 }
@@ -178,9 +187,7 @@ pub struct ArrowReader {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
-    metadata_size_hint: Option<usize>,
-    range_coalesce_bytes: u64,
-    range_fetch_concurrency: usize,
+    parquet_read_options: ParquetReadOptions,
 }
 
 impl ArrowReader {
@@ -192,9 +199,7 @@ impl ArrowReader {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
-        let metadata_size_hint = self.metadata_size_hint;
-        let range_coalesce_bytes = self.range_coalesce_bytes;
-        let range_fetch_concurrency = self.range_fetch_concurrency;
+        let parquet_read_options = self.parquet_read_options;
 
         // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
         let stream: ArrowRecordBatchStream = if concurrency_limit_data_files == 1 {
@@ -210,9 +215,7 @@ impl ArrowReader {
                             self.delete_file_loader.clone(),
                             row_group_filtering_enabled,
                             row_selection_enabled,
-                            metadata_size_hint,
-                            range_coalesce_bytes,
-                            range_fetch_concurrency,
+                            parquet_read_options,
                         )
                     })
                     .map_err(|err| {
@@ -234,9 +237,7 @@ impl ArrowReader {
                             self.delete_file_loader.clone(),
                             row_group_filtering_enabled,
                             row_selection_enabled,
-                            metadata_size_hint,
-                            range_coalesce_bytes,
-                            range_fetch_concurrency,
+                            parquet_read_options,
                         )
                     })
                     .map_err(|err| {
@@ -251,7 +252,6 @@ impl ArrowReader {
         Ok(stream)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
@@ -259,9 +259,7 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
-        metadata_size_hint: Option<usize>,
-        range_coalesce_bytes: u64,
-        range_fetch_concurrency: usize,
+        parquet_read_options: ParquetReadOptions,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
@@ -276,10 +274,8 @@ impl ArrowReader {
             file_io.clone(),
             should_load_page_index,
             None,
-            metadata_size_hint,
             task.file_size_in_bytes,
-            range_coalesce_bytes,
-            range_fetch_concurrency,
+            parquet_read_options,
         )
         .await?;
 
@@ -332,10 +328,8 @@ impl ArrowReader {
                 file_io.clone(),
                 should_load_page_index,
                 Some(options),
-                metadata_size_hint,
                 task.file_size_in_bytes,
-                range_coalesce_bytes,
-                range_fetch_concurrency,
+                parquet_read_options,
             )
             .await?
         } else {
@@ -539,10 +533,8 @@ impl ArrowReader {
         file_io: FileIO,
         should_load_page_index: bool,
         arrow_reader_options: Option<ArrowReaderOptions>,
-        metadata_size_hint: Option<usize>,
         file_size_in_bytes: u64,
-        range_coalesce_bytes: u64,
-        range_fetch_concurrency: usize,
+        parquet_read_options: ParquetReadOptions,
     ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader>> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
@@ -557,10 +549,10 @@ impl ArrowReader {
         .with_preload_column_index(true)
         .with_preload_offset_index(true)
         .with_preload_page_index(should_load_page_index)
-        .with_range_coalesce_bytes(range_coalesce_bytes)
-        .with_range_fetch_concurrency(range_fetch_concurrency);
+        .with_range_coalesce_bytes(parquet_read_options.range_coalesce_bytes)
+        .with_range_fetch_concurrency(parquet_read_options.range_fetch_concurrency);
 
-        if let Some(hint) = metadata_size_hint {
+        if let Some(hint) = parquet_read_options.metadata_size_hint {
             parquet_file_reader = parquet_file_reader.with_metadata_size_hint(hint);
         }
 
@@ -1766,14 +1758,15 @@ pub struct ArrowFileReader {
 impl ArrowFileReader {
     /// Create a new ArrowFileReader
     pub fn new(meta: FileMetadata, r: Box<dyn FileRead>) -> Self {
+        let defaults = ParquetReadOptions::default();
         Self {
             meta,
             preload_column_index: false,
             preload_offset_index: false,
             preload_page_index: false,
             metadata_size_hint: None,
-            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
-            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
+            range_coalesce_bytes: defaults.range_coalesce_bytes,
+            range_fetch_concurrency: defaults.range_fetch_concurrency,
             r,
         }
     }
