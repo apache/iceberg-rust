@@ -559,9 +559,9 @@ impl ArrowReader {
             },
             parquet_reader,
         )
-            .with_preload_column_index(true)
-            .with_preload_offset_index(true)
-            .with_preload_page_index(should_load_page_index);
+        .with_preload_column_index(true)
+        .with_preload_offset_index(true)
+        .with_preload_page_index(should_load_page_index);
 
         Ok(ParquetRecordBatchStreamBuilder::new_with_metadata(
             parquet_file_reader,
