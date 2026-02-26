@@ -90,6 +90,7 @@ impl TransactionAction for FastAppendAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            vec![],
         );
 
         // validate added files
@@ -138,7 +139,9 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Ok(manifest_list
             .entries()
             .iter()
-            .filter(|entry| entry.has_added_files() || entry.has_existing_files())
+            .filter(|entry| {
+                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
+            })
             .cloned()
             .collect())
     }
