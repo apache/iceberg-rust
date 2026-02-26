@@ -32,6 +32,9 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+
 jobs:
   typos-check:
     name: typos check
@@ -42,4 +45,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Check typos
-        uses: crate-ci/typos@v1.43.3
+        uses: crate-ci/typos@v1.43.5

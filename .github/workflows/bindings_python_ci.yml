@@ -40,6 +40,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   check-rust:
     runs-on: ubuntu-latest
@@ -75,6 +78,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest
@@ -89,7 +93,7 @@ jobs:
         with:
           working-directory: "bindings/python"
           command: build
-          args: --out dist --sdist
+          args: --out dist
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.3"

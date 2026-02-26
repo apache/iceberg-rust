@@ -55,11 +55,14 @@ jobs:
         # Use input for workflow_dispatch, otherwise use `workflow_run.head_branch`
         # Note, `workflow_run.head_branch` does not contain `refs/tags/` prefix, just the tag name, i.e. `v0.4.0` or `v0.4.0-rc.1`
         # Valid formats: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
+        env:
+          DISPATCH_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+            RELEASE_TAG="$DISPATCH_RELEASE_TAG"
           else
-            RELEASE_TAG="${{ github.event.workflow_run.head_branch }}"
+            RELEASE_TAG="$RUN_HEAD_BRANCH"
           fi
           echo "Validating release tag: $RELEASE_TAG"
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
@@ -142,6 +145,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     needs: [validate-release-tag]
     strategy:
+      max-parallel: 15
       matrix:
         include:
           - { os: windows-latest }
