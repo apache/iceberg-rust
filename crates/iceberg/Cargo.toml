@@ -40,6 +40,8 @@ storage-oss = ["opendal/services-oss"]
 storage-s3 = ["opendal/services-s3", "reqsign"]
 
 
+nightly = []
+
 [dependencies]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
