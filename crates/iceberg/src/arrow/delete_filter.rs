@@ -378,6 +378,12 @@ pub(crate) mod tests {
 
         let pos_del_1 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-1.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -385,6 +391,12 @@ pub(crate) mod tests {
 
         let pos_del_2 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-2.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -392,6 +404,12 @@ pub(crate) mod tests {
 
         let pos_del_3 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-3.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -477,6 +495,7 @@ pub(crate) mod tests {
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
                 file_path: "eq-del.parquet".to_string(),
+                file_size_in_bytes: 1, // never read; this test fails before opening the file
                 file_type: DataContentType::EqualityDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
