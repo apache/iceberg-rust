@@ -51,120 +51,127 @@
 <a href=#51 id=51 data-nosnippet>51</a><span class="doccomment">/// A task to scan part of file.
 <a href=#52 id=52 data-nosnippet>52</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 <a href=#53 id=53 data-nosnippet>53</a></span><span class="kw">pub struct </span>FileScanTask {
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="doccomment">/// The start offset of the file to scan.
-<a href=#55 id=55 data-nosnippet>55</a>    </span><span class="kw">pub </span>start: u64,
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="doccomment">/// The length of the file to scan.
-<a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">pub </span>length: u64,
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="doccomment">/// The number of records in the file to scan.
-<a href=#59 id=59 data-nosnippet>59</a>    ///
-<a href=#60 id=60 data-nosnippet>60</a>    /// This is an optional field, and only available if we are
-<a href=#61 id=61 data-nosnippet>61</a>    /// reading the entire data file.
-<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">pub </span>record_count: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// The data file path corresponding to the task.
-<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub </span>data_file_path: String,
+<a href=#54 id=54 data-nosnippet>54</a>    <span class="doccomment">/// The total size of the data file in bytes, from the manifest entry.
+<a href=#55 id=55 data-nosnippet>55</a>    /// Used to skip a stat/HEAD request when reading Parquet footers.
+<a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub </span>file_size_in_bytes: u64,
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="doccomment">/// The start offset of the file to scan.
+<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">pub </span>start: u64,
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="doccomment">/// The length of the file to scan.
+<a href=#60 id=60 data-nosnippet>60</a>    </span><span class="kw">pub </span>length: u64,
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="doccomment">/// The number of records in the file to scan.
+<a href=#62 id=62 data-nosnippet>62</a>    ///
+<a href=#63 id=63 data-nosnippet>63</a>    /// This is an optional field, and only available if we are
+<a href=#64 id=64 data-nosnippet>64</a>    /// reading the entire data file.
+<a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub </span>record_count: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#66 id=66 data-nosnippet>66</a>
-<a href=#67 id=67 data-nosnippet>67</a>    <span class="doccomment">/// The format of the file to scan.
-<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">pub </span>data_file_format: DataFileFormat,
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="doccomment">/// The data file path corresponding to the task.
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">pub </span>data_file_path: String,
 <a href=#69 id=69 data-nosnippet>69</a>
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// The schema of the file to scan.
-<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">pub </span>schema: SchemaRef,
-<a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// The field ids to project.
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub </span>project_field_ids: Vec&lt;i32&gt;,
-<a href=#74 id=74 data-nosnippet>74</a>    <span class="doccomment">/// The predicate to filter.
-<a href=#75 id=75 data-nosnippet>75</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;BoundPredicate&gt;,
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// The list of delete files that may need to be applied to this data file
-<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub </span>deletes: Vec&lt;FileScanTaskDeleteFile&gt;,
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// The format of the file to scan.
+<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">pub </span>data_file_format: DataFileFormat,
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="doccomment">/// The schema of the file to scan.
+<a href=#74 id=74 data-nosnippet>74</a>    </span><span class="kw">pub </span>schema: SchemaRef,
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="doccomment">/// The field ids to project.
+<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">pub </span>project_field_ids: Vec&lt;i32&gt;,
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="doccomment">/// The predicate to filter.
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;BoundPredicate&gt;,
 <a href=#80 id=80 data-nosnippet>80</a>
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="doccomment">/// Partition data from the manifest entry, used to identify which columns can use
-<a href=#82 id=82 data-nosnippet>82</a>    /// constant values from partition metadata vs. reading from the data file.
-<a href=#83 id=83 data-nosnippet>83</a>    /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
-<a href=#84 id=84 data-nosnippet>84</a>    </span><span class="attr">#[serde(default)]
-<a href=#85 id=85 data-nosnippet>85</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#86 id=86 data-nosnippet>86</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
-<a href=#87 id=87 data-nosnippet>87</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub </span>partition: <span class="prelude-ty">Option</span>&lt;Struct&gt;,
-<a href=#89 id=89 data-nosnippet>89</a>
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="doccomment">/// The partition spec for this file, used to distinguish identity transforms
-<a href=#91 id=91 data-nosnippet>91</a>    /// (which use partition metadata constants) from non-identity transforms like
-<a href=#92 id=92 data-nosnippet>92</a>    /// bucket/truncate (which must read source columns from the data file).
-<a href=#93 id=93 data-nosnippet>93</a>    </span><span class="attr">#[serde(default)]
-<a href=#94 id=94 data-nosnippet>94</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#95 id=95 data-nosnippet>95</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
-<a href=#96 id=96 data-nosnippet>96</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
-<a href=#97 id=97 data-nosnippet>97</a>    </span><span class="kw">pub </span>partition_spec: <span class="prelude-ty">Option</span>&lt;Arc&lt;PartitionSpec&gt;&gt;,
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>    <span class="doccomment">/// Name mapping from table metadata (property: schema.name-mapping.default),
-<a href=#100 id=100 data-nosnippet>100</a>    /// used to resolve field IDs from column names when Parquet files lack field IDs
-<a href=#101 id=101 data-nosnippet>101</a>    /// or have field ID conflicts.
-<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="attr">#[serde(default)]
-<a href=#103 id=103 data-nosnippet>103</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-<a href=#104 id=104 data-nosnippet>104</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
-<a href=#105 id=105 data-nosnippet>105</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
-<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">pub </span>name_mapping: <span class="prelude-ty">Option</span>&lt;Arc&lt;NameMapping&gt;&gt;,
-<a href=#107 id=107 data-nosnippet>107</a>
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="doccomment">/// Whether this scan task should treat column names as case-sensitive when binding predicates.
-<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">pub </span>case_sensitive: bool,
-<a href=#110 id=110 data-nosnippet>110</a>}
-<a href=#111 id=111 data-nosnippet>111</a>
-<a href=#112 id=112 data-nosnippet>112</a><span class="kw">impl </span>FileScanTask {
-<a href=#113 id=113 data-nosnippet>113</a>    <span class="doccomment">/// Returns the data file path of this file scan task.
-<a href=#114 id=114 data-nosnippet>114</a>    </span><span class="kw">pub fn </span>data_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.data_file_path
-<a href=#116 id=116 data-nosnippet>116</a>    }
-<a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="doccomment">/// Returns the project field id of this file scan task.
-<a href=#119 id=119 data-nosnippet>119</a>    </span><span class="kw">pub fn </span>project_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i32] {
-<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.project_field_ids
-<a href=#121 id=121 data-nosnippet>121</a>    }
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="doccomment">/// Returns the predicate of this file scan task.
-<a href=#124 id=124 data-nosnippet>124</a>    </span><span class="kw">pub fn </span>predicate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt; {
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="self">self</span>.predicate.as_ref()
-<a href=#126 id=126 data-nosnippet>126</a>    }
-<a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a>    <span class="doccomment">/// Returns the schema of this file scan task as a reference
-<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Schema {
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
-<a href=#131 id=131 data-nosnippet>131</a>    }
-<a href=#132 id=132 data-nosnippet>132</a>
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="doccomment">/// Returns the schema of this file scan task as a SchemaRef
-<a href=#134 id=134 data-nosnippet>134</a>    </span><span class="kw">pub fn </span>schema_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaRef {
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="self">self</span>.schema.clone()
-<a href=#136 id=136 data-nosnippet>136</a>    }
-<a href=#137 id=137 data-nosnippet>137</a>}
-<a href=#138 id=138 data-nosnippet>138</a>
-<a href=#139 id=139 data-nosnippet>139</a><span class="attr">#[derive(Debug)]
-<a href=#140 id=140 data-nosnippet>140</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>DeleteFileContext {
-<a href=#141 id=141 data-nosnippet>141</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) manifest_entry: ManifestEntryRef,
-<a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) partition_spec_id: i32,
-<a href=#143 id=143 data-nosnippet>143</a>}
-<a href=#144 id=144 data-nosnippet>144</a>
-<a href=#145 id=145 data-nosnippet>145</a><span class="kw">impl </span>From&lt;<span class="kw-2">&amp;</span>DeleteFileContext&gt; <span class="kw">for </span>FileScanTaskDeleteFile {
-<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">fn </span>from(ctx: <span class="kw-2">&amp;</span>DeleteFileContext) -&gt; <span class="self">Self </span>{
-<a href=#147 id=147 data-nosnippet>147</a>        FileScanTaskDeleteFile {
-<a href=#148 id=148 data-nosnippet>148</a>            file_path: ctx.manifest_entry.file_path().to_string(),
-<a href=#149 id=149 data-nosnippet>149</a>            file_type: ctx.manifest_entry.content_type(),
-<a href=#150 id=150 data-nosnippet>150</a>            partition_spec_id: ctx.partition_spec_id,
-<a href=#151 id=151 data-nosnippet>151</a>            equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
-<a href=#152 id=152 data-nosnippet>152</a>        }
-<a href=#153 id=153 data-nosnippet>153</a>    }
-<a href=#154 id=154 data-nosnippet>154</a>}
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a><span class="doccomment">/// A task to scan part of file.
-<a href=#157 id=157 data-nosnippet>157</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">pub struct </span>FileScanTaskDeleteFile {
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="doccomment">/// The delete file path
-<a href=#160 id=160 data-nosnippet>160</a>    </span><span class="kw">pub </span>file_path: String,
-<a href=#161 id=161 data-nosnippet>161</a>
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="doccomment">/// delete file type
-<a href=#163 id=163 data-nosnippet>163</a>    </span><span class="kw">pub </span>file_type: DataContentType,
-<a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="doccomment">/// partition id
-<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="kw">pub </span>partition_spec_id: i32,
-<a href=#167 id=167 data-nosnippet>167</a>
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// equality ids for equality deletes (null for anything other than equality-deletes)
-<a href=#169 id=169 data-nosnippet>169</a>    </span><span class="kw">pub </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
-<a href=#170 id=170 data-nosnippet>170</a>}</code></pre></div></section></main></body></html>
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="doccomment">/// The list of delete files that may need to be applied to this data file
+<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">pub </span>deletes: Vec&lt;FileScanTaskDeleteFile&gt;,
+<a href=#83 id=83 data-nosnippet>83</a>
+<a href=#84 id=84 data-nosnippet>84</a>    <span class="doccomment">/// Partition data from the manifest entry, used to identify which columns can use
+<a href=#85 id=85 data-nosnippet>85</a>    /// constant values from partition metadata vs. reading from the data file.
+<a href=#86 id=86 data-nosnippet>86</a>    /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
+<a href=#87 id=87 data-nosnippet>87</a>    </span><span class="attr">#[serde(default)]
+<a href=#88 id=88 data-nosnippet>88</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#89 id=89 data-nosnippet>89</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
+<a href=#90 id=90 data-nosnippet>90</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
+<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub </span>partition: <span class="prelude-ty">Option</span>&lt;Struct&gt;,
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a>    <span class="doccomment">/// The partition spec for this file, used to distinguish identity transforms
+<a href=#94 id=94 data-nosnippet>94</a>    /// (which use partition metadata constants) from non-identity transforms like
+<a href=#95 id=95 data-nosnippet>95</a>    /// bucket/truncate (which must read source columns from the data file).
+<a href=#96 id=96 data-nosnippet>96</a>    </span><span class="attr">#[serde(default)]
+<a href=#97 id=97 data-nosnippet>97</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#98 id=98 data-nosnippet>98</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
+<a href=#99 id=99 data-nosnippet>99</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
+<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="kw">pub </span>partition_spec: <span class="prelude-ty">Option</span>&lt;Arc&lt;PartitionSpec&gt;&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="doccomment">/// Name mapping from table metadata (property: schema.name-mapping.default),
+<a href=#103 id=103 data-nosnippet>103</a>    /// used to resolve field IDs from column names when Parquet files lack field IDs
+<a href=#104 id=104 data-nosnippet>104</a>    /// or have field ID conflicts.
+<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="attr">#[serde(default)]
+<a href=#106 id=106 data-nosnippet>106</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#107 id=107 data-nosnippet>107</a>    #[serde(serialize_with = <span class="string">"serialize_not_implemented"</span>)]
+<a href=#108 id=108 data-nosnippet>108</a>    #[serde(deserialize_with = <span class="string">"deserialize_not_implemented"</span>)]
+<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">pub </span>name_mapping: <span class="prelude-ty">Option</span>&lt;Arc&lt;NameMapping&gt;&gt;,
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="doccomment">/// Whether this scan task should treat column names as case-sensitive when binding predicates.
+<a href=#112 id=112 data-nosnippet>112</a>    </span><span class="kw">pub </span>case_sensitive: bool,
+<a href=#113 id=113 data-nosnippet>113</a>}
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a><span class="kw">impl </span>FileScanTask {
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="doccomment">/// Returns the data file path of this file scan task.
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub fn </span>data_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.data_file_path
+<a href=#119 id=119 data-nosnippet>119</a>    }
+<a href=#120 id=120 data-nosnippet>120</a>
+<a href=#121 id=121 data-nosnippet>121</a>    <span class="doccomment">/// Returns the project field id of this file scan task.
+<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">pub fn </span>project_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i32] {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.project_field_ids
+<a href=#124 id=124 data-nosnippet>124</a>    }
+<a href=#125 id=125 data-nosnippet>125</a>
+<a href=#126 id=126 data-nosnippet>126</a>    <span class="doccomment">/// Returns the predicate of this file scan task.
+<a href=#127 id=127 data-nosnippet>127</a>    </span><span class="kw">pub fn </span>predicate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt; {
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="self">self</span>.predicate.as_ref()
+<a href=#129 id=129 data-nosnippet>129</a>    }
+<a href=#130 id=130 data-nosnippet>130</a>
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// Returns the schema of this file scan task as a reference
+<a href=#132 id=132 data-nosnippet>132</a>    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Schema {
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
+<a href=#134 id=134 data-nosnippet>134</a>    }
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// Returns the schema of this file scan task as a SchemaRef
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub fn </span>schema_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaRef {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="self">self</span>.schema.clone()
+<a href=#139 id=139 data-nosnippet>139</a>    }
+<a href=#140 id=140 data-nosnippet>140</a>}
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a><span class="attr">#[derive(Debug)]
+<a href=#143 id=143 data-nosnippet>143</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>DeleteFileContext {
+<a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) manifest_entry: ManifestEntryRef,
+<a href=#145 id=145 data-nosnippet>145</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) partition_spec_id: i32,
+<a href=#146 id=146 data-nosnippet>146</a>}
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a><span class="kw">impl </span>From&lt;<span class="kw-2">&amp;</span>DeleteFileContext&gt; <span class="kw">for </span>FileScanTaskDeleteFile {
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>from(ctx: <span class="kw-2">&amp;</span>DeleteFileContext) -&gt; <span class="self">Self </span>{
+<a href=#150 id=150 data-nosnippet>150</a>        FileScanTaskDeleteFile {
+<a href=#151 id=151 data-nosnippet>151</a>            file_path: ctx.manifest_entry.file_path().to_string(),
+<a href=#152 id=152 data-nosnippet>152</a>            file_size_in_bytes: ctx.manifest_entry.file_size_in_bytes(),
+<a href=#153 id=153 data-nosnippet>153</a>            file_type: ctx.manifest_entry.content_type(),
+<a href=#154 id=154 data-nosnippet>154</a>            partition_spec_id: ctx.partition_spec_id,
+<a href=#155 id=155 data-nosnippet>155</a>            equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
+<a href=#156 id=156 data-nosnippet>156</a>        }
+<a href=#157 id=157 data-nosnippet>157</a>    }
+<a href=#158 id=158 data-nosnippet>158</a>}
+<a href=#159 id=159 data-nosnippet>159</a>
+<a href=#160 id=160 data-nosnippet>160</a><span class="doccomment">/// A task to scan part of file.
+<a href=#161 id=161 data-nosnippet>161</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+<a href=#162 id=162 data-nosnippet>162</a></span><span class="kw">pub struct </span>FileScanTaskDeleteFile {
+<a href=#163 id=163 data-nosnippet>163</a>    <span class="doccomment">/// The delete file path
+<a href=#164 id=164 data-nosnippet>164</a>    </span><span class="kw">pub </span>file_path: String,
+<a href=#165 id=165 data-nosnippet>165</a>
+<a href=#166 id=166 data-nosnippet>166</a>    <span class="doccomment">/// The total size of the delete file in bytes, from the manifest entry.
+<a href=#167 id=167 data-nosnippet>167</a>    </span><span class="kw">pub </span>file_size_in_bytes: u64,
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="doccomment">/// delete file type
+<a href=#170 id=170 data-nosnippet>170</a>    </span><span class="kw">pub </span>file_type: DataContentType,
+<a href=#171 id=171 data-nosnippet>171</a>
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="doccomment">/// partition id
+<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub </span>partition_spec_id: i32,
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// equality ids for equality deletes (null for anything other than equality-deletes)
+<a href=#176 id=176 data-nosnippet>176</a>    </span><span class="kw">pub </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
+<a href=#177 id=177 data-nosnippet>177</a>}</code></pre></div></section></main></body></html>

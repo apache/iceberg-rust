@@ -378,128 +378,150 @@
 <a href=#378 id=378 data-nosnippet>378</a>
 <a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>pos_del_1 = FileScanTaskDeleteFile {
 <a href=#380 id=380 data-nosnippet>380</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-1.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#381 id=381 data-nosnippet>381</a>            file_type: DataContentType::PositionDeletes,
-<a href=#382 id=382 data-nosnippet>382</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#383 id=383 data-nosnippet>383</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#384 id=384 data-nosnippet>384</a>        };
-<a href=#385 id=385 data-nosnippet>385</a>
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>pos_del_2 = FileScanTaskDeleteFile {
-<a href=#387 id=387 data-nosnippet>387</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-2.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#388 id=388 data-nosnippet>388</a>            file_type: DataContentType::PositionDeletes,
-<a href=#389 id=389 data-nosnippet>389</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#390 id=390 data-nosnippet>390</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#391 id=391 data-nosnippet>391</a>        };
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>        <span class="kw">let </span>pos_del_3 = FileScanTaskDeleteFile {
-<a href=#394 id=394 data-nosnippet>394</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-3.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#395 id=395 data-nosnippet>395</a>            file_type: DataContentType::PositionDeletes,
-<a href=#396 id=396 data-nosnippet>396</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#397 id=397 data-nosnippet>397</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#398 id=398 data-nosnippet>398</a>        };
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>file_scan_tasks = <span class="macro">vec!</span>[
-<a href=#401 id=401 data-nosnippet>401</a>            FileScanTask {
-<a href=#402 id=402 data-nosnippet>402</a>                start: <span class="number">0</span>,
-<a href=#403 id=403 data-nosnippet>403</a>                length: <span class="number">0</span>,
-<a href=#404 id=404 data-nosnippet>404</a>                record_count: <span class="prelude-val">None</span>,
-<a href=#405 id=405 data-nosnippet>405</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#406 id=406 data-nosnippet>406</a>                data_file_format: DataFileFormat::Parquet,
-<a href=#407 id=407 data-nosnippet>407</a>                schema: data_file_schema.clone(),
-<a href=#408 id=408 data-nosnippet>408</a>                project_field_ids: <span class="macro">vec!</span>[],
-<a href=#409 id=409 data-nosnippet>409</a>                predicate: <span class="prelude-val">None</span>,
-<a href=#410 id=410 data-nosnippet>410</a>                deletes: <span class="macro">vec!</span>[pos_del_1, pos_del_2.clone()],
-<a href=#411 id=411 data-nosnippet>411</a>                partition: <span class="prelude-val">None</span>,
-<a href=#412 id=412 data-nosnippet>412</a>                partition_spec: <span class="prelude-val">None</span>,
-<a href=#413 id=413 data-nosnippet>413</a>                name_mapping: <span class="prelude-val">None</span>,
-<a href=#414 id=414 data-nosnippet>414</a>                case_sensitive: <span class="bool-val">false</span>,
-<a href=#415 id=415 data-nosnippet>415</a>            },
-<a href=#416 id=416 data-nosnippet>416</a>            FileScanTask {
-<a href=#417 id=417 data-nosnippet>417</a>                start: <span class="number">0</span>,
-<a href=#418 id=418 data-nosnippet>418</a>                length: <span class="number">0</span>,
-<a href=#419 id=419 data-nosnippet>419</a>                record_count: <span class="prelude-val">None</span>,
-<a href=#420 id=420 data-nosnippet>420</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#421 id=421 data-nosnippet>421</a>                data_file_format: DataFileFormat::Parquet,
-<a href=#422 id=422 data-nosnippet>422</a>                schema: data_file_schema.clone(),
-<a href=#423 id=423 data-nosnippet>423</a>                project_field_ids: <span class="macro">vec!</span>[],
-<a href=#424 id=424 data-nosnippet>424</a>                predicate: <span class="prelude-val">None</span>,
-<a href=#425 id=425 data-nosnippet>425</a>                deletes: <span class="macro">vec!</span>[pos_del_3],
-<a href=#426 id=426 data-nosnippet>426</a>                partition: <span class="prelude-val">None</span>,
-<a href=#427 id=427 data-nosnippet>427</a>                partition_spec: <span class="prelude-val">None</span>,
-<a href=#428 id=428 data-nosnippet>428</a>                name_mapping: <span class="prelude-val">None</span>,
-<a href=#429 id=429 data-nosnippet>429</a>                case_sensitive: <span class="bool-val">false</span>,
-<a href=#430 id=430 data-nosnippet>430</a>            },
-<a href=#431 id=431 data-nosnippet>431</a>        ];
-<a href=#432 id=432 data-nosnippet>432</a>
-<a href=#433 id=433 data-nosnippet>433</a>        file_scan_tasks
-<a href=#434 id=434 data-nosnippet>434</a>    }
-<a href=#435 id=435 data-nosnippet>435</a>
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_pos_del_schema() -&gt; ArrowSchemaRef {
-<a href=#437 id=437 data-nosnippet>437</a>        <span class="kw">let </span>fields = <span class="macro">vec!</span>[
-<a href=#438 id=438 data-nosnippet>438</a>            arrow_schema::Field::new(<span class="string">"file_path"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">false</span>)
-<a href=#439 id=439 data-nosnippet>439</a>                .with_metadata(HashMap::from([(
-<a href=#440 id=440 data-nosnippet>440</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#441 id=441 data-nosnippet>441</a>                    FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
-<a href=#442 id=442 data-nosnippet>442</a>                )])),
-<a href=#443 id=443 data-nosnippet>443</a>            arrow_schema::Field::new(<span class="string">"pos"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(
-<a href=#444 id=444 data-nosnippet>444</a>                HashMap::from([(
-<a href=#445 id=445 data-nosnippet>445</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#446 id=446 data-nosnippet>446</a>                    FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
-<a href=#447 id=447 data-nosnippet>447</a>                )]),
-<a href=#448 id=448 data-nosnippet>448</a>            ),
-<a href=#449 id=449 data-nosnippet>449</a>        ];
-<a href=#450 id=450 data-nosnippet>450</a>        Arc::new(arrow_schema::Schema::new(fields))
-<a href=#451 id=451 data-nosnippet>451</a>    }
+<a href=#381 id=381 data-nosnippet>381</a>            file_size_in_bytes: std::fs::metadata(<span class="macro">format!</span>(
+<a href=#382 id=382 data-nosnippet>382</a>                <span class="string">"{}/pos-del-1.parquet"</span>,
+<a href=#383 id=383 data-nosnippet>383</a>                table_location.to_str().unwrap()
+<a href=#384 id=384 data-nosnippet>384</a>            ))
+<a href=#385 id=385 data-nosnippet>385</a>            .unwrap()
+<a href=#386 id=386 data-nosnippet>386</a>            .len(),
+<a href=#387 id=387 data-nosnippet>387</a>            file_type: DataContentType::PositionDeletes,
+<a href=#388 id=388 data-nosnippet>388</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#389 id=389 data-nosnippet>389</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#390 id=390 data-nosnippet>390</a>        };
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">let </span>pos_del_2 = FileScanTaskDeleteFile {
+<a href=#393 id=393 data-nosnippet>393</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-2.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#394 id=394 data-nosnippet>394</a>            file_size_in_bytes: std::fs::metadata(<span class="macro">format!</span>(
+<a href=#395 id=395 data-nosnippet>395</a>                <span class="string">"{}/pos-del-2.parquet"</span>,
+<a href=#396 id=396 data-nosnippet>396</a>                table_location.to_str().unwrap()
+<a href=#397 id=397 data-nosnippet>397</a>            ))
+<a href=#398 id=398 data-nosnippet>398</a>            .unwrap()
+<a href=#399 id=399 data-nosnippet>399</a>            .len(),
+<a href=#400 id=400 data-nosnippet>400</a>            file_type: DataContentType::PositionDeletes,
+<a href=#401 id=401 data-nosnippet>401</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#402 id=402 data-nosnippet>402</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#403 id=403 data-nosnippet>403</a>        };
+<a href=#404 id=404 data-nosnippet>404</a>
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>pos_del_3 = FileScanTaskDeleteFile {
+<a href=#406 id=406 data-nosnippet>406</a>            file_path: <span class="macro">format!</span>(<span class="string">"{}/pos-del-3.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#407 id=407 data-nosnippet>407</a>            file_size_in_bytes: std::fs::metadata(<span class="macro">format!</span>(
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="string">"{}/pos-del-3.parquet"</span>,
+<a href=#409 id=409 data-nosnippet>409</a>                table_location.to_str().unwrap()
+<a href=#410 id=410 data-nosnippet>410</a>            ))
+<a href=#411 id=411 data-nosnippet>411</a>            .unwrap()
+<a href=#412 id=412 data-nosnippet>412</a>            .len(),
+<a href=#413 id=413 data-nosnippet>413</a>            file_type: DataContentType::PositionDeletes,
+<a href=#414 id=414 data-nosnippet>414</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#415 id=415 data-nosnippet>415</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#416 id=416 data-nosnippet>416</a>        };
+<a href=#417 id=417 data-nosnippet>417</a>
+<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">let </span>file_scan_tasks = <span class="macro">vec!</span>[
+<a href=#419 id=419 data-nosnippet>419</a>            FileScanTask {
+<a href=#420 id=420 data-nosnippet>420</a>                file_size_in_bytes: <span class="number">0</span>,
+<a href=#421 id=421 data-nosnippet>421</a>                start: <span class="number">0</span>,
+<a href=#422 id=422 data-nosnippet>422</a>                length: <span class="number">0</span>,
+<a href=#423 id=423 data-nosnippet>423</a>                record_count: <span class="prelude-val">None</span>,
+<a href=#424 id=424 data-nosnippet>424</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#425 id=425 data-nosnippet>425</a>                data_file_format: DataFileFormat::Parquet,
+<a href=#426 id=426 data-nosnippet>426</a>                schema: data_file_schema.clone(),
+<a href=#427 id=427 data-nosnippet>427</a>                project_field_ids: <span class="macro">vec!</span>[],
+<a href=#428 id=428 data-nosnippet>428</a>                predicate: <span class="prelude-val">None</span>,
+<a href=#429 id=429 data-nosnippet>429</a>                deletes: <span class="macro">vec!</span>[pos_del_1, pos_del_2.clone()],
+<a href=#430 id=430 data-nosnippet>430</a>                partition: <span class="prelude-val">None</span>,
+<a href=#431 id=431 data-nosnippet>431</a>                partition_spec: <span class="prelude-val">None</span>,
+<a href=#432 id=432 data-nosnippet>432</a>                name_mapping: <span class="prelude-val">None</span>,
+<a href=#433 id=433 data-nosnippet>433</a>                case_sensitive: <span class="bool-val">false</span>,
+<a href=#434 id=434 data-nosnippet>434</a>            },
+<a href=#435 id=435 data-nosnippet>435</a>            FileScanTask {
+<a href=#436 id=436 data-nosnippet>436</a>                file_size_in_bytes: <span class="number">0</span>,
+<a href=#437 id=437 data-nosnippet>437</a>                start: <span class="number">0</span>,
+<a href=#438 id=438 data-nosnippet>438</a>                length: <span class="number">0</span>,
+<a href=#439 id=439 data-nosnippet>439</a>                record_count: <span class="prelude-val">None</span>,
+<a href=#440 id=440 data-nosnippet>440</a>                data_file_path: <span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#441 id=441 data-nosnippet>441</a>                data_file_format: DataFileFormat::Parquet,
+<a href=#442 id=442 data-nosnippet>442</a>                schema: data_file_schema.clone(),
+<a href=#443 id=443 data-nosnippet>443</a>                project_field_ids: <span class="macro">vec!</span>[],
+<a href=#444 id=444 data-nosnippet>444</a>                predicate: <span class="prelude-val">None</span>,
+<a href=#445 id=445 data-nosnippet>445</a>                deletes: <span class="macro">vec!</span>[pos_del_3],
+<a href=#446 id=446 data-nosnippet>446</a>                partition: <span class="prelude-val">None</span>,
+<a href=#447 id=447 data-nosnippet>447</a>                partition_spec: <span class="prelude-val">None</span>,
+<a href=#448 id=448 data-nosnippet>448</a>                name_mapping: <span class="prelude-val">None</span>,
+<a href=#449 id=449 data-nosnippet>449</a>                case_sensitive: <span class="bool-val">false</span>,
+<a href=#450 id=450 data-nosnippet>450</a>            },
+<a href=#451 id=451 data-nosnippet>451</a>        ];
 <a href=#452 id=452 data-nosnippet>452</a>
-<a href=#453 id=453 data-nosnippet>453</a>    <span class="attr">#[tokio::test]
-<a href=#454 id=454 data-nosnippet>454</a>    </span><span class="kw">async fn </span>test_build_equality_delete_predicate_case_sensitive() {
-<a href=#455 id=455 data-nosnippet>455</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#456 id=456 data-nosnippet>456</a>            Schema::builder()
-<a href=#457 id=457 data-nosnippet>457</a>                .with_schema_id(<span class="number">1</span>)
-<a href=#458 id=458 data-nosnippet>458</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#459 id=459 data-nosnippet>459</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"Id"</span>, Type::Primitive(PrimitiveType::Long)).into(),
-<a href=#460 id=460 data-nosnippet>460</a>                ])
-<a href=#461 id=461 data-nosnippet>461</a>                .build()
-<a href=#462 id=462 data-nosnippet>462</a>                .unwrap(),
-<a href=#463 id=463 data-nosnippet>463</a>        );
-<a href=#464 id=464 data-nosnippet>464</a>
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="comment">// ---------- fake FileScanTask ----------
-<a href=#466 id=466 data-nosnippet>466</a>        </span><span class="kw">let </span>task = FileScanTask {
-<a href=#467 id=467 data-nosnippet>467</a>            start: <span class="number">0</span>,
-<a href=#468 id=468 data-nosnippet>468</a>            length: <span class="number">0</span>,
-<a href=#469 id=469 data-nosnippet>469</a>            record_count: <span class="prelude-val">None</span>,
-<a href=#470 id=470 data-nosnippet>470</a>            data_file_path: <span class="string">"data.parquet"</span>.to_string(),
-<a href=#471 id=471 data-nosnippet>471</a>            data_file_format: <span class="kw">crate</span>::spec::DataFileFormat::Parquet,
-<a href=#472 id=472 data-nosnippet>472</a>            schema: schema.clone(),
-<a href=#473 id=473 data-nosnippet>473</a>            project_field_ids: <span class="macro">vec!</span>[],
-<a href=#474 id=474 data-nosnippet>474</a>            predicate: <span class="prelude-val">None</span>,
-<a href=#475 id=475 data-nosnippet>475</a>            deletes: <span class="macro">vec!</span>[FileScanTaskDeleteFile {
-<a href=#476 id=476 data-nosnippet>476</a>                file_path: <span class="string">"eq-del.parquet"</span>.to_string(),
-<a href=#477 id=477 data-nosnippet>477</a>                file_type: DataContentType::EqualityDeletes,
-<a href=#478 id=478 data-nosnippet>478</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#479 id=479 data-nosnippet>479</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#480 id=480 data-nosnippet>480</a>            }],
-<a href=#481 id=481 data-nosnippet>481</a>            partition: <span class="prelude-val">None</span>,
-<a href=#482 id=482 data-nosnippet>482</a>            partition_spec: <span class="prelude-val">None</span>,
-<a href=#483 id=483 data-nosnippet>483</a>            name_mapping: <span class="prelude-val">None</span>,
-<a href=#484 id=484 data-nosnippet>484</a>            case_sensitive: <span class="bool-val">true</span>,
-<a href=#485 id=485 data-nosnippet>485</a>        };
-<a href=#486 id=486 data-nosnippet>486</a>
-<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>filter = DeleteFilter::default();
-<a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="comment">// ---------- insert equality delete predicate ----------
-<a href=#490 id=490 data-nosnippet>490</a>        </span><span class="kw">let </span>pred = Reference::new(<span class="string">"id"</span>).equal_to(Datum::long(<span class="number">10</span>));
-<a href=#491 id=491 data-nosnippet>491</a>
-<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">let </span>(tx, rx) = tokio::sync::oneshot::channel();
-<a href=#493 id=493 data-nosnippet>493</a>        filter.insert_equality_delete(<span class="string">"eq-del.parquet"</span>, rx);
-<a href=#494 id=494 data-nosnippet>494</a>
-<a href=#495 id=495 data-nosnippet>495</a>        tx.send(pred).unwrap();
-<a href=#496 id=496 data-nosnippet>496</a>
-<a href=#497 id=497 data-nosnippet>497</a>        <span class="comment">// ---------- should FAIL ----------
-<a href=#498 id=498 data-nosnippet>498</a>        </span><span class="kw">let </span>result = filter.build_equality_delete_predicate(<span class="kw-2">&amp;</span>task).<span class="kw">await</span>;
-<a href=#499 id=499 data-nosnippet>499</a>
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="macro">assert!</span>(
-<a href=#501 id=501 data-nosnippet>501</a>            result.is_err(),
-<a href=#502 id=502 data-nosnippet>502</a>            <span class="string">"case_sensitive=true should fail when column case mismatches"
-<a href=#503 id=503 data-nosnippet>503</a>        </span>);
-<a href=#504 id=504 data-nosnippet>504</a>    }
-<a href=#505 id=505 data-nosnippet>505</a>}</code></pre></div></section></main></body></html>
+<a href=#453 id=453 data-nosnippet>453</a>        file_scan_tasks
+<a href=#454 id=454 data-nosnippet>454</a>    }
+<a href=#455 id=455 data-nosnippet>455</a>
+<a href=#456 id=456 data-nosnippet>456</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_pos_del_schema() -&gt; ArrowSchemaRef {
+<a href=#457 id=457 data-nosnippet>457</a>        <span class="kw">let </span>fields = <span class="macro">vec!</span>[
+<a href=#458 id=458 data-nosnippet>458</a>            arrow_schema::Field::new(<span class="string">"file_path"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">false</span>)
+<a href=#459 id=459 data-nosnippet>459</a>                .with_metadata(HashMap::from([(
+<a href=#460 id=460 data-nosnippet>460</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#461 id=461 data-nosnippet>461</a>                    FIELD_ID_POSITIONAL_DELETE_FILE_PATH.to_string(),
+<a href=#462 id=462 data-nosnippet>462</a>                )])),
+<a href=#463 id=463 data-nosnippet>463</a>            arrow_schema::Field::new(<span class="string">"pos"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(
+<a href=#464 id=464 data-nosnippet>464</a>                HashMap::from([(
+<a href=#465 id=465 data-nosnippet>465</a>                    PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#466 id=466 data-nosnippet>466</a>                    FIELD_ID_POSITIONAL_DELETE_POS.to_string(),
+<a href=#467 id=467 data-nosnippet>467</a>                )]),
+<a href=#468 id=468 data-nosnippet>468</a>            ),
+<a href=#469 id=469 data-nosnippet>469</a>        ];
+<a href=#470 id=470 data-nosnippet>470</a>        Arc::new(arrow_schema::Schema::new(fields))
+<a href=#471 id=471 data-nosnippet>471</a>    }
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>    <span class="attr">#[tokio::test]
+<a href=#474 id=474 data-nosnippet>474</a>    </span><span class="kw">async fn </span>test_build_equality_delete_predicate_case_sensitive() {
+<a href=#475 id=475 data-nosnippet>475</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#476 id=476 data-nosnippet>476</a>            Schema::builder()
+<a href=#477 id=477 data-nosnippet>477</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#478 id=478 data-nosnippet>478</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#479 id=479 data-nosnippet>479</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"Id"</span>, Type::Primitive(PrimitiveType::Long)).into(),
+<a href=#480 id=480 data-nosnippet>480</a>                ])
+<a href=#481 id=481 data-nosnippet>481</a>                .build()
+<a href=#482 id=482 data-nosnippet>482</a>                .unwrap(),
+<a href=#483 id=483 data-nosnippet>483</a>        );
+<a href=#484 id=484 data-nosnippet>484</a>
+<a href=#485 id=485 data-nosnippet>485</a>        <span class="comment">// ---------- fake FileScanTask ----------
+<a href=#486 id=486 data-nosnippet>486</a>        </span><span class="kw">let </span>task = FileScanTask {
+<a href=#487 id=487 data-nosnippet>487</a>            file_size_in_bytes: <span class="number">0</span>,
+<a href=#488 id=488 data-nosnippet>488</a>            start: <span class="number">0</span>,
+<a href=#489 id=489 data-nosnippet>489</a>            length: <span class="number">0</span>,
+<a href=#490 id=490 data-nosnippet>490</a>            record_count: <span class="prelude-val">None</span>,
+<a href=#491 id=491 data-nosnippet>491</a>            data_file_path: <span class="string">"data.parquet"</span>.to_string(),
+<a href=#492 id=492 data-nosnippet>492</a>            data_file_format: <span class="kw">crate</span>::spec::DataFileFormat::Parquet,
+<a href=#493 id=493 data-nosnippet>493</a>            schema: schema.clone(),
+<a href=#494 id=494 data-nosnippet>494</a>            project_field_ids: <span class="macro">vec!</span>[],
+<a href=#495 id=495 data-nosnippet>495</a>            predicate: <span class="prelude-val">None</span>,
+<a href=#496 id=496 data-nosnippet>496</a>            deletes: <span class="macro">vec!</span>[FileScanTaskDeleteFile {
+<a href=#497 id=497 data-nosnippet>497</a>                file_path: <span class="string">"eq-del.parquet"</span>.to_string(),
+<a href=#498 id=498 data-nosnippet>498</a>                file_size_in_bytes: <span class="number">1</span>, <span class="comment">// never read; this test fails before opening the file
+<a href=#499 id=499 data-nosnippet>499</a>                </span>file_type: DataContentType::EqualityDeletes,
+<a href=#500 id=500 data-nosnippet>500</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#501 id=501 data-nosnippet>501</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#502 id=502 data-nosnippet>502</a>            }],
+<a href=#503 id=503 data-nosnippet>503</a>            partition: <span class="prelude-val">None</span>,
+<a href=#504 id=504 data-nosnippet>504</a>            partition_spec: <span class="prelude-val">None</span>,
+<a href=#505 id=505 data-nosnippet>505</a>            name_mapping: <span class="prelude-val">None</span>,
+<a href=#506 id=506 data-nosnippet>506</a>            case_sensitive: <span class="bool-val">true</span>,
+<a href=#507 id=507 data-nosnippet>507</a>        };
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>        <span class="kw">let </span>filter = DeleteFilter::default();
+<a href=#510 id=510 data-nosnippet>510</a>
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="comment">// ---------- insert equality delete predicate ----------
+<a href=#512 id=512 data-nosnippet>512</a>        </span><span class="kw">let </span>pred = Reference::new(<span class="string">"id"</span>).equal_to(Datum::long(<span class="number">10</span>));
+<a href=#513 id=513 data-nosnippet>513</a>
+<a href=#514 id=514 data-nosnippet>514</a>        <span class="kw">let </span>(tx, rx) = tokio::sync::oneshot::channel();
+<a href=#515 id=515 data-nosnippet>515</a>        filter.insert_equality_delete(<span class="string">"eq-del.parquet"</span>, rx);
+<a href=#516 id=516 data-nosnippet>516</a>
+<a href=#517 id=517 data-nosnippet>517</a>        tx.send(pred).unwrap();
+<a href=#518 id=518 data-nosnippet>518</a>
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="comment">// ---------- should FAIL ----------
+<a href=#520 id=520 data-nosnippet>520</a>        </span><span class="kw">let </span>result = filter.build_equality_delete_predicate(<span class="kw-2">&amp;</span>task).<span class="kw">await</span>;
+<a href=#521 id=521 data-nosnippet>521</a>
+<a href=#522 id=522 data-nosnippet>522</a>        <span class="macro">assert!</span>(
+<a href=#523 id=523 data-nosnippet>523</a>            result.is_err(),
+<a href=#524 id=524 data-nosnippet>524</a>            <span class="string">"case_sensitive=true should fail when column case mismatches"
+<a href=#525 id=525 data-nosnippet>525</a>        </span>);
+<a href=#526 id=526 data-nosnippet>526</a>    }
+<a href=#527 id=527 data-nosnippet>527</a>}</code></pre></div></section></main></body></html>

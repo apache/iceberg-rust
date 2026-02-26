@@ -235,7 +235,7 @@
 <a href=#235 id=235 data-nosnippet>235</a>                    PosDelLoadAction::Load =&gt; <span class="prelude-val">Ok</span>(DeleteFileContext::PosDels {
 <a href=#236 id=236 data-nosnippet>236</a>                        file_path: task.file_path.clone(),
 <a href=#237 id=237 data-nosnippet>237</a>                        stream: basic_delete_file_loader
-<a href=#238 id=238 data-nosnippet>238</a>                            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>task.file_path)
+<a href=#238 id=238 data-nosnippet>238</a>                            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>task.file_path, task.file_size_in_bytes)
 <a href=#239 id=239 data-nosnippet>239</a>                            .<span class="kw">await</span><span class="question-mark">?</span>,
 <a href=#240 id=240 data-nosnippet>240</a>                    }),
 <a href=#241 id=241 data-nosnippet>241</a>                }
@@ -254,7 +254,7 @@
 <a href=#254 id=254 data-nosnippet>254</a>                </span><span class="kw">let </span>equality_ids_vec = task.equality_ids.clone().unwrap();
 <a href=#255 id=255 data-nosnippet>255</a>                <span class="kw">let </span>evolved_stream = BasicDeleteFileLoader::evolve_schema(
 <a href=#256 id=256 data-nosnippet>256</a>                    basic_delete_file_loader
-<a href=#257 id=257 data-nosnippet>257</a>                        .parquet_to_batch_stream(<span class="kw-2">&amp;</span>task.file_path)
+<a href=#257 id=257 data-nosnippet>257</a>                        .parquet_to_batch_stream(<span class="kw-2">&amp;</span>task.file_path, task.file_size_in_bytes)
 <a href=#258 id=258 data-nosnippet>258</a>                        .<span class="kw">await</span><span class="question-mark">?</span>,
 <a href=#259 id=259 data-nosnippet>259</a>                    schema,
 <a href=#260 id=260 data-nosnippet>260</a>                    <span class="kw-2">&amp;</span>equality_ids_vec,
@@ -614,436 +614,445 @@
 <a href=#614 id=614 data-nosnippet>614</a>
 <a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">let </span>basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
 <a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span>record_batch_stream = basic_delete_file_loader
-<a href=#617 id=617 data-nosnippet>617</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>eq_delete_file_path)
-<a href=#618 id=618 data-nosnippet>618</a>            .<span class="kw">await
-<a href=#619 id=619 data-nosnippet>619</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
-<a href=#620 id=620 data-nosnippet>620</a>
-<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">6</span>, <span class="number">8</span>]);
-<a href=#622 id=622 data-nosnippet>622</a>
-<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>parsed_eq_delete = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
-<a href=#624 id=624 data-nosnippet>624</a>            record_batch_stream,
-<a href=#625 id=625 data-nosnippet>625</a>            eq_ids,
-<a href=#626 id=626 data-nosnippet>626</a>        )
-<a href=#627 id=627 data-nosnippet>627</a>        .<span class="kw">await
-<a href=#628 id=628 data-nosnippet>628</a>        </span>.expect(<span class="string">"error parsing batch stream"</span>);
-<a href=#629 id=629 data-nosnippet>629</a>        <span class="macro">println!</span>(<span class="string">"{parsed_eq_delete}"</span>);
-<a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a>        <span class="kw">let </span>expected = <span class="string">"(((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) OR (b != 62696E6172795F64617461)) AND (((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5)) OR (b IS NOT NULL))"</span>.to_string();
-<a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>        <span class="macro">assert_eq!</span>(parsed_eq_delete.to_string(), expected);
-<a href=#634 id=634 data-nosnippet>634</a>    }
+<a href=#617 id=617 data-nosnippet>617</a>            .parquet_to_batch_stream(
+<a href=#618 id=618 data-nosnippet>618</a>                <span class="kw-2">&amp;</span>eq_delete_file_path,
+<a href=#619 id=619 data-nosnippet>619</a>                std::fs::metadata(<span class="kw-2">&amp;</span>eq_delete_file_path).unwrap().len(),
+<a href=#620 id=620 data-nosnippet>620</a>            )
+<a href=#621 id=621 data-nosnippet>621</a>            .<span class="kw">await
+<a href=#622 id=622 data-nosnippet>622</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
+<a href=#623 id=623 data-nosnippet>623</a>
+<a href=#624 id=624 data-nosnippet>624</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">6</span>, <span class="number">8</span>]);
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a>        <span class="kw">let </span>parsed_eq_delete = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+<a href=#627 id=627 data-nosnippet>627</a>            record_batch_stream,
+<a href=#628 id=628 data-nosnippet>628</a>            eq_ids,
+<a href=#629 id=629 data-nosnippet>629</a>        )
+<a href=#630 id=630 data-nosnippet>630</a>        .<span class="kw">await
+<a href=#631 id=631 data-nosnippet>631</a>        </span>.expect(<span class="string">"error parsing batch stream"</span>);
+<a href=#632 id=632 data-nosnippet>632</a>        <span class="macro">println!</span>(<span class="string">"{parsed_eq_delete}"</span>);
+<a href=#633 id=633 data-nosnippet>633</a>
+<a href=#634 id=634 data-nosnippet>634</a>        <span class="kw">let </span>expected = <span class="string">"(((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) OR (b != 62696E6172795F64617461)) AND (((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5)) OR (b IS NOT NULL))"</span>.to_string();
 <a href=#635 id=635 data-nosnippet>635</a>
-<a href=#636 id=636 data-nosnippet>636</a>    <span class="doccomment">/// Create a simple field with metadata.
-<a href=#637 id=637 data-nosnippet>637</a>    </span><span class="kw">fn </span>simple_field(name: <span class="kw-2">&amp;</span>str, ty: DataType, nullable: bool, value: <span class="kw-2">&amp;</span>str) -&gt; Field {
-<a href=#638 id=638 data-nosnippet>638</a>        arrow_schema::Field::new(name, ty, nullable).with_metadata(HashMap::from([(
-<a href=#639 id=639 data-nosnippet>639</a>            PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#640 id=640 data-nosnippet>640</a>            value.to_string(),
-<a href=#641 id=641 data-nosnippet>641</a>        )]))
-<a href=#642 id=642 data-nosnippet>642</a>    }
-<a href=#643 id=643 data-nosnippet>643</a>
-<a href=#644 id=644 data-nosnippet>644</a>    <span class="kw">fn </span>setup_write_equality_delete_file_1(table_location: <span class="kw-2">&amp;</span>str) -&gt; String {
-<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">let </span>col_y_vals = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>];
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
-<a href=#647 id=647 data-nosnippet>647</a>
-<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span>col_z_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">100</span>), <span class="prelude-val">None</span>];
-<a href=#649 id=649 data-nosnippet>649</a>        <span class="kw">let </span>col_z = Arc::new(Int64Array::from(col_z_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#636 id=636 data-nosnippet>636</a>        <span class="macro">assert_eq!</span>(parsed_eq_delete.to_string(), expected);
+<a href=#637 id=637 data-nosnippet>637</a>    }
+<a href=#638 id=638 data-nosnippet>638</a>
+<a href=#639 id=639 data-nosnippet>639</a>    <span class="doccomment">/// Create a simple field with metadata.
+<a href=#640 id=640 data-nosnippet>640</a>    </span><span class="kw">fn </span>simple_field(name: <span class="kw-2">&amp;</span>str, ty: DataType, nullable: bool, value: <span class="kw-2">&amp;</span>str) -&gt; Field {
+<a href=#641 id=641 data-nosnippet>641</a>        arrow_schema::Field::new(name, ty, nullable).with_metadata(HashMap::from([(
+<a href=#642 id=642 data-nosnippet>642</a>            PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#643 id=643 data-nosnippet>643</a>            value.to_string(),
+<a href=#644 id=644 data-nosnippet>644</a>        )]))
+<a href=#645 id=645 data-nosnippet>645</a>    }
+<a href=#646 id=646 data-nosnippet>646</a>
+<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">fn </span>setup_write_equality_delete_file_1(table_location: <span class="kw-2">&amp;</span>str) -&gt; String {
+<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span>col_y_vals = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>];
+<a href=#649 id=649 data-nosnippet>649</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
 <a href=#650 id=650 data-nosnippet>650</a>
-<a href=#651 id=651 data-nosnippet>651</a>        <span class="kw">let </span>col_a_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"HELP"</span>), <span class="prelude-val">None</span>];
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>col_a = Arc::new(StringArray::from(col_a_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#651 id=651 data-nosnippet>651</a>        <span class="kw">let </span>col_z_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">100</span>), <span class="prelude-val">None</span>];
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>col_z = Arc::new(Int64Array::from(col_z_vals)) <span class="kw">as </span>ArrayRef;
 <a href=#653 id=653 data-nosnippet>653</a>
-<a href=#654 id=654 data-nosnippet>654</a>        <span class="kw">let </span>col_s = Arc::new(StructArray::from(<span class="macro">vec!</span>[
-<a href=#655 id=655 data-nosnippet>655</a>            (
-<a href=#656 id=656 data-nosnippet>656</a>                Arc::new(simple_field(<span class="string">"sa"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"6"</span>)),
-<a href=#657 id=657 data-nosnippet>657</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">4</span>, <span class="number">5</span>])) <span class="kw">as </span>ArrayRef,
-<a href=#658 id=658 data-nosnippet>658</a>            ),
-<a href=#659 id=659 data-nosnippet>659</a>            (
-<a href=#660 id=660 data-nosnippet>660</a>                Arc::new(simple_field(<span class="string">"sb"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"7"</span>)),
-<a href=#661 id=661 data-nosnippet>661</a>                Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"x"</span>), <span class="prelude-val">None</span>])) <span class="kw">as </span>ArrayRef,
-<a href=#662 id=662 data-nosnippet>662</a>            ),
-<a href=#663 id=663 data-nosnippet>663</a>        ]));
-<a href=#664 id=664 data-nosnippet>664</a>
-<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>col_b_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">b"binary_data"</span>[..]), <span class="prelude-val">None</span>];
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="kw">let </span>col_b = Arc::new(BinaryArray::from(col_b_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#654 id=654 data-nosnippet>654</a>        <span class="kw">let </span>col_a_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"HELP"</span>), <span class="prelude-val">None</span>];
+<a href=#655 id=655 data-nosnippet>655</a>        <span class="kw">let </span>col_a = Arc::new(StringArray::from(col_a_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#656 id=656 data-nosnippet>656</a>
+<a href=#657 id=657 data-nosnippet>657</a>        <span class="kw">let </span>col_s = Arc::new(StructArray::from(<span class="macro">vec!</span>[
+<a href=#658 id=658 data-nosnippet>658</a>            (
+<a href=#659 id=659 data-nosnippet>659</a>                Arc::new(simple_field(<span class="string">"sa"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"6"</span>)),
+<a href=#660 id=660 data-nosnippet>660</a>                Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">4</span>, <span class="number">5</span>])) <span class="kw">as </span>ArrayRef,
+<a href=#661 id=661 data-nosnippet>661</a>            ),
+<a href=#662 id=662 data-nosnippet>662</a>            (
+<a href=#663 id=663 data-nosnippet>663</a>                Arc::new(simple_field(<span class="string">"sb"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"7"</span>)),
+<a href=#664 id=664 data-nosnippet>664</a>                Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"x"</span>), <span class="prelude-val">None</span>])) <span class="kw">as </span>ArrayRef,
+<a href=#665 id=665 data-nosnippet>665</a>            ),
+<a href=#666 id=666 data-nosnippet>666</a>        ]));
 <a href=#667 id=667 data-nosnippet>667</a>
-<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span>equality_delete_schema = {
-<a href=#669 id=669 data-nosnippet>669</a>            <span class="kw">let </span>struct_field = DataType::Struct(Fields::from(<span class="macro">vec!</span>[
-<a href=#670 id=670 data-nosnippet>670</a>                simple_field(<span class="string">"sa"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"6"</span>),
-<a href=#671 id=671 data-nosnippet>671</a>                simple_field(<span class="string">"sb"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"7"</span>),
-<a href=#672 id=672 data-nosnippet>672</a>            ]));
-<a href=#673 id=673 data-nosnippet>673</a>
-<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">let </span>fields = <span class="macro">vec!</span>[
-<a href=#675 id=675 data-nosnippet>675</a>                Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">true</span>).with_metadata(HashMap::from(
-<a href=#676 id=676 data-nosnippet>676</a>                    [(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"2"</span>.to_string())],
-<a href=#677 id=677 data-nosnippet>677</a>                )),
-<a href=#678 id=678 data-nosnippet>678</a>                Field::new(<span class="string">"z"</span>, arrow_schema::DataType::Int64, <span class="bool-val">true</span>).with_metadata(HashMap::from(
-<a href=#679 id=679 data-nosnippet>679</a>                    [(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"3"</span>.to_string())],
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span>col_b_vals = <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">b"binary_data"</span>[..]), <span class="prelude-val">None</span>];
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="kw">let </span>col_b = Arc::new(BinaryArray::from(col_b_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#670 id=670 data-nosnippet>670</a>
+<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span>equality_delete_schema = {
+<a href=#672 id=672 data-nosnippet>672</a>            <span class="kw">let </span>struct_field = DataType::Struct(Fields::from(<span class="macro">vec!</span>[
+<a href=#673 id=673 data-nosnippet>673</a>                simple_field(<span class="string">"sa"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"6"</span>),
+<a href=#674 id=674 data-nosnippet>674</a>                simple_field(<span class="string">"sb"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"7"</span>),
+<a href=#675 id=675 data-nosnippet>675</a>            ]));
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>            <span class="kw">let </span>fields = <span class="macro">vec!</span>[
+<a href=#678 id=678 data-nosnippet>678</a>                Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">true</span>).with_metadata(HashMap::from(
+<a href=#679 id=679 data-nosnippet>679</a>                    [(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"2"</span>.to_string())],
 <a href=#680 id=680 data-nosnippet>680</a>                )),
-<a href=#681 id=681 data-nosnippet>681</a>                Field::new(<span class="string">"a"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([
-<a href=#682 id=682 data-nosnippet>682</a>                    (PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"4"</span>.to_string()),
-<a href=#683 id=683 data-nosnippet>683</a>                ])),
-<a href=#684 id=684 data-nosnippet>684</a>                simple_field(<span class="string">"s"</span>, struct_field, <span class="bool-val">false</span>, <span class="string">"5"</span>),
-<a href=#685 id=685 data-nosnippet>685</a>                simple_field(<span class="string">"b"</span>, DataType::Binary, <span class="bool-val">true</span>, <span class="string">"8"</span>),
-<a href=#686 id=686 data-nosnippet>686</a>            ];
-<a href=#687 id=687 data-nosnippet>687</a>            Arc::new(arrow_schema::Schema::new(fields))
-<a href=#688 id=688 data-nosnippet>688</a>        };
-<a href=#689 id=689 data-nosnippet>689</a>
-<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">let </span>equality_deletes_to_write = RecordBatch::try_new(equality_delete_schema.clone(), <span class="macro">vec!</span>[
-<a href=#691 id=691 data-nosnippet>691</a>            col_y, col_z, col_a, col_s, col_b,
-<a href=#692 id=692 data-nosnippet>692</a>        ])
-<a href=#693 id=693 data-nosnippet>693</a>        .unwrap();
-<a href=#694 id=694 data-nosnippet>694</a>
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/equality-deletes-1.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
-<a href=#696 id=696 data-nosnippet>696</a>
-<a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#698 id=698 data-nosnippet>698</a>
-<a href=#699 id=699 data-nosnippet>699</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#700 id=700 data-nosnippet>700</a>            .set_compression(Compression::SNAPPY)
-<a href=#701 id=701 data-nosnippet>701</a>            .build();
-<a href=#702 id=702 data-nosnippet>702</a>
-<a href=#703 id=703 data-nosnippet>703</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(
-<a href=#704 id=704 data-nosnippet>704</a>            file,
-<a href=#705 id=705 data-nosnippet>705</a>            equality_deletes_to_write.schema(),
-<a href=#706 id=706 data-nosnippet>706</a>            <span class="prelude-val">Some</span>(props.clone()),
-<a href=#707 id=707 data-nosnippet>707</a>        )
-<a href=#708 id=708 data-nosnippet>708</a>        .unwrap();
-<a href=#709 id=709 data-nosnippet>709</a>
-<a href=#710 id=710 data-nosnippet>710</a>        writer
-<a href=#711 id=711 data-nosnippet>711</a>            .write(<span class="kw-2">&amp;</span>equality_deletes_to_write)
-<a href=#712 id=712 data-nosnippet>712</a>            .expect(<span class="string">"Writing batch"</span>);
-<a href=#713 id=713 data-nosnippet>713</a>
-<a href=#714 id=714 data-nosnippet>714</a>        <span class="comment">// writer must be closed to write footer
-<a href=#715 id=715 data-nosnippet>715</a>        </span>writer.close().unwrap();
+<a href=#681 id=681 data-nosnippet>681</a>                Field::new(<span class="string">"z"</span>, arrow_schema::DataType::Int64, <span class="bool-val">true</span>).with_metadata(HashMap::from(
+<a href=#682 id=682 data-nosnippet>682</a>                    [(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"3"</span>.to_string())],
+<a href=#683 id=683 data-nosnippet>683</a>                )),
+<a href=#684 id=684 data-nosnippet>684</a>                Field::new(<span class="string">"a"</span>, arrow_schema::DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([
+<a href=#685 id=685 data-nosnippet>685</a>                    (PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"4"</span>.to_string()),
+<a href=#686 id=686 data-nosnippet>686</a>                ])),
+<a href=#687 id=687 data-nosnippet>687</a>                simple_field(<span class="string">"s"</span>, struct_field, <span class="bool-val">false</span>, <span class="string">"5"</span>),
+<a href=#688 id=688 data-nosnippet>688</a>                simple_field(<span class="string">"b"</span>, DataType::Binary, <span class="bool-val">true</span>, <span class="string">"8"</span>),
+<a href=#689 id=689 data-nosnippet>689</a>            ];
+<a href=#690 id=690 data-nosnippet>690</a>            Arc::new(arrow_schema::Schema::new(fields))
+<a href=#691 id=691 data-nosnippet>691</a>        };
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>        <span class="kw">let </span>equality_deletes_to_write = RecordBatch::try_new(equality_delete_schema.clone(), <span class="macro">vec!</span>[
+<a href=#694 id=694 data-nosnippet>694</a>            col_y, col_z, col_a, col_s, col_b,
+<a href=#695 id=695 data-nosnippet>695</a>        ])
+<a href=#696 id=696 data-nosnippet>696</a>        .unwrap();
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/equality-deletes-1.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
+<a href=#699 id=699 data-nosnippet>699</a>
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#701 id=701 data-nosnippet>701</a>
+<a href=#702 id=702 data-nosnippet>702</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#703 id=703 data-nosnippet>703</a>            .set_compression(Compression::SNAPPY)
+<a href=#704 id=704 data-nosnippet>704</a>            .build();
+<a href=#705 id=705 data-nosnippet>705</a>
+<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(
+<a href=#707 id=707 data-nosnippet>707</a>            file,
+<a href=#708 id=708 data-nosnippet>708</a>            equality_deletes_to_write.schema(),
+<a href=#709 id=709 data-nosnippet>709</a>            <span class="prelude-val">Some</span>(props.clone()),
+<a href=#710 id=710 data-nosnippet>710</a>        )
+<a href=#711 id=711 data-nosnippet>711</a>        .unwrap();
+<a href=#712 id=712 data-nosnippet>712</a>
+<a href=#713 id=713 data-nosnippet>713</a>        writer
+<a href=#714 id=714 data-nosnippet>714</a>            .write(<span class="kw-2">&amp;</span>equality_deletes_to_write)
+<a href=#715 id=715 data-nosnippet>715</a>            .expect(<span class="string">"Writing batch"</span>);
 <a href=#716 id=716 data-nosnippet>716</a>
-<a href=#717 id=717 data-nosnippet>717</a>        path
-<a href=#718 id=718 data-nosnippet>718</a>    }
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="comment">// writer must be closed to write footer
+<a href=#718 id=718 data-nosnippet>718</a>        </span>writer.close().unwrap();
 <a href=#719 id=719 data-nosnippet>719</a>
-<a href=#720 id=720 data-nosnippet>720</a>    <span class="attr">#[tokio::test]
-<a href=#721 id=721 data-nosnippet>721</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_load_deletes() {
-<a href=#722 id=722 data-nosnippet>722</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#723 id=723 data-nosnippet>723</a>        <span class="kw">let </span>table_location = tmp_dir.path();
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-<a href=#725 id=725 data-nosnippet>725</a>            .unwrap()
-<a href=#726 id=726 data-nosnippet>726</a>            .build()
-<a href=#727 id=727 data-nosnippet>727</a>            .unwrap();
-<a href=#728 id=728 data-nosnippet>728</a>
-<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
-<a href=#730 id=730 data-nosnippet>730</a>
-<a href=#731 id=731 data-nosnippet>731</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
-<a href=#732 id=732 data-nosnippet>732</a>
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">let </span>delete_filter = delete_file_loader
-<a href=#734 id=734 data-nosnippet>734</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
-<a href=#735 id=735 data-nosnippet>735</a>            .<span class="kw">await
-<a href=#736 id=736 data-nosnippet>736</a>            </span>.unwrap()
-<a href=#737 id=737 data-nosnippet>737</a>            .unwrap();
-<a href=#738 id=738 data-nosnippet>738</a>
-<a href=#739 id=739 data-nosnippet>739</a>        <span class="kw">let </span>result = delete_filter
-<a href=#740 id=740 data-nosnippet>740</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
-<a href=#741 id=741 data-nosnippet>741</a>            .unwrap();
-<a href=#742 id=742 data-nosnippet>742</a>
-<a href=#743 id=743 data-nosnippet>743</a>        <span class="comment">// union of pos dels from pos del file 1 and 2, ie
-<a href=#744 id=744 data-nosnippet>744</a>        // [0, 1, 3, 5, 6, 8, 1022, 1023] | [0, 1, 3, 5, 20, 21, 22, 23]
-<a href=#745 id=745 data-nosnippet>745</a>        // = [0, 1, 3, 5, 6, 8, 20, 21, 22, 23, 1022, 1023]
-<a href=#746 id=746 data-nosnippet>746</a>        </span><span class="macro">assert_eq!</span>(result.lock().unwrap().len(), <span class="number">12</span>);
-<a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>result = delete_filter.get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">1</span>]);
-<a href=#749 id=749 data-nosnippet>749</a>        <span class="macro">assert!</span>(result.is_none()); <span class="comment">// no pos dels for file 3
-<a href=#750 id=750 data-nosnippet>750</a>    </span>}
-<a href=#751 id=751 data-nosnippet>751</a>
-<a href=#752 id=752 data-nosnippet>752</a>    <span class="doccomment">/// Verifies that evolve_schema on partial-schema equality deletes works correctly
-<a href=#753 id=753 data-nosnippet>753</a>    /// when only equality_ids columns are evolved, not all table columns.
-<a href=#754 id=754 data-nosnippet>754</a>    ///
-<a href=#755 id=755 data-nosnippet>755</a>    /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
-<a href=#756 id=756 data-nosnippet>756</a>    /// equality delete files can contain only a subset of columns.
-<a href=#757 id=757 data-nosnippet>757</a>    </span><span class="attr">#[tokio::test]
-<a href=#758 id=758 data-nosnippet>758</a>    </span><span class="kw">async fn </span>test_partial_schema_equality_deletes_evolve_succeeds() {
-<a href=#759 id=759 data-nosnippet>759</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#760 id=760 data-nosnippet>760</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-<a href=#761 id=761 data-nosnippet>761</a>
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="comment">// Create table schema with REQUIRED fields
-<a href=#763 id=763 data-nosnippet>763</a>        </span><span class="kw">let </span>table_schema = Arc::new(
-<a href=#764 id=764 data-nosnippet>764</a>            Schema::builder()
-<a href=#765 id=765 data-nosnippet>765</a>                .with_schema_id(<span class="number">1</span>)
-<a href=#766 id=766 data-nosnippet>766</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#767 id=767 data-nosnippet>767</a>                    <span class="kw">crate</span>::spec::NestedField::required(
-<a href=#768 id=768 data-nosnippet>768</a>                        <span class="number">1</span>,
-<a href=#769 id=769 data-nosnippet>769</a>                        <span class="string">"id"</span>,
-<a href=#770 id=770 data-nosnippet>770</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::Int),
-<a href=#771 id=771 data-nosnippet>771</a>                    )
-<a href=#772 id=772 data-nosnippet>772</a>                    .into(),
-<a href=#773 id=773 data-nosnippet>773</a>                    <span class="kw">crate</span>::spec::NestedField::required(
-<a href=#774 id=774 data-nosnippet>774</a>                        <span class="number">2</span>,
-<a href=#775 id=775 data-nosnippet>775</a>                        <span class="string">"data"</span>,
-<a href=#776 id=776 data-nosnippet>776</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::String),
-<a href=#777 id=777 data-nosnippet>777</a>                    )
-<a href=#778 id=778 data-nosnippet>778</a>                    .into(),
-<a href=#779 id=779 data-nosnippet>779</a>                ])
-<a href=#780 id=780 data-nosnippet>780</a>                .build()
-<a href=#781 id=781 data-nosnippet>781</a>                .unwrap(),
-<a href=#782 id=782 data-nosnippet>782</a>        );
-<a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>        <span class="comment">// Write equality delete file with PARTIAL schema (only 'data' column)
-<a href=#785 id=785 data-nosnippet>785</a>        </span><span class="kw">let </span>delete_file_path = {
-<a href=#786 id=786 data-nosnippet>786</a>            <span class="kw">let </span>data_vals = <span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"d"</span>, <span class="string">"g"</span>];
-<a href=#787 id=787 data-nosnippet>787</a>            <span class="kw">let </span>data_col = Arc::new(StringArray::from(data_vals)) <span class="kw">as </span>ArrayRef;
-<a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a>            <span class="kw">let </span>delete_schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[simple_field(
-<a href=#790 id=790 data-nosnippet>790</a>                <span class="string">"data"</span>,
-<a href=#791 id=791 data-nosnippet>791</a>                DataType::Utf8,
-<a href=#792 id=792 data-nosnippet>792</a>                <span class="bool-val">false</span>,
-<a href=#793 id=793 data-nosnippet>793</a>                <span class="string">"2"</span>, <span class="comment">// field ID
-<a href=#794 id=794 data-nosnippet>794</a>            </span>)]));
-<a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>            <span class="kw">let </span>delete_batch = RecordBatch::try_new(delete_schema.clone(), <span class="macro">vec!</span>[data_col]).unwrap();
-<a href=#797 id=797 data-nosnippet>797</a>
-<a href=#798 id=798 data-nosnippet>798</a>            <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/partial-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
-<a href=#799 id=799 data-nosnippet>799</a>            <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#800 id=800 data-nosnippet>800</a>            <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#801 id=801 data-nosnippet>801</a>                .set_compression(Compression::SNAPPY)
-<a href=#802 id=802 data-nosnippet>802</a>                .build();
-<a href=#803 id=803 data-nosnippet>803</a>            <span class="kw">let </span><span class="kw-2">mut </span>writer =
-<a href=#804 id=804 data-nosnippet>804</a>                ArrowWriter::try_new(file, delete_batch.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#805 id=805 data-nosnippet>805</a>            writer.write(<span class="kw-2">&amp;</span>delete_batch).expect(<span class="string">"Writing batch"</span>);
-<a href=#806 id=806 data-nosnippet>806</a>            writer.close().unwrap();
-<a href=#807 id=807 data-nosnippet>807</a>            path
-<a href=#808 id=808 data-nosnippet>808</a>        };
-<a href=#809 id=809 data-nosnippet>809</a>
-<a href=#810 id=810 data-nosnippet>810</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
-<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">let </span>basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+<a href=#720 id=720 data-nosnippet>720</a>        path
+<a href=#721 id=721 data-nosnippet>721</a>    }
+<a href=#722 id=722 data-nosnippet>722</a>
+<a href=#723 id=723 data-nosnippet>723</a>    <span class="attr">#[tokio::test]
+<a href=#724 id=724 data-nosnippet>724</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_load_deletes() {
+<a href=#725 id=725 data-nosnippet>725</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#726 id=726 data-nosnippet>726</a>        <span class="kw">let </span>table_location = tmp_dir.path();
+<a href=#727 id=727 data-nosnippet>727</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+<a href=#728 id=728 data-nosnippet>728</a>            .unwrap()
+<a href=#729 id=729 data-nosnippet>729</a>            .build()
+<a href=#730 id=730 data-nosnippet>730</a>            .unwrap();
+<a href=#731 id=731 data-nosnippet>731</a>
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
+<a href=#735 id=735 data-nosnippet>735</a>
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">let </span>delete_filter = delete_file_loader
+<a href=#737 id=737 data-nosnippet>737</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
+<a href=#738 id=738 data-nosnippet>738</a>            .<span class="kw">await
+<a href=#739 id=739 data-nosnippet>739</a>            </span>.unwrap()
+<a href=#740 id=740 data-nosnippet>740</a>            .unwrap();
+<a href=#741 id=741 data-nosnippet>741</a>
+<a href=#742 id=742 data-nosnippet>742</a>        <span class="kw">let </span>result = delete_filter
+<a href=#743 id=743 data-nosnippet>743</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
+<a href=#744 id=744 data-nosnippet>744</a>            .unwrap();
+<a href=#745 id=745 data-nosnippet>745</a>
+<a href=#746 id=746 data-nosnippet>746</a>        <span class="comment">// union of pos dels from pos del file 1 and 2, ie
+<a href=#747 id=747 data-nosnippet>747</a>        // [0, 1, 3, 5, 6, 8, 1022, 1023] | [0, 1, 3, 5, 20, 21, 22, 23]
+<a href=#748 id=748 data-nosnippet>748</a>        // = [0, 1, 3, 5, 6, 8, 20, 21, 22, 23, 1022, 1023]
+<a href=#749 id=749 data-nosnippet>749</a>        </span><span class="macro">assert_eq!</span>(result.lock().unwrap().len(), <span class="number">12</span>);
+<a href=#750 id=750 data-nosnippet>750</a>
+<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>result = delete_filter.get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">1</span>]);
+<a href=#752 id=752 data-nosnippet>752</a>        <span class="macro">assert!</span>(result.is_none()); <span class="comment">// no pos dels for file 3
+<a href=#753 id=753 data-nosnippet>753</a>    </span>}
+<a href=#754 id=754 data-nosnippet>754</a>
+<a href=#755 id=755 data-nosnippet>755</a>    <span class="doccomment">/// Verifies that evolve_schema on partial-schema equality deletes works correctly
+<a href=#756 id=756 data-nosnippet>756</a>    /// when only equality_ids columns are evolved, not all table columns.
+<a href=#757 id=757 data-nosnippet>757</a>    ///
+<a href=#758 id=758 data-nosnippet>758</a>    /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
+<a href=#759 id=759 data-nosnippet>759</a>    /// equality delete files can contain only a subset of columns.
+<a href=#760 id=760 data-nosnippet>760</a>    </span><span class="attr">#[tokio::test]
+<a href=#761 id=761 data-nosnippet>761</a>    </span><span class="kw">async fn </span>test_partial_schema_equality_deletes_evolve_succeeds() {
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+<a href=#764 id=764 data-nosnippet>764</a>
+<a href=#765 id=765 data-nosnippet>765</a>        <span class="comment">// Create table schema with REQUIRED fields
+<a href=#766 id=766 data-nosnippet>766</a>        </span><span class="kw">let </span>table_schema = Arc::new(
+<a href=#767 id=767 data-nosnippet>767</a>            Schema::builder()
+<a href=#768 id=768 data-nosnippet>768</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#769 id=769 data-nosnippet>769</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#770 id=770 data-nosnippet>770</a>                    <span class="kw">crate</span>::spec::NestedField::required(
+<a href=#771 id=771 data-nosnippet>771</a>                        <span class="number">1</span>,
+<a href=#772 id=772 data-nosnippet>772</a>                        <span class="string">"id"</span>,
+<a href=#773 id=773 data-nosnippet>773</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::Int),
+<a href=#774 id=774 data-nosnippet>774</a>                    )
+<a href=#775 id=775 data-nosnippet>775</a>                    .into(),
+<a href=#776 id=776 data-nosnippet>776</a>                    <span class="kw">crate</span>::spec::NestedField::required(
+<a href=#777 id=777 data-nosnippet>777</a>                        <span class="number">2</span>,
+<a href=#778 id=778 data-nosnippet>778</a>                        <span class="string">"data"</span>,
+<a href=#779 id=779 data-nosnippet>779</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::String),
+<a href=#780 id=780 data-nosnippet>780</a>                    )
+<a href=#781 id=781 data-nosnippet>781</a>                    .into(),
+<a href=#782 id=782 data-nosnippet>782</a>                ])
+<a href=#783 id=783 data-nosnippet>783</a>                .build()
+<a href=#784 id=784 data-nosnippet>784</a>                .unwrap(),
+<a href=#785 id=785 data-nosnippet>785</a>        );
+<a href=#786 id=786 data-nosnippet>786</a>
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="comment">// Write equality delete file with PARTIAL schema (only 'data' column)
+<a href=#788 id=788 data-nosnippet>788</a>        </span><span class="kw">let </span>delete_file_path = {
+<a href=#789 id=789 data-nosnippet>789</a>            <span class="kw">let </span>data_vals = <span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"d"</span>, <span class="string">"g"</span>];
+<a href=#790 id=790 data-nosnippet>790</a>            <span class="kw">let </span>data_col = Arc::new(StringArray::from(data_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#791 id=791 data-nosnippet>791</a>
+<a href=#792 id=792 data-nosnippet>792</a>            <span class="kw">let </span>delete_schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[simple_field(
+<a href=#793 id=793 data-nosnippet>793</a>                <span class="string">"data"</span>,
+<a href=#794 id=794 data-nosnippet>794</a>                DataType::Utf8,
+<a href=#795 id=795 data-nosnippet>795</a>                <span class="bool-val">false</span>,
+<a href=#796 id=796 data-nosnippet>796</a>                <span class="string">"2"</span>, <span class="comment">// field ID
+<a href=#797 id=797 data-nosnippet>797</a>            </span>)]));
+<a href=#798 id=798 data-nosnippet>798</a>
+<a href=#799 id=799 data-nosnippet>799</a>            <span class="kw">let </span>delete_batch = RecordBatch::try_new(delete_schema.clone(), <span class="macro">vec!</span>[data_col]).unwrap();
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a>            <span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/partial-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
+<a href=#802 id=802 data-nosnippet>802</a>            <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#803 id=803 data-nosnippet>803</a>            <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#804 id=804 data-nosnippet>804</a>                .set_compression(Compression::SNAPPY)
+<a href=#805 id=805 data-nosnippet>805</a>                .build();
+<a href=#806 id=806 data-nosnippet>806</a>            <span class="kw">let </span><span class="kw-2">mut </span>writer =
+<a href=#807 id=807 data-nosnippet>807</a>                ArrowWriter::try_new(file, delete_batch.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#808 id=808 data-nosnippet>808</a>            writer.write(<span class="kw-2">&amp;</span>delete_batch).expect(<span class="string">"Writing batch"</span>);
+<a href=#809 id=809 data-nosnippet>809</a>            writer.close().unwrap();
+<a href=#810 id=810 data-nosnippet>810</a>            path
+<a href=#811 id=811 data-nosnippet>811</a>        };
 <a href=#812 id=812 data-nosnippet>812</a>
-<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>batch_stream = basic_delete_file_loader
-<a href=#814 id=814 data-nosnippet>814</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>delete_file_path)
-<a href=#815 id=815 data-nosnippet>815</a>            .<span class="kw">await
-<a href=#816 id=816 data-nosnippet>816</a>            </span>.unwrap();
-<a href=#817 id=817 data-nosnippet>817</a>
-<a href=#818 id=818 data-nosnippet>818</a>        <span class="comment">// Only evolve the equality_ids columns (field 2), not all table columns
-<a href=#819 id=819 data-nosnippet>819</a>        </span><span class="kw">let </span>equality_ids = <span class="macro">vec!</span>[<span class="number">2</span>];
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span>evolved_stream =
-<a href=#821 id=821 data-nosnippet>821</a>            BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema, <span class="kw-2">&amp;</span>equality_ids)
-<a href=#822 id=822 data-nosnippet>822</a>                .<span class="kw">await
-<a href=#823 id=823 data-nosnippet>823</a>                </span>.unwrap();
-<a href=#824 id=824 data-nosnippet>824</a>
-<a href=#825 id=825 data-nosnippet>825</a>        <span class="kw">let </span>result = evolved_stream.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>;
-<a href=#826 id=826 data-nosnippet>826</a>
-<a href=#827 id=827 data-nosnippet>827</a>        <span class="macro">assert!</span>(
-<a href=#828 id=828 data-nosnippet>828</a>            result.is_ok(),
-<a href=#829 id=829 data-nosnippet>829</a>            <span class="string">"Expected success when evolving only equality_ids columns, got error: {:?}"</span>,
-<a href=#830 id=830 data-nosnippet>830</a>            result.err()
-<a href=#831 id=831 data-nosnippet>831</a>        );
+<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+<a href=#814 id=814 data-nosnippet>814</a>        <span class="kw">let </span>basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+<a href=#815 id=815 data-nosnippet>815</a>
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="kw">let </span>batch_stream = basic_delete_file_loader
+<a href=#817 id=817 data-nosnippet>817</a>            .parquet_to_batch_stream(
+<a href=#818 id=818 data-nosnippet>818</a>                <span class="kw-2">&amp;</span>delete_file_path,
+<a href=#819 id=819 data-nosnippet>819</a>                std::fs::metadata(<span class="kw-2">&amp;</span>delete_file_path).unwrap().len(),
+<a href=#820 id=820 data-nosnippet>820</a>            )
+<a href=#821 id=821 data-nosnippet>821</a>            .<span class="kw">await
+<a href=#822 id=822 data-nosnippet>822</a>            </span>.unwrap();
+<a href=#823 id=823 data-nosnippet>823</a>
+<a href=#824 id=824 data-nosnippet>824</a>        <span class="comment">// Only evolve the equality_ids columns (field 2), not all table columns
+<a href=#825 id=825 data-nosnippet>825</a>        </span><span class="kw">let </span>equality_ids = <span class="macro">vec!</span>[<span class="number">2</span>];
+<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span>evolved_stream =
+<a href=#827 id=827 data-nosnippet>827</a>            BasicDeleteFileLoader::evolve_schema(batch_stream, table_schema, <span class="kw-2">&amp;</span>equality_ids)
+<a href=#828 id=828 data-nosnippet>828</a>                .<span class="kw">await
+<a href=#829 id=829 data-nosnippet>829</a>                </span>.unwrap();
+<a href=#830 id=830 data-nosnippet>830</a>
+<a href=#831 id=831 data-nosnippet>831</a>        <span class="kw">let </span>result = evolved_stream.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>;
 <a href=#832 id=832 data-nosnippet>832</a>
-<a href=#833 id=833 data-nosnippet>833</a>        <span class="kw">let </span>batches = result.unwrap();
-<a href=#834 id=834 data-nosnippet>834</a>        <span class="macro">assert_eq!</span>(batches.len(), <span class="number">1</span>);
-<a href=#835 id=835 data-nosnippet>835</a>
-<a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>batches[<span class="number">0</span>];
-<a href=#837 id=837 data-nosnippet>837</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">3</span>);
-<a href=#838 id=838 data-nosnippet>838</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">1</span>); <span class="comment">// Only 'data' column
-<a href=#839 id=839 data-nosnippet>839</a>
-<a href=#840 id=840 data-nosnippet>840</a>        // Verify the actual values are preserved after schema evolution
-<a href=#841 id=841 data-nosnippet>841</a>        </span><span class="kw">let </span>data_col = batch.column(<span class="number">0</span>).as_string::&lt;i32&gt;();
-<a href=#842 id=842 data-nosnippet>842</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">0</span>), <span class="string">"a"</span>);
-<a href=#843 id=843 data-nosnippet>843</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">1</span>), <span class="string">"d"</span>);
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">2</span>), <span class="string">"g"</span>);
-<a href=#845 id=845 data-nosnippet>845</a>    }
-<a href=#846 id=846 data-nosnippet>846</a>
-<a href=#847 id=847 data-nosnippet>847</a>    <span class="doccomment">/// Test loading a FileScanTask with BOTH positional and equality deletes.
-<a href=#848 id=848 data-nosnippet>848</a>    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
-<a href=#849 id=849 data-nosnippet>849</a>    </span><span class="attr">#[tokio::test]
-<a href=#850 id=850 data-nosnippet>850</a>    </span><span class="kw">async fn </span>test_load_deletes_with_mixed_types() {
-<a href=#851 id=851 data-nosnippet>851</a>        <span class="kw">use </span><span class="kw">crate</span>::scan::FileScanTask;
-<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Schema};
-<a href=#853 id=853 data-nosnippet>853</a>
-<a href=#854 id=854 data-nosnippet>854</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">let </span>table_location = tmp_dir.path();
-<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-<a href=#857 id=857 data-nosnippet>857</a>            .unwrap()
-<a href=#858 id=858 data-nosnippet>858</a>            .build()
-<a href=#859 id=859 data-nosnippet>859</a>            .unwrap();
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="comment">// Create the data file schema
-<a href=#862 id=862 data-nosnippet>862</a>        </span><span class="kw">let </span>data_file_schema = Arc::new(
-<a href=#863 id=863 data-nosnippet>863</a>            Schema::builder()
-<a href=#864 id=864 data-nosnippet>864</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#865 id=865 data-nosnippet>865</a>                    <span class="kw">crate</span>::spec::NestedField::optional(
-<a href=#866 id=866 data-nosnippet>866</a>                        <span class="number">2</span>,
-<a href=#867 id=867 data-nosnippet>867</a>                        <span class="string">"y"</span>,
-<a href=#868 id=868 data-nosnippet>868</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::Long),
-<a href=#869 id=869 data-nosnippet>869</a>                    )
-<a href=#870 id=870 data-nosnippet>870</a>                    .into(),
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="macro">assert!</span>(
+<a href=#834 id=834 data-nosnippet>834</a>            result.is_ok(),
+<a href=#835 id=835 data-nosnippet>835</a>            <span class="string">"Expected success when evolving only equality_ids columns, got error: {:?}"</span>,
+<a href=#836 id=836 data-nosnippet>836</a>            result.err()
+<a href=#837 id=837 data-nosnippet>837</a>        );
+<a href=#838 id=838 data-nosnippet>838</a>
+<a href=#839 id=839 data-nosnippet>839</a>        <span class="kw">let </span>batches = result.unwrap();
+<a href=#840 id=840 data-nosnippet>840</a>        <span class="macro">assert_eq!</span>(batches.len(), <span class="number">1</span>);
+<a href=#841 id=841 data-nosnippet>841</a>
+<a href=#842 id=842 data-nosnippet>842</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>batches[<span class="number">0</span>];
+<a href=#843 id=843 data-nosnippet>843</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">3</span>);
+<a href=#844 id=844 data-nosnippet>844</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">1</span>); <span class="comment">// Only 'data' column
+<a href=#845 id=845 data-nosnippet>845</a>
+<a href=#846 id=846 data-nosnippet>846</a>        // Verify the actual values are preserved after schema evolution
+<a href=#847 id=847 data-nosnippet>847</a>        </span><span class="kw">let </span>data_col = batch.column(<span class="number">0</span>).as_string::&lt;i32&gt;();
+<a href=#848 id=848 data-nosnippet>848</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">0</span>), <span class="string">"a"</span>);
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">1</span>), <span class="string">"d"</span>);
+<a href=#850 id=850 data-nosnippet>850</a>        <span class="macro">assert_eq!</span>(data_col.value(<span class="number">2</span>), <span class="string">"g"</span>);
+<a href=#851 id=851 data-nosnippet>851</a>    }
+<a href=#852 id=852 data-nosnippet>852</a>
+<a href=#853 id=853 data-nosnippet>853</a>    <span class="doccomment">/// Test loading a FileScanTask with BOTH positional and equality deletes.
+<a href=#854 id=854 data-nosnippet>854</a>    /// Verifies the fix for the inverted condition that caused "Missing predicate for equality delete file" errors.
+<a href=#855 id=855 data-nosnippet>855</a>    </span><span class="attr">#[tokio::test]
+<a href=#856 id=856 data-nosnippet>856</a>    </span><span class="kw">async fn </span>test_load_deletes_with_mixed_types() {
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">use </span><span class="kw">crate</span>::scan::FileScanTask;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Schema};
+<a href=#859 id=859 data-nosnippet>859</a>
+<a href=#860 id=860 data-nosnippet>860</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>table_location = tmp_dir.path();
+<a href=#862 id=862 data-nosnippet>862</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+<a href=#863 id=863 data-nosnippet>863</a>            .unwrap()
+<a href=#864 id=864 data-nosnippet>864</a>            .build()
+<a href=#865 id=865 data-nosnippet>865</a>            .unwrap();
+<a href=#866 id=866 data-nosnippet>866</a>
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="comment">// Create the data file schema
+<a href=#868 id=868 data-nosnippet>868</a>        </span><span class="kw">let </span>data_file_schema = Arc::new(
+<a href=#869 id=869 data-nosnippet>869</a>            Schema::builder()
+<a href=#870 id=870 data-nosnippet>870</a>                .with_fields(<span class="macro">vec!</span>[
 <a href=#871 id=871 data-nosnippet>871</a>                    <span class="kw">crate</span>::spec::NestedField::optional(
-<a href=#872 id=872 data-nosnippet>872</a>                        <span class="number">3</span>,
-<a href=#873 id=873 data-nosnippet>873</a>                        <span class="string">"z"</span>,
+<a href=#872 id=872 data-nosnippet>872</a>                        <span class="number">2</span>,
+<a href=#873 id=873 data-nosnippet>873</a>                        <span class="string">"y"</span>,
 <a href=#874 id=874 data-nosnippet>874</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::Long),
 <a href=#875 id=875 data-nosnippet>875</a>                    )
 <a href=#876 id=876 data-nosnippet>876</a>                    .into(),
-<a href=#877 id=877 data-nosnippet>877</a>                ])
-<a href=#878 id=878 data-nosnippet>878</a>                .build()
-<a href=#879 id=879 data-nosnippet>879</a>                .unwrap(),
-<a href=#880 id=880 data-nosnippet>880</a>        );
-<a href=#881 id=881 data-nosnippet>881</a>
-<a href=#882 id=882 data-nosnippet>882</a>        <span class="comment">// Write positional delete file
-<a href=#883 id=883 data-nosnippet>883</a>        </span><span class="kw">let </span>positional_delete_schema = <span class="kw">crate</span>::arrow::delete_filter::tests::create_pos_del_schema();
-<a href=#884 id=884 data-nosnippet>884</a>        <span class="kw">let </span>file_path_values =
-<a href=#885 id=885 data-nosnippet>885</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"{}/data-1.parquet"</span>, table_location.to_str().unwrap()); <span class="number">4</span>];
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">let </span>file_path_col = Arc::new(StringArray::from_iter_values(<span class="kw-2">&amp;</span>file_path_values));
-<a href=#887 id=887 data-nosnippet>887</a>        <span class="kw">let </span>pos_col = Arc::new(Int64Array::from_iter_values(<span class="macro">vec!</span>[<span class="number">0i64</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]));
-<a href=#888 id=888 data-nosnippet>888</a>
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>positional_deletes_to_write =
-<a href=#890 id=890 data-nosnippet>890</a>            RecordBatch::try_new(positional_delete_schema.clone(), <span class="macro">vec!</span>[
-<a href=#891 id=891 data-nosnippet>891</a>                file_path_col,
-<a href=#892 id=892 data-nosnippet>892</a>                pos_col,
-<a href=#893 id=893 data-nosnippet>893</a>            ])
-<a href=#894 id=894 data-nosnippet>894</a>            .unwrap();
-<a href=#895 id=895 data-nosnippet>895</a>
-<a href=#896 id=896 data-nosnippet>896</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#897 id=897 data-nosnippet>897</a>            .set_compression(Compression::SNAPPY)
-<a href=#898 id=898 data-nosnippet>898</a>            .build();
-<a href=#899 id=899 data-nosnippet>899</a>
-<a href=#900 id=900 data-nosnippet>900</a>        <span class="kw">let </span>pos_del_path = <span class="macro">format!</span>(<span class="string">"{}/pos-del-mixed.parquet"</span>, table_location.to_str().unwrap());
-<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>pos_del_path).unwrap();
-<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(
-<a href=#903 id=903 data-nosnippet>903</a>            file,
-<a href=#904 id=904 data-nosnippet>904</a>            positional_deletes_to_write.schema(),
-<a href=#905 id=905 data-nosnippet>905</a>            <span class="prelude-val">Some</span>(props.clone()),
-<a href=#906 id=906 data-nosnippet>906</a>        )
-<a href=#907 id=907 data-nosnippet>907</a>        .unwrap();
-<a href=#908 id=908 data-nosnippet>908</a>        writer.write(<span class="kw-2">&amp;</span>positional_deletes_to_write).unwrap();
-<a href=#909 id=909 data-nosnippet>909</a>        writer.close().unwrap();
-<a href=#910 id=910 data-nosnippet>910</a>
-<a href=#911 id=911 data-nosnippet>911</a>        <span class="comment">// Write equality delete file
-<a href=#912 id=912 data-nosnippet>912</a>        </span><span class="kw">let </span>eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
-<a href=#913 id=913 data-nosnippet>913</a>
-<a href=#914 id=914 data-nosnippet>914</a>        <span class="comment">// Create FileScanTask with BOTH positional and equality deletes
-<a href=#915 id=915 data-nosnippet>915</a>        </span><span class="kw">let </span>pos_del = FileScanTaskDeleteFile {
-<a href=#916 id=916 data-nosnippet>916</a>            file_path: pos_del_path,
-<a href=#917 id=917 data-nosnippet>917</a>            file_type: DataContentType::PositionDeletes,
-<a href=#918 id=918 data-nosnippet>918</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#919 id=919 data-nosnippet>919</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#920 id=920 data-nosnippet>920</a>        };
-<a href=#921 id=921 data-nosnippet>921</a>
-<a href=#922 id=922 data-nosnippet>922</a>        <span class="kw">let </span>eq_del = FileScanTaskDeleteFile {
-<a href=#923 id=923 data-nosnippet>923</a>            file_path: eq_delete_path.clone(),
-<a href=#924 id=924 data-nosnippet>924</a>            file_type: DataContentType::EqualityDeletes,
+<a href=#877 id=877 data-nosnippet>877</a>                    <span class="kw">crate</span>::spec::NestedField::optional(
+<a href=#878 id=878 data-nosnippet>878</a>                        <span class="number">3</span>,
+<a href=#879 id=879 data-nosnippet>879</a>                        <span class="string">"z"</span>,
+<a href=#880 id=880 data-nosnippet>880</a>                        <span class="kw">crate</span>::spec::Type::Primitive(<span class="kw">crate</span>::spec::PrimitiveType::Long),
+<a href=#881 id=881 data-nosnippet>881</a>                    )
+<a href=#882 id=882 data-nosnippet>882</a>                    .into(),
+<a href=#883 id=883 data-nosnippet>883</a>                ])
+<a href=#884 id=884 data-nosnippet>884</a>                .build()
+<a href=#885 id=885 data-nosnippet>885</a>                .unwrap(),
+<a href=#886 id=886 data-nosnippet>886</a>        );
+<a href=#887 id=887 data-nosnippet>887</a>
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="comment">// Write positional delete file
+<a href=#889 id=889 data-nosnippet>889</a>        </span><span class="kw">let </span>positional_delete_schema = <span class="kw">crate</span>::arrow::delete_filter::tests::create_pos_del_schema();
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">let </span>file_path_values =
+<a href=#891 id=891 data-nosnippet>891</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"{}/data-1.parquet"</span>, table_location.to_str().unwrap()); <span class="number">4</span>];
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">let </span>file_path_col = Arc::new(StringArray::from_iter_values(<span class="kw-2">&amp;</span>file_path_values));
+<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">let </span>pos_col = Arc::new(Int64Array::from_iter_values(<span class="macro">vec!</span>[<span class="number">0i64</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]));
+<a href=#894 id=894 data-nosnippet>894</a>
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span>positional_deletes_to_write =
+<a href=#896 id=896 data-nosnippet>896</a>            RecordBatch::try_new(positional_delete_schema.clone(), <span class="macro">vec!</span>[
+<a href=#897 id=897 data-nosnippet>897</a>                file_path_col,
+<a href=#898 id=898 data-nosnippet>898</a>                pos_col,
+<a href=#899 id=899 data-nosnippet>899</a>            ])
+<a href=#900 id=900 data-nosnippet>900</a>            .unwrap();
+<a href=#901 id=901 data-nosnippet>901</a>
+<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#903 id=903 data-nosnippet>903</a>            .set_compression(Compression::SNAPPY)
+<a href=#904 id=904 data-nosnippet>904</a>            .build();
+<a href=#905 id=905 data-nosnippet>905</a>
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw">let </span>pos_del_path = <span class="macro">format!</span>(<span class="string">"{}/pos-del-mixed.parquet"</span>, table_location.to_str().unwrap());
+<a href=#907 id=907 data-nosnippet>907</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>pos_del_path).unwrap();
+<a href=#908 id=908 data-nosnippet>908</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(
+<a href=#909 id=909 data-nosnippet>909</a>            file,
+<a href=#910 id=910 data-nosnippet>910</a>            positional_deletes_to_write.schema(),
+<a href=#911 id=911 data-nosnippet>911</a>            <span class="prelude-val">Some</span>(props.clone()),
+<a href=#912 id=912 data-nosnippet>912</a>        )
+<a href=#913 id=913 data-nosnippet>913</a>        .unwrap();
+<a href=#914 id=914 data-nosnippet>914</a>        writer.write(<span class="kw-2">&amp;</span>positional_deletes_to_write).unwrap();
+<a href=#915 id=915 data-nosnippet>915</a>        writer.close().unwrap();
+<a href=#916 id=916 data-nosnippet>916</a>
+<a href=#917 id=917 data-nosnippet>917</a>        <span class="comment">// Write equality delete file
+<a href=#918 id=918 data-nosnippet>918</a>        </span><span class="kw">let </span>eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
+<a href=#919 id=919 data-nosnippet>919</a>
+<a href=#920 id=920 data-nosnippet>920</a>        <span class="comment">// Create FileScanTask with BOTH positional and equality deletes
+<a href=#921 id=921 data-nosnippet>921</a>        </span><span class="kw">let </span>pos_del = FileScanTaskDeleteFile {
+<a href=#922 id=922 data-nosnippet>922</a>            file_path: pos_del_path.clone(),
+<a href=#923 id=923 data-nosnippet>923</a>            file_size_in_bytes: std::fs::metadata(<span class="kw-2">&amp;</span>pos_del_path).unwrap().len(),
+<a href=#924 id=924 data-nosnippet>924</a>            file_type: DataContentType::PositionDeletes,
 <a href=#925 id=925 data-nosnippet>925</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#926 id=926 data-nosnippet>926</a>            equality_ids: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>]), <span class="comment">// Only use field IDs that exist in both schemas
-<a href=#927 id=927 data-nosnippet>927</a>        </span>};
+<a href=#926 id=926 data-nosnippet>926</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#927 id=927 data-nosnippet>927</a>        };
 <a href=#928 id=928 data-nosnippet>928</a>
-<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw">let </span>file_scan_task = FileScanTask {
-<a href=#930 id=930 data-nosnippet>930</a>            start: <span class="number">0</span>,
-<a href=#931 id=931 data-nosnippet>931</a>            length: <span class="number">0</span>,
-<a href=#932 id=932 data-nosnippet>932</a>            record_count: <span class="prelude-val">None</span>,
-<a href=#933 id=933 data-nosnippet>933</a>            data_file_path: <span class="macro">format!</span>(<span class="string">"{}/data-1.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#934 id=934 data-nosnippet>934</a>            data_file_format: DataFileFormat::Parquet,
-<a href=#935 id=935 data-nosnippet>935</a>            schema: data_file_schema.clone(),
-<a href=#936 id=936 data-nosnippet>936</a>            project_field_ids: <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>],
-<a href=#937 id=937 data-nosnippet>937</a>            predicate: <span class="prelude-val">None</span>,
-<a href=#938 id=938 data-nosnippet>938</a>            deletes: <span class="macro">vec!</span>[pos_del, eq_del],
-<a href=#939 id=939 data-nosnippet>939</a>            partition: <span class="prelude-val">None</span>,
-<a href=#940 id=940 data-nosnippet>940</a>            partition_spec: <span class="prelude-val">None</span>,
-<a href=#941 id=941 data-nosnippet>941</a>            name_mapping: <span class="prelude-val">None</span>,
-<a href=#942 id=942 data-nosnippet>942</a>            case_sensitive: <span class="bool-val">false</span>,
-<a href=#943 id=943 data-nosnippet>943</a>        };
-<a href=#944 id=944 data-nosnippet>944</a>
-<a href=#945 id=945 data-nosnippet>945</a>        <span class="comment">// Load the deletes - should handle both types without error
-<a href=#946 id=946 data-nosnippet>946</a>        </span><span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
-<a href=#947 id=947 data-nosnippet>947</a>        <span class="kw">let </span>delete_filter = delete_file_loader
-<a href=#948 id=948 data-nosnippet>948</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_task.deletes, file_scan_task.schema_ref())
-<a href=#949 id=949 data-nosnippet>949</a>            .<span class="kw">await
-<a href=#950 id=950 data-nosnippet>950</a>            </span>.unwrap()
-<a href=#951 id=951 data-nosnippet>951</a>            .unwrap();
-<a href=#952 id=952 data-nosnippet>952</a>
-<a href=#953 id=953 data-nosnippet>953</a>        <span class="comment">// Verify both delete types can be processed together
-<a href=#954 id=954 data-nosnippet>954</a>        </span><span class="kw">let </span>result = delete_filter
-<a href=#955 id=955 data-nosnippet>955</a>            .build_equality_delete_predicate(<span class="kw-2">&amp;</span>file_scan_task)
-<a href=#956 id=956 data-nosnippet>956</a>            .<span class="kw">await</span>;
-<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(
-<a href=#958 id=958 data-nosnippet>958</a>            result.is_ok(),
-<a href=#959 id=959 data-nosnippet>959</a>            <span class="string">"Failed to build equality delete predicate: {:?}"</span>,
-<a href=#960 id=960 data-nosnippet>960</a>            result.err()
-<a href=#961 id=961 data-nosnippet>961</a>        );
-<a href=#962 id=962 data-nosnippet>962</a>    }
-<a href=#963 id=963 data-nosnippet>963</a>
-<a href=#964 id=964 data-nosnippet>964</a>    <span class="attr">#[tokio::test]
-<a href=#965 id=965 data-nosnippet>965</a>    </span><span class="kw">async fn </span>test_large_equality_delete_batch_stack_overflow() {
-<a href=#966 id=966 data-nosnippet>966</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#967 id=967 data-nosnippet>967</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
-<a href=#969 id=969 data-nosnippet>969</a>
-<a href=#970 id=970 data-nosnippet>970</a>        <span class="comment">// Create a large batch of equality deletes
-<a href=#971 id=971 data-nosnippet>971</a>        </span><span class="kw">let </span>num_rows = <span class="number">20_000</span>;
-<a href=#972 id=972 data-nosnippet>972</a>        <span class="kw">let </span>col_y_vals: Vec&lt;i64&gt; = (<span class="number">0</span>..num_rows).collect();
-<a href=#973 id=973 data-nosnippet>973</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
-<a href=#974 id=974 data-nosnippet>974</a>
-<a href=#975 id=975 data-nosnippet>975</a>        <span class="kw">let </span>schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[
-<a href=#976 id=976 data-nosnippet>976</a>            Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
-<a href=#977 id=977 data-nosnippet>977</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#978 id=978 data-nosnippet>978</a>                <span class="string">"2"</span>.to_string(),
-<a href=#979 id=979 data-nosnippet>979</a>            )])),
-<a href=#980 id=980 data-nosnippet>980</a>        ]));
-<a href=#981 id=981 data-nosnippet>981</a>
-<a href=#982 id=982 data-nosnippet>982</a>        <span class="kw">let </span>record_batch = RecordBatch::try_new(schema.clone(), <span class="macro">vec!</span>[col_y]).unwrap();
+<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw">let </span>eq_del = FileScanTaskDeleteFile {
+<a href=#930 id=930 data-nosnippet>930</a>            file_path: eq_delete_path.clone(),
+<a href=#931 id=931 data-nosnippet>931</a>            file_size_in_bytes: std::fs::metadata(<span class="kw-2">&amp;</span>eq_delete_path).unwrap().len(),
+<a href=#932 id=932 data-nosnippet>932</a>            file_type: DataContentType::EqualityDeletes,
+<a href=#933 id=933 data-nosnippet>933</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#934 id=934 data-nosnippet>934</a>            equality_ids: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>]), <span class="comment">// Only use field IDs that exist in both schemas
+<a href=#935 id=935 data-nosnippet>935</a>        </span>};
+<a href=#936 id=936 data-nosnippet>936</a>
+<a href=#937 id=937 data-nosnippet>937</a>        <span class="kw">let </span>file_scan_task = FileScanTask {
+<a href=#938 id=938 data-nosnippet>938</a>            file_size_in_bytes: <span class="number">0</span>,
+<a href=#939 id=939 data-nosnippet>939</a>            start: <span class="number">0</span>,
+<a href=#940 id=940 data-nosnippet>940</a>            length: <span class="number">0</span>,
+<a href=#941 id=941 data-nosnippet>941</a>            record_count: <span class="prelude-val">None</span>,
+<a href=#942 id=942 data-nosnippet>942</a>            data_file_path: <span class="macro">format!</span>(<span class="string">"{}/data-1.parquet"</span>, table_location.to_str().unwrap()),
+<a href=#943 id=943 data-nosnippet>943</a>            data_file_format: DataFileFormat::Parquet,
+<a href=#944 id=944 data-nosnippet>944</a>            schema: data_file_schema.clone(),
+<a href=#945 id=945 data-nosnippet>945</a>            project_field_ids: <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>],
+<a href=#946 id=946 data-nosnippet>946</a>            predicate: <span class="prelude-val">None</span>,
+<a href=#947 id=947 data-nosnippet>947</a>            deletes: <span class="macro">vec!</span>[pos_del, eq_del],
+<a href=#948 id=948 data-nosnippet>948</a>            partition: <span class="prelude-val">None</span>,
+<a href=#949 id=949 data-nosnippet>949</a>            partition_spec: <span class="prelude-val">None</span>,
+<a href=#950 id=950 data-nosnippet>950</a>            name_mapping: <span class="prelude-val">None</span>,
+<a href=#951 id=951 data-nosnippet>951</a>            case_sensitive: <span class="bool-val">false</span>,
+<a href=#952 id=952 data-nosnippet>952</a>        };
+<a href=#953 id=953 data-nosnippet>953</a>
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="comment">// Load the deletes - should handle both types without error
+<a href=#955 id=955 data-nosnippet>955</a>        </span><span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span>delete_filter = delete_file_loader
+<a href=#957 id=957 data-nosnippet>957</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_task.deletes, file_scan_task.schema_ref())
+<a href=#958 id=958 data-nosnippet>958</a>            .<span class="kw">await
+<a href=#959 id=959 data-nosnippet>959</a>            </span>.unwrap()
+<a href=#960 id=960 data-nosnippet>960</a>            .unwrap();
+<a href=#961 id=961 data-nosnippet>961</a>
+<a href=#962 id=962 data-nosnippet>962</a>        <span class="comment">// Verify both delete types can be processed together
+<a href=#963 id=963 data-nosnippet>963</a>        </span><span class="kw">let </span>result = delete_filter
+<a href=#964 id=964 data-nosnippet>964</a>            .build_equality_delete_predicate(<span class="kw-2">&amp;</span>file_scan_task)
+<a href=#965 id=965 data-nosnippet>965</a>            .<span class="kw">await</span>;
+<a href=#966 id=966 data-nosnippet>966</a>        <span class="macro">assert!</span>(
+<a href=#967 id=967 data-nosnippet>967</a>            result.is_ok(),
+<a href=#968 id=968 data-nosnippet>968</a>            <span class="string">"Failed to build equality delete predicate: {:?}"</span>,
+<a href=#969 id=969 data-nosnippet>969</a>            result.err()
+<a href=#970 id=970 data-nosnippet>970</a>        );
+<a href=#971 id=971 data-nosnippet>971</a>    }
+<a href=#972 id=972 data-nosnippet>972</a>
+<a href=#973 id=973 data-nosnippet>973</a>    <span class="attr">#[tokio::test]
+<a href=#974 id=974 data-nosnippet>974</a>    </span><span class="kw">async fn </span>test_large_equality_delete_batch_stack_overflow() {
+<a href=#975 id=975 data-nosnippet>975</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#976 id=976 data-nosnippet>976</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+<a href=#977 id=977 data-nosnippet>977</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+<a href=#978 id=978 data-nosnippet>978</a>
+<a href=#979 id=979 data-nosnippet>979</a>        <span class="comment">// Create a large batch of equality deletes
+<a href=#980 id=980 data-nosnippet>980</a>        </span><span class="kw">let </span>num_rows = <span class="number">20_000</span>;
+<a href=#981 id=981 data-nosnippet>981</a>        <span class="kw">let </span>col_y_vals: Vec&lt;i64&gt; = (<span class="number">0</span>..num_rows).collect();
+<a href=#982 id=982 data-nosnippet>982</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
 <a href=#983 id=983 data-nosnippet>983</a>
-<a href=#984 id=984 data-nosnippet>984</a>        <span class="comment">// Write to file
-<a href=#985 id=985 data-nosnippet>985</a>        </span><span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/large-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
-<a href=#986 id=986 data-nosnippet>986</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#987 id=987 data-nosnippet>987</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#988 id=988 data-nosnippet>988</a>            .set_compression(Compression::SNAPPY)
-<a href=#989 id=989 data-nosnippet>989</a>            .build();
-<a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, schema, <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#991 id=991 data-nosnippet>991</a>        writer.write(<span class="kw-2">&amp;</span>record_batch).unwrap();
-<a href=#992 id=992 data-nosnippet>992</a>        writer.close().unwrap();
-<a href=#993 id=993 data-nosnippet>993</a>
-<a href=#994 id=994 data-nosnippet>994</a>        <span class="kw">let </span>basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
-<a href=#995 id=995 data-nosnippet>995</a>        <span class="kw">let </span>record_batch_stream = basic_delete_file_loader
-<a href=#996 id=996 data-nosnippet>996</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>path)
-<a href=#997 id=997 data-nosnippet>997</a>            .<span class="kw">await
-<a href=#998 id=998 data-nosnippet>998</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
-<a href=#999 id=999 data-nosnippet>999</a>
-<a href=#1000 id=1000 data-nosnippet>1000</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>]);
-<a href=#1001 id=1001 data-nosnippet>1001</a>
-<a href=#1002 id=1002 data-nosnippet>1002</a>        <span class="kw">let </span>result = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
-<a href=#1003 id=1003 data-nosnippet>1003</a>            record_batch_stream,
-<a href=#1004 id=1004 data-nosnippet>1004</a>            eq_ids,
-<a href=#1005 id=1005 data-nosnippet>1005</a>        )
-<a href=#1006 id=1006 data-nosnippet>1006</a>        .<span class="kw">await</span>;
-<a href=#1007 id=1007 data-nosnippet>1007</a>
-<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="macro">assert!</span>(result.is_ok());
-<a href=#1009 id=1009 data-nosnippet>1009</a>    }
+<a href=#984 id=984 data-nosnippet>984</a>        <span class="kw">let </span>schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[
+<a href=#985 id=985 data-nosnippet>985</a>            Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+<a href=#986 id=986 data-nosnippet>986</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#987 id=987 data-nosnippet>987</a>                <span class="string">"2"</span>.to_string(),
+<a href=#988 id=988 data-nosnippet>988</a>            )])),
+<a href=#989 id=989 data-nosnippet>989</a>        ]));
+<a href=#990 id=990 data-nosnippet>990</a>
+<a href=#991 id=991 data-nosnippet>991</a>        <span class="kw">let </span>record_batch = RecordBatch::try_new(schema.clone(), <span class="macro">vec!</span>[col_y]).unwrap();
+<a href=#992 id=992 data-nosnippet>992</a>
+<a href=#993 id=993 data-nosnippet>993</a>        <span class="comment">// Write to file
+<a href=#994 id=994 data-nosnippet>994</a>        </span><span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/large-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
+<a href=#995 id=995 data-nosnippet>995</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#996 id=996 data-nosnippet>996</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#997 id=997 data-nosnippet>997</a>            .set_compression(Compression::SNAPPY)
+<a href=#998 id=998 data-nosnippet>998</a>            .build();
+<a href=#999 id=999 data-nosnippet>999</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, schema, <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#1000 id=1000 data-nosnippet>1000</a>        writer.write(<span class="kw-2">&amp;</span>record_batch).unwrap();
+<a href=#1001 id=1001 data-nosnippet>1001</a>        writer.close().unwrap();
+<a href=#1002 id=1002 data-nosnippet>1002</a>
+<a href=#1003 id=1003 data-nosnippet>1003</a>        <span class="kw">let </span>basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+<a href=#1004 id=1004 data-nosnippet>1004</a>        <span class="kw">let </span>record_batch_stream = basic_delete_file_loader
+<a href=#1005 id=1005 data-nosnippet>1005</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>path, std::fs::metadata(<span class="kw-2">&amp;</span>path).unwrap().len())
+<a href=#1006 id=1006 data-nosnippet>1006</a>            .<span class="kw">await
+<a href=#1007 id=1007 data-nosnippet>1007</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
+<a href=#1008 id=1008 data-nosnippet>1008</a>
+<a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>]);
 <a href=#1010 id=1010 data-nosnippet>1010</a>
-<a href=#1011 id=1011 data-nosnippet>1011</a>    <span class="attr">#[tokio::test]
-<a href=#1012 id=1012 data-nosnippet>1012</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_caches_results() {
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="kw">let </span>table_location = tmp_dir.path();
-<a href=#1015 id=1015 data-nosnippet>1015</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-<a href=#1016 id=1016 data-nosnippet>1016</a>            .unwrap()
-<a href=#1017 id=1017 data-nosnippet>1017</a>            .build()
-<a href=#1018 id=1018 data-nosnippet>1018</a>            .unwrap();
+<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span>result = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+<a href=#1012 id=1012 data-nosnippet>1012</a>            record_batch_stream,
+<a href=#1013 id=1013 data-nosnippet>1013</a>            eq_ids,
+<a href=#1014 id=1014 data-nosnippet>1014</a>        )
+<a href=#1015 id=1015 data-nosnippet>1015</a>        .<span class="kw">await</span>;
+<a href=#1016 id=1016 data-nosnippet>1016</a>
+<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#1018 id=1018 data-nosnippet>1018</a>    }
 <a href=#1019 id=1019 data-nosnippet>1019</a>
-<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
-<a href=#1021 id=1021 data-nosnippet>1021</a>
-<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
-<a href=#1023 id=1023 data-nosnippet>1023</a>
-<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="comment">// Load deletes for the first time
-<a href=#1025 id=1025 data-nosnippet>1025</a>        </span><span class="kw">let </span>delete_filter_1 = delete_file_loader
-<a href=#1026 id=1026 data-nosnippet>1026</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
-<a href=#1027 id=1027 data-nosnippet>1027</a>            .<span class="kw">await
-<a href=#1028 id=1028 data-nosnippet>1028</a>            </span>.unwrap()
-<a href=#1029 id=1029 data-nosnippet>1029</a>            .unwrap();
+<a href=#1020 id=1020 data-nosnippet>1020</a>    <span class="attr">#[tokio::test]
+<a href=#1021 id=1021 data-nosnippet>1021</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_caches_results() {
+<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span>table_location = tmp_dir.path();
+<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span>file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+<a href=#1025 id=1025 data-nosnippet>1025</a>            .unwrap()
+<a href=#1026 id=1026 data-nosnippet>1026</a>            .build()
+<a href=#1027 id=1027 data-nosnippet>1027</a>            .unwrap();
+<a href=#1028 id=1028 data-nosnippet>1028</a>
+<a href=#1029 id=1029 data-nosnippet>1029</a>        <span class="kw">let </span>delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>);
 <a href=#1030 id=1030 data-nosnippet>1030</a>
-<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="comment">// Load deletes for the second time (same task/files)
-<a href=#1032 id=1032 data-nosnippet>1032</a>        </span><span class="kw">let </span>delete_filter_2 = delete_file_loader
-<a href=#1033 id=1033 data-nosnippet>1033</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
-<a href=#1034 id=1034 data-nosnippet>1034</a>            .<span class="kw">await
-<a href=#1035 id=1035 data-nosnippet>1035</a>            </span>.unwrap()
-<a href=#1036 id=1036 data-nosnippet>1036</a>            .unwrap();
-<a href=#1037 id=1037 data-nosnippet>1037</a>
-<a href=#1038 id=1038 data-nosnippet>1038</a>        <span class="kw">let </span>dv1 = delete_filter_1
-<a href=#1039 id=1039 data-nosnippet>1039</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
-<a href=#1040 id=1040 data-nosnippet>1040</a>            .unwrap();
-<a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="kw">let </span>dv2 = delete_filter_2
-<a href=#1042 id=1042 data-nosnippet>1042</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
-<a href=#1043 id=1043 data-nosnippet>1043</a>            .unwrap();
-<a href=#1044 id=1044 data-nosnippet>1044</a>
-<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="comment">// Verify that the delete vectors point to the same memory location,
-<a href=#1046 id=1046 data-nosnippet>1046</a>        // confirming that the second load reused the result from the first.
-<a href=#1047 id=1047 data-nosnippet>1047</a>        </span><span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>dv1, <span class="kw-2">&amp;</span>dv2));
-<a href=#1048 id=1048 data-nosnippet>1048</a>    }
-<a href=#1049 id=1049 data-nosnippet>1049</a>}</code></pre></div></section></main></body></html>
+<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
+<a href=#1032 id=1032 data-nosnippet>1032</a>
+<a href=#1033 id=1033 data-nosnippet>1033</a>        <span class="comment">// Load deletes for the first time
+<a href=#1034 id=1034 data-nosnippet>1034</a>        </span><span class="kw">let </span>delete_filter_1 = delete_file_loader
+<a href=#1035 id=1035 data-nosnippet>1035</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
+<a href=#1036 id=1036 data-nosnippet>1036</a>            .<span class="kw">await
+<a href=#1037 id=1037 data-nosnippet>1037</a>            </span>.unwrap()
+<a href=#1038 id=1038 data-nosnippet>1038</a>            .unwrap();
+<a href=#1039 id=1039 data-nosnippet>1039</a>
+<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="comment">// Load deletes for the second time (same task/files)
+<a href=#1041 id=1041 data-nosnippet>1041</a>        </span><span class="kw">let </span>delete_filter_2 = delete_file_loader
+<a href=#1042 id=1042 data-nosnippet>1042</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
+<a href=#1043 id=1043 data-nosnippet>1043</a>            .<span class="kw">await
+<a href=#1044 id=1044 data-nosnippet>1044</a>            </span>.unwrap()
+<a href=#1045 id=1045 data-nosnippet>1045</a>            .unwrap();
+<a href=#1046 id=1046 data-nosnippet>1046</a>
+<a href=#1047 id=1047 data-nosnippet>1047</a>        <span class="kw">let </span>dv1 = delete_filter_1
+<a href=#1048 id=1048 data-nosnippet>1048</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
+<a href=#1049 id=1049 data-nosnippet>1049</a>            .unwrap();
+<a href=#1050 id=1050 data-nosnippet>1050</a>        <span class="kw">let </span>dv2 = delete_filter_2
+<a href=#1051 id=1051 data-nosnippet>1051</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
+<a href=#1052 id=1052 data-nosnippet>1052</a>            .unwrap();
+<a href=#1053 id=1053 data-nosnippet>1053</a>
+<a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="comment">// Verify that the delete vectors point to the same memory location,
+<a href=#1055 id=1055 data-nosnippet>1055</a>        // confirming that the second load reused the result from the first.
+<a href=#1056 id=1056 data-nosnippet>1056</a>        </span><span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>dv1, <span class="kw-2">&amp;</span>dv2));
+<a href=#1057 id=1057 data-nosnippet>1057</a>    }
+<a href=#1058 id=1058 data-nosnippet>1058</a>}</code></pre></div></section></main></body></html>
