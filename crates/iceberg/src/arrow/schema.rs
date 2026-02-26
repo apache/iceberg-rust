@@ -1295,6 +1295,8 @@ pub fn strip_metadata_from_schema(schema: &ArrowSchema) -> Result<ArrowSchema> {
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
+
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1602,6 +1604,32 @@ mod tests {
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
         pretty_assertions::assert_eq!(converted_schema, schema);
+    }
+
+    #[bench]
+    fn bench_complex_arrow_schema_to_iceberg(b: &mut test::Bencher) {
+        let fields = Fields::from(vec![
+            simple_field("key", DataType::Int32, false, "17"),
+            simple_field("value", DataType::Utf8, true, "18"),
+        ]);
+
+        let map = DataType::Map(
+            Arc::new(simple_field(
+                DEFAULT_MAP_FIELD_NAME,
+                DataType::Struct(fields),
+                false,
+                "17",
+            )),
+            false,
+        );
+
+        let arrow_schema = ArrowSchema::new(vec![simple_field("map", map, true, "14")]);
+        b.iter(|| {
+            for _ in 0..10_000 {
+                let got = arrow_schema_to_schema(&arrow_schema).unwrap();
+                assert!(got.field_by_name("map").is_some());
+            }
+        });
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
