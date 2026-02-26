@@ -25,3 +25,41 @@
 This crate contains the official Native Rust implementation of Apache Iceberg Rest Catalog.
 
 See the [API documentation](https://docs.rs/iceberg-catalog-rest/latest) for examples and the full API.
+
+## Features
+
+### Middleware Support
+
+The `middleware` feature enables support for custom HTTP middleware using the `reqwest-middleware` crate. This allows you to add custom behavior to HTTP requests, such as:
+
+- Request/response logging
+- Retry logic
+- Rate limiting
+- Custom authentication
+- Metrics collection
+
+To enable middleware support, add the feature to your `Cargo.toml`:
+
+```toml
+[dependencies]
+iceberg-catalog-rest = { version = "0.8", features = ["middleware"] }
+reqwest-middleware = "0.4"
+```
+
+Example usage:
+
+```rust
+use iceberg_catalog_rest::RestCatalogBuilder;
+use reqwest_middleware::ClientBuilder;
+use reqwest::Client;
+
+// Create a client with middleware
+let client = ClientBuilder::new(Client::new())
+    // Add your middleware here
+    .build();
+
+// Configure the catalog with the middleware client
+let catalog = RestCatalogBuilder::new("http://localhost:8080")
+    .with_middleware_client(client)
+    .build()?;
+```

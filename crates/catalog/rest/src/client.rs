@@ -30,6 +30,8 @@ use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
     client: Client,
+    #[cfg(feature = "middleware")]
+    middleware_client: Option<reqwest_middleware::ClientWithMiddleware>,
 
     /// The token to be used for authentication.
     ///
@@ -62,6 +64,8 @@ impl HttpClient {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
+            #[cfg(feature = "middleware")]
+            middleware_client: cfg.middleware_client(),
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -80,8 +84,20 @@ impl HttpClient {
             .then(|| cfg.extra_headers())
             .transpose()?
             .unwrap_or(self.extra_headers);
+
+        let client = cfg.client().unwrap_or(self.client);
+
+        #[cfg(feature = "middleware")]
+        let middleware_client = if cfg.has_middleware_client() {
+            cfg.middleware_client()
+        } else {
+            self.middleware_client
+        };
+
         Ok(HttpClient {
-            client: cfg.client().unwrap_or(self.client),
+            client,
+            #[cfg(feature = "middleware")]
+            middleware_client,
             token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
             token_endpoint: if !cfg.get_token_endpoint().is_empty() {
                 cfg.get_token_endpoint()
@@ -253,6 +269,18 @@ impl HttpClient {
     /// Executes the given `Request` and returns a `Response`.
     pub async fn execute(&self, mut request: Request) -> Result<Response> {
         request.headers_mut().extend(self.extra_headers.clone());
+
+        #[cfg(feature = "middleware")]
+        if let Some(ref middleware_client) = self.middleware_client {
+            return middleware_client.execute(request).await.map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Failed to execute request: {e}"),
+                )
+                .with_source(e)
+            });
+        }
+
         Ok(self.client.execute(request).await?)
     }
 
