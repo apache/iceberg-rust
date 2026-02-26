@@ -1763,6 +1763,51 @@ impl AsyncFileReader for ArrowFileReader {
         )
     }
 
+    /// Override the default `get_byte_ranges` which calls `get_bytes` sequentially.
+    /// The parquet reader calls this to fetch column chunks for a row group, so
+    /// without this override each column chunk is a serial round-trip to object storage.
+    /// Adapted from object_store's `coalesce_ranges` in `util.rs`.
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        // Values match object_store's OBJECT_STORE_COALESCE_DEFAULT and
+        // OBJECT_STORE_COALESCE_PARALLEL.
+        const COALESCE_BYTES: u64 = 1024 * 1024;
+        const PARALLEL: usize = 10;
+
+        async move {
+            // Merge nearby ranges to reduce the number of object store requests.
+            let fetch_ranges = merge_ranges(&ranges, COALESCE_BYTES);
+            let r = &self.r;
+
+            // Fetch merged ranges concurrently.
+            let fetched: Vec<Bytes> = futures::stream::iter(fetch_ranges.iter().cloned())
+                .map(|range| async move {
+                    r.read(range)
+                        .await
+                        .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))
+                })
+                .buffered(PARALLEL)
+                .try_collect()
+                .await?;
+
+            // Slice the fetched data back into the originally requested ranges.
+            Ok(ranges
+                .iter()
+                .map(|range| {
+                    let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
+                    let fetch_range = &fetch_ranges[idx];
+                    let fetch_bytes = &fetched[idx];
+                    let start = (range.start - fetch_range.start) as usize;
+                    let end = (range.end - fetch_range.start) as usize;
+                    fetch_bytes.slice(start..end.min(fetch_bytes.len()))
+                })
+                .collect())
+        }
+        .boxed()
+    }
+
     // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
     // we will fix it after `v55.1.0` is released in https://github.com/apache/arrow-rs/issues/7393
     fn get_metadata(
@@ -1783,6 +1828,42 @@ impl AsyncFileReader for ArrowFileReader {
         }
         .boxed()
     }
+}
+
+/// Merge overlapping or nearby byte ranges, combining ranges with gaps <= `coalesce` bytes.
+/// Adapted from object_store's `merge_ranges` in `util.rs`.
+fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
+    if ranges.is_empty() {
+        return vec![];
+    }
+
+    let mut ranges = ranges.to_vec();
+    ranges.sort_unstable_by_key(|r| r.start);
+
+    let mut merged = Vec::with_capacity(ranges.len());
+    let mut start_idx = 0;
+    let mut end_idx = 1;
+
+    while start_idx != ranges.len() {
+        let mut range_end = ranges[start_idx].end;
+
+        while end_idx != ranges.len()
+            && ranges[end_idx]
+                .start
+                .checked_sub(range_end)
+                .map(|delta| delta <= coalesce)
+                .unwrap_or(true)
+        {
+            range_end = range_end.max(ranges[end_idx].end);
+            end_idx += 1;
+        }
+
+        merged.push(ranges[start_idx].start..range_end);
+        start_idx = end_idx;
+        end_idx += 1;
+    }
+
+    merged
 }
 
 /// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
@@ -1810,6 +1891,7 @@ fn try_cast_literal(
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs::File;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
@@ -4316,5 +4398,40 @@ message schema {
         assert_eq!(name_col.value(1), "Bob");
         assert_eq!(name_col.value(2), "Charlie");
         assert_eq!(name_col.value(3), "Dave");
+    }
+
+    #[test]
+    fn test_merge_ranges_empty() {
+        assert_eq!(super::merge_ranges(&[], 1024), Vec::<Range<u64>>::new());
+    }
+
+    #[test]
+    fn test_merge_ranges_no_coalesce() {
+        // Ranges far apart should not be merged
+        let ranges = vec![0..100, 1_000_000..1_000_100];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..100, 1_000_000..1_000_100]);
+    }
+
+    #[test]
+    fn test_merge_ranges_coalesce() {
+        // Ranges within the gap threshold should be merged
+        let ranges = vec![0..100, 200..300, 500..600];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..600]);
+    }
+
+    #[test]
+    fn test_merge_ranges_overlapping() {
+        let ranges = vec![0..200, 100..300];
+        let merged = super::merge_ranges(&ranges, 0);
+        assert_eq!(merged, vec![0..300]);
+    }
+
+    #[test]
+    fn test_merge_ranges_unsorted() {
+        let ranges = vec![500..600, 0..100, 200..300];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..600]);
     }
 }
