@@ -51,11 +51,16 @@ include = [
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+  "error",
+]
+
 [dependency-groups]
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=8.3.2",
-    "datafusion==50.*",
+    "datafusion==52.*",
     "pyiceberg[sql-sqlite,pyarrow]",
     "fastavro>=1.11.1",
 ]

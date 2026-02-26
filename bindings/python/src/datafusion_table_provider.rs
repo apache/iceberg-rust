@@ -19,16 +19,52 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
+use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use iceberg::TableIdent;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
 use iceberg_datafusion::table::IcebergStaticTableProvider;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::PyCapsule;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::{PyAnyMethods, PyCapsuleMethods, *};
+use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
+
+pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
+    let capsule_name = capsule.name()?;
+    if capsule_name.is_none() {
+        return Err(PyValueError::new_err(format!(
+            "Expected {name} PyCapsule to have name set."
+        )));
+    }
+
+    let capsule_name = capsule_name.unwrap().to_str()?;
+    if capsule_name != name {
+        return Err(PyValueError::new_err(format!(
+            "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'"
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn ffi_logical_codec_from_pycapsule(
+    obj: Bound<PyAny>,
+) -> PyResult<FFI_LogicalExtensionCodec> {
+    let attr_name = "__datafusion_logical_extension_codec__";
+    let capsule = if obj.hasattr(attr_name)? {
+        obj.getattr(attr_name)?.call0()?
+    } else {
+        obj
+    };
+
+    let capsule = capsule.downcast::<PyCapsule>()?;
+    validate_pycapsule(capsule, "datafusion_logical_extension_codec")?;
+
+    let codec = unsafe { capsule.reference::<FFI_LogicalExtensionCodec>() };
+    Ok(codec.clone())
+}
 
 #[pyclass(name = "IcebergDataFusionTable")]
 pub struct PyIcebergDataFusionTable {
@@ -84,10 +120,18 @@ impl PyIcebergDataFusionTable {
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
+        session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let capsule_name = CString::new("datafusion_table_provider").unwrap();
 
-        let ffi_provider = FFI_TableProvider::new(self.inner.clone(), false, Some(runtime()));
+        let logical_codec = ffi_logical_codec_from_pycapsule(session)?;
+
+        let ffi_provider = FFI_TableProvider::new_with_ffi_codec(
+            self.inner.clone(),
+            false,
+            Some(runtime()),
+            logical_codec,
+        );
 
         PyCapsule::new(py, ffi_provider, Some(capsule_name))
     }

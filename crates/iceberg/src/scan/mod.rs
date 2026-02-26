@@ -756,7 +756,9 @@ pub mod tests {
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
-            // Write data files
+            // Write the data files first, then use the file size in the manifest entries
+            let parquet_file_size = self.write_parquet_data_files();
+
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
@@ -775,7 +777,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/1.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
                                 .key_metadata(None)
@@ -798,7 +800,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/2.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(200))]))
                                 .build()
@@ -820,7 +822,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/3.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(300))]))
                                 .build()
@@ -845,8 +847,13 @@ pub mod tests {
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
+        }
 
-            // prepare data
+        /// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
+        /// and returns the file size in bytes.
+        fn write_parquet_data_files(&self) -> u64 {
+            std::fs::create_dir_all(&self.table_location).unwrap();
+
             let schema = {
                 let fields = vec![
                     arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
@@ -958,6 +965,10 @@ pub mod tests {
                 // writer must be closed to write footer
                 writer.close().unwrap();
             }
+
+            std::fs::metadata(format!("{}/1.parquet", &self.table_location))
+                .unwrap()
+                .len()
         }
 
         pub async fn setup_unpartitioned_manifest_files(&mut self) {
@@ -967,6 +978,9 @@ pub mod tests {
                 .unwrap();
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = Arc::new(PartitionSpec::unpartition_spec());
+
+            // Write the data files first, then use the file size in the manifest entries
+            let parquet_file_size = self.write_parquet_data_files();
 
             // Write data files using an empty partition for unpartitioned tables.
             let mut writer = ManifestWriterBuilder::new(
@@ -991,7 +1005,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/1.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(empty_partition.clone())
                                 .key_metadata(None)
@@ -1015,7 +1029,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/2.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(empty_partition.clone())
                                 .build()
@@ -1038,7 +1052,7 @@ pub mod tests {
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/3.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
+                                .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(empty_partition.clone())
                                 .build()
@@ -1064,111 +1078,6 @@ pub mod tests {
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
-
-            // prepare data for parquet files
-            let schema = {
-                let fields = vec![
-                    arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "1".to_string(),
-                        )])),
-                    arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "2".to_string(),
-                        )])),
-                    arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "3".to_string(),
-                        )])),
-                    arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "4".to_string(),
-                        )])),
-                    arrow_schema::Field::new("dbl", arrow_schema::DataType::Float64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "5".to_string(),
-                        )])),
-                    arrow_schema::Field::new("i32", arrow_schema::DataType::Int32, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "6".to_string(),
-                        )])),
-                    arrow_schema::Field::new("i64", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "7".to_string(),
-                        )])),
-                    arrow_schema::Field::new("bool", arrow_schema::DataType::Boolean, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "8".to_string(),
-                        )])),
-                ];
-                Arc::new(arrow_schema::Schema::new(fields))
-            };
-
-            // Build the arrays for the RecordBatch
-            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
-
-            let mut values = vec![2; 512];
-            values.append(vec![3; 200].as_mut());
-            values.append(vec![4; 300].as_mut());
-            values.append(vec![5; 12].as_mut());
-            let col2 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![3; 512];
-            values.append(vec![4; 512].as_mut());
-            let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec!["Apache"; 512];
-            values.append(vec!["Iceberg"; 512].as_mut());
-            let col4 = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![100.0f64; 512];
-            values.append(vec![150.0f64; 12].as_mut());
-            values.append(vec![200.0f64; 500].as_mut());
-            let col5 = Arc::new(Float64Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![100i32; 512];
-            values.append(vec![150i32; 12].as_mut());
-            values.append(vec![200i32; 500].as_mut());
-            let col6 = Arc::new(Int32Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![100i64; 512];
-            values.append(vec![150i64; 12].as_mut());
-            values.append(vec![200i64; 500].as_mut());
-            let col7 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![false; 512];
-            values.append(vec![true; 512].as_mut());
-            let values: BooleanArray = values.into();
-            let col8 = Arc::new(values) as ArrayRef;
-
-            let to_write = RecordBatch::try_new(schema.clone(), vec![
-                col1, col2, col3, col4, col5, col6, col7, col8,
-            ])
-            .unwrap();
-
-            // Write the Parquet files
-            let props = WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build();
-
-            for n in 1..=3 {
-                let file = File::create(format!("{}/{}.parquet", &self.table_location, n)).unwrap();
-                let mut writer =
-                    ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
-
-                writer.write(&to_write).expect("Writing batch");
-
-                // writer must be closed to write footer
-                writer.close().unwrap();
-            }
         }
 
         pub async fn setup_deadlock_manifests(&mut self) {
@@ -1874,6 +1783,7 @@ pub mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            file_size_in_bytes: 0,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
@@ -1892,6 +1802,7 @@ pub mod tests {
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            file_size_in_bytes: 0,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],

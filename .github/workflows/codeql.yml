@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,16 +15,40 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-.PHONY: build install test
+name: "CodeQL"
 
-build:
-	uv run maturin develop
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '16 4 * * 1'
 
-# uv sync may remove local editable pyiceberg-core, so install rebuilds it afterwards.
-install:
-	uv sync --group dev --no-install-project
-	$(MAKE) build
+permissions:
+  contents: read
 
-test:
-	uv run --no-sync pytest
+jobs:
+  analyze:
+    name: Analyze Actions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: actions
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:actions"
