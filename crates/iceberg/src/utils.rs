@@ -629,7 +629,7 @@ mod cleanup_tests {
             .into_builder()
             .into_parts();
         assert!(
-            committed_props.get(S3_REGION).is_none(),
+            !committed_props.contains_key(S3_REGION),
             "Catalog-returned table's FileIO should lack the S3 region property"
         );
 
