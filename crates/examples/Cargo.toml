@@ -25,10 +25,15 @@ rust-version = { workspace = true }
 version = { workspace = true }
 
 [dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 futures = { workspace = true }
+geo-types = "0.7.17"
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+parquet.workspace = true
 tokio = { workspace = true, features = ["full"] }
+wkb = "0.9.1"
 
 [[example]]
 name = "rest-catalog-namespace"
@@ -42,6 +47,11 @@ path = "src/rest_catalog_table.rs"
 name = "oss-backend"
 path = "src/oss_backend.rs"
 required-features = ["storage-oss"]
+
+[[example]]
+name = "geo-rest-catalog"
+path = "src/geo_rest_catalog.rs"
+
 
 [features]
 default = []

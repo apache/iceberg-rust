@@ -1,0 +1,351 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Float64Array, Int32Array, LargeBinaryArray, RecordBatch, StringArray};
+use geo_types::{Geometry, Point};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
+use parquet::file::properties::WriterProperties;
+
+static REST_URI: &str = "http://localhost:8181";
+static NAMESPACE: &str = "ns1";
+static TABLE_NAME: &str = "cities_table3";
+
+//This is an example of creating and loading an table using a schema with
+// geo types via the Iceberg REST Catalog.
+//
+/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+/// the iceberg-rest catalog with `docker compose` in the official
+/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
+
+#[derive(Debug, Clone)]
+struct GeoFeature {
+    id: i32,
+    name: String,
+    properties: HashMap<String, String>,
+    geometry: Geometry,
+    srid: i32,
+}
+
+impl GeoFeature {
+    fn bbox(&self) -> Option<(f64, f64, f64, f64)> {
+        match &self.geometry {
+            Geometry::Point(point) => {
+                let coord = point.0;
+                Some((coord.x, coord.y, coord.x, coord.y))
+            }
+            Geometry::LineString(line) => Self::coords_to_bbox(line.coords()),
+            Geometry::Polygon(poly) => Self::coords_to_bbox(poly.exterior().coords()),
+            Geometry::MultiPoint(mp) => Self::coords_to_bbox(mp.iter().map(|p| &p.0)),
+            Geometry::MultiLineString(mls) => {
+                Self::coords_to_bbox(mls.iter().flat_map(|line| line.coords()))
+            }
+            Geometry::MultiPolygon(mpoly) => {
+                Self::coords_to_bbox(mpoly.iter().flat_map(|poly| poly.exterior().coords()))
+            }
+            _ => None,
+        }
+    }
+
+    fn coords_to_bbox<'a>(
+        mut coords: impl Iterator<Item = &'a geo_types::Coord>,
+    ) -> Option<(f64, f64, f64, f64)> {
+        // Start with first coord, then fold over the rest
+        coords.next().map(|first| {
+            coords.fold(
+                (first.x, first.y, first.x, first.y),
+                |(min_x, min_y, max_x, max_y), coord| {
+                    (
+                        min_x.min(coord.x),
+                        min_y.min(coord.y),
+                        max_x.max(coord.x),
+                        max_y.max(coord.y),
+                    )
+                },
+            )
+        })
+    }
+
+    fn geometry_type(&self) -> &str {
+        match &self.geometry {
+            Geometry::Point(_) => "Point",
+            Geometry::LineString(_) => "LineString",
+            Geometry::Polygon(_) => "Polygon",
+            Geometry::MultiPoint(_) => "MultiPoint",
+            Geometry::MultiLineString(_) => "MultiLineString",
+            Geometry::MultiPolygon(_) => "MultiPolygon",
+            _ => "Geometry",
+        }
+    }
+
+    fn to_wkb(&self) -> Vec<u8> {
+        use wkb::writer::{WriteOptions, write_geometry};
+        let mut buf = Vec::new();
+        write_geometry(&mut buf, &self.geometry, &WriteOptions::default())
+            .expect("Failed to write WKB");
+        buf
+    }
+}
+
+fn mock_sample_features() -> Vec<GeoFeature> {
+    let mut features = Vec::new();
+    let salt_lake_city = GeoFeature {
+        id: 1,
+        name: "Salt Lake City".to_string(),
+        geometry: Geometry::Point(Point::new(-111.89, 40.76)),
+        srid: 4326,
+        properties: HashMap::from([
+            ("country".to_string(), "USA".to_string()),
+            ("population".to_string(), "200000".to_string()),
+        ]),
+    };
+    features.push(salt_lake_city);
+    let denver = GeoFeature {
+        id: 2,
+        name: "Denver".to_string(),
+        geometry: Geometry::Point(Point::new(-104.99, 39.74)),
+        srid: 4326,
+        properties: HashMap::from([
+            ("country".to_string(), "USA".to_string()),
+            ("population".to_string(), "700000".to_string()),
+        ]),
+    };
+    features.push(denver);
+    features
+}
+
+#[tokio::main]
+async fn main() {
+    println!("Geo Types Iceberg REST Catalog");
+    let catalog = RestCatalogBuilder::default()
+        .load(
+            "rest",
+            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
+        )
+        .await
+        .unwrap();
+    println!("Connected to REST Catalog at {}", REST_URI);
+
+    let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
+
+    // Create namespace if it doesn't exist
+    if !catalog.namespace_exists(&namespace_ident).await.unwrap() {
+        println!("Creating namespace {NAMESPACE}...");
+        catalog
+            .create_namespace(&namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+    }
+
+    let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
+
+    println!("Checking if table exists...");
+    if catalog.table_exists(&table_ident).await.unwrap() {
+        println!("Table {TABLE_NAME} already exists, dropping now.");
+        catalog.drop_table(&table_ident).await.unwrap();
+    }
+
+    let iceberg_schema = Schema::builder()
+        .with_fields(vec![
+            NestedField::required(1, "id".to_string(), Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(
+                2,
+                "name".to_string(),
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into(),
+            NestedField::required(
+                3,
+                "geometry_wkb".to_string(),
+                Type::Primitive(PrimitiveType::Binary),
+            )
+            .into(),
+            NestedField::required(
+                4,
+                "geometry_type".to_string(),
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into(),
+            NestedField::required(5, "srid".to_string(), Type::Primitive(PrimitiveType::Int))
+                .into(),
+            NestedField::required(
+                6,
+                "bbox_min_x".to_string(),
+                Type::Primitive(PrimitiveType::Double),
+            )
+            .into(),
+            NestedField::required(
+                7,
+                "bbox_min_y".to_string(),
+                Type::Primitive(PrimitiveType::Double),
+            )
+            .into(),
+            NestedField::required(
+                8,
+                "bbox_max_x".to_string(),
+                Type::Primitive(PrimitiveType::Double),
+            )
+            .into(),
+            NestedField::required(
+                9,
+                "bbox_max_y".to_string(),
+                Type::Primitive(PrimitiveType::Double),
+            )
+            .into(),
+            NestedField::required(
+                10,
+                "country".to_string(),
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into(),
+            NestedField::required(
+                11,
+                "population".to_string(),
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into(),
+        ])
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![1])
+        .build()
+        .unwrap();
+    let table_creation = TableCreation::builder()
+        .name(table_ident.name.clone())
+        .schema(iceberg_schema.clone())
+        .properties(HashMap::from([("geo".to_string(), "geotestx".to_string())]))
+        .build();
+
+    let _created_table = catalog
+        .create_table(&table_ident.namespace, table_creation)
+        .await
+        .unwrap();
+    println!("Table {TABLE_NAME} created.");
+    assert!(
+        catalog
+            .list_tables(&namespace_ident)
+            .await
+            .unwrap()
+            .contains(&table_ident)
+    );
+    let schema: Arc<arrow_schema::Schema> = Arc::new(
+        _created_table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+    let location_generator =
+        DefaultLocationGenerator::new(_created_table.metadata().clone()).unwrap();
+    let file_name_generator = DefaultFileNameGenerator::new(
+        "geo_type_example".to_string(),
+        None,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+    let parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        _created_table.metadata().current_schema().clone(),
+    );
+    let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+        parquet_writer_builder,
+        _created_table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
+
+    let features = mock_sample_features();
+
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(features.iter().map(|f| f.id)));
+    let names: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features.iter().map(|f| f.name.as_str()),
+    ));
+    let geometries_wkb: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(
+        features.iter().map(|f| f.to_wkb()),
+    ));
+    let geometry_types: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features.iter().map(|f| f.geometry_type()),
+    ));
+    let srids: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        features.iter().map(|f| f.srid),
+    ));
+    let bbox_min_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").0),
+    ));
+    let bbox_min_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").1),
+    ));
+    let bbox_max_xs: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").2),
+    ));
+    let bbox_max_ys: ArrayRef = Arc::new(Float64Array::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.bbox().expect("geometry must have valid bbox").3),
+    ));
+
+    let countries: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.properties.get("country").unwrap().as_str()),
+    ));
+    let populations: ArrayRef = Arc::new(StringArray::from_iter_values(
+        features
+            .iter()
+            .map(|f| f.properties.get("population").unwrap().as_str()),
+    ));
+
+    //TODO: make write with credentials
+    let record_batch = RecordBatch::try_new(schema.clone(), vec![
+        ids,
+        names,
+        geometries_wkb,
+        geometry_types,
+        srids,
+        bbox_min_xs,
+        bbox_min_ys,
+        bbox_max_xs,
+        bbox_max_ys,
+        countries,
+        populations,
+    ])
+    .unwrap();
+
+    data_file_writer.write(record_batch.clone()).await.unwrap();
+    let _data_file = data_file_writer.close().await.unwrap();
+
+    let loaded_table = catalog.load_table(&table_ident).await.unwrap();
+    println!("Table {TABLE_NAME} loaded!\n\nTable: {loaded_table:?}");
+}
