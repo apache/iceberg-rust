@@ -19,8 +19,10 @@
 
 mod manifests;
 mod metadata_table;
+mod refs;
 mod snapshots;
 
 pub use manifests::ManifestsTable;
 pub use metadata_table::*;
+pub use refs::RefsTable;
 pub use snapshots::SnapshotsTable;
