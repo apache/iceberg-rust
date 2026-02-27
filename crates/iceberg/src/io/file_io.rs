@@ -97,17 +97,6 @@ impl FileIO {
         }
     }
 
-    /// Convert FileIO into [`FileIOBuilder`] which can be used to modify configuration.
-    ///
-    /// This function is useful when you want to serialize and deserialize FileIO across
-    /// distributed systems, or when you need to create a new FileIO with modified settings.
-    pub fn into_builder(self) -> FileIOBuilder {
-        FileIOBuilder {
-            factory: self.factory,
-            config: self.config,
-        }
-    }
-
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig {
         &self.config
@@ -540,24 +529,5 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_file_io_into_builder() {
-        let factory = Arc::new(MemoryStorageFactory);
-        let file_io = FileIOBuilder::new(factory)
-            .with_prop("key", "value")
-            .build();
-
-        let builder = file_io.into_builder();
-        assert_eq!(builder.config().get("key"), Some(&"value".to_string()));
-
-        // Can build a new FileIO from the builder
-        let new_file_io = builder.with_prop("key2", "value2").build();
-        assert_eq!(new_file_io.config().get("key"), Some(&"value".to_string()));
-        assert_eq!(
-            new_file_io.config().get("key2"),
-            Some(&"value2".to_string())
-        );
     }
 }
