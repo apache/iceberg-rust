@@ -317,15 +317,16 @@ pub trait EncryptionManager: Debug + Send + Sync {
 }
 ```
 
-`StandardEncryptionManager` configuration:
+`StandardEncryptionManager` is typically not constructed directly by users. Instead,
+`TableBuilder::build()` constructs it automatically from a `KeyManagementClient`
+extension and the table's properties (see [Catalog Integration](#catalog-integration) below).
+For manual construction in tests:
 
 ```rust
 let em = StandardEncryptionManager::new(Arc::new(kms_client))
     .with_table_key_id("master-key-1")   // Master key ID in KMS
-    .with_aad_prefix(b"my-table".to_vec()); // AAD prefix for GCM blocks
+    .with_encryption_keys(table_metadata.encryption_keys.clone());
 ```
-
-A `PlaintextEncryptionManager` is also provided as a no-op pass-through for unencrypted tables.
 
 ### AGS1 Stream Encryption
 
@@ -470,31 +471,89 @@ footer parsing.
 
 ### Catalog Integration
 
-Encryption is configured at the catalog level. The `EncryptionManager` is attached to the
-catalog's `FileIO`, and all tables loaded from that catalog inherit it automatically.
+#### How Java Does It
 
-For catalogs that support `FileIOBuilder` extensions (e.g. `RestCatalog`), the encryption manager
-can be added directly:
+In Java, encryption is configured through two catalog properties:
+
+- `encryption.kms-impl` — fully qualified class name of the `KeyManagementClient` implementation
+  (e.g. `org.apache.iceberg.aws.AwsKeyManagementClient`)
+- `encryption.kms-type` — reserved for a future built-in registry of KMS types, but
+  **not yet implemented** in Java (any value throws `"Unsupported KMS type"`)
+
+These are mutually exclusive. `kms-impl` uses Java reflection to instantiate the KMS client
+from a class name. The `table_key_id` is then read from the table's `encryption.key-id`
+property, and a per-table `StandardEncryptionManager` is constructed in
+`RESTTableOperations.encryption()`. The base `FileIO` is wrapped with `EncryptingFileIO.combine(io, encryption())`
+to produce a per-table encrypting FileIO.
+
+#### How Rust Does It
+
+Rust does not have Java's reflection-based class loading, so `encryption.kms-impl` (a class name
+string) is not useful. Instead, the user provides a concrete `Arc<dyn KeyManagementClient>`
+as a `FileIOBuilder` extension on the catalog. The `table_key_id` and `encryption_keys` are
+then inferred automatically from table metadata.
+
+**Step 1: User provides the KMS client to the catalog.**
+
+For catalogs that support `FileIOBuilder` extensions (e.g. `RestCatalog`):
 
 ```rust
-rest_catalog.with_file_io_extension(encryption_manager);
+let kms_client: Arc<dyn KeyManagementClient> = Arc::new(my_aws_kms);
+
+let catalog = RestCatalogBuilder::default()
+    .load("rest", props)
+    .await?
+    .with_file_io_extension(kms_client);
 ```
 
-For catalogs that don't support extensions, an `EncryptedCatalog` wrapper implements the
-`Catalog` trait by delegating to an inner catalog and attaching the `EncryptionManager` to
-every `Table` returned:
+**Step 2: `TableBuilder::build()` auto-configures encryption per table.**
+
+When building a `Table`, `TableBuilder::maybe_configure_encryption()` runs automatically.
+This is the Rust equivalent of Java's `RESTTableOperations.io()` which calls
+`EncryptingFileIO.combine(io, encryption())`. It checks:
+
+1. Does the `FileIO` have a `KeyManagementClient` extension? If not, return as-is.
+2. Does the table metadata have an `encryption.key-id` property? If not, return as-is (unencrypted table).
+3. If both are present, construct a `StandardEncryptionManager` with:
+   - `table_key_id` from the `encryption.key-id` table property
+   - `encryption_keys` from `TableMetadata.encryption_keys` (the KEK map)
+   - The `KeyManagementClient` from the extension
+4. Attach the `EncryptionManager` to the table's `FileIO`.
+
+This runs on every `Table::builder().build()` call, so each table gets a correctly configured
+per-table `EncryptionManager` even when a single catalog manages tables with different key IDs.
 
 ```rust
-let inner_catalog = MemoryCatalogBuilder::default().load("c", props).await?;
-let encrypted = EncryptedCatalog::new(Arc::new(inner_catalog), encryption_manager);
+// User code — just provide the KMS client, everything else is automatic:
+let table = catalog.load_table(&ident).await?;
+// table.file_io() now has a StandardEncryptionManager configured with
+// the correct table_key_id and encryption_keys from this table's metadata.
 ```
-
-The wrapper intercepts all `Table`-returning methods (`load_table`, `create_table`,
-`register_table`, `update_table`) and calls `table.with_file_io(...)` to attach encryption.
-All other catalog methods delegate directly.
 
 `Table::with_file_io()` replaces the table's `FileIO` and rebuilds its `ObjectCache` (which
 stores its own `FileIO` for manifest/manifest list loading).
+
+#### Open Decision: KMS Client Injection Mechanism
+
+The current approach requires the user to manually construct and provide the KMS client.
+In production, the REST catalog server may return `encryption.kms-impl` or `encryption.kms-type`
+in its config response. A few options for resolving this automatically in Rust:
+
+1. **Current approach (explicit)**: User constructs `Arc<dyn KeyManagementClient>` and adds
+   it as a `FileIOBuilder` extension. Simple, no magic, works today.
+
+2. **Type registry**: A `HashMap<String, Box<dyn Fn(props) -> Arc<dyn KeyManagementClient>>>`
+   mapping `kms-type` strings (e.g. `"aws"`, `"gcp"`) to factory functions. The catalog reads
+   `encryption.kms-type` from properties and looks up the factory. Requires a registration step
+   but is closer to Java's `kms-type` intent.
+
+3. **Catalog-specific logic**: Each catalog implementation (REST, Glue, etc.) knows how to
+   create its KMS client based on the properties it receives. For example, `RestCatalog` could
+   detect `encryption.kms-impl = AwsKeyManagementClient` in the config response and
+   automatically create an `AwsKms` instance with the right endpoint and credentials.
+
+The right choice depends on how the upstream Iceberg spec evolves `encryption.kms-type`. For
+now, option 1 (explicit) is implemented and sufficient for production use.
 
 ### DataFusion Integration
 
