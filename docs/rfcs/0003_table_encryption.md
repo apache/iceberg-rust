@@ -42,16 +42,6 @@ production-tested. It defines:
 - **`StandardKeyMetadata`** -- Avro-serialized key metadata (wrapped DEK, AAD prefix, file length)
 - **`AesGcmInputStream` / `AesGcmOutputStream`** -- block-based stream encryption (AGS1 format)
 
-### Problem Statement
-
-The Rust implementation currently has no encryption support. Users reading encrypted Iceberg
-tables created by Java/Spark cannot do so from `iceberg-rust`. Writing encrypted tables is
-likewise impossible.
-
-Additionally, the current `InputFile` type is a concrete struct tightly coupled to `opendal::Operator`.
-This prevents cleanly representing encrypted input files -- in the Java implementation, `InputFile`
-is an interface with encrypted variants (`EncryptedInputFile`, `NativeEncryptionInputFile`).
-
 ### Relationship to Storage Trait RFC
 
 [RFC 0002 (Making Storage a Trait)](https://github.com/apache/iceberg-rust/pull/2116) proposes
@@ -63,8 +53,23 @@ converting `Storage` from an enum to a trait and removing the `Extensions` mecha
 
 ## High-Level Architecture
 
-The encryption system follows the same envelope encryption pattern as the Java implementation,
-adapted to Rust's ownership and async model.
+The encryption system uses two-layer envelope encryption, adapted from the Java implementation
+to Rust's ownership and async model.
+
+### Key Hierarchy
+
+```
+Master Key (in KMS)
+  └── wraps → KEK (Key Encryption Key) — stored in table metadata as EncryptedKey
+        └── wraps → DEK (Data Encryption Key) — stored in StandardKeyMetadata per file
+              └── encrypts → file content (AGS1 stream or Parquet native)
+```
+
+- **Master keys** live in the KMS and never leave it
+- **KEKs** are wrapped by the master key and stored in `TableMetadata.encryption_keys`
+- **DEKs** are wrapped by a KEK and stored per-file in `StandardKeyMetadata`
+- KEKs are cached in memory (moka async cache with configurable TTL) to avoid redundant KMS calls
+- KEK rotation occurs automatically when a KEK exceeds its configurable lifespan (default 730 days per NIST SP 800-57)
 
 ### Component Overview
 
@@ -75,22 +80,26 @@ adapted to Rust's ownership and async model.
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            EncryptionManager                                 │
-│                                                                              │
-│  - Orchestrates key unwrapping, caching, and encryptor creation              │
-│  - Holds Arc<dyn KeyManagementClient> for KMS integration                    │
-│  - Maintains KeyCache (LRU + TTL) to avoid redundant KMS calls               │
-│  - Provides prepare_decryption() and bulk_prepare_decryption()               │
-│  - Provides extract_aad_prefix() for Parquet native encryption               │
+│                     EncryptionManager (trait)                                │
+│                                                                             │
+│  StandardEncryptionManager:                                                 │
+│  - Two-layer envelope: Master → KEK → DEK                                  │
+│  - KEK cache (moka async, configurable TTL)                                │
+│  - Automatic KEK rotation                                                  │
+│  - encrypt() / decrypt() for AGS1 stream files                            │
+│  - encrypt_native() for Parquet Modular Encryption                         │
+│  - wrap/unwrap_key_metadata() for manifest list keys                       │
+│  - generate_dek() with KEK management                                      │
 └─────────────────────────────────────────────────────────────────────────────┘
               │                              │
               ▼                              ▼
 ┌──────────────────────────┐   ┌──────────────────────────────────────────────┐
-│   KeyManagementClient    │   │                 KeyCache                      │
-│       (trait)            │   │                                               │
-│                          │   │  - LRU cache with configurable TTL            │
-│  wrap_key(dek, kek_id)   │   │  - Thread-safe         │
-│  unwrap_key(wrapped_dek) │   │  - Caches Arc<AesGcmEncryptor> per metadata   │
+│   KeyManagementClient    │   │              KEK Cache                       │
+│       (trait)            │   │                                              │
+│                          │   │  - moka::future::Cache with configurable TTL │
+│  wrap_key(key, key_id)   │   │  - Thread-safe async                        │
+│  unwrap_key(wrapped, id) │   │  - Caches plaintext KEK bytes per key ID    │
+│  initialize(props)       │   │                                              │
 └──────────────────────────┘   └──────────────────────────────────────────────┘
               │
               ▼
@@ -104,59 +113,99 @@ adapted to Rust's ownership and async model.
 └──────────────────────────┘
 ```
 
-### Decryption Data Flow
+### Data Flow
+
+#### Read Path (Decryption)
 
 ```
 TableMetadata
-  └── encryption_keys: {key_id → EncryptedKey(key_metadata bytes)}
+  └── encryption_keys: {key_id → EncryptedKey}
           │
 Snapshot  │
-  └── encryption_key_id ──────┘
+  └── encryption_key_id ──────┘   (V3 format only)
           │
           ▼
   load_manifest_list(file_io, table_metadata)
     1. Look up encryption_key_id in table_metadata.encryption_keys
-    2. If found: file_io.new_encrypted_input(path, key_metadata) giving a new encrypted InputFile
-    3. If not: file_io.new_input(path)
+    2. em.unwrap_key_metadata() → plaintext key metadata
+    3. file_io.new_encrypted_input(path, key_metadata) → AGS1-decrypting InputFile
           │
           ▼
 ManifestFile
   └── key_metadata: Option<Vec<u8>>
           │
   load_manifest(file_io)
-    1. If key_metadata present: file_io.new_encrypted_input(path, key_metadata) giving a new encrypted InputFile
-    2. If not: file_io.new_input(path)
+    1. If key_metadata present: file_io.new_encrypted_input() → AGS1-decrypting InputFile
+    2. If not: file_io.new_input()
           │
           ▼
 FileScanTask
   └── key_metadata: Option<Vec<u8>>
           │
-  ArrowReader::create_parquet_record_batch_stream_builder()
+  ArrowReader::create_parquet_record_batch_stream_builder_with_key_metadata()
     1. If key_metadata present:
-       * Parquet-native encrypted → FileDecryptionProperties with IcebergKeyRetriever
+       a. file_io.new_native_encrypted_input(path, key_metadata) → NativeEncrypted InputFile
+       b. Build FileDecryptionProperties from NativeKeyMaterial (DEK + AAD prefix)
+       c. Pass to ParquetRecordBatchStreamBuilder
     2. If not: standard Parquet read
 ```
 
-### Crate Structure
+#### Write Path (Encryption)
 
-All encryption code lives in a new `encryption` module within the `iceberg` crate, gated
-behind an `encryption` feature flag:
+```
+RollingFileWriter::new_output_file()
+    1. If file_io.encryption_manager() is Some:
+       a. file_io.new_native_encrypted_output(path) → EncryptedOutputFile
+       b. EncryptionManager generates DEK, wraps with KEK
+       c. OutputFile::NativeEncrypted carries NativeKeyMaterial for Parquet writer
+       d. Store key_metadata bytes on DataFile
+    2. ParquetWriter detects NativeEncrypted, configures FileEncryptionProperties
+
+SnapshotProducer::commit()
+    1. Manifest writing:
+       a. file_io.new_encrypted_output(path) → AGS1-encrypting OutputFile
+       b. Store key_metadata on ManifestFile entry
+    2. Manifest list writing:
+       a. file_io.new_encrypted_output(path) → AGS1-encrypting OutputFile
+       b. em.wrap_key_metadata() → EncryptedKey for table metadata
+       c. Store key_id on Snapshot.encryption_key_id
+    3. Table updates include AddEncryptionKey for new KEKs
+```
+
+### Module Structure
 
 ```
 crates/iceberg/src/
 ├── encryption/
-│   ├── mod.rs                  # Module re-exports
-│   ├── crypto.rs               # AES-GCM primitives (SecureKey, AesGcmEncryptor)
-│   ├── cache.rs                # KeyCache (LRU + TTL)
-│   ├── key_management.rs       # KeyManagementClient trait + InMemoryKms
-│   ├── key_metadata.rs         # EncryptionKeyMetadata trait + StandardKeyMetadata
-│   ├── manager.rs              # EncryptionManager (orchestrator)
-│   ├── parquet_key_retriever.rs  # Bridge to parquet-rs KeyRetriever
-│   └── stream.rs               # AesGcmFileRead (AGS1 stream decryption)
+│   ├── mod.rs                       # Module re-exports
+│   ├── crypto.rs                    # AES-GCM primitives (SecureKey, AesGcmEncryptor)
+│   ├── key_management.rs            # KeyManagementClient trait
+│   ├── key_metadata.rs              # StandardKeyMetadata (Avro V1, Java-compatible)
+│   ├── encryption_manager.rs        # EncryptionManager trait + StandardEncryptionManager
+│   ├── plaintext_encryption_manager.rs  # No-op pass-through for unencrypted tables
+│   ├── file_encryptor.rs            # FileEncryptor (write-side AGS1 wrapper)
+│   ├── file_decryptor.rs            # FileDecryptor (read-side AGS1 wrapper)
+│   ├── encrypted_io.rs              # EncryptedInputFile / EncryptedOutputFile wrappers
+│   ├── stream.rs                    # AesGcmFileRead / AesGcmFileWrite (AGS1 format)
+│   ├── kms/
+│   │   ├── mod.rs
+│   │   └── in_memory.rs             # InMemoryKms (testing only)
+│   └── integration_tests.rs         # End-to-end encryption round-trip tests
 ├── io/
-│   └── file_io.rs              # InputFile enum + EncryptedInputFile variant
-└── arrow/
-    └── reader.rs               # Parquet decryption integration
+│   └── file_io.rs                   # InputFile/OutputFile enums, FileIO encryption methods
+├── arrow/
+│   └── reader.rs                    # Parquet decryption via FileDecryptionProperties
+├── writer/file_writer/
+│   ├── parquet_writer.rs            # Parquet FileEncryptionProperties integration
+│   └── rolling_writer.rs            # Encrypted output file creation + key_metadata propagation
+├── transaction/
+│   └── snapshot.rs                  # Encrypted manifest/manifest list writing, KEK management
+├── scan/
+│   ├── context.rs                   # key_metadata propagation from DataFile → FileScanTask
+│   └── task.rs                      # FileScanTask.key_metadata field
+└── spec/
+    ├── snapshot.rs                  # Snapshot.encryption_key_id, load_manifest_list decryption
+    └── manifest_list.rs             # ManifestFile.key_metadata, load_manifest decryption
 ```
 
 ---
@@ -170,12 +219,7 @@ crates/iceberg/src/
 ```rust
 pub enum EncryptionAlgorithm {
     Aes128Gcm,
-    // Future: Aes256Gcm
-}
-
-impl EncryptionAlgorithm {
-    pub fn key_length(&self) -> usize;   // 16 for AES-128
-    pub fn nonce_length(&self) -> usize; // 12 (96-bit)
+    // Future: Aes256Gcm (depends on parquet-rs support)
 }
 ```
 
@@ -197,7 +241,7 @@ impl SecureKey {
 
 #### AesGcmEncryptor
 
-Performs AES-GCM encrypt/decrypt operations. Ciphertext format matches the Java implementation:
+AES-GCM encrypt/decrypt. Ciphertext format matches the Java implementation:
 `[12-byte nonce][ciphertext][16-byte GCM tag]`.
 
 ```rust
@@ -218,12 +262,10 @@ Pluggable interface for KMS integration. Mirrors the Java `KeyManagementClient`:
 
 ```rust
 #[async_trait]
-pub trait KeyManagementClient: Send + Sync {
-    /// Wraps a DEK using the master key identified by `master_key_id`.
-    async fn wrap_key(&self, dek: &[u8], master_key_id: &str) -> Result<Vec<u8>>;
-
-    /// Unwraps a previously wrapped DEK.
-    async fn unwrap_key(&self, wrapped_dek: &[u8]) -> Result<Vec<u8>>;
+pub trait KeyManagementClient: Debug + Send + Sync {
+    async fn initialize(&mut self, properties: HashMap<String, String>) -> Result<()>;
+    async fn wrap_key(&self, key: &[u8], wrapping_key_id: &str) -> Result<Vec<u8>>;
+    async fn unwrap_key(&self, wrapped_key: &[u8], wrapping_key_id: &str) -> Result<Vec<u8>>;
 }
 ```
 
@@ -237,68 +279,53 @@ Avro-serialized metadata stored alongside encrypted files. Compatible with the J
 
 ```rust
 pub struct StandardKeyMetadata {
-    encryption_key: Vec<u8>,  // Wrapped DEK
+    encryption_key: Vec<u8>,  // Plaintext DEK (for PME) or wrapped DEK (for AGS1)
     aad_prefix: Vec<u8>,      // Additional authenticated data prefix
     file_length: Option<i64>, // Optional encrypted file length
 }
-
-impl StandardKeyMetadata {
-    pub fn serialize(&self) -> Result<Vec<u8>>;
-    pub fn deserialize(bytes: &[u8]) -> Result<Self>;
-}
 ```
 
-#### KeyCache
-
-Thread-safe LRU cache with TTL to avoid redundant KMS round-trips:
-
-```rust
-pub struct KeyCache { /* ... */ }
-
-impl KeyCache {
-    pub fn new(capacity: usize, ttl: Duration) -> Self;
-    pub async fn get(&self, key_metadata: &[u8]) -> Option<Arc<AesGcmEncryptor>>;
-    pub async fn insert(&self, key_metadata: &[u8], encryptor: Arc<AesGcmEncryptor>);
-    pub async fn evict_expired(&self);
-}
-```
+Wire format: `[version byte 0x01][Avro binary datum]` — byte-compatible with Java.
 
 ### EncryptionManager
 
-Central orchestrator that ties together KMS, caching, and encryptor creation:
+The `EncryptionManager` trait abstracts encryption orchestration. `StandardEncryptionManager`
+implements two-layer envelope encryption with KEK caching and rotation:
 
 ```rust
-pub struct EncryptionManager {
-    kms_client: Arc<dyn KeyManagementClient>,
-    algorithm: EncryptionAlgorithm,
-    key_cache: Arc<KeyCache>,
-}
+#[async_trait]
+pub trait EncryptionManager: Debug + Send + Sync {
+    /// Decrypt an AGS1 stream-encrypted file.
+    async fn decrypt(&self, encrypted: EncryptedInputFile) -> Result<InputFile>;
 
-impl EncryptionManager {
-    pub fn new(
-        kms_client: Arc<dyn KeyManagementClient>,
-        algorithm: EncryptionAlgorithm,
-        cache_ttl: Duration,
-    ) -> Self;
+    /// Encrypt a file with AGS1 stream encryption.
+    async fn encrypt(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
 
-    pub fn with_defaults(kms_client: Arc<dyn KeyManagementClient>) -> Self;
+    /// Encrypt for Parquet Modular Encryption (generates NativeKeyMaterial).
+    async fn encrypt_native(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
 
-    /// Unwraps a DEK from key metadata and returns a cached encryptor.
-    pub async fn prepare_decryption(
-        &self,
-        key_metadata: &[u8],
-    ) -> Result<Arc<AesGcmEncryptor>>;
+    /// Unwrap key metadata using the table's KEK hierarchy.
+    async fn unwrap_key_metadata(
+        &self, encrypted_key: &EncryptedKey,
+        encryption_keys: &HashMap<String, EncryptedKey>,
+    ) -> Result<Vec<u8>>;
 
-    /// Batch preparation for multiple files (parallel KMS calls).
-    pub async fn bulk_prepare_decryption(
-        &self,
-        key_metadata_list: Vec<Vec<u8>>,
-    ) -> Result<Vec<Arc<AesGcmEncryptor>>>;
-
-    /// Extracts the AAD prefix from key metadata for Parquet native encryption.
-    pub fn extract_aad_prefix(&self, key_metadata: &[u8]) -> Result<Vec<u8>>;
+    /// Wrap key metadata with a KEK for storage in table metadata.
+    async fn wrap_key_metadata(
+        &self, key_metadata: &[u8],
+    ) -> Result<(EncryptedKey, Option<EncryptedKey>)>;
 }
 ```
+
+`StandardEncryptionManager` configuration:
+
+```rust
+let em = StandardEncryptionManager::new(Arc::new(kms_client))
+    .with_table_key_id("master-key-1")   // Master key ID in KMS
+    .with_aad_prefix(b"my-table".to_vec()); // AAD prefix for GCM blocks
+```
+
+A `PlaintextEncryptionManager` is also provided as a no-op pass-through for unencrypted tables.
 
 ### AGS1 Stream Encryption
 
@@ -321,152 +348,77 @@ Block-based stream encryption format compatible with Java's `AesGcmInputStream`/
 │ Block 1..N (same structure)              │
 ├──────────────────────────────────────────┤
 │ Final block (may be shorter)             │
-│   Nonce (12 bytes)                       │
-│   Ciphertext (remaining bytes)           │
-│   GCM Tag (16 bytes)                     │
 └──────────────────────────────────────────┘
-
-Cipher block size = plain_block_size + 12 (nonce) + 16 (tag) = 1,048,604
 ```
 
-Each block's AAD is constructed as: `aad_prefix || block_index (4 bytes, little-endian)`.
-This binds each block to its position in the stream, preventing block reordering attacks.
+Each block's AAD is constructed as `aad_prefix || block_index (4 bytes LE)`, binding each
+block to its position in the stream to prevent reordering attacks.
 
-#### AesGcmFileRead
+**`AesGcmFileRead`** implements the `FileRead` trait for transparent AGS1 decryption with
+random-access reads. **`AesGcmFileWrite`** implements `FileWrite` for transparent AGS1
+encryption with block buffering.
 
-Implements the `FileRead` trait to provide transparent decryption of AGS1-encrypted files.
-Supports random-access reads with an internal block cache (LRU, default 16 blocks):
+### InputFile and OutputFile Enums
 
-```rust
-pub struct AesGcmFileRead { /* ... */ }
-
-impl AesGcmFileRead {
-    pub async fn new(
-        inner: Box<dyn FileRead>,
-        encryptor: Arc<AesGcmEncryptor>,
-        key_metadata: &StandardKeyMetadata,
-        file_length: u64,
-    ) -> Result<Self>;
-
-    pub async fn calculate_plaintext_length_from_file(
-        reader: &impl FileRead,
-        file_length: u64,
-    ) -> Result<u64>;
-}
-
-#[async_trait]
-impl FileRead for AesGcmFileRead {
-    async fn read(&self, range: Range<u64>) -> Result<Bytes>;
-}
-```
-
-### InputFile: From Struct to Enum
-
-**This is a key design change.** The current `InputFile` is a concrete struct. In the Java
-implementation, `InputFile` is an interface with multiple implementations including encrypted
-variants. We propose converting `InputFile` to an enum to support encrypted files without
-requiring a separate type at every call site:
+`InputFile` and `OutputFile` are enums with three variants each:
 
 ```rust
 pub enum InputFile {
-    /// Standard unencrypted input file.
-    Plain {
-        op: Operator,
-        path: String,
-        relative_path_pos: usize,
-    },
+    /// Standard unencrypted file.
+    Plain { storage: Arc<dyn Storage>, path: String },
 
-    /// AGS1 stream-encrypted input file.
-    /// The file is decrypted transparently on read.
-    Encrypted {
-        op: Operator,
-        path: String,
-        relative_path_pos: usize,
-        encryptor: Arc<AesGcmEncryptor>,
-        key_metadata: StandardKeyMetadata,
-    },
+    /// AGS1 stream-encrypted file. Transparent decryption on read.
+    Encrypted { storage: Arc<dyn Storage>, path: String, decryptor: Arc<FileDecryptor> },
 
-    /// Parquet-native encrypted input file.
-    /// Decryption is handled by the Parquet reader using FileDecryptionProperties.
-    /// The InputFile itself reads raw (encrypted) bytes.
-    NativeEncrypted {
-        op: Operator,
-        path: String,
-        relative_path_pos: usize,
-        key_metadata: Vec<u8>,
-    },
+    /// Parquet Modular Encryption. Raw reads; Parquet reader handles decryption.
+    NativeEncrypted { storage: Arc<dyn Storage>, path: String, key_material: NativeKeyMaterial },
+}
+
+pub enum OutputFile {
+    Plain { storage: Arc<dyn Storage>, path: String },
+    Encrypted { storage: Arc<dyn Storage>, path: String, encryptor: Arc<FileEncryptor> },
+    NativeEncrypted { storage: Arc<dyn Storage>, path: String, key_material: NativeKeyMaterial },
 }
 ```
 
-This mirrors the Java hierarchy:
+`NativeKeyMaterial` carries the plaintext DEK and AAD prefix for Parquet's
+`FileEncryptionProperties` / `FileDecryptionProperties`.
 
-| Java                          | Rust                          |
-|-------------------------------|-------------------------------|
-| `InputFile` (interface)       | `InputFile` (enum)            |
-| Regular `InputFile` impl      | `InputFile::Plain`            |
-| `EncryptedInputFile` wrapper  | `InputFile::Encrypted`        |
-| `NativeEncryptionInputFile`   | `InputFile::NativeEncrypted`  |
-
-Common operations delegate to the appropriate variant:
-
-```rust
-impl InputFile {
-    pub fn location(&self) -> &str;
-    pub async fn exists(&self) -> Result<bool>;
-    pub async fn metadata(&self) -> Result<FileMetadata>;
-    pub async fn read(&self) -> Result<Bytes>;
-    pub async fn reader(&self) -> Result<Box<dyn FileRead>>;
-}
-```
-
-For the `Encrypted` variant, `read()` and `reader()` transparently decrypt via `AesGcmFileRead`.
-For the `NativeEncrypted` variant, `read()` and `reader()` return raw bytes -- the Parquet
-reader handles decryption using `FileDecryptionProperties`.
+Common operations (`location()`, `exists()`, `read()`, `reader()`, `write()`, `writer()`)
+delegate to the appropriate variant, with `Encrypted` variants transparently encrypting/decrypting
+via `AesGcmFileRead`/`AesGcmFileWrite`.
 
 #### Adaptation for Storage Trait RFC
 
-Once RFC 0002 merges, `InputFile` will hold `Arc<dyn Storage>` instead of `Operator`. The enum
-structure remains the same -- only the inner storage handle type changes:
-
-```rust
-// After Storage Trait RFC merges:
-pub enum InputFile {
-    Plain {
-        storage: Arc<dyn Storage>,
-        path: String,
-    },
-    Encrypted {
-        storage: Arc<dyn Storage>,
-        path: String,
-        encryptor: Arc<AesGcmEncryptor>,
-        key_metadata: StandardKeyMetadata,
-    },
-    NativeEncrypted {
-        storage: Arc<dyn Storage>,
-        path: String,
-        key_metadata: Vec<u8>,
-    },
-}
-```
+Once RFC 0002 merges, `InputFile` will hold `Arc<dyn Storage>` instead of `Operator`. This is
+already the case in this implementation — the enum structure is stable. Only the underlying
+`Storage` trait implementation may change.
 
 ### FileIO Integration
 
-#### Current Approach (with Extensions)
-
-The `EncryptionManager` is injected into `FileIO` via the existing `Extensions` mechanism:
+The `EncryptionManager` is stored as a type-safe `FileIOBuilder` extension. This integrates
+naturally with catalogs that support extensions (e.g. `RestCatalog.with_file_io_extension()`):
 
 ```rust
-let encryption_manager = EncryptionManager::with_defaults(Arc::new(kms_client));
-
+// Via FileIOBuilder extension (works with RestCatalog and any extension-aware catalog)
 let file_io = FileIOBuilder::new("s3")
     .with_prop("s3.region", "us-east-1")
     .with_extension(encryption_manager)
     .build()?;
 
-// Creates an encrypted InputFile
-let input = file_io.new_input(path, key_metadata).await?;
-let data = input.read().await?;
+// Or via convenience method on FileIO
+let file_io = file_io.with_encryption_manager(encryption_manager);
 ```
+
+FileIO provides encryption-aware factory methods:
+
+| Method | Purpose |
+|--------|---------|
+| `new_encrypted_input(path, key_metadata)` | AGS1 stream decryption (manifests, manifest lists) |
+| `new_encrypted_output(path)` | AGS1 stream encryption |
+| `new_native_encrypted_input(path, key_metadata)` | PME input (Parquet handles decryption) |
+| `new_native_encrypted_output(path)` | PME output (Parquet handles encryption) |
+| `encryption_manager()` | Returns the configured EncryptionManager, if any |
 
 #### After Storage Trait RFC
 
@@ -481,7 +433,7 @@ let catalog = GlueCatalogBuilder::default()
     .load("my_catalog", props)
     .await?;
 
-// Option B: Wrapping StorageFactory - I'm pretty sure this is more idomatic in the new trait world.
+// Option B: Wrapping StorageFactory
 pub struct EncryptingStorageFactory {
     inner: Arc<dyn StorageFactory>,
     encryption_manager: Arc<EncryptionManager>,
@@ -498,182 +450,66 @@ impl StorageFactory for EncryptingStorageFactory {
 The exact integration point will be finalized when RFC 0002 merges. The encryption
 module's internal design (crypto, key management, stream format) is unaffected.
 
-### Parquet Native Encryption Bridge
+### Parquet Modular Encryption
 
-For files using Parquet Modular Encryption (where the Parquet file itself contains encrypted
-column chunks), we bridge Iceberg's async key management with parquet-rs's synchronous
-`KeyRetriever` trait:
+For Parquet data files, encryption is handled natively by the Parquet reader/writer using
+`FileEncryptionProperties` and `FileDecryptionProperties` from `parquet-rs`.
 
-```rust
-pub struct IcebergKeyRetriever {
-    encryption_manager: Arc<EncryptionManager>,
-    runtime: tokio::runtime::Handle,
-}
+**Write path** (`ParquetWriter`): When the output file is `NativeEncrypted`, the writer extracts
+`NativeKeyMaterial` (plaintext DEK + AAD prefix) and configures `FileEncryptionProperties` on the
+`AsyncArrowWriter`. The Parquet crate handles column/page-level encryption.
 
-impl KeyRetriever for IcebergKeyRetriever {
-    fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
-        // Bridge async → sync using the tokio runtime handle
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                self.runtime.block_on(async {
-                    self.encryption_manager
-                        .prepare_decryption(key_metadata)
-                        .await
-                })
-            })
-            .join()
-        })
-    }
-}
-```
+**Read path** (`ArrowReader`): When `FileScanTask.key_metadata` is present, the reader calls
+`file_io.new_native_encrypted_input()` which deserializes `StandardKeyMetadata` to extract the
+plaintext DEK and AAD prefix. These are used to build `FileDecryptionProperties` which are
+passed to `ParquetRecordBatchStreamBuilder::new_with_options()`.
 
-The Arrow reader integrates this when `key_metadata` is present on a `FileScanTask`:
+The `ArrowFileReader::get_metadata()` implementation forwards both `file_decryption_properties`
+and `metadata_options` from `ArrowReaderOptions` to `ParquetMetaDataReader`, enabling encrypted
+footer parsing.
+
+### Catalog Integration
+
+Encryption is configured at the catalog level. The `EncryptionManager` is attached to the
+catalog's `FileIO`, and all tables loaded from that catalog inherit it automatically.
+
+For catalogs that support `FileIOBuilder` extensions (e.g. `RestCatalog`), the encryption manager
+can be added directly:
 
 ```rust
-// In ArrowReader:
-if let Some(key_metadata) = &task.key_metadata {
-    let key_retriever = Arc::new(IcebergKeyRetriever::new(
-        encryption_manager,
-        runtime_handle,
-    ));
-    let decryption_properties = FileDecryptionProperties::with_key_retriever(
-        key_retriever as Arc<dyn KeyRetriever>,
-    )
-    .build()?;
-    builder = builder.with_file_decryption_properties(decryption_properties);
-}
+rest_catalog.with_file_io_extension(encryption_manager);
 ```
 
-### Manifest & Snapshot Integration
-
-#### ManifestFile
-
-The `ManifestFile` struct gains an optional `key_metadata` field. When present,
-`load_manifest()` uses encrypted I/O:
+For catalogs that don't support extensions, an `EncryptedCatalog` wrapper implements the
+`Catalog` trait by delegating to an inner catalog and attaching the `EncryptionManager` to
+every `Table` returned:
 
 ```rust
-pub struct ManifestFile {
-    // ... existing fields ...
-    pub key_metadata: Option<Vec<u8>>,
-}
-
-impl ManifestFile {
-    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let avro = match &self.key_metadata {
-            Some(km) => {
-                file_io
-                    .new_encrypted_input(&self.manifest_path, km)
-                    .await?
-                    .read()
-                    .await?
-            }
-            None => {
-                file_io.new_input(&self.manifest_path)?.read().await?
-            }
-        };
-        // Deserialize Avro manifest...
-    }
-}
+let inner_catalog = MemoryCatalogBuilder::default().load("c", props).await?;
+let encrypted = EncryptedCatalog::new(Arc::new(inner_catalog), encryption_manager);
 ```
 
-#### Snapshot
+The wrapper intercepts all `Table`-returning methods (`load_table`, `create_table`,
+`register_table`, `update_table`) and calls `table.with_file_io(...)` to attach encryption.
+All other catalog methods delegate directly.
 
-Snapshots reference an `encryption_key_id` that maps to a key in `TableMetadata.encryption_keys`:
+`Table::with_file_io()` replaces the table's `FileIO` and rebuilds its `ObjectCache` (which
+stores its own `FileIO` for manifest/manifest list loading).
 
-```rust
-pub struct Snapshot {
-    // ... existing fields ...
-    pub encryption_key_id: Option<String>,
-}
+### DataFusion Integration
 
-impl Snapshot {
-    pub async fn load_manifest_list(
-        &self,
-        file_io: &FileIO,
-        table_metadata: &TableMetadata,
-    ) -> Result<ManifestList> {
-        let bytes = match &self.encryption_key_id {
-            Some(key_id) => {
-                let encrypted_key = table_metadata
-                    .encryption_keys
-                    .get(key_id)
-                    .ok_or_else(|| /* error */)?;
-                file_io
-                    .new_encrypted_input(&self.manifest_list, &encrypted_key.key_metadata)
-                    .await?
-                    .read()
-                    .await?
-            }
-            None => file_io.new_input(&self.manifest_list)?.read().await?,
-        };
-        ManifestList::parse(bytes, /* ... */)
-    }
-}
-```
+The DataFusion integration requires **no encryption-specific code**. Encryption flows
+transparently through the existing pipeline:
 
-#### FileScanTask
+- **`IcebergTableProvider::scan()`** calls `catalog.load_table()` → table has encrypted FileIO → `IcebergTableScan` → `table.scan().to_arrow()` → `ArrowReader` decrypts via `key_metadata`
+- **`IcebergTableProvider::insert_into()`** calls `catalog.load_table()` → table has encrypted FileIO → `IcebergWriteExec` uses `table.file_io()` → `RollingFileWriterBuilder` detects encryption → PME-encrypted data files + AGS1-encrypted manifests
+- **`IcebergCommitExec`** uses `Transaction::fast_append()` → `SnapshotProducer` writes encrypted manifests/manifest list → `AddEncryptionKey` updates persisted in table metadata
 
-Propagates per-file encryption metadata through the scan pipeline:
+### Format Version Requirement
 
-```rust
-pub struct FileScanTask {
-    // ... existing fields ...
-    pub key_metadata: Option<Vec<u8>>,
-}
-```
-
----
-
-## Implementation Plan
-
-### Phase 1: Core Encryption (Read Path)
-
-- Cryptographic primitives: `EncryptionAlgorithm`, `SecureKey`, `AesGcmEncryptor`
-- `KeyManagementClient` trait and `InMemoryKms`
-- `StandardKeyMetadata` with Avro serialization (Java-compatible)
-- `KeyCache` with LRU + TTL
-- `EncryptionManager` with `prepare_decryption()` and `bulk_prepare_decryption()`
-- `AesGcmFileRead` (AGS1 stream decryption implementing `FileRead`)
-- `InputFile` enum conversion (`Plain`, `Encrypted`, `NativeEncrypted`)
-- `FileIO::new_encrypted_input()` integration
-- Manifest and snapshot decryption
-- `FileScanTask.key_metadata` propagation
-- `IcebergKeyRetriever` for Parquet native encryption
-- Arrow reader integration with `FileDecryptionProperties`
-- Feature-gated behind `encryption` feature flag
-- Integration tests with `InMemoryKms`
-
-### Phase 2: Write Path
-
-- `OutputFile` enum conversion (mirroring `InputFile`)
-- `AesGcmFileWrite` (AGS1 stream encryption implementing `FileWrite`)
-- `EncryptionManager::prepare_encryption()` (generate DEK, wrap with KMS, create metadata)
-- `FileIO::new_encrypted_output()` integration
-- Parquet writer encryption support (`FileEncryptionProperties`)
-- Encrypted manifest and manifest list writing
-- Encrypted snapshot commit flow
-
-### Phase 3: Production KMS Implementations
-
-- AWS KMS `KeyManagementClient` implementation
-- Azure Key Vault `KeyManagementClient` implementation
-- GCP KMS `KeyManagementClient` implementation
-
-
-### Phase 4: Storage Trait Adaptation
-
-- Adapt to RFC 0002 when it merges:
-  - Replace `Operator` with `Arc<dyn Storage>` in `InputFile`/`OutputFile` enum variants
-  - Replace `Extensions`-based `EncryptionManager` injection with the new pattern
-    (catalog-level or `EncryptingStorageFactory` wrapper)
-  - Remove any `Extensions`-specific code
-
-### Future Work
-
-- Column-level encryption policies (encrypt specific columns with different keys)
-- Key rotation support (re-encrypt DEKs with new KEKs without re-encrypting data)
-- Encryption metadata in `TableMetadata` write path
-- AES-256-GCM support (depends on apache/arrow-rs#9203)
+Snapshot-level `encryption_key_id` is serialized only in the **V3** snapshot format. V2 snapshots
+do not include this field, so encrypted manifest lists cannot be read back after a V2 round-trip.
+Tables using encryption must use format version V3.
 
 ---
 
@@ -687,43 +523,16 @@ Cross-language compatibility is a hard requirement:
   (same header, block size, nonce/tag layout, AAD construction)
 - **StandardKeyMetadata**: Avro-serialized with the same schema as Java, enabling Rust to
   read tables encrypted by Java/Spark and vice versa
-- **Parquet native encryption**: Uses the same `KeyRetriever` interface from `parquet-rs`,
-  which follows the Parquet spec
-
-### Feature Flag
-
-All encryption code is gated behind `--features encryption` to avoid adding cryptographic
-dependencies for users who don't need encryption. The `aes-gcm` and `zeroize` crates are only compiled when enabled.
-
-When the `encryption` feature is not enabled and an encrypted file is encountered, clear
-error messages are returned indicating that the feature must be enabled.
+- **Parquet native encryption**: Uses `FileDecryptionProperties`/`FileEncryptionProperties`
+  from `parquet-rs`, which follows the Parquet spec
 
 ---
 
-## Risks and Mitigations
+## Future Work
 
-| Risk | Description | Mitigation |
-| ---- | ----------- | ---------- |
-| Storage trait churn | RFC 0002 may change `InputFile`/`FileIO` significantly | Design encryption module with clean boundaries; crypto/key management/stream code is independent of storage abstraction |
-| Parquet async/sync bridge | `KeyRetriever` is sync but KMS calls are async | Use `std::thread::scope` + `runtime.block_on()` to bridge; document the requirement for a tokio runtime handle |
-| Key metadata format drift | Java may evolve `StandardKeyMetadata` | Pin to Avro schema version; add schema version detection for forward compatibility |
-| Performance: KMS latency | KMS round-trips add latency to file opens | `KeyCache` with TTL; `bulk_prepare_decryption()` for parallel unwrapping |
-| `InputFile` enum breaking change | Converting from struct to enum breaks existing code | Not sure, I think we have to break this |
-
-## Open Questions
-
-1. **KMS crate structure**: Should KMS implementations live in `iceberg-encryption-{provider}`
-   crates, or in the existing catalog crates (since AWS KMS is often used with Glue catalog)?
-2. **Write path priority**: Should Phase 2 (write path) block on Phase 3 (storage trait
-   adaptation), or proceed independently?
-
-## Conclusion
-
-This RFC introduces encryption support for `iceberg-rust`, following the Iceberg spec and
-maintaining byte-level compatibility with the Java reference implementation. The design
-separates concerns into pluggable components (KMS client, key cache, stream cipher, encryption
-manager) and integrates with the existing read path through `FileIO`, manifest loading, and
-the Arrow/Parquet reader. The `InputFile` type is evolved from a concrete struct to an enum
-to cleanly represent encrypted file variants, mirroring Java's interface hierarchy. The
-implementation is feature-gated and designed to adapt cleanly to the upcoming storage trait
-refactoring from RFC 0002.
+- **Production KMS implementations**: AWS KMS, Azure Key Vault, GCP KMS
+- **Column-level encryption policies**: Encrypt specific columns with different keys
+- **Key rotation support**: Re-encrypt DEKs with new KEKs without re-encrypting data
+- **AES-256-GCM support**: Depends on `parquet-rs` support
+- **Storage Trait adaptation**: Replace `Extensions`-based `EncryptionManager` injection
+  with the pattern from RFC 0002 (catalog-level or `EncryptingStorageFactory` wrapper)
