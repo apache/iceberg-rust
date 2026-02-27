@@ -45,7 +45,7 @@ permissions:
 
 jobs:
   check-rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
       - name: Check format
@@ -56,7 +56,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   check-python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
