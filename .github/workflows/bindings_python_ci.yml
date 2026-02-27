@@ -45,7 +45,7 @@ permissions:
 
 jobs:
   check-rust:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Check format

@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   security_audit:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     if: github.repository == 'apache/iceberg-rust'
     steps:
       - uses: actions/checkout@v6
