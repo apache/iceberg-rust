@@ -3442,9 +3442,11 @@ dependencies = [
 name = "iceberg-examples"
 version = "0.8.0"
 dependencies = [
+ "datafusion",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-datafusion",
  "tokio",
 ]
 
