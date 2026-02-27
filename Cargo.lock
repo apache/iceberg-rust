@@ -3378,6 +3378,7 @@ version = "0.8.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "hmac",
  "http 1.4.0",
  "iceberg",
  "iceberg_test_utils",
@@ -3387,6 +3388,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "typed-builder",

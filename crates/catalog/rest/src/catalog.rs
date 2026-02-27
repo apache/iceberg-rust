@@ -306,6 +306,55 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
+    /// Get the authentication type from config.
+    ///
+    /// Returns the value of the `auth-type` property, if set.
+    /// Supported values: "oauth2" (default), "sigv4"
+    pub(crate) fn auth_type(&self) -> Option<&str> {
+        self.props.get("auth-type").map(|s| s.as_str())
+    }
+
+    /// Create a SigV4 authenticator from config properties.
+    ///
+    /// Required properties:
+    /// - `s3.access-key-id`: AWS access key ID
+    /// - `s3.secret-access-key`: AWS secret access key
+    ///
+    /// Optional properties:
+    /// - `s3.session-token`: AWS session token for temporary credentials
+    /// - `s3.region` or `region`: AWS region (defaults to "us-east-1")
+    /// - `sigv4.service`: Service name (defaults to "s3")
+    pub(crate) fn create_sigv4_authenticator(&self) -> Option<crate::auth::SigV4Authenticator> {
+        let access_key = self.props.get("s3.access-key-id")?;
+        let secret_key = self.props.get("s3.secret-access-key")?;
+        let session_token = self.props.get("s3.session-token").cloned();
+
+        let region = self
+            .props
+            .get("s3.region")
+            .or_else(|| self.props.get("region"))
+            .map(|s| s.as_str())
+            .unwrap_or("us-east-1");
+
+        let service = self
+            .props
+            .get("sigv4.service")
+            .map(|s| s.as_str())
+            .unwrap_or("s3");
+
+        let credentials = crate::auth::SigV4Credentials::new(
+            access_key.clone(),
+            secret_key.clone(),
+            session_token,
+        );
+
+        Some(crate::auth::SigV4Authenticator::new(
+            credentials,
+            region,
+            service,
+        ))
+    }
+
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
         if let Some(uri) = config.overrides.remove("uri") {
