@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{ManifestsTable, SnapshotsTable};
+use super::{
+    AllDataFilesTable, AllDeleteFilesTable, AllFilesTable, AllManifestsTable, DataFilesTable,
+    DeleteFilesTable, FilesTable, HistoryTable, ManifestsTable, MetadataLogEntriesTable, RefsTable,
+    SnapshotsTable,
+};
 use crate::table::Table;
 
 /// Metadata table is used to inspect a table's history, snapshots, and other metadata as a table.
@@ -34,6 +38,26 @@ pub enum MetadataTableType {
     Snapshots,
     /// [`ManifestsTable`]
     Manifests,
+    /// [`HistoryTable`]
+    History,
+    /// [`MetadataLogEntriesTable`]
+    MetadataLogEntries,
+    /// [`RefsTable`]
+    Refs,
+    /// [`FilesTable`]
+    Files,
+    /// [`DataFilesTable`]
+    DataFiles,
+    /// [`DeleteFilesTable`]
+    DeleteFiles,
+    /// [`AllManifestsTable`]
+    AllManifests,
+    /// [`AllFilesTable`]
+    AllFiles,
+    /// [`AllDataFilesTable`]
+    AllDataFiles,
+    /// [`AllDeleteFilesTable`]
+    AllDeleteFiles,
 }
 
 impl MetadataTableType {
@@ -42,6 +66,16 @@ impl MetadataTableType {
         match self {
             MetadataTableType::Snapshots => "snapshots",
             MetadataTableType::Manifests => "manifests",
+            MetadataTableType::History => "history",
+            MetadataTableType::MetadataLogEntries => "metadata_log_entries",
+            MetadataTableType::Refs => "refs",
+            MetadataTableType::Files => "files",
+            MetadataTableType::DataFiles => "data_files",
+            MetadataTableType::DeleteFiles => "delete_files",
+            MetadataTableType::AllManifests => "all_manifests",
+            MetadataTableType::AllFiles => "all_files",
+            MetadataTableType::AllDataFiles => "all_data_files",
+            MetadataTableType::AllDeleteFiles => "all_delete_files",
         }
     }
 
@@ -59,6 +93,16 @@ impl TryFrom<&str> for MetadataTableType {
         match value {
             "snapshots" => Ok(Self::Snapshots),
             "manifests" => Ok(Self::Manifests),
+            "history" => Ok(Self::History),
+            "metadata_log_entries" => Ok(Self::MetadataLogEntries),
+            "refs" => Ok(Self::Refs),
+            "files" => Ok(Self::Files),
+            "data_files" => Ok(Self::DataFiles),
+            "delete_files" => Ok(Self::DeleteFiles),
+            "all_manifests" => Ok(Self::AllManifests),
+            "all_files" => Ok(Self::AllFiles),
+            "all_data_files" => Ok(Self::AllDataFiles),
+            "all_delete_files" => Ok(Self::AllDeleteFiles),
             _ => Err(format!("invalid metadata table type: {value}")),
         }
     }
@@ -78,5 +122,55 @@ impl<'a> MetadataTable<'a> {
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable<'_> {
         ManifestsTable::new(self.0)
+    }
+
+    /// Get the history table.
+    pub fn history(&self) -> HistoryTable<'_> {
+        HistoryTable::new(self.0)
+    }
+
+    /// Get the metadata log entries table.
+    pub fn metadata_log_entries(&self) -> MetadataLogEntriesTable<'_> {
+        MetadataLogEntriesTable::new(self.0)
+    }
+
+    /// Get the refs table.
+    pub fn refs(&self) -> RefsTable<'_> {
+        RefsTable::new(self.0)
+    }
+
+    /// Get the files table.
+    pub fn files(&self) -> FilesTable<'_> {
+        FilesTable::new(self.0)
+    }
+
+    /// Get the data files table.
+    pub fn data_files(&self) -> DataFilesTable<'_> {
+        DataFilesTable::new(self.0)
+    }
+
+    /// Get the delete files table.
+    pub fn delete_files(&self) -> DeleteFilesTable<'_> {
+        DeleteFilesTable::new(self.0)
+    }
+
+    /// Get the all manifests table.
+    pub fn all_manifests(&self) -> AllManifestsTable<'_> {
+        AllManifestsTable::new(self.0)
+    }
+
+    /// Get the all files table.
+    pub fn all_files(&self) -> AllFilesTable<'_> {
+        AllFilesTable::new(self.0)
+    }
+
+    /// Get the all data files table.
+    pub fn all_data_files(&self) -> AllDataFilesTable<'_> {
+        AllDataFilesTable::new(self.0)
+    }
+
+    /// Get the all delete files table.
+    pub fn all_delete_files(&self) -> AllDeleteFilesTable<'_> {
+        AllDeleteFilesTable::new(self.0)
     }
 }

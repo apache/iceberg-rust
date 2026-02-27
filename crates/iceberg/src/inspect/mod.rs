@@ -17,10 +17,22 @@
 
 //! Metadata table APIs.
 
+mod all_files;
+mod all_manifests;
+mod files;
+mod history;
 mod manifests;
+mod metadata_log_entries;
 mod metadata_table;
+mod refs;
 mod snapshots;
 
+pub use all_files::{AllDataFilesTable, AllDeleteFilesTable, AllFilesTable};
+pub use all_manifests::AllManifestsTable;
+pub use files::{DataFilesTable, DeleteFilesTable, FilesTable};
+pub use history::HistoryTable;
 pub use manifests::ManifestsTable;
+pub use metadata_log_entries::MetadataLogEntriesTable;
 pub use metadata_table::*;
+pub use refs::RefsTable;
 pub use snapshots::SnapshotsTable;
