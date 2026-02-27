@@ -26,5 +26,6 @@ pub(crate) mod write;
 
 pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
 
+pub use expr_to_predicate::convert_filters_to_predicate;
 pub use project::project_with_partition;
 pub use scan::IcebergTableScan;
