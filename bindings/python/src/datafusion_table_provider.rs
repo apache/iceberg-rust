@@ -22,7 +22,7 @@ use std::sync::Arc;
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use iceberg::TableIdent;
-use iceberg::io::FileIO;
+use iceberg::io::{FileIOBuilder, OpenDalStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg_datafusion::table::IcebergStaticTableProvider;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -30,6 +30,29 @@ use pyo3::prelude::{PyAnyMethods, PyCapsuleMethods, *};
 use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
+
+/// Parse the scheme from a URL and return the appropriate StorageFactory.
+fn storage_factory_from_path(path: &str) -> PyResult<Arc<dyn StorageFactory>> {
+    let scheme = path
+        .split("://")
+        .next()
+        .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid path, missing scheme: {path}")))?;
+
+    let factory: Arc<dyn StorageFactory> = match scheme {
+        "file" | "" => Arc::new(OpenDalStorageFactory::Fs),
+        "s3" | "s3a" => Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }),
+        "memory" => Arc::new(OpenDalStorageFactory::Memory),
+        _ => {
+            return Err(PyRuntimeError::new_err(format!(
+                "Unsupported storage scheme: {scheme}"
+            )));
+        }
+    };
+
+    Ok(factory)
+}
 
 pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule.name()?;
@@ -85,16 +108,15 @@ impl PyIcebergDataFusionTable {
             let table_ident = TableIdent::from_strs(identifier)
                 .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
 
-            let mut builder = FileIO::from_path(&metadata_location)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to init FileIO: {e}")))?;
+            let factory = storage_factory_from_path(&metadata_location)?;
+
+            let mut builder = FileIOBuilder::new(factory);
 
             if let Some(props) = file_io_properties {
                 builder = builder.with_props(props);
             }
 
-            let file_io = builder
-                .build()
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to build FileIO: {e}")))?;
+            let file_io = builder.build();
 
             let static_table =
                 StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)

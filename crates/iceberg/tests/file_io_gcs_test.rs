@@ -22,9 +22,12 @@
 #[cfg(all(test, feature = "storage-gcs"))]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::{
+        FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, OpenDalStorageFactory,
+    };
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
 
     static FAKE_GCS_BUCKET: &str = "test-bucket";
@@ -37,13 +40,12 @@ mod tests {
         // A bucket must exist for FileIO
         create_bucket(FAKE_GCS_BUCKET, &gcs_endpoint).await.unwrap();
 
-        FileIOBuilder::new("gcs")
+        FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Gcs))
             .with_props(vec![
                 (GCS_SERVICE_PATH, gcs_endpoint),
                 (GCS_NO_AUTH, "true".to_string()),
             ])
             .build()
-            .unwrap()
     }
 
     // Create a bucket against the emulated GCS storage server.
