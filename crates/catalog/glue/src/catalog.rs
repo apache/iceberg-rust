@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -526,14 +527,14 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
+        let metadata_location_str = metadata_location.to_string();
         let glue_table = convert_to_glue_table(
             &table_name,
-            metadata_location.clone(),
+            metadata_location_str.clone(),
             &metadata,
             metadata.properties(),
             None,
@@ -551,7 +552,7 @@ impl Catalog for GlueCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .build()
@@ -789,12 +790,13 @@ impl Catalog for GlueCatalog {
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         // Write new metadata
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         // Persist staged table to Glue with optimistic locking
