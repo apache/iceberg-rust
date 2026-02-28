@@ -102,6 +102,7 @@ impl ReassignFieldIds {
                     value_field: Arc::new(value_field),
                 }))
             }
+            Type::Variant(v) => Ok(Type::Variant(v)),
         }
     }
 

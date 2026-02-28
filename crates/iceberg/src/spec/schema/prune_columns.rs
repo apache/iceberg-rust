@@ -238,6 +238,10 @@ impl SchemaVisitor for PruneColumn {
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Option<Type>> {
         Ok(None)
     }
+
+    fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ use serde_json::{Number, Value};
 
 use crate::spec::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, visit_schema,
+    StructType, Type, VariantType, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -37,6 +37,7 @@ const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const MAP_LOGICAL_TYPE: &str = "map";
+const VARIANT_LOGICAL_TYPE: &str = "variant";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
@@ -218,6 +219,39 @@ impl SchemaVisitor for SchemaToAvroSchema {
                 )]),
             })))
         }
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<AvroSchemaOrField> {
+        let fields = vec![
+            AvroRecordField {
+                name: "metadata".to_string(),
+                schema: AvroSchema::Bytes,
+                order: RecordFieldOrder::Ignore,
+                position: 0,
+                doc: None,
+                aliases: None,
+                default: None,
+                custom_attributes: Default::default(),
+            },
+            AvroRecordField {
+                name: "value".to_string(),
+                schema: AvroSchema::Bytes,
+                order: RecordFieldOrder::Ignore,
+                position: 1,
+                doc: None,
+                aliases: None,
+                default: None,
+                custom_attributes: Default::default(),
+            },
+        ];
+        let mut schema = avro_record_schema(VARIANT_LOGICAL_TYPE, fields)?;
+        if let AvroSchema::Record(record) = &mut schema {
+            record.attributes.insert(
+                LOGICAL_TYPE.to_string(),
+                Value::String(VARIANT_LOGICAL_TYPE.to_string()),
+            );
+        }
+        Ok(Either::Left(schema))
     }
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<AvroSchemaOrField> {
@@ -435,6 +469,13 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         record: &RecordSchema,
         field_types: Vec<Option<Type>>,
     ) -> Result<Option<Type>> {
+        // A variant is encoded as a record with logicalType "variant" — return it directly
+        // rather than trying to build a struct from its metadata/value byte fields.
+        if record.attributes.get(LOGICAL_TYPE).and_then(Value::as_str) == Some(VARIANT_LOGICAL_TYPE)
+        {
+            return Ok(Some(Type::Variant(VariantType)));
+        }
+
         let mut fields = Vec::with_capacity(field_types.len());
         for (avro_field, field_type) in record.fields.iter().zip_eq(field_types) {
             let field_id =
@@ -614,7 +655,9 @@ mod tests {
 
     use super::*;
     use crate::avro::schema::AvroSchemaToSchema;
-    use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+    use crate::spec::{
+        ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, VariantType,
+    };
 
     fn read_test_data_file_to_avro_schema(filename: &str) -> AvroSchema {
         let input = read_to_string(format!(
@@ -1211,5 +1254,98 @@ mod tests {
             iceberg_type,
             converter.primitive(&avro_schema).unwrap().unwrap()
         );
+    }
+
+    /// Adapted from Java TestSchemaConversions.testVariantConversion
+    #[test]
+    fn test_variant_schema_conversion() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "test_schema",
+    "fields": [
+        {
+            "name": "variantCol1",
+            "type": {
+                "type": "record",
+                "name": "r1",
+                "logicalType": "variant",
+                "fields": [
+                    {"name": "metadata", "type": "bytes"},
+                    {"name": "value", "type": "bytes"}
+                ]
+            },
+            "field-id": 1
+        },
+        {
+            "name": "variantCol2",
+            "type": {
+                "type": "record",
+                "name": "r2",
+                "logicalType": "variant",
+                "fields": [
+                    {"name": "metadata", "type": "bytes"},
+                    {"name": "value", "type": "bytes"}
+                ]
+            },
+            "field-id": 2
+        }
+    ]
+}
+            "#,
+        )
+        .unwrap();
+
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "variantCol1", Type::Variant(VariantType)).into(),
+                NestedField::required(2, "variantCol2", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        check_schema_conversion(avro_schema, iceberg_schema);
+    }
+
+    #[test]
+    fn test_optional_variant_schema_conversion() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "test_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": [
+                "null",
+                {
+                    "type": "record",
+                    "name": "r1",
+                    "logicalType": "variant",
+                    "fields": [
+                        {"name": "metadata", "type": "bytes"},
+                        {"name": "value", "type": "bytes"}
+                    ]
+                }
+            ],
+            "default": null,
+            "field-id": 1
+        }
+    ]
+}
+            "#,
+        )
+        .unwrap();
+
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        check_schema_conversion(avro_schema, iceberg_schema);
     }
 }

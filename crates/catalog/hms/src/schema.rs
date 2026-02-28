@@ -139,6 +139,13 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
         Ok(hive_type)
     }
+
+    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Conversion from VariantType is not supported for HMS",
+        ))
+    }
 }
 
 #[cfg(test)]

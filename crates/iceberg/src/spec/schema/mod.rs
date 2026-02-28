@@ -39,6 +39,7 @@ pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
+use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
     PrimitiveType, StructType, Type,
@@ -418,6 +419,44 @@ impl Schema {
     /// Return a hashmap matching field ids to nested fields.
     pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
         &self.id_to_field
+    }
+
+    /// Check that all types in this schema are supported by the given format version.
+    ///
+    /// Mirrors Java's `Schema.checkCompatibility()`. Returns an error listing every
+    /// incompatible field if any are found.
+    ///
+    /// Types with a minimum format version:
+    /// - `TimestampNs` / `TimestamptzNs` → v3+
+    /// - `Variant` → v3+
+    pub fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
+        let mut problems: Vec<String> = Vec::new();
+
+        for field in self.id_to_field.values() {
+            let min_version = field.field_type.min_format_version();
+
+            if format_version < min_version {
+                let name = self
+                    .name_by_field_id(field.id)
+                    .unwrap_or(field.name.as_str());
+                problems.push(format!(
+                    "Invalid type for {name}: {} is not supported until v{min_version} but format version is v{format_version}.",
+                    field.field_type,
+                ));
+            }
+        }
+
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid schema for v{format_version}:\n- {}",
+                    problems.join("\n- ")
+                ),
+            ))
+        }
     }
 }
 
