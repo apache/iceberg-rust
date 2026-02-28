@@ -250,6 +250,34 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
+    /// Returns `true` if `self` can be promoted to `target` per the Iceberg spec's
+    /// valid type promotion rules.
+    ///
+    /// See <https://iceberg.apache.org/spec/#schema-evolution>
+    pub fn is_promotable_to(&self, target: &PrimitiveType) -> bool {
+        matches!(
+            (self, target),
+            (PrimitiveType::Int, PrimitiveType::Long)
+                | (PrimitiveType::Float, PrimitiveType::Double)
+                | (PrimitiveType::Date, PrimitiveType::Timestamp)
+                | (PrimitiveType::Date, PrimitiveType::TimestampNs)
+                | (PrimitiveType::String, PrimitiveType::Binary)
+                | (PrimitiveType::Binary, PrimitiveType::String)
+        ) || matches!(
+            (self, target),
+            (
+                PrimitiveType::Decimal {
+                    precision: p1,
+                    scale: s1,
+                },
+                PrimitiveType::Decimal {
+                    precision: p2,
+                    scale: s2,
+                },
+            ) if s1 == s2 && p1 < p2
+        )
+    }
+
     /// Check whether literal is compatible with the type.
     pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
         matches!(
@@ -1258,6 +1286,50 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("expected type 'struct'")
+        );
+    }
+
+    #[test]
+    fn test_is_promotable_to() {
+        assert!(PrimitiveType::Int.is_promotable_to(&PrimitiveType::Long));
+        assert!(PrimitiveType::Float.is_promotable_to(&PrimitiveType::Double));
+        assert!(PrimitiveType::Date.is_promotable_to(&PrimitiveType::Timestamp));
+        assert!(PrimitiveType::Date.is_promotable_to(&PrimitiveType::TimestampNs));
+        assert!(PrimitiveType::String.is_promotable_to(&PrimitiveType::Binary));
+        assert!(PrimitiveType::Binary.is_promotable_to(&PrimitiveType::String));
+        assert!(
+            PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2,
+            }
+            .is_promotable_to(&PrimitiveType::Decimal {
+                precision: 20,
+                scale: 2,
+            })
+        );
+
+        assert!(!PrimitiveType::Long.is_promotable_to(&PrimitiveType::Int));
+        assert!(!PrimitiveType::Double.is_promotable_to(&PrimitiveType::Float));
+        assert!(!PrimitiveType::Int.is_promotable_to(&PrimitiveType::String));
+        assert!(
+            !PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2,
+            }
+            .is_promotable_to(&PrimitiveType::Decimal {
+                precision: 20,
+                scale: 3,
+            })
+        );
+        assert!(
+            !PrimitiveType::Decimal {
+                precision: 20,
+                scale: 2,
+            }
+            .is_promotable_to(&PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2,
+            })
         );
     }
 }

@@ -28,6 +28,7 @@ pub mod delete_file_loader;
 pub(crate) mod delete_filter;
 
 mod reader;
+pub(crate) use reader::apply_name_mapping_to_arrow_schema;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
