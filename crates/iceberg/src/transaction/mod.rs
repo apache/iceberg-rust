@@ -94,6 +94,11 @@ impl Transaction {
         }
     }
 
+    /// Returns current table
+    pub fn current_table(&self) -> &Table {
+        &self.table
+    }
+
     fn update_table_metadata(table: Table, updates: &[TableUpdate]) -> Result<Table> {
         let mut metadata_builder = table.metadata().clone().into_builder(None);
         for update in updates {
