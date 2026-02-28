@@ -66,6 +66,7 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
+mod config;
 mod file_io;
 mod storage;
 
@@ -85,6 +86,8 @@ mod storage_oss;
 #[cfg(feature = "storage-s3")]
 mod storage_s3;
 
+pub use config::*;
+pub use storage::{Storage, StorageFactory};
 #[cfg(feature = "storage-azdls")]
 pub use storage_azdls::*;
 #[cfg(feature = "storage-fs")]
