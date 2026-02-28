@@ -45,6 +45,7 @@ use parquet::file::metadata::{
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
@@ -322,6 +323,54 @@ impl ArrowReader {
         record_batch_stream_builder =
             record_batch_stream_builder.with_projection(projection_mask.clone());
 
+        let has_nested_fields = task
+            .project_field_ids
+            .iter()
+            .filter(|id| !is_metadata_field(**id))
+            .any(|id| task.schema.as_struct().field_by_id(*id).is_none());
+        let projector = if has_nested_fields {
+            let projected_arrow_schema = record_batch_stream_builder.schema();
+            let projected_iceberg_schema = arrow_schema_to_schema(projected_arrow_schema)?;
+            let available_field_ids: HashSet<i32> = projected_iceberg_schema
+                .field_id_to_name_map()
+                .keys()
+                .copied()
+                .collect();
+            let projectable_field_ids = task
+                .project_field_ids
+                .iter()
+                .copied()
+                .filter(|id| available_field_ids.contains(id))
+                .collect::<Vec<_>>();
+            if projectable_field_ids.is_empty() {
+                None
+            } else {
+                Some(RecordBatchProjector::new(
+                    projected_arrow_schema.clone(),
+                    &projectable_field_ids,
+                    |field| {
+                        field
+                            .metadata()
+                            .get(PARQUET_FIELD_ID_META_KEY)
+                            .map(|value| {
+                                value.parse::<i64>().map_err(|e| {
+                                    Error::new(
+                                        ErrorKind::DataInvalid,
+                                        "field id not parseable as an i64".to_string(),
+                                    )
+                                    .with_context("value", value)
+                                    .with_source(e)
+                                })
+                            })
+                            .transpose()
+                    },
+                    |_| true,
+                )?)
+            }
+        } else {
+            None
+        };
+
         // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion,
         // column re-ordering, partition constants, and virtual field addition (like _file)
@@ -476,11 +525,15 @@ impl ArrowReader {
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
+        let mut projector = projector.clone();
         let record_batch_stream =
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => {
+                    Ok(mut batch) => {
+                        if let Some(projector) = &mut projector {
+                            batch = projector.project_batch(batch)?;
+                        }
                         // Process the record batch (type promotion, column reordering, virtual fields, etc.)
                         record_batch_transformer.process_record_batch(batch)
                     }
@@ -4316,5 +4369,134 @@ message schema {
         assert_eq!(name_col.value(1), "Bob");
         assert_eq!(name_col.value(2), "Charlie");
         assert_eq!(name_col.value(3), "Dave");
+    }
+
+    #[tokio::test]
+    async fn test_read_nested_parquet_column() {
+        use arrow_array::{Int32Array, StructArray};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        let nested_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            NestedField::optional(4, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let inner_fields = vec![
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "3".to_string(),
+            )])),
+            Field::new("age", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "4".to_string(),
+            )])),
+        ];
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new(
+                "person",
+                DataType::Struct(arrow_schema::Fields::from(inner_fields.clone())),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let name_array = Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef;
+        let age_array = Arc::new(Int32Array::from(vec![Some(30), Some(25), None])) as ArrayRef;
+
+        let struct_array = Arc::new(StructArray::from(vec![
+            (Arc::new(inner_fields[0].clone()), name_array),
+            (Arc::new(inner_fields[1].clone()), age_array),
+        ])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_array, struct_array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file_path = format!("{table_location}/nested.parquet");
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: file_path,
+                data_file_format: DataFileFormat::Parquet,
+                schema: nested_schema.clone(),
+                project_field_ids: vec![1, 3],
+                predicate: None,
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+
+        let id_col = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 2);
+        assert_eq!(id_col.value(2), 3);
+
+        let name_col = batch.column(1).as_string::<i32>();
+        assert_eq!(name_col.value(0), "Alice");
+        assert_eq!(name_col.value(1), "Bob");
+        assert_eq!(name_col.value(2), "Charlie");
     }
 }

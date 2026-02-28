@@ -573,22 +573,38 @@ impl RecordBatchTransformer {
     ) -> Result<HashMap<i32, (FieldRef, usize)>> {
         let mut field_id_to_source_schema = HashMap::new();
         for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
-            // Check if field has a field ID in metadata
-            if let Some(field_id_str) = source_field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let this_field_id = field_id_str.parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {e}"),
-                    )
-                })?;
-
-                field_id_to_source_schema
-                    .insert(this_field_id, (source_field.clone(), source_field_idx));
-            }
-            // If field doesn't have a field ID, skip it - name mapping will handle it
+            Self::collect_field_ids_recursive(
+                source_field,
+                source_field_idx,
+                &mut field_id_to_source_schema,
+            )?;
         }
 
         Ok(field_id_to_source_schema)
+    }
+
+    fn collect_field_ids_recursive(
+        field: &FieldRef,
+        top_level_idx: usize,
+        map: &mut HashMap<i32, (FieldRef, usize)>,
+    ) -> Result<()> {
+        if let Some(field_id_str) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
+            let field_id = field_id_str.parse().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("field id not parseable as an i32: {e}"),
+                )
+            })?;
+            map.insert(field_id, (field.clone(), top_level_idx));
+        }
+
+        if let DataType::Struct(inner_fields) = field.data_type() {
+            for inner_field in inner_fields.iter() {
+                Self::collect_field_ids_recursive(inner_field, top_level_idx, map)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn transform_columns(
