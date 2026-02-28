@@ -24,6 +24,7 @@
 - [Install](./install.md)
 - [Download](./download.md)
 - [API](./api.md)
+- [DataFusion Integration](./datafusion.md)
 
 # Developer Guide
 
