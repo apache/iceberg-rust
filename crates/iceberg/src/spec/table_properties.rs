@@ -51,6 +51,10 @@ pub struct TableProperties {
     pub write_target_file_size_bytes: usize,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
+    /// Master key ID for encryption. When set, all data and manifest files will be encrypted.
+    pub encryption_key_id: Option<String>,
+    /// Length of data encryption keys in bytes.
+    pub encryption_dek_length: Option<usize>,
 }
 
 impl TableProperties {
@@ -144,6 +148,29 @@ impl TableProperties {
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
+
+    // Encryption properties
+
+    /// Master key ID for encrypting data encryption keys.
+    ///
+    /// When set, enables table-level encryption where all data and manifest
+    /// files are encrypted using data encryption keys (DEKs) that are
+    /// themselves encrypted with this master key.
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
+
+    /// Length of data encryption keys in bytes.
+    ///
+    /// Controls the key size for AES encryption. Common values are 16 (AES-128)
+    /// which is the only encryption method currently supported in the parquet
+    pub const PROPERTY_ENCRYPTION_DEK_LENGTH: &str = "encryption.data-key-length";
+    /// Default length for data encryption keys (16 bytes = AES-128).
+    pub const PROPERTY_ENCRYPTION_DEK_LENGTH_DEFAULT: usize = 16;
+
+    /// Default AAD (Additional Authenticated Data) length for GCM encryption.
+    ///
+    /// AAD provides additional context for authenticated encryption modes like AES-GCM.
+    /// This is hardcoded to 16 bytes for Java compatibility and is not configurable.
+    pub const PROPERTY_ENCRYPTION_AAD_LENGTH_DEFAULT: usize = 16;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -187,6 +214,13 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
+            // Encryption properties - all optional
+            encryption_key_id: props
+                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
+                .cloned(),
+            encryption_dek_length: props
+                .get(TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH)
+                .and_then(|v| v.parse().ok()),
         })
     }
 }
@@ -219,6 +253,9 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+        // Encryption properties should be None by default
+        assert_eq!(table_properties.encryption_key_id, None);
+        assert_eq!(table_properties.encryption_dek_length, None);
     }
 
     #[test]
@@ -292,5 +329,95 @@ mod tests {
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
+    }
+
+    #[test]
+    fn test_encryption_properties_valid() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "test-key-123".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH.to_string(),
+                "32".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.encryption_key_id,
+            Some("test-key-123".to_string())
+        );
+        assert_eq!(table_properties.encryption_dek_length, Some(32));
+    }
+
+    #[test]
+    fn test_encryption_properties_partial() {
+        // Test with only the key ID set, not the DEK length
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "my-master-key".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.encryption_key_id,
+            Some("my-master-key".to_string())
+        );
+        assert_eq!(table_properties.encryption_dek_length, None);
+    }
+
+    #[test]
+    fn test_encryption_properties_invalid_numeric() {
+        // Test that invalid numeric values are silently ignored (parsed as None)
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "key-456".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH.to_string(),
+                "not-a-number".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.encryption_key_id,
+            Some("key-456".to_string())
+        );
+        // Invalid numeric values should be parsed as None
+        assert_eq!(table_properties.encryption_dek_length, None);
+    }
+
+    #[test]
+    fn test_encryption_properties_with_other_properties() {
+        // Test encryption properties alongside other table properties
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "8".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT.to_string(),
+                "orc".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "combined-test-key".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH.to_string(),
+                "16".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        // Check regular properties
+        assert_eq!(table_properties.commit_num_retries, 8);
+        assert_eq!(table_properties.write_format_default, "orc".to_string());
+        // Check encryption properties
+        assert_eq!(
+            table_properties.encryption_key_id,
+            Some("combined-test-key".to_string())
+        );
+        assert_eq!(table_properties.encryption_dek_length, Some(16));
     }
 }
