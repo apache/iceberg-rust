@@ -212,7 +212,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     output_file: OutputFile,
-    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
@@ -577,16 +577,16 @@ impl CurrentFileStatus for ParquetWriter {
 /// # NOTES
 ///
 /// We keep this wrapper been used inside only.
-struct AsyncFileWriter<W: FileWrite>(W);
+struct AsyncFileWriter(Box<dyn FileWrite>);
 
-impl<W: FileWrite> AsyncFileWriter<W> {
+impl AsyncFileWriter {
     /// Create a new `AsyncFileWriter` with the given writer.
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: Box<dyn FileWrite>) -> Self {
         Self(writer)
     }
 }
 
-impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
+impl ArrowAsyncFileWriter for AsyncFileWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
             self.0
@@ -622,13 +622,13 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::statistics::ValueStatistics;
-    use rust_decimal::Decimal;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
     use crate::io::FileIOBuilder;
+    use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
@@ -1378,12 +1378,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             data_file.upper_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(22000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(22000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
         assert_eq!(
             data_file.lower_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(11000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(11000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
 
@@ -1430,19 +1430,22 @@ mod tests {
             .unwrap();
         assert_eq!(
             data_file.upper_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(-11000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(-11000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
         assert_eq!(
             data_file.lower_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(-22000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(-22000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
 
-        // test max and min of rust_decimal
-        let decimal_max = Decimal::MAX;
-        let decimal_min = Decimal::MIN;
-        assert_eq!(decimal_max.scale(), decimal_min.scale());
+        // test 38-digit precision decimal values (Iceberg spec max)
+        // Note: fastnum D128::MAX/MIN have impractical exponents, so we use meaningful values
+        use crate::spec::decimal_utils::decimal_from_str_exact;
+        let decimal_max = decimal_from_str_exact("99999999999999999999999999999999999999").unwrap();
+        let decimal_min =
+            decimal_from_str_exact("-99999999999999999999999999999999999999").unwrap();
+        assert_eq!(decimal_scale(&decimal_max), decimal_scale(&decimal_min));
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -1451,7 +1454,7 @@ mod tests {
                         "decimal",
                         Type::Primitive(PrimitiveType::Decimal {
                             precision: 38,
-                            scale: decimal_max.scale(),
+                            scale: decimal_scale(&decimal_max),
                         }),
                     )
                     .into(),
@@ -1468,8 +1471,8 @@ mod tests {
             .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
-                Some(decimal_max.mantissa()),
-                Some(decimal_min.mantissa()),
+                Some(decimal_mantissa(&decimal_max)),
+                Some(decimal_mantissa(&decimal_min)),
             ])
             .with_data_type(DataType::Decimal128(38, 0)),
         ) as ArrayRef;

@@ -16,63 +16,36 @@
 // under the License.
 
 //! Integration tests for FileIO S3.
+//!
+//! These tests assume Docker containers are started externally via `make docker-up`.
+//! Each test uses unique file paths based on module path to avoid conflicts.
 #[cfg(all(test, feature = "storage-s3"))]
 mod tests {
-    use std::net::{IpAddr, SocketAddr};
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
     use async_trait::async_trait;
-    use ctor::{ctor, dtor};
     use iceberg::io::{
         CustomAwsCredentialLoader, FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
         S3_SECRET_ACCESS_KEY,
     };
-    use iceberg_test_utils::docker::DockerCompose;
-    use iceberg_test_utils::{normalize_test_name, set_up};
+    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign::{AwsCredential, AwsCredentialLoad};
     use reqwest::Client;
-
-    const MINIO_PORT: u16 = 9000;
-    static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
-
-    #[ctor]
-    fn before_all() {
-        let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-        let docker_compose = DockerCompose::new(
-            normalize_test_name(module_path!()),
-            format!("{}/testdata/file_io_s3", env!("CARGO_MANIFEST_DIR")),
-        );
-        docker_compose.up();
-        guard.replace(docker_compose);
-    }
-
-    #[dtor]
-    fn after_all() {
-        let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-        guard.take();
-    }
 
     async fn get_file_io() -> FileIO {
         set_up();
 
-        let container_ip = get_container_ip("minio");
-        let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
+        let minio_endpoint = get_minio_endpoint();
 
         FileIOBuilder::new("s3")
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
+                (S3_ENDPOINT, minio_endpoint),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
             ])
             .build()
             .unwrap()
-    }
-
-    fn get_container_ip(service_name: &str) -> IpAddr {
-        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-        let docker_compose = guard.as_ref().unwrap();
-        docker_compose.get_container_ip(service_name)
     }
 
     #[tokio::test]
@@ -85,23 +58,35 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_s3_output() {
         let file_io = get_file_io().await;
-        assert!(!file_io.exists("s3://bucket1/test_output").await.unwrap());
-        let output_file = file_io.new_output("s3://bucket1/test_output").unwrap();
+        // Use unique file path based on module path to avoid conflicts
+        let output_path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_output")
+        );
+        // Clean up from any previous test runs
+        let _ = file_io.delete(&output_path).await;
+        assert!(!file_io.exists(&output_path).await.unwrap());
+        let output_file = file_io.new_output(&output_path).unwrap();
         {
             output_file.write("123".into()).await.unwrap();
         }
-        assert!(file_io.exists("s3://bucket1/test_output").await.unwrap());
+        assert!(file_io.exists(&output_path).await.unwrap());
     }
 
     #[tokio::test]
     async fn test_file_io_s3_input() {
         let file_io = get_file_io().await;
-        let output_file = file_io.new_output("s3://bucket1/test_input").unwrap();
+        // Use unique file path based on module path to avoid conflicts
+        let file_path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_input")
+        );
+        let output_file = file_io.new_output(&file_path).unwrap();
         {
             output_file.write("test_input".into()).await.unwrap();
         }
 
-        let input_file = file_io.new_input("s3://bucket1/test_input").unwrap();
+        let input_file = file_io.new_input(&file_path).unwrap();
 
         {
             let buffer = input_file.read().await.unwrap();
@@ -200,15 +185,13 @@ mod tests {
         let mock_loader = MockCredentialLoader::new_minio();
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
 
-        // Get container info for endpoint
-        let container_ip = get_container_ip("minio");
-        let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
+        let minio_endpoint = get_minio_endpoint();
 
         // Build FileIO with custom credential loader
         let file_io_with_custom_creds = FileIOBuilder::new("s3")
             .with_extension(custom_loader)
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
+                (S3_ENDPOINT, minio_endpoint),
                 (S3_REGION, "us-east-1".to_string()),
             ])
             .build()
@@ -229,15 +212,13 @@ mod tests {
         let mock_loader = MockCredentialLoader::new(None);
         let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
 
-        // Get container info for endpoint
-        let container_ip = get_container_ip("minio");
-        let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
+        let minio_endpoint = get_minio_endpoint();
 
         // Build FileIO with custom credential loader
         let file_io_with_custom_creds = FileIOBuilder::new("s3")
             .with_extension(custom_loader)
             .with_props(vec![
-                (S3_ENDPOINT, format!("http://{minio_socket_addr}")),
+                (S3_ENDPOINT, minio_endpoint),
                 (S3_REGION, "us-east-1".to_string()),
             ])
             .build()

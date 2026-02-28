@@ -32,14 +32,17 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+
 jobs:
   typos-check:
     name: typos check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v6
       - name: Check typos
-        uses: crate-ci/typos@v1.42.1
+        uses: crate-ci/typos@v1.43.5

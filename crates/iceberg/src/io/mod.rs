@@ -66,40 +66,13 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
-mod config;
 mod file_io;
 mod storage;
 
 pub use file_io::*;
+pub use storage::*;
+
 pub(crate) mod object_cache;
-
-#[cfg(feature = "storage-azdls")]
-mod storage_azdls;
-#[cfg(feature = "storage-fs")]
-mod storage_fs;
-#[cfg(feature = "storage-gcs")]
-mod storage_gcs;
-#[cfg(feature = "storage-memory")]
-mod storage_memory;
-#[cfg(feature = "storage-oss")]
-mod storage_oss;
-#[cfg(feature = "storage-s3")]
-mod storage_s3;
-
-pub use config::*;
-pub use storage::{Storage, StorageFactory};
-#[cfg(feature = "storage-azdls")]
-pub use storage_azdls::*;
-#[cfg(feature = "storage-fs")]
-use storage_fs::*;
-#[cfg(feature = "storage-gcs")]
-pub use storage_gcs::*;
-#[cfg(feature = "storage-memory")]
-use storage_memory::*;
-#[cfg(feature = "storage-oss")]
-pub use storage_oss::*;
-#[cfg(feature = "storage-s3")]
-pub use storage_s3::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
