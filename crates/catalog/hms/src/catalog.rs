@@ -592,15 +592,58 @@ impl Catalog for HmsCatalog {
         Ok(())
     }
 
+    /// Registers an existing Iceberg table by its metadata location.
+    ///
+    /// This method allows registering a table that already has metadata written
+    /// to storage, without creating new metadata. It reads the existing metadata
+    /// from the provided location and creates a corresponding entry in HMS.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object representing the registered table.
+    ///
+    /// # Errors
+    /// This function may return an error in several scenarios:
+    /// - Failure to validate the namespace identifier
+    /// - Failure to read metadata from the provided location
+    /// - Table already exists in HMS
+    /// - Errors communicating with the Hive Metastore
     async fn register_table(
         &self,
-        _table_ident: &TableIdent,
-        _metadata_location: String,
+        table_ident: &TableIdent,
+        metadata_location: String,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Registering a table is not supported yet",
-        ))
+        let db_name = validate_namespace(table_ident.namespace())?;
+        let table_name = table_ident.name().to_string();
+
+        // Read metadata from provided location
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+
+        // Get table location from metadata
+        let location = metadata.location().to_string();
+
+        // Convert to HMS table format
+        let hive_table = convert_to_hive_table(
+            db_name.clone(),
+            metadata.current_schema(),
+            table_name.clone(),
+            location,
+            metadata_location.clone(),
+            metadata.properties(),
+        )?;
+
+        // Create table in HMS
+        self.client
+            .0
+            .create_table(hive_table)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(table_ident.clone())
+            .build()
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
