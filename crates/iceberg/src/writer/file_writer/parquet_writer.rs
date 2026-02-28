@@ -40,7 +40,7 @@ use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema,
+    StructType, TableMetadata, Type, VariantType, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -112,6 +112,22 @@ impl IndexByParquetPathName {
     /// Retrieves the internal field ID
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
+    }
+
+    fn insert_current_path(&mut self) -> Result<()> {
+        let full_name = self.field_names.iter().map(String::as_str).join(".");
+        let field_id = self.field_id;
+        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
+                ),
+            ));
+        } else {
+            self.name_to_id.insert(full_name, field_id);
+        }
+        Ok(())
     }
 }
 
@@ -191,20 +207,11 @@ impl SchemaVisitor for IndexByParquetPathName {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
-        let full_name = self.field_names.iter().map(String::as_str).join(".");
-        let field_id = self.field_id;
-        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
-            ));
-        } else {
-            self.name_to_id.insert(full_name, field_id);
-        }
+        self.insert_current_path()
+    }
 
-        Ok(())
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        self.insert_current_path()
     }
 }
 
