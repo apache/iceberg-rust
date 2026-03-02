@@ -421,6 +421,18 @@ impl Schema {
         &self.id_to_field
     }
 
+    /// Returns the minimum [`FormatVersion`] required to represent all types in this schema.
+    ///
+    /// Iterates over every field and returns the highest minimum version among them,
+    /// defaulting to `FormatVersion::V1` if all types are universally supported.
+    pub fn min_format_version(&self) -> FormatVersion {
+        self.id_to_field
+            .values()
+            .map(|f| f.field_type.min_format_version())
+            .max()
+            .unwrap_or(FormatVersion::V1)
+    }
+
     /// Check that all types in this schema are supported by the given format version.
     ///
     /// Mirrors Java's `Schema.checkCompatibility()`. Returns an error listing every
@@ -440,7 +452,7 @@ impl Schema {
                     .name_by_field_id(field.id)
                     .unwrap_or(field.name.as_str());
                 problems.push(format!(
-                    "Invalid type for {name}: {} is not supported until v{min_version} but format version is v{format_version}.",
+                    "Invalid type for {name}: {} is not supported until {min_version} but format version is {format_version}.",
                     field.field_type,
                 ));
             }
