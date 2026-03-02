@@ -17,6 +17,7 @@
 
 //! Core cryptographic operations for Iceberg encryption.
 
+use std::fmt;
 use std::str::FromStr;
 
 use aes_gcm::aead::generic_array::typenum::Unsigned;
@@ -26,6 +27,47 @@ use aes_gcm::{Aes128Gcm, Key, Nonce};
 use zeroize::Zeroizing;
 
 use crate::{Error, ErrorKind, Result};
+
+/// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
+/// - Zeroizes memory on drop
+/// - Redacts content in [`Debug`] output
+/// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
+/// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
+///
+/// Use this type for any struct field that holds plaintext key material.
+/// Because its [`Debug`] impl always prints `[N bytes REDACTED]`, structs
+/// containing `SensitiveBytes` can safely derive or implement `Debug`
+/// without risk of leaking key material.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
+
+impl SensitiveBytes {
+    /// Wraps the given bytes as sensitive material.
+    pub fn new(bytes: impl Into<Box<[u8]>>) -> Self {
+        Self(Zeroizing::new(bytes.into()))
+    }
+
+    /// Returns the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the number of bytes.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the byte slice is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SensitiveBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes REDACTED]", self.0.len())
+    }
+}
 
 /// Supported encryption algorithm.
 /// Currently only AES-128-GCM is supported as it's the only algorithm
@@ -57,6 +99,20 @@ impl EncryptionAlgorithm {
             Self::Aes128Gcm => "AES_GCM_128",
         }
     }
+
+    /// Returns the algorithm for a given DEK length in bytes.
+    ///
+    /// Matches Java's `encryption.data-key-length` property semantics:
+    /// 16 → AES-128-GCM.
+    pub fn from_key_length(len: usize) -> Result<Self> {
+        match len {
+            16 => Ok(Self::Aes128Gcm),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Unsupported data key length: {len} (must be 16)"),
+            )),
+        }
+    }
 }
 
 impl FromStr for EncryptionAlgorithm {
@@ -75,7 +131,7 @@ impl FromStr for EncryptionAlgorithm {
 
 /// A secure encryption key that zeroes its memory on drop.
 pub struct SecureKey {
-    key: Zeroizing<Vec<u8>>,
+    key: SensitiveBytes,
     algorithm: EncryptionAlgorithm,
 }
 
@@ -84,7 +140,7 @@ impl SecureKey {
     ///
     /// # Errors
     /// Returns an error if the key length doesn't match the algorithm requirements.
-    pub fn new(key: Vec<u8>, algorithm: EncryptionAlgorithm) -> Result<Self> {
+    pub fn new(key: &[u8], algorithm: EncryptionAlgorithm) -> Result<Self> {
         if key.len() != algorithm.key_length() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -97,7 +153,7 @@ impl SecureKey {
             ));
         }
         Ok(Self {
-            key: Zeroizing::new(key),
+            key: SensitiveBytes::new(key),
             algorithm,
         })
     }
@@ -107,7 +163,7 @@ impl SecureKey {
         let mut key = vec![0u8; algorithm.key_length()];
         OsRng.fill_bytes(&mut key);
         Self {
-            key: Zeroizing::new(key),
+            key: SensitiveBytes::new(key),
             algorithm,
         }
     }
@@ -119,7 +175,7 @@ impl SecureKey {
 
     /// Returns the key bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.key
+        &self.key.as_bytes()
     }
 }
 
@@ -289,11 +345,11 @@ mod tests {
         assert_eq!(key1.algorithm(), EncryptionAlgorithm::Aes128Gcm);
 
         // Test key creation with validation
-        let valid_key = vec![0u8; 16];
-        assert!(SecureKey::new(valid_key, EncryptionAlgorithm::Aes128Gcm).is_ok());
+        let valid_key = [0u8; 16];
+        assert!(SecureKey::new(valid_key.as_slice(), EncryptionAlgorithm::Aes128Gcm).is_ok());
 
-        let invalid_key = vec![0u8; 32];
-        assert!(SecureKey::new(invalid_key, EncryptionAlgorithm::Aes128Gcm).is_err());
+        let invalid_key = [0u8; 32];
+        assert!(SecureKey::new(invalid_key.as_slice(), EncryptionAlgorithm::Aes128Gcm).is_err());
     }
 
     #[test]
