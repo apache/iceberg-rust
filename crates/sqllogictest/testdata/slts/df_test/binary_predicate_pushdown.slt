@@ -29,7 +29,7 @@ physical_plan
 01)FilterExec: data@1 = 0102
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 03)----CooperativeExec
-04)------IcebergTableScan projection:[id,data] predicate:[data = 0102]
+04)------IcebergTableScan projection:[id,data] predicate:[data = 0102] limit:[]
 
 # Verify empty result from empty table
 query I?
