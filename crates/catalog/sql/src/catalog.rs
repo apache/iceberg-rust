@@ -998,7 +998,9 @@ impl Catalog for SqlCatalog {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::hash::Hash;
+    use std::sync::Arc;
 
+    use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
@@ -1051,6 +1053,7 @@ mod tests {
             ),
         ]);
         SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .load(&name, props)
             .await
             .unwrap()
@@ -1159,6 +1162,7 @@ mod tests {
         let warehouse_location = temp_path();
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .uri(sql_lite_uri.to_string())
             .warehouse_location(warehouse_location.clone())
             .sql_bind_style(SqlBindStyle::QMark)
@@ -1181,6 +1185,7 @@ mod tests {
         let warehouse_location = temp_path();
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .uri(sql_lite_uri)
             .warehouse_location(warehouse_location)
             .load(
@@ -1202,6 +1207,7 @@ mod tests {
         let warehouse_location = temp_path();
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .uri(sql_lite_uri2)
             .warehouse_location(warehouse_location)
             .load(
@@ -1221,6 +1227,7 @@ mod tests {
         let warehouse_location2 = temp_path();
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .warehouse_location(warehouse_location2)
             .sql_bind_style(SqlBindStyle::DollarNumeric)
             .load(
@@ -1279,6 +1286,7 @@ mod tests {
         ]);
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .props(props2)
             .load("iceberg", props)
             .await;
@@ -1312,6 +1320,7 @@ mod tests {
         ]);
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .prop(SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri2)
             .prop(SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location2)
             .prop(
@@ -1336,6 +1345,7 @@ mod tests {
         let warehouse_location = temp_path();
 
         let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .load(
                 "iceberg",
                 HashMap::from_iter([
