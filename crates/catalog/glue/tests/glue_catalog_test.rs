@@ -64,6 +64,7 @@ async fn get_catalog() -> GlueCatalog {
 
     // Wait for bucket to actually exist
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        configured_scheme: "s3a".to_string(),
         customized_credential_load: None,
     }))
     .with_props(props.clone())

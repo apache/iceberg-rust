@@ -200,6 +200,7 @@ impl S3TablesCatalog {
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
             Arc::new(OpenDalStorageFactory::S3 {
+                configured_scheme: "s3a".to_string(),
                 customized_credential_load: None,
             })
         });

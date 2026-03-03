@@ -41,6 +41,7 @@ fn storage_factory_from_path(path: &str) -> PyResult<Arc<dyn StorageFactory>> {
     let factory: Arc<dyn StorageFactory> = match scheme {
         "file" | "" => Arc::new(OpenDalStorageFactory::Fs),
         "s3" | "s3a" => Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: scheme.to_string(),
             customized_credential_load: None,
         }),
         "memory" => Arc::new(OpenDalStorageFactory::Memory),

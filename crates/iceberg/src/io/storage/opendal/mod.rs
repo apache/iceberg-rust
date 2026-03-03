@@ -85,6 +85,9 @@ pub enum OpenDalStorageFactory {
     /// S3 storage factory.
     #[cfg(feature = "storage-s3")]
     S3 {
+        /// s3 storage could have `s3://` and `s3a://`.
+        /// Storing the scheme string here to return the correct path.
+        configured_scheme: String,
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
@@ -116,9 +119,10 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Fs => Ok(Arc::new(OpenDalStorage::LocalFs)),
             #[cfg(feature = "storage-s3")]
             OpenDalStorageFactory::S3 {
+                configured_scheme,
                 customized_credential_load,
             } => Ok(Arc::new(OpenDalStorage::S3 {
-                configured_scheme: "s3".to_string(),
+                configured_scheme: configured_scheme.clone(),
                 config: s3_config_parse(config.props().clone())?.into(),
                 customized_credential_load: customized_credential_load.clone(),
             })),
