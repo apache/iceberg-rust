@@ -168,16 +168,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        let (op, relative_path) = self
-            .inner
-            .create_operator_with_config(&path, &self.builder.props)?;
-        let path = path.as_ref().to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(InputFile {
-            op,
-            path,
-            relative_path_pos,
-        })
+        self.inner.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -540,10 +531,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::{
-        IO_CHUNK_SIZE, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS,
-        IO_TIMEOUT_SECONDS,
-    };
+    use crate::io::IO_CHUNK_SIZE;
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
