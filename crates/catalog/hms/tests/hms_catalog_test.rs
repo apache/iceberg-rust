@@ -83,6 +83,10 @@ async fn get_catalog() -> HmsCatalog {
     }
 
     HmsCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3a".to_string(),
+            customized_credential_load: None,
+        }))
         .load("hms", props)
         .await
         .unwrap()
