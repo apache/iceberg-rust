@@ -60,6 +60,14 @@ use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
+/// Default gap between byte ranges below which they are coalesced into a
+/// single request. Matches object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
+const DEFAULT_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+
+/// Default maximum number of coalesced byte ranges fetched concurrently.
+/// Matches object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
+const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
+
 /// Options for tuning Parquet file I/O.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ParquetReadOptions {
@@ -71,13 +79,11 @@ pub(crate) struct ParquetReadOptions {
 }
 
 impl Default for ParquetReadOptions {
-    /// Defaults match object_store's OBJECT_STORE_COALESCE_DEFAULT and
-    /// OBJECT_STORE_COALESCE_PARALLEL.
     fn default() -> Self {
         Self {
             metadata_size_hint: None,
-            range_coalesce_bytes: 1024 * 1024,
-            range_fetch_concurrency: 10,
+            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
+            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
         }
     }
 }
