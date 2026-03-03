@@ -477,7 +477,13 @@ impl Storage for OpenDalStorage {
         let meta = op.stat(relative_path).await?;
         Ok(FileMetadata {
             size: meta.content_length(),
-            last_modified_ms: meta.last_modified().map(|dt| dt.timestamp_millis()),
+            last_modified_ms: meta.last_modified().and_then(|dt| {
+                let system_time: std::time::SystemTime = dt.into();
+                system_time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as i64)
+            }),
             is_dir: meta.is_dir(),
         })
     }

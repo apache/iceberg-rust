@@ -508,6 +508,8 @@ impl ArrowReader {
         let mut parquet_file_reader = ArrowFileReader::new(
             FileMetadata {
                 size: file_size_in_bytes,
+                last_modified_ms: None,
+                is_dir: false,
             },
             parquet_reader,
         )
