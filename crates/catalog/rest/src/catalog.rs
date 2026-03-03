@@ -1050,6 +1050,7 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::{TimeZone, Utc};
+    use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
