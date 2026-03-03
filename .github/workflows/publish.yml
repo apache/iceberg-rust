@@ -26,12 +26,15 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     strategy:
       # Publish package one by one instead of flooding the registry
-      max-parallel: 1
+      max-parallel: 15
       matrix:
         # Order here is sensitive, as it will be used to determine the order of publishing
         package:

@@ -235,7 +235,7 @@ impl CachingDeleteFileLoader {
                     PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
                         file_path: task.file_path.clone(),
                         stream: basic_delete_file_loader
-                            .parquet_to_batch_stream(&task.file_path)
+                            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
                             .await?,
                     }),
                 }
@@ -254,7 +254,7 @@ impl CachingDeleteFileLoader {
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.file_path)
+                        .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
                         .await?,
                     schema,
                     &equality_ids_vec,
@@ -614,7 +614,10 @@ mod tests {
 
         let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&eq_delete_file_path)
+            .parquet_to_batch_stream(
+                &eq_delete_file_path,
+                std::fs::metadata(&eq_delete_file_path).unwrap().len(),
+            )
             .await
             .expect("could not get batch stream");
 
@@ -811,7 +814,10 @@ mod tests {
         let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
 
         let batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&delete_file_path)
+            .parquet_to_batch_stream(
+                &delete_file_path,
+                std::fs::metadata(&delete_file_path).unwrap().len(),
+            )
             .await
             .unwrap();
 
@@ -913,7 +919,8 @@ mod tests {
 
         // Create FileScanTask with BOTH positional and equality deletes
         let pos_del = FileScanTaskDeleteFile {
-            file_path: pos_del_path,
+            file_path: pos_del_path.clone(),
+            file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -921,12 +928,14 @@ mod tests {
 
         let eq_del = FileScanTaskDeleteFile {
             file_path: eq_delete_path.clone(),
+            file_size_in_bytes: std::fs::metadata(&eq_delete_path).unwrap().len(),
             file_type: DataContentType::EqualityDeletes,
             partition_spec_id: 0,
             equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
         };
 
         let file_scan_task = FileScanTask {
+            file_size_in_bytes: 0,
             start: 0,
             length: 0,
             record_count: None,
@@ -993,7 +1002,7 @@ mod tests {
 
         let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path)
+            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len())
             .await
             .expect("could not get batch stream");
 

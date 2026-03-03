@@ -36,6 +36,9 @@ on:
   schedule:
     - cron: '0 0 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   security_audit:
     runs-on: ubuntu-latest

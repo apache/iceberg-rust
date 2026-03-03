@@ -19,10 +19,11 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 
+use super::validate_puffin_compression;
 use crate::Result;
+use crate::compression::CompressionCodec;
 use crate::io::{FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
-use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 
 /// Puffin writer
@@ -64,6 +65,8 @@ impl PuffinWriter {
 
     /// Adds blob to Puffin file
     pub async fn add(&mut self, blob: Blob, compression_codec: CompressionCodec) -> Result<()> {
+        validate_puffin_compression(compression_codec)?;
+
         self.write_header_once().await?;
 
         let offset = self.num_bytes_written;
@@ -114,8 +117,7 @@ impl PuffinWriter {
             properties: self.properties.clone(),
         };
         let json = serde_json::to_string::<FileMetadata>(&file_metadata)?;
-        let bytes = json.as_bytes();
-        self.footer_compression_codec.compress(bytes.to_vec())
+        self.footer_compression_codec.compress(json.into_bytes())
     }
 
     fn flags_bytes(&self) -> [u8; FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH as usize] {
@@ -148,10 +150,9 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::Result;
+    use crate::compression::CompressionCodec;
     use crate::io::{FileIOBuilder, InputFile, OutputFile};
     use crate::puffin::blob::Blob;
-    use crate::puffin::compression::CompressionCodec;
     use crate::puffin::metadata::FileMetadata;
     use crate::puffin::reader::PuffinReader;
     use crate::puffin::test_utils::{
@@ -161,6 +162,7 @@ mod tests {
         zstd_compressed_metric_file_metadata,
     };
     use crate::puffin::writer::PuffinWriter;
+    use crate::{ErrorKind, Result};
 
     async fn write_puffin_file(
         temp_dir: &TempDir,
@@ -330,5 +332,23 @@ mod tests {
             java_zstd_compressed_metric_input_file(),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn test_gzip_compression_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let blobs = vec![blob_0()];
+        let blobs_with_compression = blobs_with_compression(blobs, CompressionCodec::Gzip);
+
+        let result = write_puffin_file(&temp_dir, blobs_with_compression, file_properties()).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("Gzip"));
+        assert!(
+            err.to_string()
+                .contains("is not supported for Puffin files")
+        );
     }
 }

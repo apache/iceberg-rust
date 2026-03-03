@@ -22,12 +22,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::io::Read as _;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
-use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -39,6 +37,7 @@ use super::{
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
     TableProperties,
 };
+use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::spec::EncryptedKey;
@@ -445,16 +444,16 @@ impl TableMetadata {
             && metadata_content[0] == 0x1F
             && metadata_content[1] == 0x8B
         {
-            let mut decoder = GzDecoder::new(metadata_content.as_ref());
-            let mut decompressed_data = Vec::new();
-            decoder.read_to_end(&mut decompressed_data).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Trying to read compressed metadata file",
-                )
-                .with_context("file_path", metadata_location)
-                .with_source(e)
-            })?;
+            let decompressed_data = CompressionCodec::Gzip
+                .decompress(metadata_content.to_vec())
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Trying to read compressed metadata file",
+                    )
+                    .with_context("file_path", metadata_location)
+                    .with_source(e)
+                })?;
             serde_json::from_slice(&decompressed_data)?
         } else {
             serde_json::from_slice(&metadata_content)?
@@ -1559,7 +1558,6 @@ impl SnapshotLog {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
-    use std::io::Write as _;
     use std::sync::Arc;
 
     use anyhow::Result;
@@ -1569,6 +1567,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use crate::compression::CompressionCodec;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -3576,10 +3575,10 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
         let json = serde_json::to_string(&original_metadata).unwrap();
 
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(json.as_bytes()).unwrap();
-        std::fs::write(&metadata_location, encoder.finish().unwrap())
-            .expect("failed to write metadata");
+        let compressed = CompressionCodec::Gzip
+            .compress(json.into_bytes())
+            .expect("failed to compress metadata");
+        std::fs::write(&metadata_location, &compressed).expect("failed to write metadata");
 
         // Read the metadata back
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
