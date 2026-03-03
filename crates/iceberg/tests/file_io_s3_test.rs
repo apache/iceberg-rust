@@ -298,7 +298,7 @@ mod tests {
             file_io
                 .new_output(file_path.as_str())
                 .unwrap()
-                .write(format!("content_{}", i).into())
+                .write(format!("content_{i}").into())
                 .await
                 .unwrap();
         }
@@ -318,9 +318,7 @@ mod tests {
         for expected_path in &all_files {
             assert!(
                 listed_paths.contains(expected_path.as_str()),
-                "Missing file: '{}'\nListed paths: {:?}",
-                expected_path,
-                listed_paths
+                "Missing file: '{expected_path}'\nListed paths: {listed_paths:?}",
             );
         }
 
@@ -401,15 +399,11 @@ mod tests {
         // This is the key assertion for delete_orphan_files correctness
         assert!(
             listed_paths.contains(&data_file_path),
-            "list_recursive should return exact path '{}' for HashSet.contains() to work.\nGot: {:?}",
-            data_file_path,
-            listed_paths
+            "list_recursive should return exact path '{data_file_path}' for HashSet.contains() to work.\nGot: {listed_paths:?}",
         );
         assert!(
             listed_paths.contains(&manifest_path),
-            "list_recursive should return exact path '{}' for HashSet.contains() to work.\nGot: {:?}",
-            manifest_path,
-            listed_paths
+            "list_recursive should return exact path '{manifest_path}' for HashSet.contains() to work.\nGot: {listed_paths:?}",
         );
 
         // Cleanup

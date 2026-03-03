@@ -188,7 +188,7 @@ impl FileIO {
         let list_path = if relative_path.is_empty() || relative_path.ends_with('/') {
             relative_path.to_string()
         } else {
-            format!("{}/", relative_path)
+            format!("{relative_path}/")
         };
 
         // OpenDAL's lister_with returns a Lister that implements Stream
@@ -269,10 +269,7 @@ impl FileIO {
                 let parsed_chunk_size = chunk_size.parse::<usize>().map_err(|_err| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "Invalid {}: Cannot parse to unsigned integer.",
-                            IO_CHUNK_SIZE,
-                        ),
+                        format!("Invalid {IO_CHUNK_SIZE}: Cannot parse to unsigned integer."),
                     )
                 })?;
                 Ok(Some(parsed_chunk_size))
@@ -802,7 +799,7 @@ mod tests {
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
 
         // Verify absolute path format (can be passed back to FileIO)
-        let expected_nested = format!("{}/subdir/nested_file.txt", root_path);
+        let expected_nested = format!("{root_path}/subdir/nested_file.txt");
         assert!(paths.contains(&expected_nested.as_str()));
         assert!(paths.iter().any(|p| p.ends_with("root_file.txt")));
     }

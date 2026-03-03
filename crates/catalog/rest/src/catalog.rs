@@ -324,12 +324,11 @@ impl RestCatalogConfig {
         // Try to decode as base64 first
         if let Ok(decoded) =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value.as_bytes())
+            && let Ok(json_str) = String::from_utf8(decoded)
         {
-            if let Ok(json_str) = String::from_utf8(decoded) {
-                // Validate it's valid JSON
-                if serde_json::from_str::<serde_json::Value>(&json_str).is_ok() {
-                    return Some(json_str);
-                }
+            // Validate it's valid JSON
+            if serde_json::from_str::<serde_json::Value>(&json_str).is_ok() {
+                return Some(json_str);
             }
         }
 

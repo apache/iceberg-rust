@@ -53,7 +53,7 @@ pub(crate) fn azblob_config_build(cfg: &AzblobConfig, path: &str) -> Result<Oper
     let container = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid azblob url: {}, container is required", path),
+            format!("Invalid azblob url: {path}, container is required"),
         )
     })?;
 

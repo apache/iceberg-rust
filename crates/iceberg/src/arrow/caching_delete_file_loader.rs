@@ -230,7 +230,7 @@ impl CachingDeleteFileLoader {
     ) -> Result<DeleteFileContext> {
         match task.data_file_content {
             DataContentType::PositionDeletes => {
-                match del_filter.try_start_pos_del_load(&task.data_file_path()) {
+                match del_filter.try_start_pos_del_load(task.data_file_path()) {
                     PosDelLoadAction::AlreadyLoaded => Ok(DeleteFileContext::ExistingPosDel),
                     PosDelLoadAction::WaitFor(notify) => {
                         // Positional deletes are accessed synchronously by ArrowReader.
@@ -259,7 +259,7 @@ impl CachingDeleteFileLoader {
                                 file_path: task.data_file_path().to_string(),
                                 stream: basic_delete_file_loader
                                     .parquet_to_batch_stream(
-                                        &task.data_file_path(),
+                                        task.data_file_path(),
                                         task.file_size_in_bytes,
                                     )
                                     .await?,
@@ -282,7 +282,7 @@ impl CachingDeleteFileLoader {
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.data_file_path(), task.file_size_in_bytes)
+                        .parquet_to_batch_stream(task.data_file_path(), task.file_size_in_bytes)
                         .await?,
                     schema,
                     &equality_ids_vec,

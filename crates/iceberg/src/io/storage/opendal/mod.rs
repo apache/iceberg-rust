@@ -43,9 +43,9 @@ pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{
-    FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageConfig, StorageFactory, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS, IO_RETRY_MIN_DELAY_MS,
-    IO_TIMEOUT_SECONDS,
+    FileIOBuilder, FileMetadata, FileRead, FileWrite, IO_MAX_RETRIES, IO_RETRY_MAX_DELAY_MS,
+    IO_RETRY_MIN_DELAY_MS, IO_TIMEOUT_SECONDS, InputFile, OutputFile, Storage, StorageConfig,
+    StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -446,18 +446,13 @@ impl OpenDalStorage {
 }
 
 fn parse_config<T>(config: &HashMap<String, String>, key: &str) -> Result<Option<T>>
-where
-    T: std::str::FromStr,
-{
+where T: std::str::FromStr {
     match config.get(key) {
         Some(value_str) => match value_str.parse::<T>() {
             Ok(value) => Ok(Some(value)),
             Err(_) => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Invalid {}: '{}' cannot be parsed as a positive integer",
-                    key, value_str
-                ),
+                format!("Invalid {key}: '{value_str}' cannot be parsed as a positive integer"),
             )),
         },
         None => Ok(None),

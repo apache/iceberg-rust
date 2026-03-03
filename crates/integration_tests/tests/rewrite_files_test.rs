@@ -251,7 +251,7 @@ async fn test_multiple_file_rewrite() {
         file_name_generator,
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
-    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
@@ -264,7 +264,7 @@ async fn test_multiple_file_rewrite() {
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file1 = data_file_writer.close().await.unwrap();
 
-    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file2 = data_file_writer.close().await.unwrap();
 
@@ -363,7 +363,7 @@ async fn test_rewrite_nonexistent_file() {
 
 #[tokio::test]
 async fn test_sequence_number_in_manifest_entry() {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await
@@ -408,7 +408,7 @@ async fn test_sequence_number_in_manifest_entry() {
     );
 
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
-    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
@@ -421,7 +421,7 @@ async fn test_sequence_number_in_manifest_entry() {
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file1 = data_file_writer.close().await.unwrap();
 
-    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file2 = data_file_writer.close().await.unwrap();
 
@@ -457,7 +457,7 @@ async fn test_sequence_number_in_manifest_entry() {
 
 #[tokio::test]
 async fn test_partition_spec_id_in_manifest() {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await

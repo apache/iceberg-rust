@@ -547,13 +547,11 @@ mod cleanup_tests {
         let strategy = ReachableFileCleanupStrategy::new(file_io.clone());
         assert_eq!(
             strategy.delete_concurrency, DEFAULT_DELETE_CONCURRENCY_LIMIT,
-            "Default delete concurrency limit should be {}",
-            DEFAULT_DELETE_CONCURRENCY_LIMIT
+            "Default delete concurrency limit should be {DEFAULT_DELETE_CONCURRENCY_LIMIT}",
         );
         assert_eq!(
             strategy.load_concurrency, DEFAULT_LOAD_CONCURRENCY_LIMIT,
-            "Default load concurrency limit should be {}",
-            DEFAULT_LOAD_CONCURRENCY_LIMIT
+            "Default load concurrency limit should be {DEFAULT_LOAD_CONCURRENCY_LIMIT}",
         );
 
         // Test custom delete concurrency limit

@@ -122,17 +122,16 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        if let Some(snapshot_id) = self.snapshot_id {
-            if table
+        if let Some(snapshot_id) = self.snapshot_id
+            && table
                 .metadata()
                 .snapshots()
                 .any(|s| s.snapshot_id() == snapshot_id)
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Snapshot id {} already exists", snapshot_id),
-                ));
-            }
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Snapshot id {snapshot_id} already exists"),
+            ));
         }
 
         let mut snapshot_producer = SnapshotProducer::new(

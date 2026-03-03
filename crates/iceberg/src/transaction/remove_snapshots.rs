@@ -272,8 +272,7 @@ impl TransactionAction for RemoveSnapshotAction {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Cannot remove snapshot {:?} with retained references: {:?}",
-                        id_to_remove, refs_for_id
+                        "Cannot remove snapshot {id_to_remove:?} with retained references: {refs_for_id:?}"
                     ),
                 ));
             }

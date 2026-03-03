@@ -128,7 +128,7 @@ async fn test_append_data_file_conflict() {
 
 #[tokio::test]
 async fn test_append_data_file_target_branch() {
-    let fixture = get_shared_containers();
+    let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
         .await

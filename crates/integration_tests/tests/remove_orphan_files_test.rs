@@ -96,11 +96,14 @@ async fn write_data_files(
 }
 
 fn future_timestamp() -> i64 {
+    current_timestamp_millis() + 3_600_000
+}
+
+fn current_timestamp_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
-        + 3_600_000
 }
 
 /// Creates an orphan file at the given path.
@@ -259,7 +262,7 @@ async fn test_preserves_metadata_files() {
     // Create multiple snapshots
     let mut all_data_files = Vec::new();
     for i in 0..3 {
-        all_data_files.extend(write_data_files(&mut table, &catalog, &format!("s{}", i)).await);
+        all_data_files.extend(write_data_files(&mut table, &catalog, &format!("s{i}")).await);
     }
 
     let table = catalog
@@ -300,7 +303,7 @@ async fn test_preserves_metadata_files() {
 
     // Verify data files NOT orphan
     for f in &all_data_files {
-        assert!(!orphan_set.contains(f), "Data file not orphan: {}", f);
+        assert!(!orphan_set.contains(f), "Data file not orphan: {f}");
     }
 }
 
@@ -327,7 +330,7 @@ async fn test_after_expire_snapshots() {
     // Create 3 snapshots
     let mut manifest_lists = Vec::new();
     for i in 0..3 {
-        write_data_files(&mut table, &catalog, &format!("b{}", i)).await;
+        write_data_files(&mut table, &catalog, &format!("b{i}")).await;
         if let Some(snap) = table.metadata().current_snapshot() {
             manifest_lists.push(snap.manifest_list().to_string());
         }
@@ -341,7 +344,7 @@ async fn test_after_expire_snapshots() {
     let tx = tx
         .expire_snapshot()
         .retain_last(1)
-        .expire_older_than(chrono::Utc::now().timestamp_millis())
+        .expire_older_than(current_timestamp_millis())
         .apply(tx)
         .unwrap();
     table = tx.commit(&catalog).await.unwrap();
@@ -364,8 +367,7 @@ async fn test_after_expire_snapshots() {
     for ml in &expired_mls {
         assert!(
             orphan_set.contains(ml),
-            "Expired manifest list should be orphan: {}",
-            ml
+            "Expired manifest list should be orphan: {ml}"
         );
     }
 }
@@ -476,7 +478,7 @@ async fn test_after_rewrite() {
     let tx = tx
         .expire_snapshot()
         .retain_last(1)
-        .expire_older_than(chrono::Utc::now().timestamp_millis())
+        .expire_older_than(current_timestamp_millis())
         .apply(tx)
         .unwrap();
     table = tx.commit(&catalog).await.unwrap();
@@ -500,8 +502,7 @@ async fn test_after_rewrite() {
     for m in &first_manifests {
         assert!(
             orphan_set.contains(m),
-            "First manifest should be orphan: {}",
-            m
+            "First manifest should be orphan: {m}"
         );
     }
 }

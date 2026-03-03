@@ -34,6 +34,7 @@ use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 
 #[tokio::test]
@@ -82,7 +83,7 @@ async fn test_expire_snapshots_by_count() {
         file_name_generator,
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
-    let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+    let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
@@ -119,13 +120,13 @@ async fn test_expire_snapshots_by_count() {
     // commit result
     for i in 0..10 {
         // Create a new data file writer for each iteration
-        let mut data_file_writer = data_file_writer_builder.clone().build(None).await.unwrap();
+        let mut data_file_writer = data_file_writer_builder.build(None).await.unwrap();
         // Create different data for each iteration
         let col1 = StringArray::from(vec![
-            Some(format!("foo_{}", i)),
-            Some(format!("bar_{}", i)),
+            Some(format!("foo_{i}")),
+            Some(format!("bar_{i}")),
             None,
-            Some(format!("baz_{}", i)),
+            Some(format!("baz_{i}")),
         ]);
         let col2 = Int32Array::from(vec![Some(i), Some(i + 1), Some(i + 2), Some(i + 3)]);
         let col3 = BooleanArray::from(vec![
@@ -156,7 +157,10 @@ async fn test_expire_snapshots_by_count() {
     assert_eq!(10, snapshot_counts);
 
     let tx = Transaction::new(&table);
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
     let remove_action = tx.expire_snapshot().retain_last(5).expire_older_than(now);
     let tx = remove_action.apply(tx).unwrap();
     let t = tx.commit(&rest_catalog).await.unwrap();

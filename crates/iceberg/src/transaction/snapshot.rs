@@ -1143,8 +1143,5 @@ pub(crate) fn new_manifest_path(
     manifest_counter: u64,
     format: DataFileFormat,
 ) -> String {
-    format!(
-        "{}/{}/{}-m{}.{}",
-        metadata_location, meta_root_path, commit_uuid, manifest_counter, format
-    )
+    format!("{metadata_location}/{meta_root_path}/{commit_uuid}-m{manifest_counter}.{format}")
 }

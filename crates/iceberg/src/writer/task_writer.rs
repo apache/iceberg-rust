@@ -153,22 +153,24 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
             SupportedWriter::Unpartitioned(writer) => writer.write(batch).await,
             SupportedWriter::Fanout(writer) => {
                 if self.partition_splitter.is_none() {
-                    self.partition_splitter =
-                        Some(RecordBatchPartitionSplitter::try_new_with_precomputed_values(
+                    self.partition_splitter = Some(
+                        RecordBatchPartitionSplitter::try_new_with_precomputed_values(
                             self.schema.clone(),
                             self.partition_spec.clone(),
-                        )?);
+                        )?,
+                    );
                 }
 
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
             SupportedWriter::Clustered(writer) => {
                 if self.partition_splitter.is_none() {
-                    self.partition_splitter =
-                        Some(RecordBatchPartitionSplitter::try_new_with_precomputed_values(
+                    self.partition_splitter = Some(
+                        RecordBatchPartitionSplitter::try_new_with_precomputed_values(
                             self.schema.clone(),
                             self.partition_spec.clone(),
-                        )?);
+                        )?,
+                    );
                 }
 
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
