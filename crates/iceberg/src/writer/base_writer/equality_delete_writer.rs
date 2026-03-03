@@ -60,7 +60,7 @@ where
 }
 
 /// Config for `EqualityDeleteWriter`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EqualityDeleteWriterConfig {
     // Field ids used to determine row equality in equality delete files.
     equality_ids: Vec<i32>,

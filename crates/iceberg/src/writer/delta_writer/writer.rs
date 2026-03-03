@@ -80,7 +80,7 @@ where
 {
     type R = DeltaWriter<DB::R, PDB::R, EDB::R>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Self::R::try_new(
             self.data_writer_builder
                 .build(partition_key.clone())
@@ -91,8 +91,8 @@ where
             self.equality_delete_writer_builder
                 .build(partition_key)
                 .await?,
-            self.schema,
-            self.unique_column_ids,
+            self.schema.clone(),
+            self.unique_column_ids.clone(),
         )
     }
 }
