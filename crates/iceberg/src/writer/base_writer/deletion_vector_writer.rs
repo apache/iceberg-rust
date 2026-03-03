@@ -60,11 +60,11 @@ where
 {
     type R = DeletionVectorWriter<L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DeletionVectorWriter {
-            file_io: self.file_io,
-            location_generator: self.location_generator,
-            file_name_generator: self.file_name_generator,
+            file_io: self.file_io.clone(),
+            location_generator: self.location_generator.clone(),
+            file_name_generator: self.file_name_generator.clone(),
             partition_key,
             delete_vectors: HashMap::new(),
         })
