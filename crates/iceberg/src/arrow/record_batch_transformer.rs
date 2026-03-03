@@ -21,7 +21,6 @@ use std::sync::Arc;
 use arrow_array::{
     Array as ArrowArray, ArrayRef, Int32Array, RecordBatch, RecordBatchOptions, RunArray,
 };
-use arrow_buffer::NullBuffer;
 use arrow_cast::cast;
 use arrow_schema::{
     DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
