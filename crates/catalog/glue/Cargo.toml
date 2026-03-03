@@ -36,7 +36,6 @@ aws-sdk-glue = { workspace = true }
 iceberg = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }

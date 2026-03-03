@@ -107,6 +107,7 @@ rand = "0.8.5"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
+rstest = "0.26"
 fastnum = { version = "0.7", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
