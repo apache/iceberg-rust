@@ -35,8 +35,9 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
+    TableProperties, parse_metadata_file_compression,
 };
+use crate::catalog::MetadataLocation;
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -360,6 +361,18 @@ impl TableMetadata {
         &self.properties
     }
 
+    /// Returns the metadata compression codec from table properties.
+    ///
+    /// Returns `CompressionCodec::None` if compression is disabled or not configured.
+    /// Returns `CompressionCodec::Gzip` if gzip compression is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compression codec property has an invalid value.
+    pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
+        parse_metadata_file_compression(&self.properties)
+    }
+
     /// Returns typed table properties parsed from the raw properties map with defaults.
     pub fn table_properties(&self) -> Result<TableProperties> {
         TableProperties::try_from(&self.properties).map_err(|e| {
@@ -466,11 +479,39 @@ impl TableMetadata {
     pub async fn write_to(
         &self,
         file_io: &FileIO,
-        metadata_location: impl AsRef<str>,
+        metadata_location: &MetadataLocation,
     ) -> Result<()> {
+        let json_data = serde_json::to_vec(self)?;
+
+        // Check if compression codec from properties matches the one in metadata_location
+        let codec = parse_metadata_file_compression(&self.properties)?;
+
+        if codec != metadata_location.compression_codec() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Compression codec mismatch: metadata_location has {:?}, but table properties specify {:?}",
+                    metadata_location.compression_codec(),
+                    codec
+                ),
+            ));
+        }
+
+        // Apply compression based on codec
+        let data_to_write = match codec {
+            CompressionCodec::Gzip => codec.compress(json_data)?,
+            CompressionCodec::None => json_data,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Unsupported metadata compression codec: {codec:?}"),
+                ));
+            }
+        };
+
         file_io
-            .new_output(metadata_location)?
-            .write(serde_json::to_vec(self)?.into())
+            .new_output(metadata_location.to_string())?
+            .write(data_to_write.into())
             .await
     }
 
@@ -1567,6 +1608,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use crate::catalog::MetadataLocation;
     use crate::compression::CompressionCodec;
     use crate::io::FileIOBuilder;
     use crate::spec::table_metadata::TableMetadata;
@@ -1574,7 +1616,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, Transform, Type, UnboundPartitionField,
+        Summary, TableProperties, Transform, Type, UnboundPartitionField,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -3547,7 +3589,8 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Define the metadata location
-        let metadata_location = format!("{temp_path}/metadata.json");
+        let metadata_location = MetadataLocation::new_with_metadata(temp_path, &original_metadata);
+        let metadata_location_str = metadata_location.to_string();
 
         // Write the metadata
         original_metadata
@@ -3556,10 +3599,10 @@ mod tests {
             .unwrap();
 
         // Verify the file exists
-        assert!(fs::metadata(&metadata_location).is_ok());
+        assert!(fs::metadata(&metadata_location_str).is_ok());
 
         // Read the metadata back
-        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location)
+        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location_str)
             .await
             .unwrap();
 
@@ -3601,6 +3644,63 @@ mod tests {
 
         // Verify it returns an error
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_write_with_gzip_compression() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        // Get a test metadata and add gzip compression property
+        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+
+        // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
+        let mut props = original_metadata.properties.clone();
+        props.insert(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "GziP".to_string(),
+        );
+        // Use builder to create new metadata with updated properties
+        let compressed_metadata =
+            TableMetadataBuilder::new_from_metadata(original_metadata.clone(), None)
+                .assign_uuid(original_metadata.table_uuid)
+                .set_properties(props.clone())
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+
+        // Create MetadataLocation with compression codec from metadata
+        let metadata_location =
+            MetadataLocation::new_with_metadata(temp_path, &compressed_metadata);
+        let metadata_location_str = metadata_location.to_string();
+
+        // Verify the location has the .gz extension
+        assert!(metadata_location_str.contains(".gz.metadata.json"));
+
+        // Write the metadata with compression
+        compressed_metadata
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        // Verify the compressed file exists
+        assert!(std::path::Path::new(&metadata_location_str).exists());
+
+        // Read the raw file and check it's gzip compressed
+        let raw_content = std::fs::read(&metadata_location_str).unwrap();
+        assert!(raw_content.len() > 2);
+        assert_eq!(raw_content[0], 0x1F); // gzip magic number
+        assert_eq!(raw_content[1], 0x8B); // gzip magic number
+
+        // Read the metadata back using the compressed location
+        let read_metadata = TableMetadata::read_from(&file_io, &metadata_location_str)
+            .await
+            .unwrap();
+
+        // Verify the complete round-trip: read metadata should match what we wrote
+        assert_eq!(read_metadata, compressed_metadata);
     }
 
     #[test]
