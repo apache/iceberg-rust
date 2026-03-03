@@ -506,7 +506,8 @@ pub(crate) mod tests {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: true,
-            }],
+            }
+            .into()],
             sequence_number: 0,
             equality_ids: None,
             partition: None,

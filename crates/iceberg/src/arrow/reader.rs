@@ -2827,7 +2827,8 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            }],
+            }
+            .into()],
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -3062,7 +3063,8 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            }],
+            }
+            .into()],
             partition: None,
             partition_spec: None,
             name_mapping: None,
@@ -3290,7 +3292,8 @@ message schema {
                 partition_spec: None,
                 name_mapping: None,
                 case_sensitive: false,
-            }],
+            }
+            .into()],
             partition: None,
             partition_spec: None,
             name_mapping: None,
