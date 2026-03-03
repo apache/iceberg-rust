@@ -72,6 +72,7 @@ mod storage;
 pub use file_io::*;
 pub use storage::*;
 
+/// Object cache interfaces and implementations.
 pub mod object_cache;
 
 #[cfg(feature = "storage-azblob")]
