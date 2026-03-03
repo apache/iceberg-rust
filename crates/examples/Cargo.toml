@@ -25,9 +25,11 @@ rust-version = { workspace = true }
 version = { workspace = true }
 
 [dependencies]
+datafusion = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+iceberg-datafusion = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 [[example]]
@@ -42,6 +44,10 @@ path = "src/rest_catalog_table.rs"
 name = "oss-backend"
 path = "src/oss_backend.rs"
 required-features = ["storage-oss"]
+
+[[example]]
+name = "datafusion-incremental-read"
+path = "src/datafusion_incremental_read.rs"
 
 [features]
 default = []
