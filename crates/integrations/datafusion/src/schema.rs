@@ -29,7 +29,7 @@ use futures::StreamExt;
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
@@ -211,6 +211,42 @@ impl SchemaProvider for IcebergSchemaProvider {
             DataFusionError::Execution(format!("Failed to create Iceberg table: {e}"))
         })?
     }
+
+    fn deregister_table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        // Check if table exists
+        if !self.table_exist(name) {
+            return Ok(None);
+        }
+
+        let catalog = self.catalog.clone();
+        let namespace = self.namespace.clone();
+        let tables = self.tables.clone();
+        let table_name = name.to_string();
+
+        // Use tokio's spawn_blocking to handle the async work on a blocking thread pool
+        let result = tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                let table_ident = TableIdent::new(namespace, table_name.clone());
+
+                // Drop the table from the Iceberg catalog
+                catalog
+                    .drop_table(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?;
+
+                // Remove from local cache and return the removed provider
+                let removed = tables
+                    .remove(&table_name)
+                    .map(|(_, table)| table as Arc<dyn TableProvider>);
+
+                Ok(removed)
+            })
+        });
+
+        futures::executor::block_on(result)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to drop Iceberg table: {e}")))?
+    }
 }
 
 /// Verifies that a table provider contains no data by scanning with LIMIT 1.
@@ -367,5 +403,43 @@ mod tests {
             err.to_string().contains("already exists"),
             "Expected error about table already existing, got: {err}",
         );
+    }
+
+    #[tokio::test]
+    async fn test_deregister_table_succeeds() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        // Create and register an empty table
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let empty_batch = RecordBatch::new_empty(arrow_schema.clone());
+        let mem_table = MemTable::try_new(arrow_schema, vec![vec![empty_batch]]).unwrap();
+
+        // Register the table
+        let result = schema_provider.register_table("drop_me".to_string(), Arc::new(mem_table));
+        assert!(result.is_ok());
+        assert!(schema_provider.table_exist("drop_me"));
+
+        // Deregister the table
+        let result = schema_provider.deregister_table("drop_me");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+
+        // Verify the table no longer exists
+        assert!(!schema_provider.table_exist("drop_me"));
+    }
+
+    #[tokio::test]
+    async fn test_deregister_nonexistent_table_returns_none() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        // Attempt to deregister a table that doesn't exist
+        let result = schema_provider.deregister_table("nonexistent");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 }

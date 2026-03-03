@@ -32,6 +32,12 @@ install-cargo-machete:
 cargo-machete: install-cargo-machete
 	cargo machete
 
+install-cargo-nextest:
+	cargo install --locked cargo-nextest
+
+nextest: install-cargo-nextest
+	cargo nextest run --all-targets --all-features --workspace
+
 install-taplo-cli:
 	cargo install taplo-cli@0.9.3
 
@@ -55,8 +61,9 @@ doc-test:
 unit-test: doc-test
 	cargo test --no-fail-fast --lib --all-features --workspace
 
-test: doc-test
-	cargo test --no-fail-fast --all-targets --all-features --workspace
+test: docker-up
+	@trap '$(MAKE) docker-down' EXIT; \
+	$(MAKE) nextest
 
 clean:
 	cargo clean
@@ -66,3 +73,13 @@ install-mdbook:
 
 site: install-mdbook
 	cd website && mdbook serve
+
+# Docker targets for integration tests
+docker-up:
+	docker compose -f dev/docker-compose.yaml up -d --build --wait
+
+docker-down:
+	docker compose -f dev/docker-compose.yaml down -v --remove-orphans --timeout 0
+
+docker-logs:
+	docker compose -f dev/docker-compose.yaml logs -f

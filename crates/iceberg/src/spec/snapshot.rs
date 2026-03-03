@@ -272,7 +272,7 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
-    /// Defines the structure of a v2 snapshot for serialization/deserialization
+    /// Defines the structure of a v3 snapshot for serialization/deserialization
     pub(crate) struct SnapshotV3 {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -283,8 +283,10 @@ pub(super) mod _serde {
         pub summary: Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schema_id: Option<SchemaId>,
-        pub first_row_id: u64,
-        pub added_rows: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub first_row_id: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub added_rows: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub key_id: Option<String>,
     }
@@ -333,10 +335,13 @@ pub(super) mod _serde {
                 summary: s.summary,
                 schema_id: s.schema_id,
                 encryption_key_id: s.key_id,
-                row_range: Some(SnapshotRowRange {
-                    first_row_id: s.first_row_id,
-                    added_rows: s.added_rows,
-                }),
+                row_range: match (s.first_row_id, s.added_rows) {
+                    (Some(first_row_id), Some(added_rows)) => Some(SnapshotRowRange {
+                        first_row_id,
+                        added_rows,
+                    }),
+                    _ => None,
+                },
             }
         }
     }
@@ -345,12 +350,10 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(s: Snapshot) -> Result<Self, Self::Error> {
-            let row_range = s.row_range.ok_or_else(|| {
-                Error::new(
-                    crate::ErrorKind::DataInvalid,
-                    "v3 Snapshots must have first-row-id and rows-added fields set.".to_string(),
-                )
-            })?;
+            let (first_row_id, added_rows) = match s.row_range {
+                Some(row_range) => (Some(row_range.first_row_id), Some(row_range.added_rows)),
+                None => (None, None),
+            };
 
             Ok(SnapshotV3 {
                 snapshot_id: s.snapshot_id,
@@ -360,8 +363,8 @@ pub(super) mod _serde {
                 manifest_list: s.manifest_list,
                 summary: s.summary,
                 schema_id: s.schema_id,
-                first_row_id: row_range.first_row_id,
-                added_rows: row_range.added_rows,
+                first_row_id,
+                added_rows,
                 key_id: s.encryption_key_id,
             })
         }
