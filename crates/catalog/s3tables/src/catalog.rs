@@ -26,7 +26,7 @@ use aws_sdk_s3tables::operation::get_table::GetTableOutput;
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
-use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, OpenDalStorageFactory, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -198,7 +198,11 @@ impl S3TablesCatalog {
         };
 
         // Use provided factory or default to LocalFsStorageFactory
-        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let factory = storage_factory.unwrap_or_else(|| {
+            Arc::new(OpenDalStorageFactory::S3 {
+                customized_credential_load: None,
+            })
+        });
         let file_io = FileIOBuilder::new(factory)
             .with_props(&config.props)
             .build();

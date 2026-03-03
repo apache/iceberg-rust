@@ -23,7 +23,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
@@ -429,11 +429,16 @@ impl RestCatalog {
             ));
         }
 
-        // Use provided factory or default to LocalFsStorageFactory
+        // Require a StorageFactory to be provided
         let factory = self
             .storage_factory
             .clone()
-            .unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "StorageFactory must be provided for RestCatalog. Use `with_storage_factory` to configure it.",
+                )
+            })?;
 
         let file_io = FileIOBuilder::new(factory).with_props(props).build();
 

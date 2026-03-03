@@ -25,7 +25,7 @@ use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
-    FileIO, FileIOBuilder, LocalFsStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
+    FileIO, FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
     S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, StorageFactory,
 };
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
@@ -199,7 +199,11 @@ impl GlueCatalog {
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
         // Use provided factory or default to LocalFsStorageFactory
-        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let factory = storage_factory.unwrap_or_else(|| {
+            Arc::new(OpenDalStorageFactory::S3 {
+                customized_credential_load: None,
+            })
+        });
         let file_io = FileIOBuilder::new(factory)
             .with_props(file_io_props)
             .build();

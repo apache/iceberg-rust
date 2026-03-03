@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -238,8 +238,12 @@ impl SqlCatalog {
         config: SqlCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
     ) -> Result<Self> {
-        // Use provided factory or default to LocalFsStorageFactory
-        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let factory = storage_factory.ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "StorageFactory must be provided for SqlCatalog. Use `with_storage_factory` to configure it.",
+            )
+        })?;
         let fileio = FileIOBuilder::new(factory).build();
 
         install_default_drivers();

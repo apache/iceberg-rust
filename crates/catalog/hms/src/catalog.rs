@@ -26,7 +26,7 @@ use hive_metastore::{
     ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
 };
-use iceberg::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -209,8 +209,12 @@ impl HmsCatalog {
                 .build(),
         };
 
-        // Use provided factory or default to LocalFsStorageFactory
-        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let factory = storage_factory.ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "StorageFactory must be provided for HmsCatalog. Use `with_storage_factory` to configure it.",
+            )
+        })?;
         let file_io = FileIOBuilder::new(factory)
             .with_props(&config.props)
             .build();

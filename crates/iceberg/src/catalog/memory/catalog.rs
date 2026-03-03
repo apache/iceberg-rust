@@ -25,7 +25,7 @@ use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
-use crate::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, StorageFactory};
+use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
@@ -129,7 +129,7 @@ impl MemoryCatalog {
         storage_factory: Option<Arc<dyn StorageFactory>>,
     ) -> Result<Self> {
         // Use provided factory or default to LocalFsStorageFactory
-        let factory = storage_factory.unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+        let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
 
         Ok(Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
