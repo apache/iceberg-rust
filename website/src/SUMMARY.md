@@ -32,6 +32,5 @@
 
 # Reference
 
-- [Using Podman instead of Docker](./reference/podman.md)
-- [OrbStack as a docker alternative](./reference/orbstack.md)
+- [Container Runtimes](./reference/container-runtimes.md)
 - [Setup GPG key](./reference/setup_gpg.md)
