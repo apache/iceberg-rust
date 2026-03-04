@@ -2401,7 +2401,7 @@ message schema {
 
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
 
         let file = File::create(&file_path).unwrap();
@@ -2716,7 +2716,7 @@ message schema {
         // Force each batch into its own row group
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
 
         let file = File::create(&data_file_path).unwrap();
@@ -2912,7 +2912,7 @@ message schema {
         // Force each batch into its own row group
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
 
         let file = File::create(&data_file_path).unwrap();
@@ -3136,7 +3136,7 @@ message schema {
         // Force each batch into its own row group
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
 
         let file = File::create(&data_file_path).unwrap();
@@ -3584,7 +3584,7 @@ message schema {
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .set_write_batch_size(2)
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let file = File::create(format!("{table_location}/1.parquet")).unwrap();
