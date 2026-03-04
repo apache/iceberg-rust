@@ -19,7 +19,7 @@
 //!
 //! These tests assume Docker containers are started externally via `make docker-up`.
 
-#[cfg(feature = "storage-gcs")]
+#[cfg(feature = "opendal-gcs")]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;

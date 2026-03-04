@@ -31,8 +31,9 @@ use url::Url;
 
 use crate::utils::from_opendal_error;
 
-/// Local version of ensure_data_valid macro since the iceberg crate's macro
-/// references private modules via $crate paths.
+/// Local version of `ensure_data_valid` macro since the iceberg crate's macro
+/// uses `$crate::error::Error` paths that don't resolve from external crates
+/// (the `error` module is private).
 macro_rules! ensure_data_valid {
     ($cond:expr, $fmt:literal, $($arg:tt)*) => {
         if !$cond {

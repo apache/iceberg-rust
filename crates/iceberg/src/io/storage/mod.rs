@@ -65,7 +65,6 @@ use crate::Result;
 ///     }
 ///     // ... implement other methods
 /// }
-///
 /// ```
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -122,7 +121,6 @@ pub trait Storage: Debug + Send + Sync {
 ///         todo!()
 ///     }
 /// }
-///
 /// ```
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {

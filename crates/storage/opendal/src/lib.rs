@@ -24,53 +24,53 @@
 
 mod utils;
 
-#[cfg(feature = "storage-azdls")]
+#[cfg(feature = "opendal-azdls")]
 mod azdls;
-#[cfg(feature = "storage-fs")]
+#[cfg(feature = "opendal-fs")]
 mod fs;
-#[cfg(feature = "storage-gcs")]
+#[cfg(feature = "opendal-gcs")]
 mod gcs;
-#[cfg(feature = "storage-memory")]
+#[cfg(feature = "opendal-memory")]
 mod memory;
-#[cfg(feature = "storage-oss")]
+#[cfg(feature = "opendal-oss")]
 mod oss;
-#[cfg(feature = "storage-s3")]
+#[cfg(feature = "opendal-s3")]
 mod s3;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-#[cfg(feature = "storage-azdls")]
+#[cfg(feature = "opendal-azdls")]
 use azdls::AzureStorageScheme;
-#[cfg(feature = "storage-azdls")]
+#[cfg(feature = "opendal-azdls")]
 use azdls::*;
 use bytes::Bytes;
-#[cfg(feature = "storage-fs")]
+#[cfg(feature = "opendal-fs")]
 use fs::*;
-#[cfg(feature = "storage-gcs")]
+#[cfg(feature = "opendal-gcs")]
 use gcs::*;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
-#[cfg(feature = "storage-memory")]
+#[cfg(feature = "opendal-memory")]
 use memory::*;
 use opendal::Operator;
 use opendal::layers::RetryLayer;
-#[cfg(feature = "storage-azdls")]
+#[cfg(feature = "opendal-azdls")]
 use opendal::services::AzdlsConfig;
-#[cfg(feature = "storage-gcs")]
+#[cfg(feature = "opendal-gcs")]
 use opendal::services::GcsConfig;
-#[cfg(feature = "storage-oss")]
+#[cfg(feature = "opendal-oss")]
 use opendal::services::OssConfig;
-#[cfg(feature = "storage-s3")]
+#[cfg(feature = "opendal-s3")]
 use opendal::services::S3Config;
-#[cfg(feature = "storage-oss")]
+#[cfg(feature = "opendal-oss")]
 use oss::*;
-#[cfg(feature = "storage-s3")]
+#[cfg(feature = "opendal-s3")]
 pub use s3::CustomAwsCredentialLoader;
-#[cfg(feature = "storage-s3")]
+#[cfg(feature = "opendal-s3")]
 pub use s3::*;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
@@ -82,13 +82,13 @@ use utils::from_opendal_error;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorageFactory {
     /// Memory storage factory.
-    #[cfg(feature = "storage-memory")]
+    #[cfg(feature = "opendal-memory")]
     Memory,
     /// Local filesystem storage factory.
-    #[cfg(feature = "storage-fs")]
+    #[cfg(feature = "opendal-fs")]
     Fs,
     /// S3 storage factory.
-    #[cfg(feature = "storage-s3")]
+    #[cfg(feature = "opendal-s3")]
     S3 {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
@@ -98,13 +98,13 @@ pub enum OpenDalStorageFactory {
         customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
-    #[cfg(feature = "storage-gcs")]
+    #[cfg(feature = "opendal-gcs")]
     Gcs,
     /// OSS storage factory.
-    #[cfg(feature = "storage-oss")]
+    #[cfg(feature = "opendal-oss")]
     Oss,
     /// Azure Data Lake Storage factory.
-    #[cfg(feature = "storage-azdls")]
+    #[cfg(feature = "opendal-azdls")]
     Azdls {
         /// The configured Azure storage scheme.
         configured_scheme: AzureStorageScheme,
@@ -116,13 +116,13 @@ impl StorageFactory for OpenDalStorageFactory {
     #[allow(unused_variables)]
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         match self {
-            #[cfg(feature = "storage-memory")]
+            #[cfg(feature = "opendal-memory")]
             OpenDalStorageFactory::Memory => {
                 Ok(Arc::new(OpenDalStorage::Memory(memory_config_build()?)))
             }
-            #[cfg(feature = "storage-fs")]
+            #[cfg(feature = "opendal-fs")]
             OpenDalStorageFactory::Fs => Ok(Arc::new(OpenDalStorage::LocalFs)),
-            #[cfg(feature = "storage-s3")]
+            #[cfg(feature = "opendal-s3")]
             OpenDalStorageFactory::S3 {
                 configured_scheme,
                 customized_credential_load,
@@ -131,15 +131,15 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: s3_config_parse(config.props().clone())?.into(),
                 customized_credential_load: customized_credential_load.clone(),
             })),
-            #[cfg(feature = "storage-gcs")]
+            #[cfg(feature = "opendal-gcs")]
             OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
                 config: gcs_config_parse(config.props().clone())?.into(),
             })),
-            #[cfg(feature = "storage-oss")]
+            #[cfg(feature = "opendal-oss")]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
             })),
-            #[cfg(feature = "storage-azdls")]
+            #[cfg(feature = "opendal-azdls")]
             OpenDalStorageFactory::Azdls { configured_scheme } => {
                 Ok(Arc::new(OpenDalStorage::Azdls {
                     configured_scheme: configured_scheme.clone(),
@@ -147,12 +147,12 @@ impl StorageFactory for OpenDalStorageFactory {
                 }))
             }
             #[cfg(all(
-                not(feature = "storage-memory"),
-                not(feature = "storage-fs"),
-                not(feature = "storage-s3"),
-                not(feature = "storage-gcs"),
-                not(feature = "storage-oss"),
-                not(feature = "storage-azdls"),
+                not(feature = "opendal-memory"),
+                not(feature = "opendal-fs"),
+                not(feature = "opendal-s3"),
+                not(feature = "opendal-gcs"),
+                not(feature = "opendal-oss"),
+                not(feature = "opendal-azdls"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -163,7 +163,7 @@ impl StorageFactory for OpenDalStorageFactory {
 }
 
 /// Default memory operator for serde deserialization.
-#[cfg(feature = "storage-memory")]
+#[cfg(feature = "opendal-memory")]
 fn default_memory_operator() -> Operator {
     memory_config_build().expect("Failed to create default memory operator")
 }
@@ -172,13 +172,13 @@ fn default_memory_operator() -> Operator {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorage {
     /// Memory storage variant.
-    #[cfg(feature = "storage-memory")]
+    #[cfg(feature = "opendal-memory")]
     Memory(#[serde(skip, default = "self::default_memory_operator")] Operator),
     /// Local filesystem storage variant.
-    #[cfg(feature = "storage-fs")]
+    #[cfg(feature = "opendal-fs")]
     LocalFs,
     /// S3 storage variant.
-    #[cfg(feature = "storage-s3")]
+    #[cfg(feature = "opendal-s3")]
     S3 {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
@@ -190,13 +190,13 @@ pub enum OpenDalStorage {
         customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
     },
     /// GCS storage variant.
-    #[cfg(feature = "storage-gcs")]
+    #[cfg(feature = "opendal-gcs")]
     Gcs {
         /// GCS configuration.
         config: Arc<GcsConfig>,
     },
     /// OSS storage variant.
-    #[cfg(feature = "storage-oss")]
+    #[cfg(feature = "opendal-oss")]
     Oss {
         /// OSS configuration.
         config: Arc<OssConfig>,
@@ -205,7 +205,7 @@ pub enum OpenDalStorage {
     /// Expects paths of the form
     /// `abfs[s]://<filesystem>@<account>.dfs.<endpoint-suffix>/<path>` or
     /// `wasb[s]://<container>@<account>.blob.<endpoint-suffix>/<path>`.
-    #[cfg(feature = "storage-azdls")]
+    #[cfg(feature = "opendal-azdls")]
     #[allow(private_interfaces)]
     Azdls {
         /// The configured Azure storage scheme.
@@ -237,7 +237,7 @@ impl OpenDalStorage {
     ) -> Result<(Operator, &'a str)> {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
-            #[cfg(feature = "storage-memory")]
+            #[cfg(feature = "opendal-memory")]
             OpenDalStorage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     (op.clone(), stripped)
@@ -245,7 +245,7 @@ impl OpenDalStorage {
                     (op.clone(), &path[1..])
                 }
             }
-            #[cfg(feature = "storage-fs")]
+            #[cfg(feature = "opendal-fs")]
             OpenDalStorage::LocalFs => {
                 let op = fs_config_build()?;
                 if let Some(stripped) = path.strip_prefix("file:/") {
@@ -254,7 +254,7 @@ impl OpenDalStorage {
                     (op, &path[1..])
                 }
             }
-            #[cfg(feature = "storage-s3")]
+            #[cfg(feature = "opendal-s3")]
             OpenDalStorage::S3 {
                 configured_scheme,
                 config,
@@ -274,7 +274,7 @@ impl OpenDalStorage {
                     ));
                 }
             }
-            #[cfg(feature = "storage-gcs")]
+            #[cfg(feature = "opendal-gcs")]
             OpenDalStorage::Gcs { config } => {
                 let operator = gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
@@ -287,7 +287,7 @@ impl OpenDalStorage {
                     ));
                 }
             }
-            #[cfg(feature = "storage-oss")]
+            #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { config } => {
                 let op = oss_config_build(config, path)?;
                 let prefix = format!("oss://{}/", op.info().name());
@@ -300,17 +300,17 @@ impl OpenDalStorage {
                     ));
                 }
             }
-            #[cfg(feature = "storage-azdls")]
+            #[cfg(feature = "opendal-azdls")]
             OpenDalStorage::Azdls {
                 configured_scheme,
                 config,
             } => azdls_create_operator(path, config, configured_scheme)?,
             #[cfg(all(
-                not(feature = "storage-s3"),
-                not(feature = "storage-fs"),
-                not(feature = "storage-gcs"),
-                not(feature = "storage-oss"),
-                not(feature = "storage-azdls"),
+                not(feature = "opendal-s3"),
+                not(feature = "opendal-fs"),
+                not(feature = "opendal-gcs"),
+                not(feature = "opendal-oss"),
+                not(feature = "opendal-azdls"),
             ))]
             _ => {
                 return Err(Error::new(
@@ -440,7 +440,7 @@ impl FileWrite for OpenDalWriter {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "storage-memory")]
+    #[cfg(feature = "opendal-memory")]
     #[test]
     fn test_default_memory_operator() {
         let op = default_memory_operator();

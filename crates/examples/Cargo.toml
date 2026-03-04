@@ -46,4 +46,4 @@ required-features = ["storage-oss"]
 
 [features]
 default = []
-storage-oss = ["iceberg-storage-opendal/storage-oss"]
+storage-oss = ["iceberg-storage-opendal/opendal-oss"]

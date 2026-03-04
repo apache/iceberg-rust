@@ -27,15 +27,15 @@ description = "Apache Iceberg OpenDAL storage implementation"
 keywords = ["iceberg", "opendal", "storage"]
 
 [features]
-default = ["storage-memory", "storage-fs", "storage-s3"]
-storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs", "storage-oss", "storage-azdls"]
+default = ["opendal-memory", "opendal-fs", "opendal-s3"]
+opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls"]
 
-storage-azdls = ["opendal/services-azdls"]
-storage-fs = ["opendal/services-fs"]
-storage-gcs = ["opendal/services-gcs"]
-storage-memory = ["opendal/services-memory"]
-storage-oss = ["opendal/services-oss"]
-storage-s3 = ["opendal/services-s3", "reqsign"]
+opendal-azdls = ["opendal/services-azdls"]
+opendal-fs = ["opendal/services-fs"]
+opendal-gcs = ["opendal/services-gcs"]
+opendal-memory = ["opendal/services-memory"]
+opendal-oss = ["opendal/services-oss"]
+opendal-s3 = ["opendal/services-s3", "reqsign"]
 
 [dependencies]
 anyhow = { workspace = true }
