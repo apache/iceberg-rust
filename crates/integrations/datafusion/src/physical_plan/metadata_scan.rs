@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion::catalog::TableProvider;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -27,17 +29,17 @@ use crate::metadata_table::IcebergMetadataTableProvider;
 #[derive(Debug)]
 pub struct IcebergMetadataScan {
     provider: IcebergMetadataTableProvider,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl IcebergMetadataScan {
     pub fn new(provider: IcebergMetadataTableProvider) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(provider.schema()),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             provider,
             properties,
@@ -64,7 +66,7 @@ impl ExecutionPlan for IcebergMetadataScan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
