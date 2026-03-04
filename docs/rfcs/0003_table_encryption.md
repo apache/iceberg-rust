@@ -53,21 +53,37 @@ converting `Storage` from an enum to a trait and removing the `Extensions` mecha
 
 ## High-Level Architecture
 
-The encryption system uses two-layer envelope encryption, adapted from the Java implementation
-to Rust's ownership and async model.
+The encryption system uses envelope encryption with a chained key hierarchy, adapted from the
+Java implementation to Rust's ownership and async model. KMS-managed master keys wrap KEKs,
+which encrypt only manifest list key metadata. All other DEKs are protected by being stored
+inside their encrypted parent files.
 
 ### Key Hierarchy
 
 ```
 Master Key (in KMS)
-  └── wraps → KEK (Key Encryption Key) — stored in table metadata as EncryptedKey
-        └── wraps → DEK (Data Encryption Key) — stored in StandardKeyMetadata per file
-              └── encrypts → file content (AGS1 stream or Parquet native)
+  └── wraps → KEK (Key Encryption Key) — stored KMS-wrapped in table metadata
+        └── encrypts → manifest list StandardKeyMetadata (AES-GCM, KEY_TIMESTAMP as AAD)
+              │
+              ├── manifest list DEK → encrypts manifest list file (AGS1)
+              │     └── manifest key_metadata (plaintext StandardKeyMetadata) stored in manifest list entries
+              │           └── manifest DEK → encrypts manifest file (AGS1)
+              │                 └── data file key_metadata (plaintext StandardKeyMetadata) stored in manifest entries
+              │                       └── data file DEK → encrypts data file (AGS1 or Parquet native)
 ```
 
 - **Master keys** live in the KMS and never leave it
-- **KEKs** are wrapped by the master key and stored in `TableMetadata.encryption_keys`
-- **DEKs** are wrapped by a KEK and stored per-file in `StandardKeyMetadata`
+- **KEKs** are wrapped by the master key via KMS (`kmsClient.wrapKey()`) and stored in
+  `TableMetadata.encryption_keys` with a `KEY_TIMESTAMP` property for rotation tracking
+- **DEKs** are generated as plaintext random bytes and stored in `StandardKeyMetadata` per file.
+  DEKs are **not** individually wrapped by a KEK. Instead, they are protected by being stored
+  inside their encrypted parent file:
+  - **Manifest list DEKs**: Their `StandardKeyMetadata` is AES-GCM encrypted by a KEK
+    (using `KEY_TIMESTAMP` as AAD) and stored as an `EncryptedKey` in table metadata
+  - **Manifest DEKs**: Their `StandardKeyMetadata` is stored as plaintext `key_metadata` bytes
+    in manifest list entries — protected because the manifest list file itself is encrypted
+  - **Data file DEKs**: Their `StandardKeyMetadata` is stored as plaintext `key_metadata` bytes
+    in manifest entries — protected because the manifest file itself is encrypted
 - KEKs are cached in memory (moka async cache with configurable TTL) to avoid redundant KMS calls
 - KEK rotation occurs automatically when a KEK exceeds its configurable lifespan (default 730 days per NIST SP 800-57)
 
@@ -83,13 +99,14 @@ Master Key (in KMS)
 │                     EncryptionManager (trait)                                │
 │                                                                             │
 │  StandardEncryptionManager:                                                 │
-│  - Two-layer envelope: Master → KEK → DEK                                  │
+│  - Envelope encryption: Master → KEK → manifest list StandardKeyMetadata   │
+│  - DEKs are plaintext, protected by encrypted parent files                 │
 │  - KEK cache (moka async, configurable TTL)                                │
-│  - Automatic KEK rotation                                                  │
+│  - Automatic KEK rotation (730 days, KEY_TIMESTAMP tracking)               │
 │  - encrypt() / decrypt() for AGS1 stream files                            │
 │  - encrypt_native() for Parquet Modular Encryption                         │
-│  - wrap/unwrap_key_metadata() for manifest list keys                       │
-│  - generate_dek() with KEK management                                      │
+│  - wrap/unwrap_key_metadata() for manifest list keys (KEK + KMS)           │
+│  - generate_dek() for per-file plaintext DEK generation                    │
 └─────────────────────────────────────────────────────────────────────────────┘
               │                              │
               ▼                              ▼
@@ -127,26 +144,35 @@ Snapshot  │
           ▼
   load_manifest_list(file_io, table_metadata)
     1. Look up encryption_key_id in table_metadata.encryption_keys
-    2. em.unwrap_key_metadata() → plaintext key metadata
-    3. file_io.new_encrypted_input(path, key_metadata) → AGS1-decrypting InputFile
+       → get manifest list EncryptedKey
+    2. Find the KEK via EncryptedKey.encrypted_by_id
+       → unwrap KEK via KMS: kms_client.unwrap_key(kek.encrypted_key_metadata, table_key_id)
+       (KEK is cached to avoid redundant KMS calls)
+    3. AES-GCM decrypt the manifest list's StandardKeyMetadata using the
+       unwrapped KEK, with KEY_TIMESTAMP as AAD
+    4. Extract plaintext manifest list DEK from decrypted StandardKeyMetadata
+    5. file_io.new_encrypted_input(path, key_metadata) → AGS1-decrypting InputFile
           │
           ▼
 ManifestFile
-  └── key_metadata: Option<Vec<u8>>
+  └── key_metadata: Option<Vec<u8>>  (plaintext StandardKeyMetadata, read from encrypted manifest list)
           │
   load_manifest(file_io)
-    1. If key_metadata present: file_io.new_encrypted_input() → AGS1-decrypting InputFile
+    1. If key_metadata present:
+       a. Parse StandardKeyMetadata → extract plaintext DEK + AAD prefix
+       b. file_io.new_encrypted_input() → AGS1-decrypting InputFile
     2. If not: file_io.new_input()
           │
           ▼
 FileScanTask
-  └── key_metadata: Option<Vec<u8>>
+  └── key_metadata: Option<Vec<u8>>  (plaintext StandardKeyMetadata, read from encrypted manifest)
           │
   ArrowReader::create_parquet_record_batch_stream_builder_with_key_metadata()
     1. If key_metadata present:
        a. file_io.new_native_encrypted_input(path, key_metadata) → NativeEncrypted InputFile
-       b. Build FileDecryptionProperties from NativeKeyMaterial (DEK + AAD prefix)
-       c. Pass to ParquetRecordBatchStreamBuilder
+       b. Parse StandardKeyMetadata → extract plaintext DEK + AAD prefix
+       c. Build FileDecryptionProperties from NativeKeyMaterial (DEK + AAD prefix)
+       d. Pass to ParquetRecordBatchStreamBuilder
     2. If not: standard Parquet read
 ```
 
@@ -156,20 +182,31 @@ FileScanTask
 RollingFileWriter::new_output_file()
     1. If file_io.encryption_manager() is Some:
        a. file_io.new_native_encrypted_output(path) → EncryptedOutputFile
-       b. EncryptionManager generates DEK, wraps with KEK
+       b. EncryptionManager generates random plaintext DEK + AAD prefix
        c. OutputFile::NativeEncrypted carries NativeKeyMaterial for Parquet writer
-       d. Store key_metadata bytes on DataFile
+       d. Store plaintext StandardKeyMetadata as key_metadata bytes on DataFile
+          (protected by being stored inside the encrypted parent manifest)
     2. ParquetWriter detects NativeEncrypted, configures FileEncryptionProperties
 
 SnapshotProducer::commit()
     1. Manifest writing:
-       a. file_io.new_encrypted_output(path) → AGS1-encrypting OutputFile
-       b. Store key_metadata on ManifestFile entry
+       a. em.encrypt(output_file) → generates random plaintext DEK + AAD prefix
+       b. Write manifest to AGS1-encrypting OutputFile
+       c. Store plaintext StandardKeyMetadata as key_metadata on ManifestFile entry
+          (protected by being stored inside the encrypted parent manifest list)
     2. Manifest list writing:
-       a. file_io.new_encrypted_output(path) → AGS1-encrypting OutputFile
-       b. em.wrap_key_metadata() → EncryptedKey for table metadata
-       c. Store key_id on Snapshot.encryption_key_id
-    3. Table updates include AddEncryptionKey for new KEKs
+       a. em.encrypt(output_file) → generates random plaintext DEK + AAD prefix
+       b. Write manifest list to AGS1-encrypting OutputFile
+       c. Get or create KEK:
+          - Find unexpired KEK (check KEY_TIMESTAMP, 730-day lifespan)
+          - If none: generate new KEK, wrap via KMS: kms_client.wrap_key(kek, table_key_id)
+       d. AES-GCM encrypt the manifest list's StandardKeyMetadata using the KEK,
+          with KEY_TIMESTAMP as AAD
+       e. Store as EncryptedKey (encrypted_by_id = kek_id) in encryption manager
+       f. Store manifest list key_id on Snapshot.encryption_key_id
+    3. Table commit includes AddEncryptionKey for all new entries:
+       - New KEKs (encrypted_by_id = table_key_id, properties include KEY_TIMESTAMP)
+       - New manifest list key metadata (encrypted_by_id = kek_id)
 ```
 
 ### Module Structure
@@ -279,10 +316,14 @@ Avro-serialized metadata stored alongside encrypted files. Compatible with the J
 
 ```rust
 pub struct StandardKeyMetadata {
-    encryption_key: Vec<u8>,  // Plaintext DEK (for PME) or wrapped DEK (for AGS1)
+    encryption_key: Vec<u8>,  // Plaintext DEK (always plaintext — never individually wrapped)
     aad_prefix: Vec<u8>,      // Additional authenticated data prefix
     file_length: Option<i64>, // Optional encrypted file length
 }
+// Note: For manifest lists, the entire serialized StandardKeyMetadata is AES-GCM
+// encrypted by a KEK before storage. For manifests and data files, the
+// StandardKeyMetadata is stored as plaintext key_metadata in the parent
+// encrypted file.
 ```
 
 Wire format: `[version byte 0x01][Avro binary datum]` — byte-compatible with Java.
@@ -290,7 +331,7 @@ Wire format: `[version byte 0x01][Avro binary datum]` — byte-compatible with J
 ### EncryptionManager
 
 The `EncryptionManager` trait abstracts encryption orchestration. `StandardEncryptionManager`
-implements two-layer envelope encryption with KEK caching and rotation:
+implements envelope encryption with KMS-backed KEK management, KEK caching, and rotation:
 
 ```rust
 #[async_trait]
@@ -304,13 +345,23 @@ pub trait EncryptionManager: Debug + Send + Sync {
     /// Encrypt for Parquet Modular Encryption (generates NativeKeyMaterial).
     async fn encrypt_native(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
 
-    /// Unwrap key metadata using the table's KEK hierarchy.
+    /// Unwrap key metadata for a manifest list.
+    /// 1. Look up the manifest list's EncryptedKey by key ID
+    /// 2. Find the KEK via encrypted_by_id
+    /// 3. Unwrap the KEK via KMS: kms_client.unwrap_key(kek.encrypted_key_metadata, table_key_id)
+    /// 4. AES-GCM decrypt the manifest list's StandardKeyMetadata using the KEK,
+    ///    with KEY_TIMESTAMP as AAD
+    /// 5. Return the decrypted StandardKeyMetadata bytes (containing plaintext DEK)
     async fn unwrap_key_metadata(
         &self, encrypted_key: &EncryptedKey,
         encryption_keys: &HashMap<String, EncryptedKey>,
     ) -> Result<Vec<u8>>;
 
-    /// Wrap key metadata with a KEK for storage in table metadata.
+    /// Wrap key metadata for a manifest list with a KEK for storage in table metadata.
+    /// 1. Get or create a KEK (wrapping new KEK via KMS if needed)
+    /// 2. AES-GCM encrypt the StandardKeyMetadata using the KEK, with KEY_TIMESTAMP as AAD
+    /// 3. Return the manifest list EncryptedKey (encrypted_by_id = kek_id)
+    ///    and optionally a new KEK EncryptedKey if one was created
     async fn wrap_key_metadata(
         &self, key_metadata: &[u8],
     ) -> Result<(EncryptedKey, Option<EncryptedKey>)>;
