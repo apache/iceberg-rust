@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -26,7 +26,7 @@ use iceberg::io::{FileIOBuilder, OpenDalStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg_datafusion::table::IcebergStaticTableProvider;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::{PyAnyMethods, PyCapsuleMethods, *};
+use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
@@ -55,22 +55,17 @@ fn storage_factory_from_path(path: &str) -> PyResult<Arc<dyn StorageFactory>> {
     Ok(factory)
 }
 
-pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
+pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &CStr) -> PyResult<()> {
     let capsule_name = capsule.name()?;
-    if capsule_name.is_none() {
-        return Err(PyValueError::new_err(format!(
-            "Expected {name} PyCapsule to have name set."
-        )));
+    match capsule_name {
+        None => Err(PyValueError::new_err(
+            "Expected PyCapsule to have name set.",
+        )),
+        Some(capsule_name) if unsafe { capsule_name.as_cstr() } != name => {
+            Err(PyValueError::new_err("PyCapsule name mismatch"))
+        }
+        _ => Ok(()),
     }
-
-    let capsule_name = capsule_name.unwrap().to_str()?;
-    if capsule_name != name {
-        return Err(PyValueError::new_err(format!(
-            "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'"
-        )));
-    }
-
-    Ok(())
 }
 
 pub(crate) fn ffi_logical_codec_from_pycapsule(
@@ -83,10 +78,12 @@ pub(crate) fn ffi_logical_codec_from_pycapsule(
         obj
     };
 
-    let capsule = capsule.downcast::<PyCapsule>()?;
-    validate_pycapsule(capsule, "datafusion_logical_extension_codec")?;
+    let capsule_name = CStr::from_bytes_with_nul(b"datafusion_logical_extension_codec\0").unwrap();
+    let capsule = capsule.cast::<PyCapsule>()?;
+    validate_pycapsule(&capsule, capsule_name)?;
 
-    let codec = unsafe { capsule.reference::<FFI_LogicalExtensionCodec>() };
+    let ptr = capsule.pointer_checked(Some(capsule_name))?;
+    let codec = unsafe { &*(ptr.as_ptr() as *const FFI_LogicalExtensionCodec) };
     Ok(codec.clone())
 }
 
