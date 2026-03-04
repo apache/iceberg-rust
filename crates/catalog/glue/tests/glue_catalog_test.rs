@@ -23,10 +23,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use iceberg::io::{
-    FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-    S3_SECRET_ACCESS_KEY,
-};
+use iceberg::io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{

@@ -24,11 +24,23 @@ use opendal::services::AzdlsConfig;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::io::{
+use iceberg::io::{
     ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
     ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
 };
-use crate::{Error, ErrorKind, Result, ensure_data_valid};
+use iceberg::{Error, ErrorKind, Result};
+
+use crate::utils::from_opendal_error;
+
+/// Local version of ensure_data_valid macro since the iceberg crate's macro
+/// references private modules via $crate paths.
+macro_rules! ensure_data_valid {
+    ($cond:expr, $fmt:literal, $($arg:tt)*) => {
+        if !$cond {
+            return Err(Error::new(ErrorKind::DataInvalid, format!($fmt, $($arg)*)));
+        }
+    };
+}
 
 /// Parses adls.* prefixed configuration properties.
 pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Result<AzdlsConfig> {
@@ -201,7 +213,7 @@ fn azdls_config_build(config: &AzdlsConfig, path: &AzureStoragePath) -> Result<o
     }
     builder = builder.filesystem(&path.filesystem);
 
-    Ok(opendal::Operator::new(builder)?.finish())
+    Ok(opendal::Operator::new(builder).map_err(from_opendal_error)?.finish())
 }
 
 /// Represents a fully qualified path to blob/ file in Azure Storage.

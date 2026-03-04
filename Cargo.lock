@@ -3299,13 +3299,11 @@ dependencies = [
  "moka",
  "murmur3",
  "once_cell",
- "opendal",
  "ordered-float 4.6.0",
  "parquet",
  "pretty_assertions",
  "rand 0.8.5",
  "regex",
- "reqsign",
  "reqwest",
  "roaring",
  "serde",
@@ -3341,6 +3339,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-glue",
  "iceberg",
+ "iceberg-storage-opendal",
  "iceberg_test_utils",
  "serde_json",
  "tokio",
@@ -3357,6 +3356,7 @@ dependencies = [
  "faststr",
  "hive_metastore",
  "iceberg",
+ "iceberg-storage-opendal",
  "iceberg_test_utils",
  "linkedbytes",
  "metainfo",
@@ -3415,6 +3415,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3tables",
  "iceberg",
+ "iceberg-storage-opendal",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "tokio",
@@ -3458,6 +3459,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-storage-opendal",
  "tokio",
 ]
 
@@ -3470,6 +3472,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-storage-opendal",
  "iceberg_test_utils",
  "ordered-float 2.10.1",
  "parquet",
@@ -3519,6 +3522,25 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "iceberg-storage-opendal"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "iceberg",
+ "iceberg_test_utils",
+ "opendal",
+ "reqsign",
+ "reqwest",
+ "serde",
+ "serde_derive",
+ "tokio",
+ "typetag",
+ "url",
 ]
 
 [[package]]

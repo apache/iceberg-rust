@@ -17,12 +17,11 @@
 
 //! OpenDAL-based storage implementation.
 
-use std::ops::Range;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(feature = "storage-azdls")]
-use azdls::AzureStorageScheme;
+use crate::azdls::AzureStorageScheme;
 use bytes::Bytes;
 use opendal::Operator;
 use opendal::layers::RetryLayer;
@@ -34,41 +33,28 @@ use opendal::services::GcsConfig;
 use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
-#[cfg(feature = "storage-s3")]
-pub use s3::CustomAwsCredentialLoader;
 use serde::{Deserialize, Serialize};
 
-use crate::io::{
+use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
-use crate::{Error, ErrorKind, Result};
+use iceberg::{Error, ErrorKind, Result};
+
+use crate::utils::from_opendal_error;
 
 #[cfg(feature = "storage-azdls")]
-mod azdls;
+use crate::azdls::*;
 #[cfg(feature = "storage-fs")]
-mod fs;
+use crate::fs::*;
 #[cfg(feature = "storage-gcs")]
-mod gcs;
+use crate::gcs::*;
 #[cfg(feature = "storage-memory")]
-mod memory;
+use crate::memory::*;
 #[cfg(feature = "storage-oss")]
-mod oss;
+use crate::oss::*;
 #[cfg(feature = "storage-s3")]
-mod s3;
-
-#[cfg(feature = "storage-azdls")]
-use azdls::*;
-#[cfg(feature = "storage-fs")]
-use fs::*;
-#[cfg(feature = "storage-gcs")]
-use gcs::*;
-#[cfg(feature = "storage-memory")]
-use memory::*;
-#[cfg(feature = "storage-oss")]
-use oss::*;
-#[cfg(feature = "storage-s3")]
-pub use s3::*;
+pub use crate::s3::*;
 
 /// OpenDAL-based storage factory.
 ///
@@ -90,7 +76,7 @@ pub enum OpenDalStorageFactory {
         configured_scheme: String,
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<CustomAwsCredentialLoader>,
+        customized_credential_load: Option<crate::s3::CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
     #[cfg(feature = "storage-gcs")]
@@ -182,7 +168,7 @@ pub enum OpenDalStorage {
         config: Arc<S3Config>,
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<CustomAwsCredentialLoader>,
+        customized_credential_load: Option<crate::s3::CustomAwsCredentialLoader>,
     },
     /// GCS storage variant.
     #[cfg(feature = "storage-gcs")]
@@ -217,7 +203,7 @@ impl OpenDalStorage {
     ///
     /// # Arguments
     ///
-    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`](iceberg::io::FileIO).
     ///
     /// # Returns
     ///
@@ -327,12 +313,12 @@ impl OpenDalStorage {
 impl Storage for OpenDalStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(op.exists(relative_path).await?)
+        Ok(op.exists(relative_path).await.map_err(from_opendal_error)?)
     }
 
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
         let (op, relative_path) = self.create_operator(&path)?;
-        let meta = op.stat(relative_path).await?;
+        let meta = op.stat(relative_path).await.map_err(from_opendal_error)?;
         Ok(FileMetadata {
             size: meta.content_length(),
         })
@@ -340,28 +326,45 @@ impl Storage for OpenDalStorage {
 
     async fn read(&self, path: &str) -> Result<Bytes> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(op.read(relative_path).await?.to_bytes())
+        Ok(op
+            .read(relative_path)
+            .await
+            .map_err(from_opendal_error)?
+            .to_bytes())
     }
 
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(Box::new(op.reader(relative_path).await?))
+        Ok(Box::new(OpenDalReader(
+            op.reader(relative_path)
+                .await
+                .map_err(from_opendal_error)?,
+        )))
     }
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
-        op.write(relative_path, bs).await?;
+        op.write(relative_path, bs)
+            .await
+            .map_err(from_opendal_error)?;
         Ok(())
     }
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(Box::new(op.writer(relative_path).await?))
+        Ok(Box::new(OpenDalWriter(
+            op.writer(relative_path)
+                .await
+                .map_err(from_opendal_error)?,
+        )))
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(op.delete(relative_path).await?)
+        Ok(op
+            .delete(relative_path)
+            .await
+            .map_err(from_opendal_error)?)
     }
 
     async fn delete_prefix(&self, path: &str) -> Result<()> {
@@ -371,7 +374,7 @@ impl Storage for OpenDalStorage {
         } else {
             format!("{relative_path}/")
         };
-        Ok(op.remove_all(&path).await?)
+        Ok(op.remove_all(&path).await.map_err(from_opendal_error)?)
     }
 
     #[allow(unreachable_code, unused_variables)]
@@ -385,23 +388,38 @@ impl Storage for OpenDalStorage {
     }
 }
 
-// OpenDAL implementations for FileRead and FileWrite traits
+// Newtype wrappers for opendal types to satisfy orphan rules.
+// We can't implement iceberg's FileRead/FileWrite traits directly on opendal's
+// Reader/Writer since neither trait nor type is defined in this crate.
+
+/// Wrapper around `opendal::Reader` that implements `FileRead`.
+pub(crate) struct OpenDalReader(pub(crate) opendal::Reader);
 
 #[async_trait]
-impl FileRead for opendal::Reader {
-    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-        Ok(opendal::Reader::read(self, range).await?.to_bytes())
+impl FileRead for OpenDalReader {
+    async fn read(&self, range: std::ops::Range<u64>) -> Result<Bytes> {
+        Ok(opendal::Reader::read(&self.0, range)
+            .await
+            .map_err(from_opendal_error)?
+            .to_bytes())
     }
 }
 
+/// Wrapper around `opendal::Writer` that implements `FileWrite`.
+pub(crate) struct OpenDalWriter(pub(crate) opendal::Writer);
+
 #[async_trait]
-impl FileWrite for opendal::Writer {
+impl FileWrite for OpenDalWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
-        Ok(opendal::Writer::write(self, bs).await?)
+        Ok(opendal::Writer::write(&mut self.0, bs)
+            .await
+            .map_err(from_opendal_error)?)
     }
 
     async fn close(&mut self) -> Result<()> {
-        let _ = opendal::Writer::close(self).await?;
+        let _ = opendal::Writer::close(&mut self.0)
+            .await
+            .map_err(from_opendal_error)?;
         Ok(())
     }
 }

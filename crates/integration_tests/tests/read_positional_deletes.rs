@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use futures::TryStreamExt;
-use iceberg::io::OpenDalStorageFactory;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;

@@ -129,7 +129,8 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///
     /// ```rust,ignore
     /// use iceberg::CatalogBuilder;
-    /// use iceberg::io::{OpenDalStorageFactory, StorageFactory};
+    /// use iceberg::io::StorageFactory;
+    /// use iceberg_storage_opendal::OpenDalStorageFactory;
     /// use std::sync::Arc;
     ///
     /// let catalog = MyCatalogBuilder::default()

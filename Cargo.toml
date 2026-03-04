@@ -24,6 +24,7 @@ members = [
   "crates/integration_tests",
   "crates/integrations/*",
   "crates/sqllogictest",
+  "crates/storage/*",
   "crates/test_utils",
 ]
 resolver = "2"
@@ -85,6 +86,7 @@ iceberg-catalog-rest = { version = "0.8.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.8.0", path = "./crates/catalog/s3tables" }
 iceberg-catalog-sql = { version = "0.8.0", path = "./crates/catalog/sql" }
 iceberg-datafusion = { version = "0.8.0", path = "./crates/integrations/datafusion" }
+iceberg-storage-opendal = { version = "0.8.0", path = "./crates/storage/opendal" }
 indicatif = "0.18"
 itertools = "0.13"
 libtest-mimic = "0.8.1"

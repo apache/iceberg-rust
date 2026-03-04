@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::stream::StreamExt;
-use iceberg::io::OpenDalStorageFactory;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
 
