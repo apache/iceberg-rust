@@ -80,9 +80,9 @@ pub(crate) fn ffi_logical_codec_from_pycapsule(
         obj
     };
 
-    let capsule_name = CStr::from_bytes_with_nul(b"datafusion_logical_extension_codec\0").unwrap();
+    let capsule_name = c"datafusion_logical_extension_codec";
     let capsule = capsule.cast::<PyCapsule>()?;
-    validate_pycapsule(&capsule, capsule_name)?;
+    validate_pycapsule(capsule, capsule_name)?;
 
     let ptr = capsule.pointer_checked(Some(capsule_name))?;
     let codec = unsafe { &*(ptr.as_ptr() as *const FFI_LogicalExtensionCodec) };
