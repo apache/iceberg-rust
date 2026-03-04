@@ -1568,7 +1568,7 @@
 <a href=#1568 id=1568 data-nosnippet>1568</a>
 <a href=#1569 id=1569 data-nosnippet>1569</a>    <span class="kw">use super</span>::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
 <a href=#1570 id=1570 data-nosnippet>1570</a>    <span class="kw">use </span><span class="kw">crate</span>::compression::CompressionCodec;
-<a href=#1571 id=1571 data-nosnippet>1571</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#1571 id=1571 data-nosnippet>1571</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#1572 id=1572 data-nosnippet>1572</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::table_metadata::TableMetadata;
 <a href=#1573 id=1573 data-nosnippet>1573</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
 <a href=#1574 id=1574 data-nosnippet>1574</a>        BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
@@ -3541,7 +3541,7 @@
 <a href=#3541 id=3541 data-nosnippet>3541</a>        <span class="kw">let </span>temp_path = temp_dir.path().to_str().unwrap();
 <a href=#3542 id=3542 data-nosnippet>3542</a>
 <a href=#3543 id=3543 data-nosnippet>3543</a>        <span class="comment">// Create a FileIO instance
-<a href=#3544 id=3544 data-nosnippet>3544</a>        </span><span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#3544 id=3544 data-nosnippet>3544</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3545 id=3545 data-nosnippet>3545</a>
 <a href=#3546 id=3546 data-nosnippet>3546</a>        <span class="comment">// Use an existing test metadata from the test files
 <a href=#3547 id=3547 data-nosnippet>3547</a>        </span><span class="kw">let </span>original_metadata: TableMetadata = get_test_table_metadata(<span class="string">"TableMetadataV2Valid.json"</span>);
@@ -3581,7 +3581,7 @@
 <a href=#3581 id=3581 data-nosnippet>3581</a>        std::fs::write(<span class="kw-2">&amp;</span>metadata_location, <span class="kw-2">&amp;</span>compressed).expect(<span class="string">"failed to write metadata"</span>);
 <a href=#3582 id=3582 data-nosnippet>3582</a>
 <a href=#3583 id=3583 data-nosnippet>3583</a>        <span class="comment">// Read the metadata back
-<a href=#3584 id=3584 data-nosnippet>3584</a>        </span><span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#3584 id=3584 data-nosnippet>3584</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3585 id=3585 data-nosnippet>3585</a>        <span class="kw">let </span>metadata_location = metadata_location.to_str().unwrap();
 <a href=#3586 id=3586 data-nosnippet>3586</a>        <span class="kw">let </span>read_metadata = TableMetadata::read_from(<span class="kw-2">&amp;</span>file_io, metadata_location)
 <a href=#3587 id=3587 data-nosnippet>3587</a>            .<span class="kw">await
@@ -3594,7 +3594,7 @@
 <a href=#3594 id=3594 data-nosnippet>3594</a>    <span class="attr">#[tokio::test]
 <a href=#3595 id=3595 data-nosnippet>3595</a>    </span><span class="kw">async fn </span>test_table_metadata_read_nonexistent_file() {
 <a href=#3596 id=3596 data-nosnippet>3596</a>        <span class="comment">// Create a FileIO instance
-<a href=#3597 id=3597 data-nosnippet>3597</a>        </span><span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#3597 id=3597 data-nosnippet>3597</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3598 id=3598 data-nosnippet>3598</a>
 <a href=#3599 id=3599 data-nosnippet>3599</a>        <span class="comment">// Try to read a non-existent file
 <a href=#3600 id=3600 data-nosnippet>3600</a>        </span><span class="kw">let </span>result = TableMetadata::read_from(<span class="kw-2">&amp;</span>file_io, <span class="string">"/nonexistent/path/metadata.json"</span>).<span class="kw">await</span>;

@@ -267,7 +267,7 @@
 <a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">use </span>datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
 <a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema};
 <a href=#269 id=269 data-nosnippet>269</a>    <span class="kw">use </span>iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN;
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">use </span>iceberg::io::FileIOBuilder;
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">use </span>iceberg::io::FileIO;
 <a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">use </span>iceberg::spec::{DataFileFormat, NestedField, PartitionSpec, PrimitiveType, Type};
 <a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">use </span>iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 <a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">use </span>iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>            DefaultFileNameGenerator,
 <a href=#350 id=350 data-nosnippet>350</a>        &gt;,
 <a href=#351 id=351 data-nosnippet>351</a>    &gt; {
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#354 id=354 data-nosnippet>354</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#355 id=355 data-nosnippet>355</a>        );

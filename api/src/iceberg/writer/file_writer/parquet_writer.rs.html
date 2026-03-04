@@ -627,7 +627,7 @@
 <a href=#627 id=627 data-nosnippet>627</a>
 <a href=#628 id=628 data-nosnippet>628</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#629 id=629 data-nosnippet>629</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::schema_to_arrow_schema;
-<a href=#630 id=630 data-nosnippet>630</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
 <a href=#632 id=632 data-nosnippet>632</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{PrimitiveLiteral, Struct, <span class="kw-2">*</span>};
 <a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::{
@@ -790,7 +790,7 @@
 <a href=#790 id=790 data-nosnippet>790</a>    <span class="attr">#[tokio::test]
 <a href=#791 id=791 data-nosnippet>791</a>    </span><span class="kw">async fn </span>test_parquet_writer() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#794 id=794 data-nosnippet>794</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#795 id=795 data-nosnippet>795</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#796 id=796 data-nosnippet>796</a>        );
@@ -864,7 +864,7 @@
 <a href=#864 id=864 data-nosnippet>864</a>    <span class="attr">#[tokio::test]
 <a href=#865 id=865 data-nosnippet>865</a>    </span><span class="kw">async fn </span>test_parquet_writer_with_complex_schema() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#868 id=868 data-nosnippet>868</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#869 id=869 data-nosnippet>869</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#870 id=870 data-nosnippet>870</a>        );
@@ -1087,7 +1087,7 @@
 <a href=#1087 id=1087 data-nosnippet>1087</a>    <span class="attr">#[tokio::test]
 <a href=#1088 id=1088 data-nosnippet>1088</a>    </span><span class="kw">async fn </span>test_all_type_for_write() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1089 id=1089 data-nosnippet>1089</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1090 id=1090 data-nosnippet>1090</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1090 id=1090 data-nosnippet>1090</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1092 id=1092 data-nosnippet>1092</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1093 id=1093 data-nosnippet>1093</a>        );
@@ -1328,7 +1328,7 @@
 <a href=#1328 id=1328 data-nosnippet>1328</a>    <span class="attr">#[tokio::test]
 <a href=#1329 id=1329 data-nosnippet>1329</a>    </span><span class="kw">async fn </span>test_decimal_bound() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1330 id=1330 data-nosnippet>1330</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1331 id=1331 data-nosnippet>1331</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1331 id=1331 data-nosnippet>1331</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1332 id=1332 data-nosnippet>1332</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1333 id=1333 data-nosnippet>1333</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1334 id=1334 data-nosnippet>1334</a>        );
@@ -1573,7 +1573,7 @@
 <a href=#1573 id=1573 data-nosnippet>1573</a>    <span class="attr">#[tokio::test]
 <a href=#1574 id=1574 data-nosnippet>1574</a>    </span><span class="kw">async fn </span>test_empty_write() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1575 id=1575 data-nosnippet>1575</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1576 id=1576 data-nosnippet>1576</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1576 id=1576 data-nosnippet>1576</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1577 id=1577 data-nosnippet>1577</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1578 id=1578 data-nosnippet>1578</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1579 id=1579 data-nosnippet>1579</a>        );
@@ -1623,7 +1623,7 @@
 <a href=#1623 id=1623 data-nosnippet>1623</a>    <span class="attr">#[tokio::test]
 <a href=#1624 id=1624 data-nosnippet>1624</a>    </span><span class="kw">async fn </span>test_nan_val_cnts_primitive_type() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1625 id=1625 data-nosnippet>1625</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1626 id=1626 data-nosnippet>1626</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1626 id=1626 data-nosnippet>1626</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1627 id=1627 data-nosnippet>1627</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1628 id=1628 data-nosnippet>1628</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1629 id=1629 data-nosnippet>1629</a>        );
@@ -1711,7 +1711,7 @@
 <a href=#1711 id=1711 data-nosnippet>1711</a>    <span class="attr">#[tokio::test]
 <a href=#1712 id=1712 data-nosnippet>1712</a>    </span><span class="kw">async fn </span>test_nan_val_cnts_struct_type() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1713 id=1713 data-nosnippet>1713</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1714 id=1714 data-nosnippet>1714</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1714 id=1714 data-nosnippet>1714</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1715 id=1715 data-nosnippet>1715</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1716 id=1716 data-nosnippet>1716</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1717 id=1717 data-nosnippet>1717</a>        );
@@ -1851,7 +1851,7 @@
 <a href=#1851 id=1851 data-nosnippet>1851</a>    <span class="attr">#[tokio::test]
 <a href=#1852 id=1852 data-nosnippet>1852</a>    </span><span class="kw">async fn </span>test_nan_val_cnts_list_type() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1853 id=1853 data-nosnippet>1853</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1854 id=1854 data-nosnippet>1854</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1854 id=1854 data-nosnippet>1854</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1855 id=1855 data-nosnippet>1855</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#1856 id=1856 data-nosnippet>1856</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#1857 id=1857 data-nosnippet>1857</a>        );
@@ -2053,7 +2053,7 @@
 <a href=#2053 id=2053 data-nosnippet>2053</a>    <span class="attr">#[tokio::test]
 <a href=#2054 id=2054 data-nosnippet>2054</a>    </span><span class="kw">async fn </span>test_nan_val_cnts_map_type() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#2055 id=2055 data-nosnippet>2055</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#2056 id=2056 data-nosnippet>2056</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#2056 id=2056 data-nosnippet>2056</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2057 id=2057 data-nosnippet>2057</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#2058 id=2058 data-nosnippet>2058</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#2059 id=2059 data-nosnippet>2059</a>        );
@@ -2209,7 +2209,7 @@
 <a href=#2209 id=2209 data-nosnippet>2209</a>    <span class="attr">#[tokio::test]
 <a href=#2210 id=2210 data-nosnippet>2210</a>    </span><span class="kw">async fn </span>test_write_empty_parquet_file() {
 <a href=#2211 id=2211 data-nosnippet>2211</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#2212 id=2212 data-nosnippet>2212</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#2212 id=2212 data-nosnippet>2212</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2213 id=2213 data-nosnippet>2213</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#2214 id=2214 data-nosnippet>2214</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#2215 id=2215 data-nosnippet>2215</a>        );

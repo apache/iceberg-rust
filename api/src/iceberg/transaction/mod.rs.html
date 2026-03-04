@@ -236,7 +236,7 @@
 <a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">use </span>std::sync::atomic::{AtomicU32, Ordering};
 <a href=#237 id=237 data-nosnippet>237</a>
 <a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">use </span><span class="kw">crate</span>::catalog::MockCatalog;
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::TableMetadata;
 <a href=#241 id=241 data-nosnippet>241</a>    <span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::{ApplyTransactionAction, Transaction};
@@ -256,7 +256,7 @@
 <a href=#256 id=256 data-nosnippet>256</a>            .metadata(resp)
 <a href=#257 id=257 data-nosnippet>257</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
 <a href=#258 id=258 data-nosnippet>258</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#259 id=259 data-nosnippet>259</a>            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+<a href=#259 id=259 data-nosnippet>259</a>            .file_io(FileIO::new_with_memory())
 <a href=#260 id=260 data-nosnippet>260</a>            .build()
 <a href=#261 id=261 data-nosnippet>261</a>            .unwrap()
 <a href=#262 id=262 data-nosnippet>262</a>    }
@@ -275,7 +275,7 @@
 <a href=#275 id=275 data-nosnippet>275</a>            .metadata(resp)
 <a href=#276 id=276 data-nosnippet>276</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
 <a href=#277 id=277 data-nosnippet>277</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#278 id=278 data-nosnippet>278</a>            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+<a href=#278 id=278 data-nosnippet>278</a>            .file_io(FileIO::new_with_memory())
 <a href=#279 id=279 data-nosnippet>279</a>            .build()
 <a href=#280 id=280 data-nosnippet>280</a>            .unwrap()
 <a href=#281 id=281 data-nosnippet>281</a>    }
@@ -294,7 +294,7 @@
 <a href=#294 id=294 data-nosnippet>294</a>            .metadata(resp)
 <a href=#295 id=295 data-nosnippet>295</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
 <a href=#296 id=296 data-nosnippet>296</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#297 id=297 data-nosnippet>297</a>            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+<a href=#297 id=297 data-nosnippet>297</a>            .file_io(FileIO::new_with_memory())
 <a href=#298 id=298 data-nosnippet>298</a>            .build()
 <a href=#299 id=299 data-nosnippet>299</a>            .unwrap()
 <a href=#300 id=300 data-nosnippet>300</a>    }

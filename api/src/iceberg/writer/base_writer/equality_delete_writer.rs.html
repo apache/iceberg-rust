@@ -213,7 +213,7 @@
 <a href=#213 id=213 data-nosnippet>213</a>    <span class="kw">use </span>uuid::Uuid;
 <a href=#214 id=214 data-nosnippet>214</a>
 <a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileIOBuilder};
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#217 id=217 data-nosnippet>217</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
 <a href=#218 id=218 data-nosnippet>218</a>        DataFile, DataFileFormat, ListType, MapType, NestedField, PrimitiveType, Schema,
 <a href=#219 id=219 data-nosnippet>219</a>        StructType, Type,
@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>    <span class="attr">#[tokio::test]
 <a href=#308 id=308 data-nosnippet>308</a>    </span><span class="kw">async fn </span>test_equality_delete_writer() -&gt; <span class="prelude-ty">Result</span>&lt;(), anyhow::Error&gt; {
 <a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#312 id=312 data-nosnippet>312</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#313 id=313 data-nosnippet>313</a>        );
@@ -545,7 +545,7 @@
 <a href=#545 id=545 data-nosnippet>545</a>    <span class="attr">#[tokio::test]
 <a href=#546 id=546 data-nosnippet>546</a>    </span><span class="kw">async fn </span>test_equality_delete_with_primitive_type() -&gt; <span class="prelude-ty">Result</span>&lt;(), anyhow::Error&gt; {
 <a href=#547 id=547 data-nosnippet>547</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#550 id=550 data-nosnippet>550</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#551 id=551 data-nosnippet>551</a>        );

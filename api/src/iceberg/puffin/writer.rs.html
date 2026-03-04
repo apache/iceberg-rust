@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#152 id=152 data-nosnippet>152</a>
 <a href=#153 id=153 data-nosnippet>153</a>    <span class="kw">use </span><span class="kw">crate</span>::compression::CompressionCodec;
-<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">use </span><span class="kw">crate</span>::io::{FileIOBuilder, InputFile, OutputFile};
+<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, InputFile, OutputFile};
 <a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span><span class="kw">crate</span>::puffin::blob::Blob;
 <a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">use </span><span class="kw">crate</span>::puffin::metadata::FileMetadata;
 <a href=#157 id=157 data-nosnippet>157</a>    <span class="kw">use </span><span class="kw">crate</span>::puffin::reader::PuffinReader;
@@ -169,7 +169,7 @@
 <a href=#169 id=169 data-nosnippet>169</a>        blobs: Vec&lt;(Blob, CompressionCodec)&gt;,
 <a href=#170 id=170 data-nosnippet>170</a>        properties: HashMap&lt;String, String&gt;,
 <a href=#171 id=171 data-nosnippet>171</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;OutputFile&gt; {
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#173 id=173 data-nosnippet>173</a>
 <a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">let </span>path_buf = temp_dir.path().join(<span class="string">"temp_puffin.bin"</span>);
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">let </span>temp_path = path_buf.to_str().unwrap();

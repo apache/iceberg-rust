@@ -2187,7 +2187,7 @@
 <a href=#2187 id=2187 data-nosnippet>2187</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#2188 id=2188 data-nosnippet>2188</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
 <a href=#2189 id=2189 data-nosnippet>2189</a>
-<a href=#2190 id=2190 data-nosnippet>2190</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#2190 id=2190 data-nosnippet>2190</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2191 id=2191 data-nosnippet>2191</a>
 <a href=#2192 id=2192 data-nosnippet>2192</a>        <span class="kw">let </span>col = <span class="kw">match </span>col_a_type {
 <a href=#2193 id=2193 data-nosnippet>2193</a>            DataType::Utf8 =&gt; Arc::new(StringArray::from(data_for_col_a)) <span class="kw">as </span>ArrayRef,
@@ -2448,7 +2448,7 @@
 <a href=#2448 id=2448 data-nosnippet>2448</a>            row_group_2.compressed_size()
 <a href=#2449 id=2449 data-nosnippet>2449</a>        );
 <a href=#2450 id=2450 data-nosnippet>2450</a>
-<a href=#2451 id=2451 data-nosnippet>2451</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#2451 id=2451 data-nosnippet>2451</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 <a href=#2453 id=2453 data-nosnippet>2453</a>
 <a href=#2454 id=2454 data-nosnippet>2454</a>        <span class="comment">// Task 1: read only the first row group
@@ -2583,7 +2583,7 @@
 <a href=#2583 id=2583 data-nosnippet>2583</a>        <span class="comment">// Write old Parquet file with only column 'a'
 <a href=#2584 id=2584 data-nosnippet>2584</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#2585 id=2585 data-nosnippet>2585</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#2586 id=2586 data-nosnippet>2586</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#2586 id=2586 data-nosnippet>2586</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2587 id=2587 data-nosnippet>2587</a>
 <a href=#2588 id=2588 data-nosnippet>2588</a>        <span class="kw">let </span>data_a = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="kw">let </span>to_write = RecordBatch::try_new(arrow_schema_old.clone(), <span class="macro">vec!</span>[data_a]).unwrap();
@@ -2766,7 +2766,7 @@
 <a href=#2766 id=2766 data-nosnippet>2766</a>        delete_writer.close().unwrap();
 <a href=#2767 id=2767 data-nosnippet>2767</a>
 <a href=#2768 id=2768 data-nosnippet>2768</a>        <span class="comment">// Step 3: Read the data file with the delete applied
-<a href=#2769 id=2769 data-nosnippet>2769</a>        </span><span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#2769 id=2769 data-nosnippet>2769</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2770 id=2770 data-nosnippet>2770</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 <a href=#2771 id=2771 data-nosnippet>2771</a>
 <a href=#2772 id=2772 data-nosnippet>2772</a>        <span class="kw">let </span>task = FileScanTask {
@@ -2985,7 +2985,7 @@
 <a href=#2985 id=2985 data-nosnippet>2985</a>            row_group_1.compressed_size()
 <a href=#2986 id=2986 data-nosnippet>2986</a>        );
 <a href=#2987 id=2987 data-nosnippet>2987</a>
-<a href=#2988 id=2988 data-nosnippet>2988</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#2988 id=2988 data-nosnippet>2988</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#2989 id=2989 data-nosnippet>2989</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 <a href=#2990 id=2990 data-nosnippet>2990</a>
 <a href=#2991 id=2991 data-nosnippet>2991</a>        <span class="comment">// Create FileScanTask that reads ONLY row group 1 via byte range filtering
@@ -3198,7 +3198,7 @@
 <a href=#3198 id=3198 data-nosnippet>3198</a>        </span><span class="kw">let </span>rg1_start = rg0_start + row_group_0.compressed_size() <span class="kw">as </span>u64;
 <a href=#3199 id=3199 data-nosnippet>3199</a>        <span class="kw">let </span>rg1_length = row_group_1.compressed_size() <span class="kw">as </span>u64;
 <a href=#3200 id=3200 data-nosnippet>3200</a>
-<a href=#3201 id=3201 data-nosnippet>3201</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3201 id=3201 data-nosnippet>3201</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3202 id=3202 data-nosnippet>3202</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
 <a href=#3203 id=3203 data-nosnippet>3203</a>
 <a href=#3204 id=3204 data-nosnippet>3204</a>        <span class="comment">// Create FileScanTask that reads ONLY row group 1 via byte range filtering
@@ -3289,7 +3289,7 @@
 <a href=#3289 id=3289 data-nosnippet>3289</a>
 <a href=#3290 id=3290 data-nosnippet>3290</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3291 id=3291 data-nosnippet>3291</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3292 id=3292 data-nosnippet>3292</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3292 id=3292 data-nosnippet>3292</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3293 id=3293 data-nosnippet>3293</a>
 <a href=#3294 id=3294 data-nosnippet>3294</a>        <span class="kw">let </span>name_data = <span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>];
 <a href=#3295 id=3295 data-nosnippet>3295</a>        <span class="kw">let </span>age_data = <span class="macro">vec!</span>[<span class="number">30</span>, <span class="number">25</span>, <span class="number">35</span>];
@@ -3389,7 +3389,7 @@
 <a href=#3389 id=3389 data-nosnippet>3389</a>
 <a href=#3390 id=3390 data-nosnippet>3390</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3391 id=3391 data-nosnippet>3391</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3392 id=3392 data-nosnippet>3392</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3392 id=3392 data-nosnippet>3392</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3393 id=3393 data-nosnippet>3393</a>
 <a href=#3394 id=3394 data-nosnippet>3394</a>        <span class="kw">let </span>col1_data = Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"b"</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#3395 id=3395 data-nosnippet>3395</a>        <span class="kw">let </span>col2_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">20</span>])) <span class="kw">as </span>ArrayRef;
@@ -3483,7 +3483,7 @@
 <a href=#3483 id=3483 data-nosnippet>3483</a>
 <a href=#3484 id=3484 data-nosnippet>3484</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3485 id=3485 data-nosnippet>3485</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3486 id=3486 data-nosnippet>3486</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3486 id=3486 data-nosnippet>3486</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3487 id=3487 data-nosnippet>3487</a>
 <a href=#3488 id=3488 data-nosnippet>3488</a>        <span class="kw">let </span>name_data = Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#3489 id=3489 data-nosnippet>3489</a>        <span class="kw">let </span>age_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">30</span>, <span class="number">25</span>])) <span class="kw">as </span>ArrayRef;
@@ -3578,7 +3578,7 @@
 <a href=#3578 id=3578 data-nosnippet>3578</a>
 <a href=#3579 id=3579 data-nosnippet>3579</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3580 id=3580 data-nosnippet>3580</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3581 id=3581 data-nosnippet>3581</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3581 id=3581 data-nosnippet>3581</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3582 id=3582 data-nosnippet>3582</a>
 <a href=#3583 id=3583 data-nosnippet>3583</a>        <span class="comment">// Small row group size to create multiple row groups
 <a href=#3584 id=3584 data-nosnippet>3584</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
@@ -3709,7 +3709,7 @@
 <a href=#3709 id=3709 data-nosnippet>3709</a>
 <a href=#3710 id=3710 data-nosnippet>3710</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3711 id=3711 data-nosnippet>3711</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3712 id=3712 data-nosnippet>3712</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3712 id=3712 data-nosnippet>3712</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3713 id=3713 data-nosnippet>3713</a>
 <a href=#3714 id=3714 data-nosnippet>3714</a>        <span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#3715 id=3715 data-nosnippet>3715</a>        <span class="kw">let </span>name_data = Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>])) <span class="kw">as </span>ArrayRef;
@@ -3821,7 +3821,7 @@
 <a href=#3821 id=3821 data-nosnippet>3821</a>
 <a href=#3822 id=3822 data-nosnippet>3822</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3823 id=3823 data-nosnippet>3823</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3824 id=3824 data-nosnippet>3824</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3824 id=3824 data-nosnippet>3824</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3825 id=3825 data-nosnippet>3825</a>
 <a href=#3826 id=3826 data-nosnippet>3826</a>        <span class="kw">let </span>col0_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#3827 id=3827 data-nosnippet>3827</a>        <span class="kw">let </span>col1_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">20</span>])) <span class="kw">as </span>ArrayRef;
@@ -3924,7 +3924,7 @@
 <a href=#3924 id=3924 data-nosnippet>3924</a>
 <a href=#3925 id=3925 data-nosnippet>3925</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#3926 id=3926 data-nosnippet>3926</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#3927 id=3927 data-nosnippet>3927</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#3927 id=3927 data-nosnippet>3927</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#3928 id=3928 data-nosnippet>3928</a>
 <a href=#3929 id=3929 data-nosnippet>3929</a>        <span class="comment">// Write data where all ids are &gt;= 10
 <a href=#3930 id=3930 data-nosnippet>3930</a>        </span><span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>])) <span class="kw">as </span>ArrayRef;
@@ -4018,7 +4018,7 @@
 <a href=#4018 id=4018 data-nosnippet>4018</a>
 <a href=#4019 id=4019 data-nosnippet>4019</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#4020 id=4020 data-nosnippet>4020</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#4021 id=4021 data-nosnippet>4021</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#4021 id=4021 data-nosnippet>4021</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#4022 id=4022 data-nosnippet>4022</a>
 <a href=#4023 id=4023 data-nosnippet>4023</a>        <span class="comment">// Create 3 parquet files with different data
 <a href=#4024 id=4024 data-nosnippet>4024</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
@@ -4246,7 +4246,7 @@
 <a href=#4246 id=4246 data-nosnippet>4246</a>        <span class="comment">// Write Parquet file with data
 <a href=#4247 id=4247 data-nosnippet>4247</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#4248 id=4248 data-nosnippet>4248</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#4249 id=4249 data-nosnippet>4249</a>        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>table_location).unwrap().build().unwrap();
+<a href=#4249 id=4249 data-nosnippet>4249</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#4250 id=4250 data-nosnippet>4250</a>
 <a href=#4251 id=4251 data-nosnippet>4251</a>        <span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">5</span>, <span class="number">9</span>, <span class="number">13</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#4252 id=4252 data-nosnippet>4252</a>        <span class="kw">let </span>name_data =

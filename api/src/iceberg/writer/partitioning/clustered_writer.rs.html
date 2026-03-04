@@ -152,7 +152,7 @@
 <a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#153 id=153 data-nosnippet>153</a>
 <a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, NestedField, PrimitiveType, Type};
 <a href=#157 id=157 data-nosnippet>157</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 <a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
@@ -164,7 +164,7 @@
 <a href=#164 id=164 data-nosnippet>164</a>    <span class="attr">#[tokio::test]
 <a href=#165 id=165 data-nosnippet>165</a>    </span><span class="kw">async fn </span>test_clustered_writer_single_partition() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#167 id=167 data-nosnippet>167</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#167 id=167 data-nosnippet>167</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#169 id=169 data-nosnippet>169</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#170 id=170 data-nosnippet>170</a>        );
@@ -261,7 +261,7 @@
 <a href=#261 id=261 data-nosnippet>261</a>    <span class="attr">#[tokio::test]
 <a href=#262 id=262 data-nosnippet>262</a>    </span><span class="kw">async fn </span>test_clustered_writer_sorted_partitions() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#266 id=266 data-nosnippet>266</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#267 id=267 data-nosnippet>267</a>        );
@@ -402,7 +402,7 @@
 <a href=#402 id=402 data-nosnippet>402</a>    <span class="attr">#[tokio::test]
 <a href=#403 id=403 data-nosnippet>403</a>    </span><span class="kw">async fn </span>test_clustered_writer_unsorted_partitions_error() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#407 id=407 data-nosnippet>407</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#408 id=408 data-nosnippet>408</a>        );

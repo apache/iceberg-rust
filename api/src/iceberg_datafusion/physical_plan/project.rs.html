@@ -446,7 +446,7 @@
 <a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">let </span>table = iceberg::table::Table::builder()
 <a href=#447 id=447 data-nosnippet>447</a>            .metadata(table_metadata.metadata)
 <a href=#448 id=448 data-nosnippet>448</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"table"</span>]).unwrap())
-<a href=#449 id=449 data-nosnippet>449</a>            .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
+<a href=#449 id=449 data-nosnippet>449</a>            .file_io(FileIO::new_with_fs())
 <a href=#450 id=450 data-nosnippet>450</a>            .metadata_location(<span class="string">"/test/metadata.json"</span>.to_string())
 <a href=#451 id=451 data-nosnippet>451</a>            .build()
 <a href=#452 id=452 data-nosnippet>452</a>            .unwrap();
@@ -504,7 +504,7 @@
 <a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>table = iceberg::table::Table::builder()
 <a href=#505 id=505 data-nosnippet>505</a>            .metadata(table_metadata.metadata)
 <a href=#506 id=506 data-nosnippet>506</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"table"</span>]).unwrap())
-<a href=#507 id=507 data-nosnippet>507</a>            .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
+<a href=#507 id=507 data-nosnippet>507</a>            .file_io(FileIO::new_with_fs())
 <a href=#508 id=508 data-nosnippet>508</a>            .metadata_location(<span class="string">"/test/metadata.json"</span>.to_string())
 <a href=#509 id=509 data-nosnippet>509</a>            .build()
 <a href=#510 id=510 data-nosnippet>510</a>            .unwrap();
@@ -576,7 +576,7 @@
 <a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>table = iceberg::table::Table::builder()
 <a href=#577 id=577 data-nosnippet>577</a>            .metadata(table_metadata.metadata)
 <a href=#578 id=578 data-nosnippet>578</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"table"</span>]).unwrap())
-<a href=#579 id=579 data-nosnippet>579</a>            .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
+<a href=#579 id=579 data-nosnippet>579</a>            .file_io(FileIO::new_with_fs())
 <a href=#580 id=580 data-nosnippet>580</a>            .metadata_location(<span class="string">"/test/metadata.json"</span>.to_string())
 <a href=#581 id=581 data-nosnippet>581</a>            .build()
 <a href=#582 id=582 data-nosnippet>582</a>            .unwrap();

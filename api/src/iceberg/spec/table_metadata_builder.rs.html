@@ -1466,7 +1466,7 @@
 <a href=#1466 id=1466 data-nosnippet>1466</a>
 <a href=#1467 id=1467 data-nosnippet>1467</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#1468 id=1468 data-nosnippet>1468</a>    <span class="kw">use </span><span class="kw">crate</span>::TableIdent;
-<a href=#1469 id=1469 data-nosnippet>1469</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#1469 id=1469 data-nosnippet>1469</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#1470 id=1470 data-nosnippet>1470</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
 <a href=#1471 id=1471 data-nosnippet>1471</a>        BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
 <a href=#1472 id=1472 data-nosnippet>1472</a>        SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
@@ -2711,7 +2711,7 @@
 <a href=#2711 id=2711 data-nosnippet>2711</a>            .metadata(resp)
 <a href=#2712 id=2712 data-nosnippet>2712</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
 <a href=#2713 id=2713 data-nosnippet>2713</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#2714 id=2714 data-nosnippet>2714</a>            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+<a href=#2714 id=2714 data-nosnippet>2714</a>            .file_io(FileIO::new_with_memory())
 <a href=#2715 id=2715 data-nosnippet>2715</a>            .build()
 <a href=#2716 id=2716 data-nosnippet>2716</a>            .unwrap();
 <a href=#2717 id=2717 data-nosnippet>2717</a>
@@ -2742,7 +2742,7 @@
 <a href=#2742 id=2742 data-nosnippet>2742</a>            .metadata(resp)
 <a href=#2743 id=2743 data-nosnippet>2743</a>            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
 <a href=#2744 id=2744 data-nosnippet>2744</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#2745 id=2745 data-nosnippet>2745</a>            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+<a href=#2745 id=2745 data-nosnippet>2745</a>            .file_io(FileIO::new_with_memory())
 <a href=#2746 id=2746 data-nosnippet>2746</a>            .build()
 <a href=#2747 id=2747 data-nosnippet>2747</a>            .unwrap();
 <a href=#2748 id=2748 data-nosnippet>2748</a>

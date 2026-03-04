@@ -1365,7 +1365,7 @@
 <a href=#1365 id=1365 data-nosnippet>1365</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#1366 id=1366 data-nosnippet>1366</a>
 <a href=#1367 id=1367 data-nosnippet>1367</a>    <span class="kw">use </span><span class="kw">super</span>::_serde::ManifestListV2;
-<a href=#1368 id=1368 data-nosnippet>1368</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#1368 id=1368 data-nosnippet>1368</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#1369 id=1369 data-nosnippet>1369</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
 <a href=#1370 id=1370 data-nosnippet>1370</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
 <a href=#1371 id=1371 data-nosnippet>1371</a>        Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
@@ -1397,7 +1397,7 @@
 <a href=#1397 id=1397 data-nosnippet>1397</a>            ]
 <a href=#1398 id=1398 data-nosnippet>1398</a>        };
 <a href=#1399 id=1399 data-nosnippet>1399</a>
-<a href=#1400 id=1400 data-nosnippet>1400</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1400 id=1400 data-nosnippet>1400</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1401 id=1401 data-nosnippet>1401</a>
 <a href=#1402 id=1402 data-nosnippet>1402</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#1403 id=1403 data-nosnippet>1403</a>        <span class="kw">let </span>file_name = <span class="string">"simple_manifest_list_v1.avro"</span>;
@@ -1469,7 +1469,7 @@
 <a href=#1469 id=1469 data-nosnippet>1469</a>            ]
 <a href=#1470 id=1470 data-nosnippet>1470</a>        };
 <a href=#1471 id=1471 data-nosnippet>1471</a>
-<a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1473 id=1473 data-nosnippet>1473</a>
 <a href=#1474 id=1474 data-nosnippet>1474</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#1475 id=1475 data-nosnippet>1475</a>        <span class="kw">let </span>file_name = <span class="string">"simple_manifest_list_v1.avro"</span>;
@@ -1542,7 +1542,7 @@
 <a href=#1542 id=1542 data-nosnippet>1542</a>            ]
 <a href=#1543 id=1543 data-nosnippet>1543</a>        };
 <a href=#1544 id=1544 data-nosnippet>1544</a>
-<a href=#1545 id=1545 data-nosnippet>1545</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1545 id=1545 data-nosnippet>1545</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#1546 id=1546 data-nosnippet>1546</a>
 <a href=#1547 id=1547 data-nosnippet>1547</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#1548 id=1548 data-nosnippet>1548</a>        <span class="kw">let </span>file_name = <span class="string">"simple_manifest_list_v3.avro"</span>;
@@ -1687,7 +1687,7 @@
 <a href=#1687 id=1687 data-nosnippet>1687</a>
 <a href=#1688 id=1688 data-nosnippet>1688</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1689 id=1689 data-nosnippet>1689</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v1.avro"</span>);
-<a href=#1690 id=1690 data-nosnippet>1690</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1690 id=1690 data-nosnippet>1690</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1691 id=1691 data-nosnippet>1691</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1692 id=1692 data-nosnippet>1692</a>
 <a href=#1693 id=1693 data-nosnippet>1693</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(output_file, <span class="number">1646658105718557341</span>, <span class="prelude-val">Some</span>(<span class="number">0</span>));
@@ -1734,7 +1734,7 @@
 <a href=#1734 id=1734 data-nosnippet>1734</a>
 <a href=#1735 id=1735 data-nosnippet>1735</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1736 id=1736 data-nosnippet>1736</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v2.avro"</span>);
-<a href=#1737 id=1737 data-nosnippet>1737</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1737 id=1737 data-nosnippet>1737</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1738 id=1738 data-nosnippet>1738</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1739 id=1739 data-nosnippet>1739</a>
 <a href=#1740 id=1740 data-nosnippet>1740</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, snapshot_id, <span class="prelude-val">Some</span>(<span class="number">0</span>), seq_num);
@@ -1782,7 +1782,7 @@
 <a href=#1782 id=1782 data-nosnippet>1782</a>
 <a href=#1783 id=1783 data-nosnippet>1783</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1784 id=1784 data-nosnippet>1784</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v2.avro"</span>);
-<a href=#1785 id=1785 data-nosnippet>1785</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1785 id=1785 data-nosnippet>1785</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1786 id=1786 data-nosnippet>1786</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1787 id=1787 data-nosnippet>1787</a>
 <a href=#1788 id=1788 data-nosnippet>1788</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer =
@@ -1830,7 +1830,7 @@
 <a href=#1830 id=1830 data-nosnippet>1830</a>
 <a href=#1831 id=1831 data-nosnippet>1831</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1832 id=1832 data-nosnippet>1832</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v1.avro"</span>);
-<a href=#1833 id=1833 data-nosnippet>1833</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1833 id=1833 data-nosnippet>1833</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1834 id=1834 data-nosnippet>1834</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1835 id=1835 data-nosnippet>1835</a>
 <a href=#1836 id=1836 data-nosnippet>1836</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(output_file, <span class="number">1646658105718557341</span>, <span class="prelude-val">Some</span>(<span class="number">0</span>));
@@ -1875,7 +1875,7 @@
 <a href=#1875 id=1875 data-nosnippet>1875</a>
 <a href=#1876 id=1876 data-nosnippet>1876</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1877 id=1877 data-nosnippet>1877</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v1.avro"</span>);
-<a href=#1878 id=1878 data-nosnippet>1878</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1878 id=1878 data-nosnippet>1878</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1879 id=1879 data-nosnippet>1879</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1880 id=1880 data-nosnippet>1880</a>
 <a href=#1881 id=1881 data-nosnippet>1881</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(output_file, <span class="number">1646658105718557341</span>, <span class="prelude-val">Some</span>(<span class="number">0</span>));
@@ -1922,7 +1922,7 @@
 <a href=#1922 id=1922 data-nosnippet>1922</a>
 <a href=#1923 id=1923 data-nosnippet>1923</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
 <a href=#1924 id=1924 data-nosnippet>1924</a>        <span class="kw">let </span>path = temp_dir.path().join(<span class="string">"manifest_list_v2.avro"</span>);
-<a href=#1925 id=1925 data-nosnippet>1925</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#1925 id=1925 data-nosnippet>1925</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#1927 id=1927 data-nosnippet>1927</a>
 <a href=#1928 id=1928 data-nosnippet>1928</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, snapshot_id, <span class="prelude-val">Some</span>(<span class="number">0</span>), seq_num);

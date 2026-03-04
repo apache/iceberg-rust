@@ -115,7 +115,7 @@
 <a href=#115 id=115 data-nosnippet>115</a>
 <a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">use </span><span class="kw">crate</span>::Result;
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, NestedField, PrimitiveType, Struct, Type};
 <a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 <a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
@@ -152,7 +152,7 @@
 <a href=#152 id=152 data-nosnippet>152</a>        ]));
 <a href=#153 id=153 data-nosnippet>153</a>
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="comment">// Build writer
-<a href=#155 id=155 data-nosnippet>155</a>        </span><span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#155 id=155 data-nosnippet>155</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#156 id=156 data-nosnippet>156</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#157 id=157 data-nosnippet>157</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#158 id=158 data-nosnippet>158</a>        );

@@ -268,7 +268,7 @@
 <a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#269 id=269 data-nosnippet>269</a>
 <a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
 <a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 <a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
@@ -304,7 +304,7 @@
 <a href=#304 id=304 data-nosnippet>304</a>    <span class="attr">#[tokio::test]
 <a href=#305 id=305 data-nosnippet>305</a>    </span><span class="kw">async fn </span>test_rolling_writer_basic() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#309 id=309 data-nosnippet>309</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#310 id=310 data-nosnippet>310</a>        );
@@ -362,7 +362,7 @@
 <a href=#362 id=362 data-nosnippet>362</a>    <span class="attr">#[tokio::test]
 <a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">async fn </span>test_rolling_writer_with_rolling() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>temp_dir = TempDir::new()<span class="question-mark">?</span>;
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build()<span class="question-mark">?</span>;
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
 <a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>location_gen = DefaultLocationGenerator::with_data_location(
 <a href=#367 id=367 data-nosnippet>367</a>            temp_dir.path().to_str().unwrap().to_string(),
 <a href=#368 id=368 data-nosnippet>368</a>        );

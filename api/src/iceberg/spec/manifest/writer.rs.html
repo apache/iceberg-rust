@@ -559,7 +559,7 @@
 <a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#560 id=560 data-nosnippet>560</a>
 <a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
+<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#563 id=563 data-nosnippet>563</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
 <a href=#564 id=564 data-nosnippet>564</a>
 <a href=#565 id=565 data-nosnippet>565</a>    <span class="attr">#[tokio::test]
@@ -684,7 +684,7 @@
 <a href=#684 id=684 data-nosnippet>684</a>        <span class="comment">// write manifest to file
 <a href=#685 id=685 data-nosnippet>685</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#686 id=686 data-nosnippet>686</a>        <span class="kw">let </span>path = tmp_dir.path().join(<span class="string">"test_manifest.avro"</span>);
-<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestWriterBuilder::new(
 <a href=#690 id=690 data-nosnippet>690</a>            output_file,
@@ -771,7 +771,7 @@
 <a href=#771 id=771 data-nosnippet>771</a>        <span class="comment">// Write a V3 delete manifest
 <a href=#772 id=772 data-nosnippet>772</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 <a href=#773 id=773 data-nosnippet>773</a>        <span class="kw">let </span>path = tmp_dir.path().join(<span class="string">"v3_delete_manifest.avro"</span>);
-<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
+<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">let </span>io = FileIO::new_with_fs();
 <a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 <a href=#776 id=776 data-nosnippet>776</a>
 <a href=#777 id=777 data-nosnippet>777</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestWriterBuilder::new(
