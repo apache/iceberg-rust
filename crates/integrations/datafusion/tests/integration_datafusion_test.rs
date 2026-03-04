@@ -681,7 +681,7 @@ async fn test_insert_into_nested() -> Result<()> {
               valid,
             ]
             [
-            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, metadata: {"PARQUET:field_id": "8"} }]))
+            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: true, metadata: {"PARQUET:field_id": "8"} }]))
             StructArray
             -- validity:
             [
