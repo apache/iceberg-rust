@@ -19,12 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use opendal::services::S3Config;
-use opendal::{Configurator, Operator};
-pub use reqsign::{AwsCredential, AwsCredentialLoad};
-use reqwest::Client;
-use url::Url;
-
 use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
@@ -32,6 +26,11 @@ use iceberg::io::{
     S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
 };
 use iceberg::{Error, ErrorKind, Result};
+use opendal::services::S3Config;
+use opendal::{Configurator, Operator};
+pub use reqsign::{AwsCredential, AwsCredentialLoad};
+use reqwest::Client;
+use url::Url;
 
 use crate::utils::{from_opendal_error, is_truthy};
 

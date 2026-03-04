@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use iceberg::Result;
 use opendal::Operator;
 use opendal::services::FsConfig;
 
 use crate::utils::from_opendal_error;
-use iceberg::Result;
 
 /// Build new opendal operator from give path.
 pub(crate) fn fs_config_build() -> Result<Operator> {

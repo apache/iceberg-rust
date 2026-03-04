@@ -19,16 +19,15 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use opendal::Configurator;
-use opendal::services::AzdlsConfig;
-use serde::{Deserialize, Serialize};
-use url::Url;
-
 use iceberg::io::{
     ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
     ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
 };
 use iceberg::{Error, ErrorKind, Result};
+use opendal::Configurator;
+use opendal::services::AzdlsConfig;
+use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::utils::from_opendal_error;
 
@@ -213,7 +212,9 @@ fn azdls_config_build(config: &AzdlsConfig, path: &AzureStoragePath) -> Result<o
     }
     builder = builder.filesystem(&path.filesystem);
 
-    Ok(opendal::Operator::new(builder).map_err(from_opendal_error)?.finish())
+    Ok(opendal::Operator::new(builder)
+        .map_err(from_opendal_error)?
+        .finish())
 }
 
 /// Represents a fully qualified path to blob/ file in Azure Storage.

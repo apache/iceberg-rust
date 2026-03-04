@@ -17,12 +17,11 @@
 
 use std::collections::HashMap;
 
+use iceberg::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
+use iceberg::{Error, ErrorKind, Result};
 use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
-
-use iceberg::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
-use iceberg::{Error, ErrorKind, Result};
 
 use crate::utils::from_opendal_error;
 

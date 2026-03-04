@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use iceberg::Result;
 use opendal::Operator;
 use opendal::services::MemoryConfig;
 
 use crate::utils::from_opendal_error;
-use iceberg::Result;
 
 pub(crate) fn memory_config_build() -> Result<Operator> {
     Ok(Operator::from_config(MemoryConfig::default())

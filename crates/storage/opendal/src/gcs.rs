@@ -18,15 +18,14 @@
 
 use std::collections::HashMap;
 
-use opendal::Operator;
-use opendal::services::GcsConfig;
-use url::Url;
-
 use iceberg::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
     GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
 };
 use iceberg::{Error, ErrorKind, Result};
+use opendal::Operator;
+use opendal::services::GcsConfig;
+use url::Url;
 
 use crate::utils::{from_opendal_error, is_truthy};
 
@@ -83,5 +82,7 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
 
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
-    Ok(Operator::from_config(cfg).map_err(from_opendal_error)?.finish())
+    Ok(Operator::from_config(cfg)
+        .map_err(from_opendal_error)?
+        .finish())
 }
