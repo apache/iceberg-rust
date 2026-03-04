@@ -19,7 +19,7 @@
 //!
 //! These tests assume Docker containers are started externally via `make docker-up`.
 //! Each test uses unique file paths based on module path to avoid conflicts.
-#[cfg(test)]
+#[cfg(feature = "storage-s3")]
 mod tests {
     use std::sync::Arc;
 
