@@ -24,6 +24,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use common::{random_ns, test_schema};
 use futures::TryStreamExt;
+use iceberg::io::OpenDalStorageFactory;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -41,6 +42,10 @@ use parquet::file::properties::WriterProperties;
 async fn test_append_data_file_conflict() {
     let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3".to_string(),
+            customized_credential_load: None,
+        }))
         .load("rest", fixture.catalog_config.clone())
         .await
         .unwrap();
