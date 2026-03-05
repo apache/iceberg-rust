@@ -31,6 +31,7 @@ repository = { workspace = true }
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+hmac = "0.12"
 http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
@@ -38,6 +39,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 typed-builder = { workspace = true }

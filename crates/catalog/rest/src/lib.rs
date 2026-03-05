@@ -51,9 +51,11 @@
 
 #![deny(missing_docs)]
 
+pub mod auth;
 mod catalog;
 mod client;
 mod types;
 
+pub use auth::{Authenticator, NoAuth, OAuth2Authenticator, SigV4Authenticator, SigV4Credentials};
 pub use catalog::*;
 pub use types::*;
