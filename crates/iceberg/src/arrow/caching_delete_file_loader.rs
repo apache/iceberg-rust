@@ -942,6 +942,8 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            column_sizes: None,
+            split_offsets: None,
             case_sensitive: false,
         };
 

@@ -132,6 +132,8 @@ impl ManifestEntryContext {
             partition_spec: None,
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
+            column_sizes: Some(self.manifest_entry.data_file().column_sizes().clone()),
+            split_offsets: self.manifest_entry.data_file().split_offsets().map(|s| s.to_vec()),
             case_sensitive: self.case_sensitive,
         })
     }

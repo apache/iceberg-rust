@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
@@ -107,6 +108,20 @@ pub struct FileScanTask {
     #[serde(serialize_with = "serialize_not_implemented")]
     #[serde(deserialize_with = "deserialize_not_implemented")]
     pub name_mapping: Option<Arc<NameMapping>>,
+
+    /// Column sizes from the manifest entry (column_id -> size_bytes).
+    /// Used for scan size estimation without re-reading manifests.
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
+    pub column_sizes: Option<HashMap<i32, u64>>,
+
+    /// Row group split offsets from the manifest entry.
+    /// Used for sub-file parallelism without re-reading manifests.
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
+    pub split_offsets: Option<Vec<i64>>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
