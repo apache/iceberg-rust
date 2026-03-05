@@ -54,6 +54,7 @@ motore-macros = { workspace = true }
 volo = { workspace = true }
 
 [dev-dependencies]
+iceberg-storage-opendal = { workspace = true, features = ["opendal-s3"] }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 
 [package.metadata.cargo-machete]

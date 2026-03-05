@@ -21,7 +21,9 @@
 //! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use iceberg::io::LocalFsStorageFactory;
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
@@ -62,6 +64,7 @@ async fn get_catalog() -> RestCatalog {
     }
 
     RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(LocalFsStorageFactory))
         .load(
             "rest",
             HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_endpoint)]),
