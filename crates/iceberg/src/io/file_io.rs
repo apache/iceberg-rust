@@ -39,12 +39,12 @@ use crate::Result;
 ///
 /// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
 /// |--------------------|-------------------|----------------------------------| ------------------------------|
-/// | Local file system  | `storage-fs`      | `file`                           | `file://path/to/file`         |
-/// | Memory             | `storage-memory`  | `memory`                         | `memory://path/to/file`       |
-/// | S3                 | `storage-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
-/// | GCS                | `storage-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
-/// | OSS                | `storage-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
-/// | Azure Datalake     | `storage-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+/// | Local file system  | `opendal-fs`      | `file`                           | `file://path/to/file`         |
+/// | Memory             | `opendal-memory`  | `memory`                         | `memory://path/to/file`       |
+/// | S3                 | `opendal-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
+/// | GCS                | `opendal-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
+/// | OSS                | `opendal-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
+/// | Azure Datalake     | `opendal-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
 ///
 /// # Example
 ///
