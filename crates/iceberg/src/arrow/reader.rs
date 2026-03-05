@@ -43,6 +43,7 @@ use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
 };
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
+use typed_builder::TypedBuilder;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
@@ -68,23 +69,67 @@ const DEFAULT_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
 /// Matches object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
 const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
 
+/// Default number of bytes to prefetch when parsing Parquet footer metadata.
+/// Matches DataFusion's default `ParquetOptions::metadata_size_hint`.
+const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
+
 /// Options for tuning Parquet file I/O.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, TypedBuilder)]
+#[builder(field_defaults(setter(prefix = "with_")))]
 pub(crate) struct ParquetReadOptions {
-    pub metadata_size_hint: Option<usize>,
+    /// Number of bytes to prefetch for parsing the Parquet metadata.
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    ///
+    /// Defaults to 512 KiB, matching DataFusion's default `ParquetOptions::metadata_size_hint`.
+    #[builder(default = Some(DEFAULT_METADATA_SIZE_HINT))]
+    pub(crate) metadata_size_hint: Option<usize>,
     /// Gap threshold for merging nearby byte ranges into a single request.
-    pub range_coalesce_bytes: u64,
+    /// Ranges with gaps smaller than this value will be coalesced.
+    ///
+    /// Defaults to 1 MiB, matching object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
+    #[builder(default = DEFAULT_RANGE_COALESCE_BYTES)]
+    pub(crate) range_coalesce_bytes: u64,
     /// Maximum number of merged byte ranges to fetch concurrently.
-    pub range_fetch_concurrency: usize,
+    ///
+    /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
+    #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
+    pub(crate) range_fetch_concurrency: usize,
+    /// Whether to preload the column index when reading Parquet metadata.
+    #[builder(default = true)]
+    pub(crate) preload_column_index: bool,
+    /// Whether to preload the offset index when reading Parquet metadata.
+    #[builder(default = true)]
+    pub(crate) preload_offset_index: bool,
+    /// Whether to preload the page index when reading Parquet metadata.
+    #[builder(default = false)]
+    pub(crate) preload_page_index: bool,
 }
 
-impl Default for ParquetReadOptions {
-    fn default() -> Self {
-        Self {
-            metadata_size_hint: None,
-            range_coalesce_bytes: DEFAULT_RANGE_COALESCE_BYTES,
-            range_fetch_concurrency: DEFAULT_RANGE_FETCH_CONCURRENCY,
-        }
+impl ParquetReadOptions {
+    pub(crate) fn metadata_size_hint(&self) -> Option<usize> {
+        self.metadata_size_hint
+    }
+
+    pub(crate) fn range_coalesce_bytes(&self) -> u64 {
+        self.range_coalesce_bytes
+    }
+
+    pub(crate) fn range_fetch_concurrency(&self) -> usize {
+        self.range_fetch_concurrency
+    }
+
+    pub(crate) fn preload_column_index(&self) -> bool {
+        self.preload_column_index
+    }
+
+    pub(crate) fn preload_offset_index(&self) -> bool {
+        self.preload_offset_index
+    }
+
+    pub(crate) fn preload_page_index(&self) -> bool {
+        self.preload_page_index
     }
 }
 
@@ -109,7 +154,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
-            parquet_read_options: ParquetReadOptions::default(),
+            parquet_read_options: ParquetReadOptions::builder().build(),
         }
     }
 
@@ -269,6 +314,8 @@ impl ArrowReader {
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let mut parquet_read_options = parquet_read_options;
+        parquet_read_options.preload_page_index = should_load_page_index;
 
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
@@ -278,7 +325,6 @@ impl ArrowReader {
         let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
             &task.data_file_path,
             file_io.clone(),
-            should_load_page_index,
             None,
             task.file_size_in_bytes,
             parquet_read_options,
@@ -332,7 +378,6 @@ impl ArrowReader {
             Self::create_parquet_record_batch_stream_builder(
                 &task.data_file_path,
                 file_io.clone(),
-                should_load_page_index,
                 Some(options),
                 task.file_size_in_bytes,
                 parquet_read_options,
@@ -537,7 +582,6 @@ impl ArrowReader {
     pub(crate) async fn create_parquet_record_batch_stream_builder(
         data_file_path: &str,
         file_io: FileIO,
-        should_load_page_index: bool,
         arrow_reader_options: Option<ArrowReaderOptions>,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
@@ -546,21 +590,13 @@ impl ArrowReader {
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
         let parquet_reader = parquet_file.reader().await?;
-        let mut parquet_file_reader = ArrowFileReader::new(
+        let parquet_file_reader = ArrowFileReader::new(
             FileMetadata {
                 size: file_size_in_bytes,
             },
             parquet_reader,
         )
-        .with_preload_column_index(true)
-        .with_preload_offset_index(true)
-        .with_preload_page_index(should_load_page_index)
-        .with_range_coalesce_bytes(parquet_read_options.range_coalesce_bytes)
-        .with_range_fetch_concurrency(parquet_read_options.range_fetch_concurrency);
-
-        if let Some(hint) = parquet_read_options.metadata_size_hint {
-            parquet_file_reader = parquet_file_reader.with_metadata_size_hint(hint);
-        }
+        .with_parquet_read_options(parquet_read_options);
 
         // Create the record batch stream builder, which wraps the parquet file reader
         let options = arrow_reader_options.unwrap_or_default();
@@ -1752,67 +1788,23 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
 pub struct ArrowFileReader {
     meta: FileMetadata,
-    preload_column_index: bool,
-    preload_offset_index: bool,
-    preload_page_index: bool,
-    metadata_size_hint: Option<usize>,
-    range_coalesce_bytes: u64,
-    range_fetch_concurrency: usize,
+    parquet_read_options: ParquetReadOptions,
     r: Box<dyn FileRead>,
 }
 
 impl ArrowFileReader {
     /// Create a new ArrowFileReader
     pub fn new(meta: FileMetadata, r: Box<dyn FileRead>) -> Self {
-        let defaults = ParquetReadOptions::default();
         Self {
             meta,
-            preload_column_index: false,
-            preload_offset_index: false,
-            preload_page_index: false,
-            metadata_size_hint: None,
-            range_coalesce_bytes: defaults.range_coalesce_bytes,
-            range_fetch_concurrency: defaults.range_fetch_concurrency,
+            parquet_read_options: ParquetReadOptions::builder().build(),
             r,
         }
     }
 
-    /// Enable or disable preloading of the column index
-    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
-        self.preload_column_index = preload;
-        self
-    }
-
-    /// Enable or disable preloading of the offset index
-    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
-        self.preload_offset_index = preload;
-        self
-    }
-
-    /// Enable or disable preloading of the page index
-    pub fn with_preload_page_index(mut self, preload: bool) -> Self {
-        self.preload_page_index = preload;
-        self
-    }
-
-    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
-    ///
-    /// This hint can help reduce the number of fetch requests. For more details see the
-    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
-        self.metadata_size_hint = Some(hint);
-        self
-    }
-
-    /// Sets the gap threshold for merging nearby byte ranges into a single request.
-    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
-        self.range_coalesce_bytes = range_coalesce_bytes;
-        self
-    }
-
-    /// Sets the maximum number of merged byte ranges to fetch concurrently.
-    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
-        self.range_fetch_concurrency = range_fetch_concurrency;
+    /// Configure all Parquet read options.
+    pub(crate) fn with_parquet_read_options(mut self, options: ParquetReadOptions) -> Self {
+        self.parquet_read_options = options;
         self
     }
 }
@@ -1834,8 +1826,8 @@ impl AsyncFileReader for ArrowFileReader {
         &mut self,
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
-        let coalesce_bytes = self.range_coalesce_bytes;
-        let concurrency = self.range_fetch_concurrency;
+        let coalesce_bytes = self.parquet_read_options.range_coalesce_bytes();
+        let concurrency = self.parquet_read_options.range_fetch_concurrency();
 
         async move {
             // Merge nearby ranges to reduce the number of object store requests.
@@ -1877,11 +1869,17 @@ impl AsyncFileReader for ArrowFileReader {
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
             let reader = ParquetMetaDataReader::new()
-                .with_prefetch_hint(self.metadata_size_hint)
+                .with_prefetch_hint(self.parquet_read_options.metadata_size_hint())
                 // Set the page policy first because it updates both column and offset policies.
-                .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
-                .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
-                .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index));
+                .with_page_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_page_index(),
+                ))
+                .with_column_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_column_index(),
+                ))
+                .with_offset_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_offset_index(),
+                ));
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
@@ -4494,5 +4492,94 @@ message schema {
         let ranges = vec![500..600, 0..100, 200..300];
         let merged = super::merge_ranges(&ranges, 1024);
         assert_eq!(merged, vec![0..600]);
+    }
+
+    /// Mock FileRead backed by a flat byte buffer.
+    struct MockFileRead {
+        data: bytes::Bytes,
+    }
+
+    impl MockFileRead {
+        fn new(size: usize) -> Self {
+            // Fill with sequential byte values so slices are verifiable.
+            let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+            Self {
+                data: bytes::Bytes::from(data),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::io::FileRead for MockFileRead {
+        async fn read(&self, range: Range<u64>) -> crate::Result<bytes::Bytes> {
+            Ok(self.data.slice(range.start as usize..range.end as usize))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_no_coalesce() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(0)
+                        .build(),
+                );
+
+        let result = reader
+            .get_byte_ranges(vec![0..100, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_with_coalesce() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(1024);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(200..300);
+        let expected_2 = mock.data.slice(500..600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(1024)
+                        .build(),
+                );
+
+        // All ranges within coalesce threshold — should merge into one fetch.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 200..300, 500..600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+        assert_eq!(result[2], expected_2);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_empty() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(1024);
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock));
+
+        let result = reader.get_byte_ranges(vec![]).await.unwrap();
+        assert!(result.is_empty());
     }
 }

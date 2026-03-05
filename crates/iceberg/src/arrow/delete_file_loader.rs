@@ -64,10 +64,9 @@ impl BasicDeleteFileLoader {
         let record_batch_stream = ArrowReader::create_parquet_record_batch_stream_builder(
             data_file_path,
             self.file_io.clone(),
-            false,
             None,
             file_size_in_bytes,
-            ParquetReadOptions::default(),
+            ParquetReadOptions::builder().build(),
         )
         .await?
         .build()?
