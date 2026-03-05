@@ -1827,7 +1827,7 @@ impl AsyncFileReader for ArrowFileReader {
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
         let coalesce_bytes = self.parquet_read_options.range_coalesce_bytes();
-        let concurrency = self.parquet_read_options.range_fetch_concurrency();
+        let concurrency = self.parquet_read_options.range_fetch_concurrency().max(1);
 
         async move {
             // Merge nearby ranges to reduce the number of object store requests.
@@ -4581,5 +4581,86 @@ message schema {
 
         let result = reader.get_byte_ranges(vec![]).await.unwrap();
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_coalesce_max() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(u64::MAX)
+                        .build(),
+                );
+
+        // u64::MAX coalesce — all ranges merge into a single fetch.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_concurrency_zero() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        // concurrency=0 is clamped to 1, so this should not hang.
+        let mock = MockFileRead::new(1024);
+        let expected = mock.data.slice(0..100);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_fetch_concurrency(0)
+                        .build(),
+                );
+
+        let result = reader
+            .get_byte_ranges(vec![0..100, 200..300])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_concurrency_one() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(500..600);
+        let expected_2 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(0)
+                        .with_range_fetch_concurrency(1)
+                        .build(),
+                );
+
+        // concurrency=1 with no coalescing — sequential fetches.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 500..600, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+        assert_eq!(result[2], expected_2);
     }
 }
