@@ -3537,7 +3537,6 @@ dependencies = [
  "reqsign",
  "reqwest",
  "serde",
- "serde_derive",
  "tokio",
  "typetag",
  "url",
