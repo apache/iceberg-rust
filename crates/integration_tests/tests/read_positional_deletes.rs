@@ -20,10 +20,10 @@
 use std::sync::Arc;
 
 use futures::TryStreamExt;
-use iceberg::io::OpenDalStorageFactory;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 #[tokio::test]
 async fn test_read_table_with_positional_deletes() {

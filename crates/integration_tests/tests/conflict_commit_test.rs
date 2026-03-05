@@ -24,7 +24,6 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use common::{random_ns, test_schema};
 use futures::TryStreamExt;
-use iceberg::io::OpenDalStorageFactory;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -36,6 +35,7 @@ use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, CatalogBuilder, TableCreation};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use parquet::file::properties::WriterProperties;
 
 #[tokio::test]

@@ -22,11 +22,11 @@ use std::sync::Arc;
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray};
 use futures::TryStreamExt;
 use iceberg::expr::Reference;
-use iceberg::io::OpenDalStorageFactory;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use ordered_float::OrderedFloat;
 
 #[tokio::test]

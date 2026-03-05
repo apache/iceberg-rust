@@ -19,19 +19,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use iceberg::io::{
+    CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
+    S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
+    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
+    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+};
+use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 pub use reqsign::{AwsCredential, AwsCredentialLoad};
 use reqwest::Client;
 use url::Url;
 
-use crate::io::{
-    CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
-    S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
-    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE, is_truthy,
-};
-use crate::{Error, ErrorKind, Result};
+use crate::utils::{from_opendal_error, is_truthy};
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -141,7 +142,7 @@ pub(crate) fn s3_config_build(
             .customized_credential_load(customized_credential_load.clone().into_opendal_loader());
     }
 
-    Ok(Operator::new(builder)?.finish())
+    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
 }
 
 /// Custom AWS credential loader.
