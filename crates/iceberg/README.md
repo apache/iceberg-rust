@@ -29,17 +29,24 @@ See the [API documentation](https://docs.rs/iceberg/latest) for examples and the
 ## Usage
 
 ```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use futures::TryStreamExt;
-use iceberg::io::{FileIO, FileIOBuilder};
-use iceberg::{Catalog, Result, TableIdent};
-use iceberg_catalog_memory::MemoryCatalog;
+use iceberg::io::MemoryStorageFactory;
+use iceberg::memory::{MemoryCatalogBuilder, MEMORY_CATALOG_WAREHOUSE};
+use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Build your file IO.
-    let file_io = FileIOBuilder::new("memory").build()?;
-    // Connect to a catalog.
-    let catalog = MemoryCatalog::new(file_io, None);
+    // Connect to a catalog with a memory storage factory.
+    let catalog = MemoryCatalogBuilder::default()
+        .with_storage_factory(Arc::new(MemoryStorageFactory))
+        .load(
+            "my_catalog",
+            HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "/tmp/warehouse".to_string())]),
+        )
+        .await?;
     // Load table from catalog.
     let table = catalog
         .load_table(&TableIdent::from_strs(["hello", "world"])?)
