@@ -716,6 +716,13 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
+        println!(
+            "Create table request: {:?}",
+            request
+                .body()
+                .map(|b| String::from_utf8_lossy(b.as_bytes().unwrap_or(&[])))
+        );
+
         let http_response = context.client.query_catalog(request).await?;
 
         let response = match http_response.status() {
