@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/sql/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_sql" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0-nightly (be19eda0d 2025-06-22)" data-channel="nightly" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_sql/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/sql/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_sql" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_sql/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -173,12 +173,12 @@
 <a href=#173 id=173 data-nosnippet>173</a>        <span class="kw">let </span>valid_name = !name.trim().is_empty();
 <a href=#174 id=174 data-nosnippet>174</a>
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">async move </span>{
-<a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">if </span>!valid_name {
+<a href=#176 id=176 data-nosnippet>176</a>            <span class="macro">if !</span>valid_name {
 <a href=#177 id=177 data-nosnippet>177</a>                <span class="prelude-val">Err</span>(Error::new(
 <a href=#178 id=178 data-nosnippet>178</a>                    ErrorKind::DataInvalid,
 <a href=#179 id=179 data-nosnippet>179</a>                    <span class="string">"Catalog name cannot be empty"</span>,
 <a href=#180 id=180 data-nosnippet>180</a>                ))
-<a href=#181 id=181 data-nosnippet>181</a>            } <span class="kw">else if </span>!valid_sql_bind_style {
+<a href=#181 id=181 data-nosnippet>181</a>            } <span class="kw">else </span><span class="macro">if !</span>valid_sql_bind_style {
 <a href=#182 id=182 data-nosnippet>182</a>                <span class="prelude-val">Err</span>(Error::new(
 <a href=#183 id=183 data-nosnippet>183</a>                    ErrorKind::DataInvalid,
 <a href=#184 id=184 data-nosnippet>184</a>                    <span class="macro">format!</span>(
@@ -402,7 +402,7 @@
 <a href=#402 id=402 data-nosnippet>402</a>                <span class="kw">for </span>row <span class="kw">in </span>namespace_rows.iter() {
 <a href=#403 id=403 data-nosnippet>403</a>                    <span class="kw">let </span>nsp = row.try_get::&lt;String, <span class="kw">_</span>&gt;(<span class="number">0</span>).map_err(from_sqlx_error)<span class="question-mark">?</span>;
 <a href=#404 id=404 data-nosnippet>404</a>                    <span class="comment">// if parent = a, then we only want to see a.b, a.c returned.
-<a href=#405 id=405 data-nosnippet>405</a>                    </span><span class="kw">if </span>nsp != parent_str &amp;&amp; nsp.starts_with(<span class="kw-2">&amp;</span>parent_str) {
+<a href=#405 id=405 data-nosnippet>405</a>                    </span><span class="kw">if </span><span class="macro">nsp !</span>= parent_str &amp;&amp; nsp.starts_with(<span class="kw-2">&amp;</span>parent_str) {
 <a href=#406 id=406 data-nosnippet>406</a>                        namespaces.insert(NamespaceIdent::from_strs(nsp.split(<span class="string">"."</span>))<span class="question-mark">?</span>);
 <a href=#407 id=407 data-nosnippet>407</a>                    }
 <a href=#408 id=408 data-nosnippet>408</a>                }
@@ -415,7 +415,7 @@
 <a href=#415 id=415 data-nosnippet>415</a>            <span class="kw">for </span>row <span class="kw">in </span>namespace_rows.iter() {
 <a href=#416 id=416 data-nosnippet>416</a>                <span class="kw">let </span>nsp = row.try_get::&lt;String, <span class="kw">_</span>&gt;(<span class="number">0</span>).map_err(from_sqlx_error)<span class="question-mark">?</span>;
 <a href=#417 id=417 data-nosnippet>417</a>                <span class="kw">let </span><span class="kw-2">mut </span>levels = nsp.split(<span class="string">"."</span>).collect::&lt;Vec&lt;<span class="kw-2">&amp;</span>str&gt;&gt;();
-<a href=#418 id=418 data-nosnippet>418</a>                <span class="kw">if </span>!levels.is_empty() {
+<a href=#418 id=418 data-nosnippet>418</a>                <span class="macro">if !</span>levels.is_empty() {
 <a href=#419 id=419 data-nosnippet>419</a>                    <span class="kw">let </span>first_level = levels.drain(..<span class="number">1</span>).collect::&lt;Vec&lt;<span class="kw-2">&amp;</span>str&gt;&gt;();
 <a href=#420 id=420 data-nosnippet>420</a>                    namespaces.insert(NamespaceIdent::from_strs(first_level)<span class="question-mark">?</span>);
 <a href=#421 id=421 data-nosnippet>421</a>                }
@@ -443,7 +443,7 @@
 <a href=#443 id=443 data-nosnippet>443</a>        <span class="kw">let </span>insert = <span class="macro">format!</span>(
 <a href=#444 id=444 data-nosnippet>444</a>            <span class="string">"INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
 <a href=#445 id=445 data-nosnippet>445</a>             VALUES (?, ?, ?, ?)"</span>);
-<a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">if </span>!properties.is_empty() {
+<a href=#446 id=446 data-nosnippet>446</a>        <span class="macro">if !</span>properties.is_empty() {
 <a href=#447 id=447 data-nosnippet>447</a>            <span class="kw">let </span><span class="kw-2">mut </span>insert_properties = properties.clone();
 <a href=#448 id=448 data-nosnippet>448</a>            insert_properties.insert(<span class="string">"exists"</span>.to_string(), <span class="string">"true"</span>.to_string());
 <a href=#449 id=449 data-nosnippet>449</a>
@@ -536,7 +536,7 @@
 <a href=#536 id=536 data-nosnippet>536</a>            )
 <a href=#537 id=537 data-nosnippet>537</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#538 id=538 data-nosnippet>538</a>
-<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">if </span>!table_namespaces.is_empty() {
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="macro">if !</span>table_namespaces.is_empty() {
 <a href=#540 id=540 data-nosnippet>540</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#541 id=541 data-nosnippet>541</a>        } <span class="kw">else </span>{
 <a href=#542 id=542 data-nosnippet>542</a>            <span class="kw">let </span>namespaces = <span class="self">self
@@ -550,7 +550,7 @@
 <a href=#550 id=550 data-nosnippet>550</a>                    <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.name), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>namespace_str)],
 <a href=#551 id=551 data-nosnippet>551</a>                )
 <a href=#552 id=552 data-nosnippet>552</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#553 id=553 data-nosnippet>553</a>            <span class="kw">if </span>!namespaces.is_empty() {
+<a href=#553 id=553 data-nosnippet>553</a>            <span class="macro">if !</span>namespaces.is_empty() {
 <a href=#554 id=554 data-nosnippet>554</a>                <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#555 id=555 data-nosnippet>555</a>            } <span class="kw">else </span>{
 <a href=#556 id=556 data-nosnippet>556</a>                <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>)
@@ -635,7 +635,7 @@
 <a href=#635 id=635 data-nosnippet>635</a>        <span class="kw">if </span>exists {
 <a href=#636 id=636 data-nosnippet>636</a>            <span class="comment">// if there are tables in the namespace, don't allow drop.
 <a href=#637 id=637 data-nosnippet>637</a>            </span><span class="kw">let </span>tables = <span class="self">self</span>.list_tables(namespace).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#638 id=638 data-nosnippet>638</a>            <span class="kw">if </span>!tables.is_empty() {
+<a href=#638 id=638 data-nosnippet>638</a>            <span class="macro">if !</span>tables.is_empty() {
 <a href=#639 id=639 data-nosnippet>639</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#640 id=640 data-nosnippet>640</a>                    iceberg::ErrorKind::Unexpected,
 <a href=#641 id=641 data-nosnippet>641</a>                    <span class="macro">format!</span>(
@@ -722,7 +722,7 @@
 <a href=#722 id=722 data-nosnippet>722</a>            )
 <a href=#723 id=723 data-nosnippet>723</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#724 id=724 data-nosnippet>724</a>
-<a href=#725 id=725 data-nosnippet>725</a>        <span class="kw">if </span>!table_counts.is_empty() {
+<a href=#725 id=725 data-nosnippet>725</a>        <span class="macro">if !</span>table_counts.is_empty() {
 <a href=#726 id=726 data-nosnippet>726</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#727 id=727 data-nosnippet>727</a>        } <span class="kw">else </span>{
 <a href=#728 id=728 data-nosnippet>728</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>)
@@ -730,7 +730,7 @@
 <a href=#730 id=730 data-nosnippet>730</a>    }
 <a href=#731 id=731 data-nosnippet>731</a>
 <a href=#732 id=732 data-nosnippet>732</a>    <span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, identifier: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#733 id=733 data-nosnippet>733</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#734 id=734 data-nosnippet>734</a>            <span class="kw">return </span>no_such_table_err(identifier);
 <a href=#735 id=735 data-nosnippet>735</a>        }
 <a href=#736 id=736 data-nosnippet>736</a>
@@ -758,7 +758,7 @@
 <a href=#758 id=758 data-nosnippet>758</a>    }
 <a href=#759 id=759 data-nosnippet>759</a>
 <a href=#760 id=760 data-nosnippet>760</a>    <span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, identifier: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#761 id=761 data-nosnippet>761</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#762 id=762 data-nosnippet>762</a>            <span class="kw">return </span>no_such_table_err(identifier);
 <a href=#763 id=763 data-nosnippet>763</a>        }
 <a href=#764 id=764 data-nosnippet>764</a>
@@ -807,7 +807,7 @@
 <a href=#807 id=807 data-nosnippet>807</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
 <a href=#808 id=808 data-nosnippet>808</a>        creation: TableCreation,
 <a href=#809 id=809 data-nosnippet>809</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#810 id=810 data-nosnippet>810</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#810 id=810 data-nosnippet>810</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#811 id=811 data-nosnippet>811</a>            <span class="kw">return </span>no_such_namespace_err(namespace);
 <a href=#812 id=812 data-nosnippet>812</a>        }
 <a href=#813 id=813 data-nosnippet>813</a>
@@ -876,11 +876,11 @@
 <a href=#876 id=876 data-nosnippet>876</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#877 id=877 data-nosnippet>877</a>        }
 <a href=#878 id=878 data-nosnippet>878</a>
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(src).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#879 id=879 data-nosnippet>879</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(src).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#880 id=880 data-nosnippet>880</a>            <span class="kw">return </span>no_such_table_err(src);
 <a href=#881 id=881 data-nosnippet>881</a>        }
 <a href=#882 id=882 data-nosnippet>882</a>
-<a href=#883 id=883 data-nosnippet>883</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(dest.namespace()).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#883 id=883 data-nosnippet>883</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(dest.namespace()).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#884 id=884 data-nosnippet>884</a>            <span class="kw">return </span>no_such_namespace_err(dest.namespace());
 <a href=#885 id=885 data-nosnippet>885</a>        }
 <a href=#886 id=886 data-nosnippet>886</a>
@@ -2450,4 +2450,5 @@
 <a href=#2450 id=2450 data-nosnippet>2450</a>            updated_table.metadata_location()
 <a href=#2451 id=2451 data-nosnippet>2451</a>        );
 <a href=#2452 id=2452 data-nosnippet>2452</a>    }
-<a href=#2453 id=2453 data-nosnippet>2453</a>}</code></pre></div></section></main></body></html>
+<a href=#2453 id=2453 data-nosnippet>2453</a>}
+</code></pre></div></section></main></body></html>

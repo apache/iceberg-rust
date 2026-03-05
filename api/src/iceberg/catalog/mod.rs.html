@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/catalog/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0-nightly (be19eda0d 2025-06-22)" data-channel="nightly" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../static.files/storage-4e99c027.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/catalog/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/catalog/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/catalog/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -685,7 +685,7 @@
 <a href=#685 id=685 data-nosnippet>685</a>                }
 <a href=#686 id=686 data-nosnippet>686</a>                TableRequirement::CurrentSchemaIdMatch { current_schema_id } =&gt; {
 <a href=#687 id=687 data-nosnippet>687</a>                    <span class="comment">// ToDo: Harmonize the types of current_schema_id
-<a href=#688 id=688 data-nosnippet>688</a>                    </span><span class="kw">if </span>metadata.current_schema_id != <span class="kw-2">*</span>current_schema_id {
+<a href=#688 id=688 data-nosnippet>688</a>                    </span><span class="kw">if </span>metadata.<span class="macro">current_schema_id !</span>= <span class="kw-2">*</span>current_schema_id {
 <a href=#689 id=689 data-nosnippet>689</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#690 id=690 data-nosnippet>690</a>                            ErrorKind::CatalogCommitConflicts,
 <a href=#691 id=691 data-nosnippet>691</a>                            <span class="string">"Requirement failed: Current schema id does not match"</span>,
@@ -698,7 +698,7 @@
 <a href=#698 id=698 data-nosnippet>698</a>                TableRequirement::DefaultSortOrderIdMatch {
 <a href=#699 id=699 data-nosnippet>699</a>                    default_sort_order_id,
 <a href=#700 id=700 data-nosnippet>700</a>                } =&gt; {
-<a href=#701 id=701 data-nosnippet>701</a>                    <span class="kw">if </span>metadata.default_sort_order().order_id != <span class="kw-2">*</span>default_sort_order_id {
+<a href=#701 id=701 data-nosnippet>701</a>                    <span class="kw">if </span>metadata.default_sort_order().<span class="macro">order_id !</span>= <span class="kw-2">*</span>default_sort_order_id {
 <a href=#702 id=702 data-nosnippet>702</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#703 id=703 data-nosnippet>703</a>                            ErrorKind::CatalogCommitConflicts,
 <a href=#704 id=704 data-nosnippet>704</a>                            <span class="string">"Requirement failed: Default sort order id does not match"</span>,
@@ -753,7 +753,7 @@
 <a href=#753 id=753 data-nosnippet>753</a>                TableRequirement::LastAssignedPartitionIdMatch {
 <a href=#754 id=754 data-nosnippet>754</a>                    last_assigned_partition_id,
 <a href=#755 id=755 data-nosnippet>755</a>                } =&gt; {
-<a href=#756 id=756 data-nosnippet>756</a>                    <span class="kw">if </span>metadata.last_partition_id != <span class="kw-2">*</span>last_assigned_partition_id {
+<a href=#756 id=756 data-nosnippet>756</a>                    <span class="kw">if </span>metadata.<span class="macro">last_partition_id !</span>= <span class="kw-2">*</span>last_assigned_partition_id {
 <a href=#757 id=757 data-nosnippet>757</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#758 id=758 data-nosnippet>758</a>                            ErrorKind::CatalogCommitConflicts,
 <a href=#759 id=759 data-nosnippet>759</a>                            <span class="string">"Requirement failed: Last assigned partition id does not match"</span>,
@@ -766,7 +766,7 @@
 <a href=#766 id=766 data-nosnippet>766</a>                TableRequirement::LastAssignedFieldIdMatch {
 <a href=#767 id=767 data-nosnippet>767</a>                    last_assigned_field_id,
 <a href=#768 id=768 data-nosnippet>768</a>                } =&gt; {
-<a href=#769 id=769 data-nosnippet>769</a>                    <span class="kw">if </span><span class="kw-2">&amp;</span>metadata.last_column_id != last_assigned_field_id {
+<a href=#769 id=769 data-nosnippet>769</a>                    <span class="kw">if </span><span class="kw-2">&amp;</span>metadata.<span class="macro">last_column_id !</span>= last_assigned_field_id {
 <a href=#770 id=770 data-nosnippet>770</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#771 id=771 data-nosnippet>771</a>                            ErrorKind::CatalogCommitConflicts,
 <a href=#772 id=772 data-nosnippet>772</a>                            <span class="string">"Requirement failed: Last assigned field id does not match"</span>,
@@ -1029,7 +1029,7 @@
 <a href=#1029 id=1029 data-nosnippet>1029</a>            statistics,
 <a href=#1030 id=1030 data-nosnippet>1030</a>        } = SetStatistics::deserialize(deserializer)<span class="question-mark">?</span>;
 <a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(snapshot_id) = snapshot_id
-<a href=#1032 id=1032 data-nosnippet>1032</a>            &amp;&amp; snapshot_id != statistics.snapshot_id
+<a href=#1032 id=1032 data-nosnippet>1032</a>            &amp;&amp; <span class="macro">snapshot_id !</span>= statistics.snapshot_id
 <a href=#1033 id=1033 data-nosnippet>1033</a>        {
 <a href=#1034 id=1034 data-nosnippet>1034</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(serde::de::Error::custom(<span class="macro">format!</span>(
 <a href=#1035 id=1035 data-nosnippet>1035</a>                <span class="string">"Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}"</span>,
@@ -2433,4 +2433,5 @@
 <a href=#2433 id=2433 data-nosnippet>2433</a>            <span class="string">"s3://bucket/test/new_location/data"</span>,
 <a href=#2434 id=2434 data-nosnippet>2434</a>        );
 <a href=#2435 id=2435 data-nosnippet>2435</a>    }
-<a href=#2436 id=2436 data-nosnippet>2436</a>}</code></pre></div></section></main></body></html>
+<a href=#2436 id=2436 data-nosnippet>2436</a>}
+</code></pre></div></section></main></body></html>

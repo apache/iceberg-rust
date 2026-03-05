@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/view_metadata_builder.rs`."><title>view_metadata_builder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0-nightly (be19eda0d 2025-06-22)" data-channel="nightly" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../static.files/storage-4e99c027.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>view_metadata_builder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/view_metadata_builder.rs`."><title>view_metadata_builder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>view_metadata_builder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>            ));
 <a href=#152 id=152 data-nosnippet>152</a>        }
 <a href=#153 id=153 data-nosnippet>153</a>
-<a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">if </span>format_version != <span class="self">self</span>.metadata.format_version {
+<a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">if </span><span class="macro">format_version !</span>= <span class="self">self</span>.metadata.format_version {
 <a href=#155 id=155 data-nosnippet>155</a>            <span class="kw">match </span>format_version {
 <a href=#156 id=156 data-nosnippet>156</a>                ViewFormatVersion::V1 =&gt; {
 <a href=#157 id=157 data-nosnippet>157</a>                    <span class="comment">// No changes needed for V1
@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>    <span class="doccomment">/// Set the location of the view, stripping any trailing slashes.
 <a href=#166 id=166 data-nosnippet>166</a>    </span><span class="kw">pub fn </span>set_location(<span class="kw-2">mut </span><span class="self">self</span>, location: String) -&gt; <span class="self">Self </span>{
 <a href=#167 id=167 data-nosnippet>167</a>        <span class="kw">let </span>location = location.trim_end_matches(<span class="string">'/'</span>).to_string();
-<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">if </span><span class="self">self</span>.metadata.location != location {
+<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">if </span><span class="self">self</span>.metadata.<span class="macro">location !</span>= location {
 <a href=#169 id=169 data-nosnippet>169</a>            <span class="self">self</span>.changes.push(ViewUpdate::SetLocation {
 <a href=#170 id=170 data-nosnippet>170</a>                location: location.clone(),
 <a href=#171 id=171 data-nosnippet>171</a>            });
@@ -225,7 +225,7 @@
 <a href=#225 id=225 data-nosnippet>225</a>            .any(|update| <span class="macro">matches!</span>(update, ViewUpdate::AddViewVersion { view_version } <span class="kw">if </span>view_version.version_id() == version_id));
 <a href=#226 id=226 data-nosnippet>226</a>
 <a href=#227 id=227 data-nosnippet>227</a>        <span class="kw">let </span><span class="kw-2">mut </span>log = version.log();
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">if </span>!version_added_in_this_changes {
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="macro">if !</span>version_added_in_this_changes {
 <a href=#229 id=229 data-nosnippet>229</a>            log.set_timestamp_ms(Utc::now().timestamp_millis());
 <a href=#230 id=230 data-nosnippet>230</a>        }
 <a href=#231 id=231 data-nosnippet>231</a>
@@ -266,7 +266,7 @@
 <a href=#266 id=266 data-nosnippet>266</a>            <span class="comment">// ToDo Discuss: Similar to TableMetadata sort-order, Java does not add changes
 <a href=#267 id=267 data-nosnippet>267</a>            // in this case. I prefer to add changes as the state of the builder is
 <a href=#268 id=268 data-nosnippet>268</a>            // potentially mutated (`last_added_version_id`), thus we should record the change.
-<a href=#269 id=269 data-nosnippet>269</a>            </span><span class="kw">if </span><span class="self">self</span>.last_added_version_id != <span class="prelude-val">Some</span>(version_id) {
+<a href=#269 id=269 data-nosnippet>269</a>            </span><span class="kw">if </span><span class="self">self</span>.<span class="macro">last_added_version_id !</span>= <span class="prelude-val">Some</span>(version_id) {
 <a href=#270 id=270 data-nosnippet>270</a>                <span class="self">self</span>.changes
 <a href=#271 id=271 data-nosnippet>271</a>                    .push(ViewUpdate::AddViewVersion { view_version });
 <a href=#272 id=272 data-nosnippet>272</a>                <span class="self">self</span>.last_added_version_id = <span class="prelude-val">Some</span>(version_id);
@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>            view_version
 <a href=#287 id=287 data-nosnippet>287</a>        };
 <a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">if </span>!<span class="self">self
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="macro">if !</span><span class="self">self
 <a href=#290 id=290 data-nosnippet>290</a>            </span>.metadata
 <a href=#291 id=291 data-nosnippet>291</a>            .schemas
 <a href=#292 id=292 data-nosnippet>292</a>            .contains_key(<span class="kw-2">&amp;</span>view_version.schema_id())
@@ -374,7 +374,7 @@
 <a href=#374 id=374 data-nosnippet>374</a>            <span class="comment">// ToDo Discuss: Java does not add changes in this case. I prefer to add changes
 <a href=#375 id=375 data-nosnippet>375</a>            // as the state of the builder is potentially mutated (`last_added_schema_id`),
 <a href=#376 id=376 data-nosnippet>376</a>            // thus we should record the change.
-<a href=#377 id=377 data-nosnippet>377</a>            </span><span class="kw">if </span><span class="self">self</span>.last_added_schema_id != <span class="prelude-val">Some</span>(schema_id) {
+<a href=#377 id=377 data-nosnippet>377</a>            </span><span class="kw">if </span><span class="self">self</span>.<span class="macro">last_added_schema_id !</span>= <span class="prelude-val">Some</span>(schema_id) {
 <a href=#378 id=378 data-nosnippet>378</a>                <span class="self">self</span>.changes.push(ViewUpdate::AddSchema {
 <a href=#379 id=379 data-nosnippet>379</a>                    schema: schema.clone().with_schema_id(schema_id),
 <a href=#380 id=380 data-nosnippet>380</a>                    last_column_id: <span class="prelude-val">None</span>,
@@ -460,7 +460,7 @@
 <a href=#460 id=460 data-nosnippet>460</a>
 <a href=#461 id=461 data-nosnippet>461</a>    <span class="doccomment">/// Assign a new UUID to the view.
 <a href=#462 id=462 data-nosnippet>462</a>    </span><span class="kw">pub fn </span>assign_uuid(<span class="kw-2">mut </span><span class="self">self</span>, uuid: Uuid) -&gt; <span class="self">Self </span>{
-<a href=#463 id=463 data-nosnippet>463</a>        <span class="kw">if </span><span class="self">self</span>.metadata.view_uuid != uuid {
+<a href=#463 id=463 data-nosnippet>463</a>        <span class="kw">if </span><span class="self">self</span>.metadata.<span class="macro">view_uuid !</span>= uuid {
 <a href=#464 id=464 data-nosnippet>464</a>            <span class="self">self</span>.metadata.view_uuid = uuid;
 <a href=#465 id=465 data-nosnippet>465</a>            <span class="self">self</span>.changes.push(ViewUpdate::AssignUuid { uuid });
 <a href=#466 id=466 data-nosnippet>466</a>        }
@@ -527,7 +527,7 @@
 <a href=#527 id=527 data-nosnippet>527</a>                .collect::&lt;HashSet&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#528 id=528 data-nosnippet>528</a>
 <a href=#529 id=529 data-nosnippet>529</a>            <span class="comment">// always retain current version
-<a href=#530 id=530 data-nosnippet>530</a>            </span><span class="kw">if </span>!versions_to_keep.contains(<span class="kw-2">&amp;</span><span class="self">self</span>.metadata.current_version_id) {
+<a href=#530 id=530 data-nosnippet>530</a>            </span><span class="macro">if !</span>versions_to_keep.contains(<span class="kw-2">&amp;</span><span class="self">self</span>.metadata.current_version_id) {
 <a href=#531 id=531 data-nosnippet>531</a>                <span class="comment">// Remove the lowest ID
 <a href=#532 id=532 data-nosnippet>532</a>                </span><span class="kw">if </span>num_versions_to_keep &gt; num_added_versions {
 <a href=#533 id=533 data-nosnippet>533</a>                    <span class="kw">let </span>lowest_id = versions_to_keep.iter().min().copied();
@@ -586,7 +586,7 @@
 <a href=#586 id=586 data-nosnippet>586</a>    <span class="kw">let </span>base_dialects = lowercase_sql_dialects_for(previous);
 <a href=#587 id=587 data-nosnippet>587</a>    <span class="kw">let </span>updated_dialects = lowercase_sql_dialects_for(current);
 <a href=#588 id=588 data-nosnippet>588</a>
-<a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">if </span>!updated_dialects.is_superset(<span class="kw-2">&amp;</span>base_dialects) {
+<a href=#589 id=589 data-nosnippet>589</a>    <span class="macro">if !</span>updated_dialects.is_superset(<span class="kw-2">&amp;</span>base_dialects) {
 <a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#591 id=591 data-nosnippet>591</a>            ErrorKind::DataInvalid,
 <a href=#592 id=592 data-nosnippet>592</a>            <span class="macro">format!</span>(
@@ -616,7 +616,7 @@
 <a href=#616 id=616 data-nosnippet>616</a>    <span class="kw">for </span>repr <span class="kw">in </span>view_version.representations().iter() {
 <a href=#617 id=617 data-nosnippet>617</a>        <span class="kw">match </span>repr {
 <a href=#618 id=618 data-nosnippet>618</a>            ViewRepresentation::Sql(sql_repr) =&gt; {
-<a href=#619 id=619 data-nosnippet>619</a>                <span class="kw">if </span>!seen_dialects.insert(sql_repr.dialect.to_lowercase()) {
+<a href=#619 id=619 data-nosnippet>619</a>                <span class="macro">if !</span>seen_dialects.insert(sql_repr.dialect.to_lowercase()) {
 <a href=#620 id=620 data-nosnippet>620</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#621 id=621 data-nosnippet>621</a>                        ErrorKind::DataInvalid,
 <a href=#622 id=622 data-nosnippet>622</a>                        <span class="macro">format!</span>(
@@ -1658,4 +1658,5 @@
 <a href=#1658 id=1658 data-nosnippet>1658</a>
 <a href=#1659 id=1659 data-nosnippet>1659</a>        <span class="macro">assert!</span>(require_unique_dialects(<span class="kw-2">&amp;</span>view_version).is_ok());
 <a href=#1660 id=1660 data-nosnippet>1660</a>    }
-<a href=#1661 id=1661 data-nosnippet>1661</a>}</code></pre></div></section></main></body></html>
+<a href=#1661 id=1661 data-nosnippet>1661</a>}
+</code></pre></div></section></main></body></html>

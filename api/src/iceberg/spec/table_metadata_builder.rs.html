@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/table_metadata_builder.rs`."><title>table_metadata_builder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0-nightly (be19eda0d 2025-06-22)" data-channel="nightly" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../static.files/storage-4e99c027.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>table_metadata_builder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/table_metadata_builder.rs`."><title>table_metadata_builder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>table_metadata_builder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -198,7 +198,7 @@
 <a href=#198 id=198 data-nosnippet>198</a>
 <a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// Changes uuid of table metadata.
 <a href=#200 id=200 data-nosnippet>200</a>    </span><span class="kw">pub fn </span>assign_uuid(<span class="kw-2">mut </span><span class="self">self</span>, uuid: Uuid) -&gt; <span class="self">Self </span>{
-<a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">if </span><span class="self">self</span>.metadata.table_uuid != uuid {
+<a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">if </span><span class="self">self</span>.metadata.<span class="macro">table_uuid !</span>= uuid {
 <a href=#202 id=202 data-nosnippet>202</a>            <span class="self">self</span>.metadata.table_uuid = uuid;
 <a href=#203 id=203 data-nosnippet>203</a>            <span class="self">self</span>.changes.push(TableUpdate::AssignUuid { uuid });
 <a href=#204 id=204 data-nosnippet>204</a>        }
@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>            ));
 <a href=#222 id=222 data-nosnippet>222</a>        }
 <a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a>        <span class="kw">if </span>format_version != <span class="self">self</span>.metadata.format_version {
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="kw">if </span><span class="macro">format_version !</span>= <span class="self">self</span>.metadata.format_version {
 <a href=#225 id=225 data-nosnippet>225</a>            <span class="kw">match </span>format_version {
 <a href=#226 id=226 data-nosnippet>226</a>                FormatVersion::V1 =&gt; {
 <a href=#227 id=227 data-nosnippet>227</a>                    <span class="comment">// No changes needed for V1
@@ -260,7 +260,7 @@
 <a href=#260 id=260 data-nosnippet>260</a>            .map(ToString::to_string)
 <a href=#261 id=261 data-nosnippet>261</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#262 id=262 data-nosnippet>262</a>
-<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">if </span>!reserved_properties.is_empty() {
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="macro">if !</span>reserved_properties.is_empty() {
 <a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#265 id=265 data-nosnippet>265</a>                ErrorKind::DataInvalid,
 <a href=#266 id=266 data-nosnippet>266</a>                <span class="macro">format!</span>(
@@ -298,7 +298,7 @@
 <a href=#298 id=298 data-nosnippet>298</a>            .map(ToString::to_string)
 <a href=#299 id=299 data-nosnippet>299</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">if </span>!reserved_properties.is_empty() {
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="macro">if !</span>reserved_properties.is_empty() {
 <a href=#302 id=302 data-nosnippet>302</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#303 id=303 data-nosnippet>303</a>                ErrorKind::DataInvalid,
 <a href=#304 id=304 data-nosnippet>304</a>                <span class="macro">format!</span>(
@@ -312,7 +312,7 @@
 <a href=#312 id=312 data-nosnippet>312</a>            <span class="self">self</span>.metadata.properties.remove(property);
 <a href=#313 id=313 data-nosnippet>313</a>        }
 <a href=#314 id=314 data-nosnippet>314</a>
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">if </span>!properties.is_empty() {
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="macro">if !</span>properties.is_empty() {
 <a href=#316 id=316 data-nosnippet>316</a>            <span class="self">self</span>.changes.push(TableUpdate::RemoveProperties {
 <a href=#317 id=317 data-nosnippet>317</a>                removals: properties.into_iter().collect(),
 <a href=#318 id=318 data-nosnippet>318</a>            });
@@ -324,7 +324,7 @@
 <a href=#324 id=324 data-nosnippet>324</a>    <span class="doccomment">/// Set the location of the table, stripping any trailing slashes.
 <a href=#325 id=325 data-nosnippet>325</a>    </span><span class="kw">pub fn </span>set_location(<span class="kw-2">mut </span><span class="self">self</span>, location: String) -&gt; <span class="self">Self </span>{
 <a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">let </span>location = location.trim_end_matches(<span class="string">'/'</span>).to_string();
-<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">if </span><span class="self">self</span>.metadata.location != location {
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">if </span><span class="self">self</span>.metadata.<span class="macro">location !</span>= location {
 <a href=#328 id=328 data-nosnippet>328</a>            <span class="self">self</span>.changes.push(TableUpdate::SetLocation {
 <a href=#329 id=329 data-nosnippet>329</a>                location: location.clone(),
 <a href=#330 id=330 data-nosnippet>330</a>            });
@@ -354,7 +354,7 @@
 <a href=#354 id=354 data-nosnippet>354</a>            ));
 <a href=#355 id=355 data-nosnippet>355</a>        }
 <a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">if </span><span class="self">self</span>.metadata.format_version != FormatVersion::V1
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">if </span><span class="self">self</span>.metadata.<span class="macro">format_version !</span>= FormatVersion::V1
 <a href=#358 id=358 data-nosnippet>358</a>            &amp;&amp; snapshot.sequence_number() &lt;= <span class="self">self</span>.metadata.last_sequence_number
 <a href=#359 id=359 data-nosnippet>359</a>            &amp;&amp; snapshot.parent_snapshot_id().is_some()
 <a href=#360 id=360 data-nosnippet>360</a>        {
@@ -458,7 +458,7 @@
 <a href=#458 id=458 data-nosnippet>458</a>        <span class="kw">let </span>reference = <span class="self">self</span>.metadata.refs.get(branch).cloned();
 <a href=#459 id=459 data-nosnippet>459</a>
 <a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span>reference = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>reference) = reference {
-<a href=#461 id=461 data-nosnippet>461</a>            <span class="kw">if </span>!reference.is_branch() {
+<a href=#461 id=461 data-nosnippet>461</a>            <span class="macro">if !</span>reference.is_branch() {
 <a href=#462 id=462 data-nosnippet>462</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#463 id=463 data-nosnippet>463</a>                    ErrorKind::DataInvalid,
 <a href=#464 id=464 data-nosnippet>464</a>                    <span class="macro">format!</span>(<span class="string">"Cannot append snapshot to non-branch reference '{branch}'"</span>,),
@@ -496,7 +496,7 @@
 <a href=#496 id=496 data-nosnippet>496</a>            </span>}
 <a href=#497 id=497 data-nosnippet>497</a>        });
 <a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">if </span>!removed_snapshots.is_empty() {
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="macro">if !</span>removed_snapshots.is_empty() {
 <a href=#500 id=500 data-nosnippet>500</a>            <span class="self">self</span>.changes.push(TableUpdate::RemoveSnapshots {
 <a href=#501 id=501 data-nosnippet>501</a>                snapshot_ids: removed_snapshots,
 <a href=#502 id=502 data-nosnippet>502</a>            });
@@ -645,7 +645,7 @@
 <a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">let </span>schema_found = <span class="self">self</span>.metadata.schemas.contains_key(<span class="kw-2">&amp;</span>new_schema_id);
 <a href=#646 id=646 data-nosnippet>646</a>
 <a href=#647 id=647 data-nosnippet>647</a>        <span class="kw">if </span>schema_found {
-<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">if </span><span class="self">self</span>.last_added_schema_id != <span class="prelude-val">Some</span>(new_schema_id) {
+<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">if </span><span class="self">self</span>.<span class="macro">last_added_schema_id !</span>= <span class="prelude-val">Some</span>(new_schema_id) {
 <a href=#649 id=649 data-nosnippet>649</a>                <span class="self">self</span>.changes.push(TableUpdate::AddSchema {
 <a href=#650 id=650 data-nosnippet>650</a>                    schema: schema.clone(),
 <a href=#651 id=651 data-nosnippet>651</a>                });
@@ -783,7 +783,7 @@
 <a href=#783 id=783 data-nosnippet>783</a>                .name_exists_in_any_schema(<span class="kw-2">&amp;</span>partition_field.name);
 <a href=#784 id=784 data-nosnippet>784</a>
 <a href=#785 id=785 data-nosnippet>785</a>            <span class="comment">// Skip if partition field name doesn't conflict with any schema field
-<a href=#786 id=786 data-nosnippet>786</a>            </span><span class="kw">if </span>!exists_in_any_schema {
+<a href=#786 id=786 data-nosnippet>786</a>            </span><span class="macro">if !</span>exists_in_any_schema {
 <a href=#787 id=787 data-nosnippet>787</a>                <span class="kw">continue</span>;
 <a href=#788 id=788 data-nosnippet>788</a>            }
 <a href=#789 id=789 data-nosnippet>789</a>
@@ -793,7 +793,7 @@
 <a href=#793 id=793 data-nosnippet>793</a>                    partition_field.transform == <span class="kw">crate</span>::spec::Transform::Identity;
 <a href=#794 id=794 data-nosnippet>794</a>                <span class="kw">let </span>has_matching_source_id = schema_field.id == partition_field.source_id;
 <a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>                <span class="kw">if </span>!is_identity_transform {
+<a href=#796 id=796 data-nosnippet>796</a>                <span class="macro">if !</span>is_identity_transform {
 <a href=#797 id=797 data-nosnippet>797</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#798 id=798 data-nosnippet>798</a>                        ErrorKind::DataInvalid,
 <a href=#799 id=799 data-nosnippet>799</a>                        <span class="macro">format!</span>(
@@ -803,7 +803,7 @@
 <a href=#803 id=803 data-nosnippet>803</a>                    ));
 <a href=#804 id=804 data-nosnippet>804</a>                }
 <a href=#805 id=805 data-nosnippet>805</a>
-<a href=#806 id=806 data-nosnippet>806</a>                <span class="kw">if </span>!has_matching_source_id {
+<a href=#806 id=806 data-nosnippet>806</a>                <span class="macro">if !</span>has_matching_source_id {
 <a href=#807 id=807 data-nosnippet>807</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#808 id=808 data-nosnippet>808</a>                        ErrorKind::DataInvalid,
 <a href=#809 id=809 data-nosnippet>809</a>                        <span class="macro">format!</span>(
@@ -848,7 +848,7 @@
 <a href=#848 id=848 data-nosnippet>848</a>        <span class="kw">let </span>unbound_spec = unbound_spec.with_spec_id(new_spec_id);
 <a href=#849 id=849 data-nosnippet>849</a>
 <a href=#850 id=850 data-nosnippet>850</a>        <span class="kw">if </span>spec_found {
-<a href=#851 id=851 data-nosnippet>851</a>            <span class="kw">if </span><span class="self">self</span>.last_added_spec_id != <span class="prelude-val">Some</span>(new_spec_id) {
+<a href=#851 id=851 data-nosnippet>851</a>            <span class="kw">if </span><span class="self">self</span>.<span class="macro">last_added_spec_id !</span>= <span class="prelude-val">Some</span>(new_spec_id) {
 <a href=#852 id=852 data-nosnippet>852</a>                <span class="self">self</span>.changes
 <a href=#853 id=853 data-nosnippet>853</a>                    .push(TableUpdate::AddSpec { spec: unbound_spec });
 <a href=#854 id=854 data-nosnippet>854</a>                <span class="self">self</span>.last_added_spec_id = <span class="prelude-val">Some</span>(new_spec_id);
@@ -937,7 +937,7 @@
 <a href=#937 id=937 data-nosnippet>937</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">self</span>);
 <a href=#938 id=938 data-nosnippet>938</a>        }
 <a href=#939 id=939 data-nosnippet>939</a>
-<a href=#940 id=940 data-nosnippet>940</a>        <span class="kw">if </span>!<span class="self">self</span>.metadata.partition_specs.contains_key(<span class="kw-2">&amp;</span>spec_id) {
+<a href=#940 id=940 data-nosnippet>940</a>        <span class="macro">if !</span><span class="self">self</span>.metadata.partition_specs.contains_key(<span class="kw-2">&amp;</span>spec_id) {
 <a href=#941 id=941 data-nosnippet>941</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#942 id=942 data-nosnippet>942</a>                ErrorKind::DataInvalid,
 <a href=#943 id=943 data-nosnippet>943</a>                <span class="macro">format!</span>(<span class="string">"Cannot set default partition spec to unknown spec with id: '{spec_id}'"</span>,),
@@ -1000,7 +1000,7 @@
 <a href=#1000 id=1000 data-nosnippet>1000</a>            }
 <a href=#1001 id=1001 data-nosnippet>1001</a>        });
 <a href=#1002 id=1002 data-nosnippet>1002</a>
-<a href=#1003 id=1003 data-nosnippet>1003</a>        <span class="kw">if </span>!removed_specs.is_empty() {
+<a href=#1003 id=1003 data-nosnippet>1003</a>        <span class="macro">if !</span>removed_specs.is_empty() {
 <a href=#1004 id=1004 data-nosnippet>1004</a>            <span class="self">self</span>.changes.push(TableUpdate::RemovePartitionSpecs {
 <a href=#1005 id=1005 data-nosnippet>1005</a>                spec_ids: removed_specs,
 <a href=#1006 id=1006 data-nosnippet>1006</a>            });
@@ -1024,7 +1024,7 @@
 <a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span>sort_order_found = <span class="self">self</span>.metadata.sort_orders.contains_key(<span class="kw-2">&amp;</span>new_order_id);
 <a href=#1025 id=1025 data-nosnippet>1025</a>
 <a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="kw">if </span>sort_order_found {
-<a href=#1027 id=1027 data-nosnippet>1027</a>            <span class="kw">if </span><span class="self">self</span>.last_added_order_id != <span class="prelude-val">Some</span>(new_order_id) {
+<a href=#1027 id=1027 data-nosnippet>1027</a>            <span class="kw">if </span><span class="self">self</span>.<span class="macro">last_added_order_id !</span>= <span class="prelude-val">Some</span>(new_order_id) {
 <a href=#1028 id=1028 data-nosnippet>1028</a>                <span class="self">self</span>.changes.push(TableUpdate::AddSortOrder {
 <a href=#1029 id=1029 data-nosnippet>1029</a>                    sort_order: sort_order.clone().with_order_id(new_order_id),
 <a href=#1030 id=1030 data-nosnippet>1030</a>                });
@@ -1075,7 +1075,7 @@
 <a href=#1075 id=1075 data-nosnippet>1075</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">self</span>);
 <a href=#1076 id=1076 data-nosnippet>1076</a>        }
 <a href=#1077 id=1077 data-nosnippet>1077</a>
-<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="kw">if </span>!<span class="self">self</span>.metadata.sort_orders.contains_key(<span class="kw-2">&amp;</span>sort_order_id) {
+<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="macro">if !</span><span class="self">self</span>.metadata.sort_orders.contains_key(<span class="kw-2">&amp;</span>sort_order_id) {
 <a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#1080 id=1080 data-nosnippet>1080</a>                ErrorKind::DataInvalid,
 <a href=#1081 id=1081 data-nosnippet>1081</a>                <span class="macro">format!</span>(
@@ -1201,7 +1201,7 @@
 <a href=#1201 id=1201 data-nosnippet>1201</a>        <span class="kw">for </span>log_entry <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.metadata.snapshot_log {
 <a href=#1202 id=1202 data-nosnippet>1202</a>            <span class="kw">let </span>snapshot_id = log_entry.snapshot_id;
 <a href=#1203 id=1203 data-nosnippet>1203</a>            <span class="kw">if </span><span class="self">self</span>.metadata.snapshots.contains_key(<span class="kw-2">&amp;</span>snapshot_id) {
-<a href=#1204 id=1204 data-nosnippet>1204</a>                <span class="kw">if </span>!intermediate_snapshots.contains(<span class="kw-2">&amp;</span>snapshot_id) {
+<a href=#1204 id=1204 data-nosnippet>1204</a>                <span class="macro">if !</span>intermediate_snapshots.contains(<span class="kw-2">&amp;</span>snapshot_id) {
 <a href=#1205 id=1205 data-nosnippet>1205</a>                    new_snapshot_log.push(log_entry.clone());
 <a href=#1206 id=1206 data-nosnippet>1206</a>                }
 <a href=#1207 id=1207 data-nosnippet>1207</a>            } <span class="kw">else if </span>has_removed_snapshots {
@@ -1216,7 +1216,7 @@
 <a href=#1216 id=1216 data-nosnippet>1216</a>
 <a href=#1217 id=1217 data-nosnippet>1217</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(current_snapshot_id) = <span class="self">self</span>.metadata.current_snapshot_id {
 <a href=#1218 id=1218 data-nosnippet>1218</a>            <span class="kw">let </span>last_id = new_snapshot_log.last().map(|entry| entry.snapshot_id);
-<a href=#1219 id=1219 data-nosnippet>1219</a>            <span class="kw">if </span>last_id != <span class="prelude-val">Some</span>(current_snapshot_id) {
+<a href=#1219 id=1219 data-nosnippet>1219</a>            <span class="kw">if </span><span class="macro">last_id !</span>= <span class="prelude-val">Some</span>(current_snapshot_id) {
 <a href=#1220 id=1220 data-nosnippet>1220</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#1221 id=1221 data-nosnippet>1221</a>                    ErrorKind::DataInvalid,
 <a href=#1222 id=1222 data-nosnippet>1222</a>                    <span class="string">"Cannot set invalid snapshot log: latest entry is not the current snapshot"</span>,
@@ -1256,8 +1256,8 @@
 <a href=#1256 id=1256 data-nosnippet>1256</a>                } =&gt; {
 <a href=#1257 id=1257 data-nosnippet>1257</a>                    <span class="kw">if </span>added_snapshot_ids.contains(<span class="kw-2">&amp;</span>reference.snapshot_id)
 <a href=#1258 id=1258 data-nosnippet>1258</a>                        &amp;&amp; ref_name == MAIN_BRANCH
-<a href=#1259 id=1259 data-nosnippet>1259</a>                        &amp;&amp; reference.snapshot_id
-<a href=#1260 id=1260 data-nosnippet>1260</a>                            != <span class="self">self
+<a href=#1259 id=1259 data-nosnippet>1259</a>                        &amp;&amp; reference.<span class="macro">snapshot_id
+<a href=#1260 id=1260 data-nosnippet>1260</a>                            !</span>= <span class="self">self
 <a href=#1261 id=1261 data-nosnippet>1261</a>                                </span>.metadata
 <a href=#1262 id=1262 data-nosnippet>1262</a>                                .current_snapshot_id
 <a href=#1263 id=1263 data-nosnippet>1263</a>                                .unwrap_or(i64::from(<span class="self">Self</span>::LAST_ADDED))
@@ -3607,4 +3607,5 @@
 <a href=#3607 id=3607 data-nosnippet>3607</a>        <span class="kw">let </span>field_ids: Vec&lt;i32&gt; = spec2.fields().iter().map(|f| f.field_id).collect();
 <a href=#3608 id=3608 data-nosnippet>3608</a>        <span class="macro">assert_eq!</span>(field_ids, <span class="macro">vec!</span>[<span class="number">1000</span>, <span class="number">1001</span>, <span class="number">1002</span>]); <span class="comment">// Reused 1000, 1001; new 1002
 <a href=#3609 id=3609 data-nosnippet>3609</a>    </span>}
-<a href=#3610 id=3610 data-nosnippet>3610</a>}</code></pre></div></section></main></body></html>
+<a href=#3610 id=3610 data-nosnippet>3610</a>}
+</code></pre></div></section></main></body></html>

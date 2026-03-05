@@ -1,1 +1,0 @@
-searchState.loadedDescShard("iceberg_integration_tests", 0, "Global test fixture that uses environment-based …\nReturns the argument unchanged.\nCreates a new GlobalTestFixture from environment variables.\nReturns a reference to the global test fixture. This …\nCalls <code>U::from(self)</code>.")

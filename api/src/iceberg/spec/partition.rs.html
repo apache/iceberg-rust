@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/partition.rs`."><title>partition.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0-nightly (be19eda0d 2025-06-22)" data-channel="nightly" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../static.files/storage-4e99c027.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>partition.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/partition.rs`."><title>partition.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>partition.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -144,9 +144,9 @@
 <a href=#144 id=144 data-nosnippet>144</a>        }
 <a href=#145 id=145 data-nosnippet>145</a>
 <a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">for </span>(this_field, other_field) <span class="kw">in </span><span class="self">self</span>.fields.iter().zip(other.fields.iter()) {
-<a href=#147 id=147 data-nosnippet>147</a>            <span class="kw">if </span>this_field.source_id != other_field.source_id
-<a href=#148 id=148 data-nosnippet>148</a>                || this_field.name != other_field.name
-<a href=#149 id=149 data-nosnippet>149</a>                || this_field.transform != other_field.transform
+<a href=#147 id=147 data-nosnippet>147</a>            <span class="kw">if </span>this_field.<span class="macro">source_id !</span>= other_field.source_id
+<a href=#148 id=148 data-nosnippet>148</a>                || this_field.<span class="macro">name !</span>= other_field.name
+<a href=#149 id=149 data-nosnippet>149</a>                || this_field.<span class="macro">transform !</span>= other_field.transform
 <a href=#150 id=150 data-nosnippet>150</a>            {
 <a href=#151 id=151 data-nosnippet>151</a>                <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#152 id=152 data-nosnippet>152</a>            }
@@ -302,7 +302,7 @@
 <a href=#302 id=302 data-nosnippet>302</a>            .and_then(|id| id.checked_add(index <span class="kw">as </span>i64))
 <a href=#303 id=303 data-nosnippet>303</a>            .unwrap_or(i64::MAX);
 <a href=#304 id=304 data-nosnippet>304</a>
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">if </span>field_id <span class="kw">as </span>i64 != expected_id {
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">if </span>field_id <span class="kw">as </span><span class="macro">i64 !</span>= expected_id {
 <a href=#306 id=306 data-nosnippet>306</a>            <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#307 id=307 data-nosnippet>307</a>        }
 <a href=#308 id=308 data-nosnippet>308</a>    }
@@ -638,8 +638,8 @@
 <a href=#638 id=638 data-nosnippet>638</a>            )
 <a href=#639 id=639 data-nosnippet>639</a>        })<span class="question-mark">?</span>;
 <a href=#640 id=640 data-nosnippet>640</a>
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">if </span>field.transform != Transform::Void {
-<a href=#642 id=642 data-nosnippet>642</a>            <span class="kw">if </span>!schema_field.field_type.is_primitive() {
+<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">if </span>field.<span class="macro">transform !</span>= Transform::Void {
+<a href=#642 id=642 data-nosnippet>642</a>            <span class="macro">if !</span>schema_field.field_type.is_primitive() {
 <a href=#643 id=643 data-nosnippet>643</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#644 id=644 data-nosnippet>644</a>                    ErrorKind::DataInvalid,
 <a href=#645 id=645 data-nosnippet>645</a>                    <span class="macro">format!</span>(
@@ -1843,4 +1843,5 @@
 <a href=#1843 id=1843 data-nosnippet>1843</a>            <span class="string">"id=42/name=alice/ts_hour=1000/empty_void=null"
 <a href=#1844 id=1844 data-nosnippet>1844</a>        </span>);
 <a href=#1845 id=1845 data-nosnippet>1845</a>    }
-<a href=#1846 id=1846 data-nosnippet>1846</a>}</code></pre></div></section></main></body></html>
+<a href=#1846 id=1846 data-nosnippet>1846</a>}
+</code></pre></div></section></main></body></html>

@@ -1,1 +1,0 @@
-searchState.loadedDescShard("iceberg_cache_moka", 0, "A cache provider that uses Moka for caching objects.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nCreates a new <code>MokaObjectCacheProvider</code> with default cache …\nSet the cache for manifests.\nSet the cache for manifest lists.")
