@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.8.0] - 2025-12-16
+## [v0.8.0] - 2026-01-06
 
 ### Breaking Changes
 
@@ -167,6 +167,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Remove wildcard pattern in exhaustive enums by @lgingerich in https://github.com/apache/iceberg-rust/pull/1925
 * fix: prioritize delete manifests to prevent scan deadlock by @dojiong in https://github.com/apache/iceberg-rust/pull/1937
 * feat: Include statistics for Reserved Fields by @Fokko in https://github.com/apache/iceberg-rust/pull/1849
+* fix(website): Update expected messages by @CTTY in https://github.com/apache/iceberg-rust/pull/1942
+* feat: Implement shared delete file loading and caching for ArrowReader by @dojiong in https://github.com/apache/iceberg-rust/pull/1941
+* infra: license header check ignore target/ dir by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1954
+* infra: release script, validate proper ICEBERG_VERSION variable by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/1956
+* refactor(arrow): Rename parameter in delete_filter for clarity by @robertmu in https://github.com/apache/iceberg-rust/pull/1955
+* feat(sqllogictest): use serde derived structs for schedule parsing by @AndreaBozzo in https://github.com/apache/iceberg-rust/pull/1953
+* fix: follow IEEE 754 totalOrder for `float` and `double` by @Standing-Man in https://github.com/apache/iceberg-rust/pull/1959
+* fix: return proper error rather than persisting error message on snapshot by @Standing-Man in https://github.com/apache/iceberg-rust/pull/1960
+* feat(arrow): Convert Arrow schema to Iceberg schema with auto assigned field ids by @CTTY in https://github.com/apache/iceberg-rust/pull/1928
+* fix: MemoryCatalog to return absolute NamespaceIdents by @eickler in https://github.com/apache/iceberg-rust/pull/1970
+* fix(spec): Include delete file content to V3 manifest by @CTTY in https://github.com/apache/iceberg-rust/pull/1979
+* fix: fix typo check error by @Standing-Man in https://github.com/apache/iceberg-rust/pull/1989
+* Fix ci audit failure by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/1988
+* feat: make FanoutWriter writer configurable by @Standing-Man in https://github.com/apache/iceberg-rust/pull/1962
 
 ## [v0.7.0] - 2025-09-23
 

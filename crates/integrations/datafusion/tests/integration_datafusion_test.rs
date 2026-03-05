@@ -26,6 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
+use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{
     NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionSpec,
@@ -44,6 +45,7 @@ fn temp_path() -> String {
 
 async fn get_iceberg_catalog() -> MemoryCatalog {
     MemoryCatalogBuilder::default()
+        .with_storage_factory(Arc::new(LocalFsStorageFactory))
         .load(
             "memory",
             HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),

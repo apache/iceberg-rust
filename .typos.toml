@@ -15,5 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[type.rust]
+extend-ignore-identifiers-re = ["^bimap$"]
+
 [files]
 extend-exclude = ["**/testdata", "CHANGELOG.md"]

@@ -24,7 +24,7 @@ use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::sql::TableReference;
-use iceberg::io::FileIO;
+use iceberg::io::{FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 
@@ -97,11 +97,22 @@ use crate::to_datafusion_error;
 /// An error will be returned if any unsupported feature, such as partition columns,
 /// order expressions, constraints, or column defaults, is detected in the table creation command.
 #[derive(Debug, Default)]
-pub struct IcebergTableProviderFactory {}
+pub struct IcebergTableProviderFactory {
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 impl IcebergTableProviderFactory {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            storage_factory: None,
+        }
+    }
+
+    /// Create a new factory with a custom storage factory for creating FileIO instances.
+    pub fn new_with_storage_factory(storage_factory: Arc<dyn StorageFactory>) -> Self {
+        Self {
+            storage_factory: Some(storage_factory),
+        }
     }
 }
 
@@ -120,10 +131,20 @@ impl TableProviderFactory for IcebergTableProviderFactory {
 
         let table_name_with_ns = complement_namespace_if_necessary(table_name);
 
-        let table = create_static_table(table_name_with_ns, metadata_file_path, options)
-            .await
-            .map_err(to_datafusion_error)?
-            .into_table();
+        let storage_factory = self
+            .storage_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(LocalFsStorageFactory));
+
+        let table = create_static_table(
+            table_name_with_ns,
+            metadata_file_path,
+            options,
+            storage_factory,
+        )
+        .await
+        .map_err(to_datafusion_error)?
+        .into_table();
 
         let provider = IcebergStaticTableProvider::try_new_from_table(table)
             .await
@@ -183,11 +204,12 @@ async fn create_static_table(
     table_name: Cow<'_, TableReference>,
     metadata_file_path: &str,
     props: &HashMap<String, String>,
+    storage_factory: Arc<dyn StorageFactory>,
 ) -> Result<StaticTable> {
     let table_ident = TableIdent::from_strs(table_name.to_vec())?;
-    let file_io = FileIO::from_path(metadata_file_path)?
+    let file_io = FileIOBuilder::new(storage_factory)
         .with_props(props)
-        .build()?;
+        .build();
     StaticTable::from_metadata_file(metadata_file_path, table_ident, file_io).await
 }
 
