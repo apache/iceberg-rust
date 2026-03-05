@@ -90,10 +90,12 @@ impl TransactionAction for FastAppendAction {
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            vec![],
         );
 
         // validate added files
         snapshot_producer.validate_added_data_files()?;
+        snapshot_producer.validate_added_delete_files()?;
 
         // Checks duplicate files
         if self.check_duplicate {
