@@ -51,7 +51,7 @@ pub struct IcebergTableScan {
     projection: Option<Vec<String>>,
     /// Filters to apply to the table scan
     predicates: Option<Predicate>,
-    /// Optional limit on the number of rows to return
+    /// Maximum number of records to return, None means no limit
     limit: Option<usize>,
 }
 
@@ -151,6 +151,7 @@ impl ExecutionPlan for IcebergTableScan {
             self.snapshot_id,
             self.projection.clone(),
             self.predicates.clone(),
+            self.limit,
         );
         let stream = futures::stream::once(fut).try_flatten();
 
@@ -189,13 +190,14 @@ impl DisplayAs for IcebergTableScan {
     ) -> std::fmt::Result {
         write!(
             f,
-            "IcebergTableScan projection:[{}] predicate:[{}]",
+            "IcebergTableScan projection:[{}] predicate:[{}] limit:[{}]",
             self.projection
                 .clone()
                 .map_or(String::new(), |v| v.join(",")),
             self.predicates
                 .clone()
-                .map_or(String::from(""), |p| format!("{p}"))
+                .map_or(String::from(""), |p| format!("{p}")),
+            self.limit.map_or(String::from(""), |l| format!("{l}")),
         )
     }
 }
@@ -210,6 +212,7 @@ async fn get_batch_stream(
     snapshot_id: Option<i64>,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
+    limit: Option<usize>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
     let scan_builder = match snapshot_id {
         Some(snapshot_id) => table.scan().snapshot_id(snapshot_id),
@@ -223,6 +226,9 @@ async fn get_batch_stream(
     if let Some(pred) = predicates {
         scan_builder = scan_builder.with_filter(pred);
     }
+
+    scan_builder = scan_builder.with_limit(limit);
+
     let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
     let stream = table_scan
