@@ -251,14 +251,18 @@ pub struct CreateTableRequest {
     /// Name of the table to create
     pub name: String,
     /// Optional table location. If not provided, the server will choose a location.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
     /// Table schema
     pub schema: Schema,
     /// Optional partition specification. If not provided, the table will be unpartitioned.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// Optional sort order for the table
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub write_order: Option<SortOrder>,
     /// Whether to stage the create for a transaction (true) or create immediately (false)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_create: Option<bool>,
     /// Optional properties to set on the table
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -353,6 +357,66 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&ns_response_no_props).expect("Serialization failed"),
             json_no_props
+        );
+    }
+
+    #[test]
+    fn test_create_table_request_serde() {
+        let json_full = serde_json::json!({
+            "name": "my_table",
+            "location": "s3://bucket/table",
+            "schema": {
+                "schema-id": 0,
+                "type": "struct",
+                "fields": [
+                    {"id": 1, "name": "id", "required": true, "type": "int"}
+                ]
+            },
+            "partition-spec": {
+                "fields": [
+                    {"source-id": 1, "name": "id_bucket", "transform": "bucket[16]"}
+                ]
+            },
+            "write-order": {
+                "order-id": 0,
+                "fields": []
+            },
+            "stage-create": true,
+            "properties": {"key": "value"}
+        });
+        let request_full: CreateTableRequest =
+            serde_json::from_value(json_full.clone()).expect("Deserialization failed");
+        assert_eq!(request_full.name, "my_table");
+        assert_eq!(request_full.location.as_deref(), Some("s3://bucket/table"));
+        assert!(request_full.partition_spec.is_some());
+        assert_eq!(request_full.stage_create, Some(true));
+        assert_eq!(
+            serde_json::to_value(&request_full).expect("Serialization failed"),
+            json_full
+        );
+
+        // Without optional fields — they must be omitted, not null
+        let json_minimal = serde_json::json!({
+            "name": "my_table",
+            "schema": {
+                "schema-id": 0,
+                "type": "struct",
+                "fields": [
+                    {"id": 1, "name": "id", "required": true, "type": "int"}
+                ]
+            }
+        });
+        let request_minimal: CreateTableRequest =
+            serde_json::from_value(json_minimal.clone()).expect("Deserialization failed");
+        assert_eq!(request_minimal.name, "my_table");
+        assert_eq!(request_minimal.location, None);
+        assert_eq!(request_minimal.partition_spec, None);
+        assert_eq!(request_minimal.write_order, None);
+        assert_eq!(request_minimal.stage_create, None);
+        assert!(request_minimal.properties.is_empty());
+        assert_eq!(
+            serde_json::to_value(&request_minimal).expect("Serialization failed"),
+            json_minimal
         );
     }
 }
