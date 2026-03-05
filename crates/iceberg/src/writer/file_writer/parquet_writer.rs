@@ -570,6 +570,10 @@ impl CurrentFileStatus for ParquetWriter {
             0
         }
     }
+
+    fn current_schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
 }
 
 /// AsyncFileWriter is a wrapper of FileWrite to make it compatible with tokio::io::AsyncWrite.
