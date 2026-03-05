@@ -60,6 +60,7 @@ backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"
 bytes = "1.11"
+cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
 dashmap = "6"

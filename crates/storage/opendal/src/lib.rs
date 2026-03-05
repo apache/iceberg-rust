@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cfg_if::cfg_if;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
@@ -38,47 +39,52 @@ use opendal::layers::RetryLayer;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
-#[cfg(feature = "opendal-azdls")]
-mod azdls;
-#[cfg(feature = "opendal-azdls")]
-use azdls::AzureStorageScheme;
-#[cfg(feature = "opendal-azdls")]
-use azdls::*;
-#[cfg(feature = "opendal-azdls")]
-use opendal::services::AzdlsConfig;
+cfg_if! {
+    if #[cfg(feature = "opendal-azdls")] {
+        mod azdls;
+        use azdls::AzureStorageScheme;
+        use azdls::*;
+        use opendal::services::AzdlsConfig;
+    }
+}
 
-#[cfg(feature = "opendal-fs")]
-mod fs;
-#[cfg(feature = "opendal-fs")]
-use fs::*;
+cfg_if! {
+    if #[cfg(feature = "opendal-fs")] {
+        mod fs;
+        use fs::*;
+    }
+}
 
-#[cfg(feature = "opendal-gcs")]
-mod gcs;
-#[cfg(feature = "opendal-gcs")]
-use gcs::*;
-#[cfg(feature = "opendal-gcs")]
-use opendal::services::GcsConfig;
+cfg_if! {
+    if #[cfg(feature = "opendal-gcs")] {
+        mod gcs;
+        use gcs::*;
+        use opendal::services::GcsConfig;
+    }
+}
 
-#[cfg(feature = "opendal-memory")]
-mod memory;
-#[cfg(feature = "opendal-memory")]
-use memory::*;
+cfg_if! {
+    if #[cfg(feature = "opendal-memory")] {
+        mod memory;
+        use memory::*;
+    }
+}
 
-#[cfg(feature = "opendal-oss")]
-mod oss;
-#[cfg(feature = "opendal-oss")]
-use opendal::services::OssConfig;
-#[cfg(feature = "opendal-oss")]
-use oss::*;
+cfg_if! {
+    if #[cfg(feature = "opendal-oss")] {
+        mod oss;
+        use opendal::services::OssConfig;
+        use oss::*;
+    }
+}
 
-#[cfg(feature = "opendal-s3")]
-mod s3;
-#[cfg(feature = "opendal-s3")]
-use opendal::services::S3Config;
-#[cfg(feature = "opendal-s3")]
-pub use s3::CustomAwsCredentialLoader;
-#[cfg(feature = "opendal-s3")]
-pub use s3::*;
+cfg_if! {
+    if #[cfg(feature = "opendal-s3")] {
+        mod s3;
+        use opendal::services::S3Config;
+        pub use s3::*;
+    }
+}
 
 /// OpenDAL-based storage factory.
 ///

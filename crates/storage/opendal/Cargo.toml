@@ -39,6 +39,7 @@ opendal-s3 = ["opendal/services-s3", "reqsign"]
 
 [dependencies]
 anyhow = { workspace = true }
+cfg-if = { workspace = true }
 iceberg = { workspace = true }
 opendal = { workspace = true }
 async-trait = { workspace = true }
