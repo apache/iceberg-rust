@@ -400,6 +400,28 @@ impl Storage for OpenDalStorage {
         Ok(op.remove_all(&path).await.map_err(from_opendal_error)?)
     }
 
+    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
+        // Get the first path to create the operator
+        let Some(first_path) = paths.next().await else {
+            return Ok(());
+        };
+
+        let storage = self.clone();
+        let (op, first_relative) = self.create_operator(&first_path)?;
+
+        // Create a stream of relative paths, starting with the first one
+        let relative_paths = futures::stream::once(async move { first_relative.to_string() })
+            .chain(paths.map(move |path| {
+                let (_, relative_path) = storage
+                    .create_operator(&path)
+                    .expect("Failed to create operator");
+                relative_path.to_string()
+            }));
+
+        op.delete_stream(relative_paths).await?;
+        Ok(())
+    }
+
     #[allow(unreachable_code, unused_variables)]
     fn new_input(&self, path: &str) -> Result<InputFile> {
         Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
