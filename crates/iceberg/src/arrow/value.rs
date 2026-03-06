@@ -30,7 +30,7 @@ use uuid::Uuid;
 use super::get_field_id_from_metadata;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
+    SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
     visit_type_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -425,6 +425,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 }
             }
         }
+    }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Converting variant Arrow array to Iceberg literal is not supported yet",
+        ))
     }
 }
 

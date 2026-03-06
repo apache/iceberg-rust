@@ -129,6 +129,24 @@ spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN b
 spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN baz TYPE decimal(6, 2)")
 spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (25, 22.25, 22.25)")
 
+#  Create a table with a variant column
+spark.sql("""
+CREATE OR REPLACE TABLE rest.default.test_variant_column (
+    id     INT,
+    v      VARIANT
+)
+USING iceberg
+TBLPROPERTIES ('format-version'='3')
+""")
+
+spark.sql("""
+INSERT INTO rest.default.test_variant_column
+VALUES
+    (1, PARSE_JSON('{"a": 1, "b": "hello"}')),
+    (2, PARSE_JSON('[1, 2, 3]')),
+    (3, PARSE_JSON('42'))
+""")
+
 #  Create a table with various types
 spark.sql("""
 CREATE OR REPLACE TABLE rest.default.types_test USING ICEBERG AS 
