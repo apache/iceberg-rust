@@ -338,6 +338,101 @@ impl OpenDalStorage {
         let operator = operator.layer(RetryLayer::new());
         Ok((operator, relative_path))
     }
+
+    /// Extracts the relative path from an absolute path without building an operator.
+    ///
+    /// This is a lightweight alternative to [`create_operator`](Self::create_operator) for cases
+    /// where only the relative path is needed (e.g. bulk deletes where the operator is already
+    /// available).
+    #[allow(unreachable_code, unused_variables)]
+    pub(crate) fn relativize_path<'a>(&self, path: &'a str) -> Result<&'a str> {
+        match self {
+            #[cfg(feature = "opendal-memory")]
+            OpenDalStorage::Memory(_) => Ok(path.strip_prefix("memory:/").unwrap_or(&path[1..])),
+            #[cfg(feature = "opendal-fs")]
+            OpenDalStorage::LocalFs => Ok(path.strip_prefix("file:/").unwrap_or(&path[1..])),
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorage::S3 {
+                configured_scheme, ..
+            } => {
+                let url = url::Url::parse(path)?;
+                let bucket = url.host_str().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid s3 url: {path}, missing bucket"),
+                    )
+                })?;
+                let prefix = format!("{}://{}/", configured_scheme, bucket);
+                if path.starts_with(&prefix) {
+                    Ok(&path[prefix.len()..])
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid s3 url: {path}, should start with {prefix}"),
+                    ))
+                }
+            }
+            #[cfg(feature = "opendal-gcs")]
+            OpenDalStorage::Gcs { .. } => {
+                let url = url::Url::parse(path)?;
+                let bucket = url.host_str().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid gcs url: {path}, missing bucket"),
+                    )
+                })?;
+                let prefix = format!("gs://{}/", bucket);
+                if path.starts_with(&prefix) {
+                    Ok(&path[prefix.len()..])
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid gcs url: {path}, should start with {prefix}"),
+                    ))
+                }
+            }
+            #[cfg(feature = "opendal-oss")]
+            OpenDalStorage::Oss { .. } => {
+                let url = url::Url::parse(path)?;
+                let bucket = url.host_str().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid oss url: {path}, missing bucket"),
+                    )
+                })?;
+                let prefix = format!("oss://{}/", bucket);
+                if path.starts_with(&prefix) {
+                    Ok(&path[prefix.len()..])
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid oss url: {path}, should start with {prefix}"),
+                    ))
+                }
+            }
+            #[cfg(feature = "opendal-azdls")]
+            OpenDalStorage::Azdls {
+                configured_scheme,
+                config,
+            } => {
+                let azure_path = path.parse::<AzureStoragePath>()?;
+                match_path_with_config(&azure_path, config, configured_scheme)?;
+                let relative_path_len = azure_path.path.len();
+                Ok(&path[path.len() - relative_path_len..])
+            }
+            #[cfg(all(
+                not(feature = "opendal-s3"),
+                not(feature = "opendal-fs"),
+                not(feature = "opendal-gcs"),
+                not(feature = "opendal-oss"),
+                not(feature = "opendal-azdls"),
+            ))]
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "No storage service has been enabled",
+            )),
+        }
+    }
 }
 
 #[typetag::serde(name = "OpenDalStorage")]
@@ -408,21 +503,24 @@ impl Storage for OpenDalStorage {
             return Ok(());
         };
 
-        let storage = self.clone();
         let (op, first_relative) = self.create_operator(&first_path)?;
 
-        // Create a stream of relative paths, starting with the first one
-        let relative_paths = futures::stream::once(async move { first_relative.to_string() })
-            .chain(paths.map(move |path| {
-                let (_, relative_path) = storage
-                    .create_operator(&path)
-                    .expect("Failed to create operator");
-                relative_path.to_string()
-            }));
-
-        op.delete_stream(relative_paths)
+        let mut deleter = op.deleter().await.map_err(from_opendal_error)?;
+        deleter
+            .delete(first_relative)
             .await
             .map_err(from_opendal_error)?;
+
+        // Use relativize_path for remaining paths to avoid rebuilding the operator each time.
+        while let Some(path) = paths.next().await {
+            let relative_path = self.relativize_path(&path)?;
+            deleter
+                .delete(relative_path)
+                .await
+                .map_err(from_opendal_error)?;
+        }
+
+        deleter.close().await.map_err(from_opendal_error)?;
         Ok(())
     }
 
@@ -482,5 +580,183 @@ mod tests {
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[test]
+    fn test_relativize_path_memory() {
+        let storage = OpenDalStorage::Memory(default_memory_operator());
+
+        assert_eq!(
+            storage.relativize_path("memory:/path/to/file").unwrap(),
+            "path/to/file"
+        );
+        // Without the scheme prefix, falls back to stripping the leading slash
+        assert_eq!(
+            storage.relativize_path("/path/to/file").unwrap(),
+            "path/to/file"
+        );
+    }
+
+    #[cfg(feature = "opendal-fs")]
+    #[test]
+    fn test_relativize_path_fs() {
+        let storage = OpenDalStorage::LocalFs;
+
+        assert_eq!(
+            storage
+                .relativize_path("file:/tmp/data/file.parquet")
+                .unwrap(),
+            "tmp/data/file.parquet"
+        );
+        assert_eq!(
+            storage.relativize_path("/tmp/data/file.parquet").unwrap(),
+            "tmp/data/file.parquet"
+        );
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_relativize_path_s3() {
+        let storage = OpenDalStorage::S3 {
+            configured_scheme: "s3".to_string(),
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("s3://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+
+        // s3a scheme
+        let storage_s3a = OpenDalStorage::S3 {
+            configured_scheme: "s3a".to_string(),
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+        };
+        assert_eq!(
+            storage_s3a
+                .relativize_path("s3a://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_relativize_path_s3_scheme_mismatch() {
+        let storage = OpenDalStorage::S3 {
+            configured_scheme: "s3".to_string(),
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+        };
+
+        // Scheme mismatch should error
+        assert!(
+            storage
+                .relativize_path("s3a://my-bucket/path/to/file.parquet")
+                .is_err()
+        );
+    }
+
+    #[cfg(feature = "opendal-gcs")]
+    #[test]
+    fn test_relativize_path_gcs() {
+        let storage = OpenDalStorage::Gcs {
+            config: Arc::new(GcsConfig::default()),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("gs://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+    }
+
+    #[cfg(feature = "opendal-gcs")]
+    #[test]
+    fn test_relativize_path_gcs_invalid_scheme() {
+        let storage = OpenDalStorage::Gcs {
+            config: Arc::new(GcsConfig::default()),
+        };
+
+        assert!(
+            storage
+                .relativize_path("s3://my-bucket/path/to/file.parquet")
+                .is_err()
+        );
+    }
+
+    #[cfg(feature = "opendal-oss")]
+    #[test]
+    fn test_relativize_path_oss() {
+        let storage = OpenDalStorage::Oss {
+            config: Arc::new(OssConfig::default()),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("oss://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+    }
+
+    #[cfg(feature = "opendal-oss")]
+    #[test]
+    fn test_relativize_path_oss_invalid_scheme() {
+        let storage = OpenDalStorage::Oss {
+            config: Arc::new(OssConfig::default()),
+        };
+
+        assert!(
+            storage
+                .relativize_path("s3://my-bucket/path/to/file.parquet")
+                .is_err()
+        );
+    }
+
+    #[cfg(feature = "opendal-azdls")]
+    #[test]
+    fn test_relativize_path_azdls() {
+        let storage = OpenDalStorage::Azdls {
+            configured_scheme: AzureStorageScheme::Abfss,
+            config: Arc::new(AzdlsConfig {
+                account_name: Some("myaccount".to_string()),
+                endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("abfss://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
+                .unwrap(),
+            "/path/to/file.parquet"
+        );
+    }
+
+    #[cfg(feature = "opendal-azdls")]
+    #[test]
+    fn test_relativize_path_azdls_scheme_mismatch() {
+        let storage = OpenDalStorage::Azdls {
+            configured_scheme: AzureStorageScheme::Abfss,
+            config: Arc::new(AzdlsConfig {
+                account_name: Some("myaccount".to_string()),
+                endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        // wasbs scheme doesn't match configured abfss
+        assert!(
+            storage
+                .relativize_path("wasbs://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
+                .is_err()
+        );
     }
 }

@@ -25,6 +25,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use futures::StreamExt;
     use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH};
     use iceberg_storage_opendal::OpenDalStorageFactory;
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
@@ -93,5 +94,42 @@ mod tests {
 
         let input = file_io.new_input(gs_file).unwrap();
         assert_eq!(input.read().await.unwrap(), Bytes::from_static(b"iceberg!"));
+    }
+
+    #[tokio::test]
+    async fn gcs_delete_stream() {
+        let file_io = get_file_io_gcs().await;
+        let base = get_gs_path();
+
+        // Write multiple files
+        let paths: Vec<String> = (0..5)
+            .map(|i| format!("{base}/delete-stream-{i}"))
+            .collect();
+        for path in &paths {
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write(Bytes::from_static(b"to-delete"))
+                .await
+                .unwrap();
+            assert!(file_io.exists(path).await.unwrap());
+        }
+
+        // Delete via delete_stream on FileIO
+        let stream = futures::stream::iter(paths.clone()).boxed();
+        file_io.delete_stream(stream).await.unwrap();
+
+        // Verify all files are gone
+        for path in &paths {
+            assert!(!file_io.exists(path).await.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn gcs_delete_stream_empty() {
+        let file_io = get_file_io_gcs().await;
+        let stream = futures::stream::empty().boxed();
+        // Should succeed with no-op
+        file_io.delete_stream(stream).await.unwrap();
     }
 }
