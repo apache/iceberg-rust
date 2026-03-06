@@ -65,26 +65,6 @@ async fn main() -> Result<()> {
 }
 ```
 
-## IO Support
+## Storage Backends
 
-Iceberg Rust provides various storage backends through feature flags. Here are the currently supported storage backends:
-
-| Storage Backend      | Feature Flag     | Status         | Description                                   |
-| -------------------- | ---------------- | -------------- | --------------------------------------------- |
-| Memory               | `opendal-memory` | ✅ Stable       | In-memory storage for testing and development |
-| Local Filesystem     | `opendal-fs`     | ✅ Stable       | Local filesystem storage                      |
-| Amazon S3            | `opendal-s3`     | ✅ Stable       | Amazon S3 storage                             |
-| Google Cloud Storage | `opendal-gcs`    | ✅ Stable       | Google Cloud Storage                          |
-| Alibaba Cloud OSS    | `opendal-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
-| Azure Datalake       | `opendal-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
-
-You can enable all stable storage backends at once using the `opendal-all` feature flag. 
-
-> Note that `opendal-oss` and `opendal-azdls` are currently experimental and not included in `opendal-all`.
-
-Example usage in `Cargo.toml`:
-
-```toml
-[dependencies]
-iceberg = { version = "x.y.z", features = ["opendal-s3", "opendal-fs"] }
-```
+For storage backend support (S3, GCS, local filesystem, etc.), use the [`iceberg-storage-opendal`](https://crates.io/crates/iceberg-storage-opendal) crate. See its [README](../storage/opendal/README.md) for available backends and feature flags.
