@@ -320,8 +320,8 @@ impl ArrowReader {
         let delete_filter_rx =
             delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
-        // Load Parquet metadata once for this file
-        let parquet_metadata = Self::load_parquet_metadata(
+        // Open the Parquet file once, loading its metadata
+        let (parquet_file_reader, arrow_metadata) = Self::open_parquet_file(
             &task.data_file_path,
             &file_io,
             task.file_size_in_bytes,
@@ -329,22 +329,10 @@ impl ArrowReader {
         )
         .await?;
 
-        // Migrated tables lack field IDs, requiring us to inspect the schema to choose
-        // between field-ID-based or position-based projection
-        let default_arrow_metadata =
-            ArrowReaderMetadata::try_new(Arc::clone(&parquet_metadata), Default::default())
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to create ArrowReaderMetadata from ParquetMetaData",
-                    )
-                    .with_source(e)
-                })?;
-
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
         // Reference: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java:118
-        let missing_field_ids = default_arrow_metadata
+        let missing_field_ids = arrow_metadata
             .schema()
             .fields()
             .iter()
@@ -366,7 +354,7 @@ impl ArrowReader {
         // - Branch 1: hasIds(fileSchema) → trust embedded field IDs, use pruneColumns()
         // - Branch 2: nameMapping present → applyNameMapping(), then pruneColumns()
         // - Branch 3: fallback → addFallbackIds(), then pruneColumnsFallback()
-        let options = if missing_field_ids {
+        let arrow_metadata = if missing_field_ids {
             // Parquet file lacks field IDs - must assign them before reading
             let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
                 // Branch 2: Apply name mapping to assign correct Iceberg field IDs
@@ -374,31 +362,33 @@ impl ArrowReader {
                 // to columns without field id"
                 // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
                 apply_name_mapping_to_arrow_schema(
-                    Arc::clone(default_arrow_metadata.schema()),
+                    Arc::clone(arrow_metadata.schema()),
                     name_mapping,
                 )?
             } else {
                 // Branch 3: No name mapping - use position-based fallback IDs
                 // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
-                add_fallback_field_ids_to_arrow_schema(default_arrow_metadata.schema())
+                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
             };
 
-            ArrowReaderOptions::new().with_schema(arrow_schema)
+            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
+                |e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to create ArrowReaderMetadata with field ID schema",
+                    )
+                    .with_source(e)
+                },
+            )?
         } else {
             // Branch 1: File has embedded field IDs - trust them
-            ArrowReaderOptions::default()
+            arrow_metadata
         };
 
-        // Create a single builder with the correct options and pre-loaded metadata
-        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
-            &task.data_file_path,
-            file_io.clone(),
-            options,
-            task.file_size_in_bytes,
-            parquet_metadata,
-            parquet_read_options,
-        )
-        .await?;
+        // Build the stream reader, reusing the already-opened file reader
+        let mut record_batch_stream_builder =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata);
 
         // Filter out metadata fields for Parquet projection (they don't exist in files)
         let project_field_ids_without_metadata: Vec<i32> = task
@@ -591,13 +581,15 @@ impl ArrowReader {
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
-    /// Loads Parquet metadata from storage, handling file size optimization.
-    pub(crate) async fn load_parquet_metadata(
+    /// Opens a Parquet file and loads its metadata, returning both the reader and metadata.
+    /// The reader can be reused to build a `ParquetRecordBatchStreamBuilder` without
+    /// reopening the file.
+    pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-    ) -> Result<Arc<ParquetMetaData>> {
+    ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
         let parquet_reader = parquet_file.reader().await?;
         let mut reader = ArrowFileReader::new(
@@ -614,40 +606,7 @@ impl ArrowReader {
                 Error::new(ErrorKind::Unexpected, "Failed to load Parquet metadata").with_source(e)
             })?;
 
-        Ok(Arc::clone(arrow_metadata.metadata()))
-    }
-
-    pub(crate) async fn create_parquet_record_batch_stream_builder(
-        data_file_path: &str,
-        file_io: FileIO,
-        arrow_reader_options: ArrowReaderOptions,
-        file_size_in_bytes: u64,
-        parquet_metadata: Arc<ParquetMetaData>,
-        parquet_read_options: ParquetReadOptions,
-    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader>> {
-        let arrow_reader_metadata =
-            ArrowReaderMetadata::try_new(parquet_metadata, arrow_reader_options).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to create ArrowReaderMetadata from ParquetMetaData",
-                )
-                .with_source(e)
-            })?;
-
-        let parquet_file = file_io.new_input(data_file_path)?;
-        let parquet_reader = parquet_file.reader().await?;
-        let parquet_file_reader = ArrowFileReader::new(
-            FileMetadata {
-                size: file_size_in_bytes,
-            },
-            parquet_reader,
-        )
-        .with_parquet_read_options(parquet_read_options);
-
-        Ok(ParquetRecordBatchStreamBuilder::new_with_metadata(
-            parquet_file_reader,
-            arrow_reader_metadata,
-        ))
+        Ok((reader, arrow_metadata))
     }
 
     /// computes a `RowSelection` from positional delete indices.
