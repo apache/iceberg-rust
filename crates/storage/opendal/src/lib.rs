@@ -29,6 +29,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cfg_if::cfg_if;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
