@@ -420,7 +420,9 @@ impl Storage for OpenDalStorage {
                 relative_path.to_string()
             }));
 
-        op.delete_stream(relative_paths).await?;
+        op.delete_stream(relative_paths)
+            .await
+            .map_err(from_opendal_error)?;
         Ok(())
     }
 
