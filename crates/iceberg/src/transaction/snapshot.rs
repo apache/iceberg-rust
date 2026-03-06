@@ -32,7 +32,6 @@ use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::transaction::validate::SnapshotValidator;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
-use crate::transaction::validate::SnapshotValidator;
 
 const META_ROOT_PATH: &str = "metadata";
 
