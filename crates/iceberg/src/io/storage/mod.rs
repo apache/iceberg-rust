@@ -27,7 +27,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use config::*;
-use futures::StreamExt;
 use futures::stream::BoxStream;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
