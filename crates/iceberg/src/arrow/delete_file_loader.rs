@@ -20,6 +20,7 @@ use std::sync::Arc;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::arrow::ArrowReader;
+use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
@@ -63,10 +64,9 @@ impl BasicDeleteFileLoader {
         let record_batch_stream = ArrowReader::create_parquet_record_batch_stream_builder(
             data_file_path,
             self.file_io.clone(),
-            false,
-            None,
             None,
             file_size_in_bytes,
+            ParquetReadOptions::builder().build(),
         )
         .await?
         .build()?
