@@ -35,16 +35,10 @@ use crate::Result;
 /// All paths passed to `FileIO` must be absolute paths starting with the scheme string
 /// appropriate for the storage backend being used.
 ///
-/// Supported storages:
-///
-/// | Storage            | Feature Flag      | Expected Path Format             | Schemes                       |
-/// |--------------------|-------------------|----------------------------------| ------------------------------|
-/// | Local file system  | `opendal-fs`      | `file`                           | `file://path/to/file`         |
-/// | Memory             | `opendal-memory`  | `memory`                         | `memory://path/to/file`       |
-/// | S3                 | `opendal-s3`      | `s3`, `s3a`                      | `s3://<bucket>/path/to/file`  |
-/// | GCS                | `opendal-gcs`     | `gs`, `gcs`                      | `gs://<bucket>/path/to/file`  |
-/// | OSS                | `opendal-oss`     | `oss`                            | `oss://<bucket>/path/to/file` |
-/// | Azure Datalake     | `opendal-azdls`   | `abfs`, `abfss`, `wasb`, `wasbs` | `abfs://<filesystem>@<account>.dfs.core.windows.net/path/to/file` or `wasb://<container>@<account>.blob.core.windows.net/path/to/file` |
+/// This crate provides native support for local filesystem (`file://`) and
+/// memory (`memory://`) storage. For extensive storage backend support (S3, GCS,
+/// OSS, Azure, etc.), use the
+/// [`iceberg-storage-opendal`](https://crates.io/crates/iceberg-storage-opendal) crate.
 ///
 /// # Example
 ///
