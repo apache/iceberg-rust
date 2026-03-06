@@ -63,8 +63,8 @@
 //!
 //! use iceberg::CatalogBuilder;
 //! use iceberg_catalog_sql::{
-//!     SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE, SqlBindStyle,
-//!     SqlCatalogBuilder,
+//!     SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
+//!     SqlBindStyle, SqlCatalogBuilder,
 //! };
 //!
 //! #[tokio::main]
@@ -90,7 +90,7 @@
 //!         .await
 //!         .unwrap();
 //! }
-//!```
+//! ```
 
 #![deny(missing_docs)]
 
