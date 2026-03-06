@@ -341,6 +341,14 @@ impl ManifestWriter {
         Ok(())
     }
 
+    /// Add a deleted manifest entry, preserving the original sequence numbers.
+    pub(crate) fn add_deleted_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
+        self.check_data_file(&entry.data_file)?;
+        entry.status = ManifestStatus::Deleted;
+        self.add_entry_inner(entry)?;
+        Ok(())
+    }
+
     /// Add an file as existing manifest entry. The original data and file sequence numbers, snapshot ID,
     /// which were assigned at commit, must be preserved when adding an existing entry.
     pub fn add_existing_file(
