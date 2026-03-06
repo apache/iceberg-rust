@@ -132,6 +132,10 @@ where
     fn current_written_size(&self) -> usize {
         self.inner.as_ref().unwrap().current_written_size()
     }
+
+    fn current_schema(&self) -> crate::spec::SchemaRef {
+        self.inner.as_ref().unwrap().current_schema()
+    }
 }
 
 #[cfg(test)]
@@ -170,18 +174,21 @@ mod test {
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
-        let schema = Schema::builder()
-            .with_schema_id(3)
-            .with_fields(vec![
-                NestedField::required(3, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(4, "bar", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(3)
+                .with_fields(vec![
+                    NestedField::required(3, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(4, "bar", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()?,
+        );
 
-        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
 
         let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pw,
+            schema,
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -268,6 +275,7 @@ mod test {
 
         let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
+            schema_ref.clone(),
             file_io.clone(),
             location_gen,
             file_name_gen,

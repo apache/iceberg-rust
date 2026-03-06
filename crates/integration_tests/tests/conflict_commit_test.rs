@@ -83,6 +83,7 @@ async fn test_append_data_file_conflict() {
     );
     let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
         parquet_writer_builder,
+        table.metadata().current_schema().clone(),
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
