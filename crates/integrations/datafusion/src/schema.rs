@@ -36,6 +36,20 @@ use crate::to_datafusion_error;
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
+///
+/// # Deprecation Notice
+///
+/// This provider captures a snapshot of table state at creation time and does not
+/// reflect subsequent changes to the catalog (new tables, dropped tables, etc.).
+///
+/// Use [`IcebergAsyncSchemaProvider`] instead for dynamic catalog support that
+/// fetches metadata on-demand.
+///
+/// [`IcebergAsyncSchemaProvider`]: crate::IcebergAsyncSchemaProvider
+#[deprecated(
+    since = "0.6.0",
+    note = "Use IcebergAsyncSchemaProvider instead for dynamic catalog support. This provider captures a snapshot at creation time and does not reflect catalog changes."
+)]
 #[derive(Debug)]
 pub(crate) struct IcebergSchemaProvider {
     /// Reference to the Iceberg catalog
