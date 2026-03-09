@@ -19,7 +19,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use futures::stream::BoxStream;
+use futures::{Stream, StreamExt};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -152,8 +152,8 @@ impl FileIO {
     /// # Arguments
     ///
     /// * paths: A stream of absolute paths starting with the scheme string used to construct [`FileIO`].
-    pub async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
-        self.get_storage()?.delete_stream(paths).await
+    pub async fn delete_stream(&self, paths: impl Stream<Item = String> + Send + 'static) -> Result<()> {
+        self.get_storage()?.delete_stream(paths.boxed()).await
     }
 
     /// Check file exists.
