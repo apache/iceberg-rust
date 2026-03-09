@@ -147,7 +147,7 @@ impl Transaction {
     ///
     /// RowDelta supports:
     /// - Adding new data files (inserts)
-    /// - Removing data files (deletes in COW mode)
+    /// - Removing data files (deletes in Copy-on-Write (COW) mode)
     /// - Both operations in a single transaction (updates/merges)
     pub fn row_delta(&self) -> RowDeltaAction {
         RowDeltaAction::new()
