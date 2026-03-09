@@ -243,7 +243,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::TableMetadata;
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -263,7 +263,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap()
     }
@@ -282,7 +282,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap()
     }
@@ -301,7 +301,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap()
     }

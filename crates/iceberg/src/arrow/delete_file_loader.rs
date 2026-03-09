@@ -18,8 +18,10 @@
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 
 use crate::arrow::ArrowReader;
+use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
@@ -60,17 +62,20 @@ impl BasicDeleteFileLoader {
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
            as that introduces a circular dependency.
         */
-        let record_batch_stream = ArrowReader::create_parquet_record_batch_stream_builder(
+        let parquet_read_options = ParquetReadOptions::builder().build();
+
+        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
             data_file_path,
-            self.file_io.clone(),
-            false,
-            None,
-            None,
+            &self.file_io,
             file_size_in_bytes,
+            parquet_read_options,
         )
-        .await?
-        .build()?
-        .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{e}")));
+        .await?;
+
+        let record_batch_stream =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata)
+                .build()?
+                .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{e}")));
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -130,10 +135,7 @@ mod tests {
     async fn test_basic_delete_file_loader_read_delete_file() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
 
