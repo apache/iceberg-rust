@@ -46,16 +46,16 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// 1. Write new rows to data files
 /// 2. Add files via `add_data_files()`
 ///
-/// # Future: Merge-on-Read (MOR) Strategy
+/// # Future: Merge-on-Read Strategy
 ///
-/// The `add_delete_files()` method is reserved for future MOR support, which uses
+/// The `add_delete_files()` method is reserved for future Merge-on-Read support, which uses
 /// delete files instead of rewriting data files.
 pub struct RowDeltaAction {
     /// New data files to add (for inserts or rewritten files in COW mode)
     added_data_files: Vec<DataFile>,
     /// Data files to mark as deleted (for COW mode when rewriting files)
     removed_data_files: Vec<DataFile>,
-    /// Delete files to add (reserved for future MOR mode support)
+    /// Delete files to add (reserved for future Merge-on-Read mode support)
     added_delete_files: Vec<DataFile>,
     /// Optional commit UUID for manifest file naming
     commit_uuid: Option<Uuid>,
@@ -77,37 +77,25 @@ impl RowDeltaAction {
         }
     }
 
-    /// Add new data files to the snapshot.
-    ///
-    /// Used for:
+    /// Add new data files to the snapshot. Used for:
     /// - New rows from INSERT operations
     /// - Rewritten data files in COW mode (after applying UPDATE/DELETE)
-    ///
-    /// Corresponds to `addRows(DataFile)` in Java implementation.
     pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_data_files.extend(data_files);
         self
     }
 
     /// Mark data files as deleted in the snapshot.
-    ///
-    /// Used in COW mode to mark original files as deleted when they've been rewritten
-    /// with modifications.
-    ///
+    /// Used in COW mode to mark original files as deleted when they've been rewritten with modifications.
     /// Corresponds to `removeRows(DataFile)` in Java implementation.
     pub fn remove_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.removed_data_files.extend(data_files);
         self
     }
 
-    /// Add delete files to the snapshot (reserved for future MOR mode).
-    ///
-    /// Corresponds to `addDeletes(DeleteFile)` in Java implementation.
-    ///
-    /// # Note
-    ///
-    /// This is not yet implemented and is reserved for future Merge-on-Read (MOR)
-    /// optimization where delete files are used instead of rewriting data files.
+    /// Add delete files to the snapshot (reserved for future Merge-on-Read mode).
+    /// #Note: This is not yet implemented and is reserved for future Merge-on-Read optimization
+    /// where delete files are used instead of rewriting data files.
     pub fn add_delete_files(mut self, delete_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_delete_files.extend(delete_files);
         self
@@ -126,10 +114,7 @@ impl RowDeltaAction {
     }
 
     /// Validate that the operation is applied on top of a specific snapshot.
-    ///
     /// This can be used for conflict detection in concurrent modification scenarios.
-    ///
-    /// Corresponds to `validateFromSnapshot(long snapshotId)` in Java implementation.
     pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
         self.starting_snapshot_id = Some(snapshot_id);
         self
@@ -208,7 +193,6 @@ impl SnapshotProduceOperation for RowDeltaOperation {
     }
 
     /// Returns manifest entries for files that should be marked as deleted.
-    ///
     /// This creates DELETED entries for removed data files in COW mode.
     async fn delete_entries(
         &self,
@@ -217,7 +201,7 @@ impl SnapshotProduceOperation for RowDeltaOperation {
         let snapshot_id = snapshot_produce.table.metadata().current_snapshot_id();
 
         // Create DELETED manifest entries for removed data files
-        let deleted_entries = self
+        let deleted_entries: Vec<ManifestEntry> = self
             .removed_data_files
             .iter()
             .map(|data_file| {
@@ -225,11 +209,18 @@ impl SnapshotProduceOperation for RowDeltaOperation {
                     ManifestEntry::builder()
                         .status(ManifestStatus::Deleted)
                         .snapshot_id(snapshot_id)
+                        // TODO: Get actual sequence numbers from original manifest entries
+                        // For now, use 0 as a placeholder - this should be the sequence
+                        // number from when the file was originally added
+                        .sequence_number(0)
+                        .file_sequence_number(0)
                         .data_file(data_file.clone())
                         .build()
                 } else {
                     ManifestEntry::builder()
                         .status(ManifestStatus::Deleted)
+                        .sequence_number(0)
+                        .file_sequence_number(0)
                         .data_file(data_file.clone())
                         .build()
                 }
@@ -241,9 +232,12 @@ impl SnapshotProduceOperation for RowDeltaOperation {
 
     /// Returns existing manifest files that should be included in the new snapshot.
     ///
-    /// For RowDelta:
-    /// - Include all existing manifests (they contain unchanged data)
-    /// - The snapshot producer will add new manifests for added/deleted entries
+    /// For RowDelta in Copy-on-Write mode:
+    /// - We're rewriting entire data files (not just modifying rows)
+    /// - Files being deleted are completely replaced by new files
+    /// - We should NOT carry forward manifests that contain any of the deleted files
+    ///
+    /// Note: For future precision COW or Merge-on-Read modes, this logic may need refinement.
     async fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
@@ -259,13 +253,37 @@ impl SnapshotProduceOperation for RowDeltaOperation {
             )
             .await?;
 
-        // Include all existing manifests - unchanged data is still valid
-        Ok(manifest_list
-            .entries()
+        // In COW mode, we rewrite entire files, so we need to exclude manifests
+        // that contain any files we're deleting. Create a set of deleted file paths for fast lookup.
+        let deleted_file_paths: std::collections::HashSet<String> = self
+            .removed_data_files
             .iter()
-            .filter(|entry| entry.has_added_files() || entry.has_existing_files())
-            .cloned()
-            .collect())
+            .map(|f| f.file_path().to_string())
+            .collect();
+
+        // Filter out manifests that contain deleted files
+        let mut filtered_manifests = Vec::new();
+        for manifest_file in manifest_list.entries().iter() {
+            if manifest_file.has_added_files() || manifest_file.has_existing_files() {
+                // Load the manifest to check if it contains any deleted files
+                let manifest = manifest_file
+                    .load_manifest(snapshot_produce.table.file_io())
+                    .await?;
+
+                // Check if any entries in this manifest are files we're deleting
+                let contains_deleted_file = manifest
+                    .entries()
+                    .iter()
+                    .any(|entry| deleted_file_paths.contains(entry.data_file().file_path()));
+
+                if !contains_deleted_file {
+                    // This manifest doesn't contain any files we're deleting, keep it
+                    filtered_manifests.push(manifest_file.clone());
+                }
+            }
+        }
+
+        Ok(filtered_manifests)
     }
 }
 
