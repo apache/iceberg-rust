@@ -271,13 +271,25 @@ impl OpenDalStorage {
                 config,
                 customized_credential_load,
             } => {
-                let op = s3_config_build(config, customized_credential_load, path)?;
+                // Normalize s3a:// to s3:// so paths are consistent regardless
+                // of which scheme the REST catalog returns.
+                let normalized;
+                let (op_path, original_scheme_len) = if path.starts_with("s3a://") {
+                    normalized = format!("s3://{}", &path[6..]);
+                    (normalized.as_str(), 6) // "s3a://".len()
+                } else {
+                    (path, 4) // "s3://".len()
+                };
+
+                let op = s3_config_build(config, customized_credential_load, op_path)?;
                 let op_info = op.info();
 
-                // Check prefix of s3 path.
+                // Check prefix of s3 path (against the normalized path).
                 let prefix = format!("{}://{}/", configured_scheme, op_info.name());
-                if path.starts_with(&prefix) {
-                    (op, &path[prefix.len()..])
+                if op_path.starts_with(&prefix) {
+                    // Return a slice into the original path to satisfy the lifetime.
+                    let relative_start = original_scheme_len + op_info.name().len() + 1; // scheme + bucket + "/"
+                    (op, &path[relative_start..])
                 } else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
