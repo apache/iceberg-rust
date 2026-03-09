@@ -114,7 +114,9 @@ impl UpdateSchemaAction {
         initial_default: Literal,
     ) -> Self {
         self.add_field(Arc::new(
-            NestedField::required(0, name, field_type).with_initial_default(initial_default),
+            NestedField::required(0, name, field_type)
+                .with_initial_default(initial_default.clone())
+                .with_write_default(initial_default),
         ))
     }
 
@@ -132,7 +134,8 @@ impl UpdateSchemaAction {
     ) -> Self {
         self.add_field(Arc::new(
             NestedField::required(0, name, field_type)
-                .with_initial_default(initial_default)
+                .with_initial_default(initial_default.clone())
+                .with_write_default(initial_default)
                 .with_doc(doc),
         ))
     }
@@ -192,7 +195,9 @@ impl UpdateSchemaAction {
         self.add_field_to(
             parent,
             Arc::new(
-                NestedField::required(0, name, field_type).with_initial_default(initial_default),
+                NestedField::required(0, name, field_type)
+                    .with_initial_default(initial_default.clone())
+                    .with_write_default(initial_default),
             ),
         )
     }
@@ -213,7 +218,8 @@ impl UpdateSchemaAction {
             parent,
             Arc::new(
                 NestedField::required(0, name, field_type)
-                    .with_initial_default(initial_default)
+                    .with_initial_default(initial_default.clone())
+                    .with_write_default(initial_default)
                     .with_doc(doc),
             ),
         )
@@ -781,6 +787,7 @@ mod tests {
         assert_eq!(field.id, 4);
         assert!(field.required);
         assert_eq!(field.initial_default, Some(Literal::int(0)));
+        assert_eq!(field.write_default, Some(Literal::int(0)));
     }
 
     #[tokio::test]
