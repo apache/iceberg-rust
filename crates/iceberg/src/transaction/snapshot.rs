@@ -327,13 +327,15 @@ impl<'a> SnapshotProducer<'a> {
         if delete_entries.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No delete entries found when write a delete manifest file",
+                "No delete entries found when writing a delete manifest file",
             ));
         }
 
         let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
         for entry in delete_entries {
-            writer.add_entry(entry)?;
+            // Use add_delete_entry() to preserve Deleted status instead of add_entry()
+            // which always overwrites status to Added
+            writer.add_delete_entry(entry)?;
         }
         writer.write_manifest_file().await
     }
