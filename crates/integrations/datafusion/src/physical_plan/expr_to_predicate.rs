@@ -310,13 +310,21 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
         // Timestamps without timezone
-        ScalarValue::TimestampSecond(Some(v), None) => Some(Datum::timestamp_micros(*v * 1_000_000)),
-        ScalarValue::TimestampMillisecond(Some(v), None) => Some(Datum::timestamp_micros(*v * 1_000)),
+        ScalarValue::TimestampSecond(Some(v), None) => {
+            Some(Datum::timestamp_micros(*v * 1_000_000))
+        }
+        ScalarValue::TimestampMillisecond(Some(v), None) => {
+            Some(Datum::timestamp_micros(*v * 1_000))
+        }
         ScalarValue::TimestampMicrosecond(Some(v), None) => Some(Datum::timestamp_micros(*v)),
         ScalarValue::TimestampNanosecond(Some(v), None) => Some(Datum::timestamp_nanos(*v)),
         // Timestamps with timezone
-        ScalarValue::TimestampSecond(Some(v), Some(_)) => Some(Datum::timestamptz_micros(*v * 1_000_000)),
-        ScalarValue::TimestampMillisecond(Some(v), Some(_)) => Some(Datum::timestamptz_micros(*v * 1_000)),
+        ScalarValue::TimestampSecond(Some(v), Some(_)) => {
+            Some(Datum::timestamptz_micros(*v * 1_000_000))
+        }
+        ScalarValue::TimestampMillisecond(Some(v), Some(_)) => {
+            Some(Datum::timestamptz_micros(*v * 1_000))
+        }
         ScalarValue::TimestampMicrosecond(Some(v), Some(_)) => Some(Datum::timestamptz_micros(*v)),
         ScalarValue::TimestampNanosecond(Some(v), Some(_)) => Some(Datum::timestamptz_nanos(*v)),
         _ => None,

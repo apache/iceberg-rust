@@ -58,6 +58,8 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    from_snapshot_id: Option<i64>,
+    to_snapshot_id: Option<i64>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -76,6 +78,8 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            from_snapshot_id: None,
+            to_snapshot_id: None,
         }
     }
 
@@ -126,6 +130,18 @@ impl<'a> TableScanBuilder<'a> {
     /// Set the snapshot to scan. When not set, it uses current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Set the starting snapshot id (exclusive) for incremental scan.
+    pub fn from_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.from_snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Set the ending snapshot id (inclusive) for incremental scan.
+    pub fn to_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.to_snapshot_id = Some(snapshot_id);
         self
     }
 
@@ -184,6 +200,57 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
+        // Validate that we have either a snapshot scan or an incremental scan configuration
+        if self.from_snapshot_id.is_some() || self.to_snapshot_id.is_some() {
+            // For incremental scan, we need to_snapshot_id to be set. from_snapshot_id is optional.
+            let Some(to_id) = self.to_snapshot_id else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Incremental scan requires to_snapshot_id to be set",
+                ));
+            };
+
+            if self.table.metadata().snapshot_by_id(to_id).is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("to_snapshot_id {to_id} not found in table metadata"),
+                ));
+            }
+
+            // snapshot_id should not be set for incremental scan
+            if self.snapshot_id.is_some() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "snapshot_id should not be set for incremental scan. Use from_snapshot_id and to_snapshot_id instead.",
+                ));
+            }
+
+            // Validate from_snapshot_id is an ancestor of to_snapshot_id
+            if let (Some(from_id), Some(to_id)) = (self.from_snapshot_id, self.to_snapshot_id) {
+                let metadata = self.table.metadata();
+                let mut current = metadata.snapshot_by_id(to_id).cloned();
+                let mut found = false;
+                while let Some(snapshot) = current {
+                    if snapshot.snapshot_id() == from_id {
+                        found = true;
+                        break;
+                    }
+                    current = snapshot
+                        .parent_snapshot_id()
+                        .and_then(|id| metadata.snapshot_by_id(id).cloned());
+                }
+
+                if !found {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "from_snapshot_id {from_id} is not an ancestor of to_snapshot_id {to_id}"
+                        ),
+                    ));
+                }
+            }
+        }
+
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -289,6 +356,8 @@ impl<'a> TableScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            from_snapshot_id: self.from_snapshot_id,
+            to_snapshot_id: self.to_snapshot_id,
         };
 
         Ok(TableScan {
@@ -337,6 +406,30 @@ impl TableScan {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
+
+        // Incremental scan: only return files added between two snapshots
+        if let Some(to_snapshot_id) = plan_context.to_snapshot_id {
+            let data_contexts = plan_context
+                .build_manifest_file_contexts_for_incremental_scan(
+                    plan_context.from_snapshot_id,
+                    to_snapshot_id,
+                )
+                .await?;
+
+            // No delete file handling for incremental scans (append-only)
+            let delete_file_index = Arc::new(DeleteFileIndex::default());
+
+            return Ok(TableScan::process_manifest_contexts(
+                data_contexts,
+                self.concurrency_limit_manifest_files,
+                self.concurrency_limit_manifest_entries,
+                move |ctx| {
+                    let delete_file_index = delete_file_index.clone();
+                    async move { Self::process_data_manifest_entry(ctx, delete_file_index) }
+                },
+            )
+            .boxed());
+        }
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
