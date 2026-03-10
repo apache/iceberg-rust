@@ -152,7 +152,10 @@ impl FileIO {
     /// # Arguments
     ///
     /// * paths: A stream of absolute paths starting with the scheme string used to construct [`FileIO`].
-    pub async fn delete_stream(&self, paths: impl Stream<Item = String> + Send + 'static) -> Result<()> {
+    pub async fn delete_stream(
+        &self,
+        paths: impl Stream<Item = String> + Send + 'static,
+    ) -> Result<()> {
         self.get_storage()?.delete_stream(paths.boxed()).await
     }
 
