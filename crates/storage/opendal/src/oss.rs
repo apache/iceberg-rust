@@ -17,12 +17,13 @@
 
 use std::collections::HashMap;
 
+use iceberg::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
+use iceberg::{Error, ErrorKind, Result};
 use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
 
-use crate::io::config::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
-use crate::{Error, ErrorKind, Result};
+use crate::utils::from_opendal_error;
 
 /// Parse iceberg props to oss config.
 pub(crate) fn oss_config_parse(mut m: HashMap<String, String>) -> Result<OssConfig> {
@@ -52,5 +53,5 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
 
     let builder = cfg.clone().into_builder().bucket(bucket);
 
-    Ok(Operator::new(builder)?.finish())
+    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
 }

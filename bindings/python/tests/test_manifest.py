@@ -34,7 +34,27 @@ from pyiceberg.manifest import (
 @pytest.fixture(autouse=True)
 def clear_global_manifests_cache() -> None:
     # Clear the global cache before each test
-    _manifests.cache_clear()  # type: ignore
+    cache_clear = getattr(_manifests, "cache_clear", None)
+    if callable(cache_clear):
+        # pyiceberg<=0.10: _manifests was lru_cache-decorated.
+        cache_clear()
+        return
+
+    # pyiceberg>=0.11: manifests are cached in module-level LRUCache.
+    from pyiceberg import manifest as manifest_module
+
+    manifest_cache = getattr(manifest_module, "_manifest_cache", None)
+    manifest_cache_lock = getattr(manifest_module, "_manifest_cache_lock", None)
+
+    if manifest_cache is None:
+        return
+
+    if manifest_cache_lock is None:
+        manifest_cache.clear()
+        return
+
+    with manifest_cache_lock:
+        manifest_cache.clear()
 
 
 def fetch_manifest_entry(
@@ -49,33 +69,43 @@ def fetch_manifest_entry(
     # but this is the easiest for now until we
     # have the write part in there as well
     def _convert_entry(entry: Any) -> ManifestEntry:
-        data_file = DataFile(
-            content=DataFileContent(entry.data_file.content),
-            file_path=entry.data_file.file_path,
-            file_format=FileFormat(entry.data_file.file_format),
-            partition=[
+        data_file_args = {
+            "content": DataFileContent(entry.data_file.content),
+            "file_path": entry.data_file.file_path,
+            "file_format": FileFormat(entry.data_file.file_format),
+            "partition": [
                 p.value() if p is not None else None for p in entry.data_file.partition
             ],
-            record_count=entry.data_file.record_count,
-            file_size_in_bytes=entry.data_file.file_size_in_bytes,
-            column_sizes=entry.data_file.column_sizes,
-            value_counts=entry.data_file.value_counts,
-            null_value_counts=entry.data_file.null_value_counts,
-            nan_value_counts=entry.data_file.nan_value_counts,
-            lower_bounds=entry.data_file.lower_bounds,
-            upper_bounds=entry.data_file.upper_bounds,
-            key_metadata=entry.data_file.key_metadata,
-            split_offsets=entry.data_file.split_offsets,
-            equality_ids=entry.data_file.equality_ids,
-            sort_order_id=entry.data_file.sort_order_id,
+            "record_count": entry.data_file.record_count,
+            "file_size_in_bytes": entry.data_file.file_size_in_bytes,
+            "column_sizes": entry.data_file.column_sizes,
+            "value_counts": entry.data_file.value_counts,
+            "null_value_counts": entry.data_file.null_value_counts,
+            "nan_value_counts": entry.data_file.nan_value_counts,
+            "lower_bounds": entry.data_file.lower_bounds,
+            "upper_bounds": entry.data_file.upper_bounds,
+            "key_metadata": entry.data_file.key_metadata,
+            "split_offsets": entry.data_file.split_offsets,
+            "equality_ids": entry.data_file.equality_ids,
+            "sort_order_id": entry.data_file.sort_order_id,
+        }
+        data_file = (
+            DataFile.from_args(**data_file_args)
+            if hasattr(DataFile, "from_args")
+            else DataFile(**data_file_args)
         )
 
-        return ManifestEntry(
-            ManifestEntryStatus(entry.status),
-            entry.snapshot_id,
-            entry.sequence_number,
-            entry.file_sequence_number,
-            data_file,
+        manifest_entry_args = {
+            "status": ManifestEntryStatus(entry.status),
+            "snapshot_id": entry.snapshot_id,
+            "sequence_number": entry.sequence_number,
+            "file_sequence_number": entry.file_sequence_number,
+            "data_file": data_file,
+        }
+        return (
+            ManifestEntry.from_args(**manifest_entry_args)
+            if hasattr(ManifestEntry, "from_args")
+            else ManifestEntry(**manifest_entry_args)
         )
 
     return [

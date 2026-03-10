@@ -21,8 +21,9 @@
 //! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{
@@ -32,6 +33,7 @@ use iceberg_catalog_glue::{
     AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
     GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalog, GlueCatalogBuilder,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{
     cleanup_namespace, get_glue_endpoint, get_minio_endpoint, normalize_test_name_with_parts,
     set_up,
@@ -59,11 +61,12 @@ async fn get_catalog() -> GlueCatalog {
     ]);
 
     // Wait for bucket to actually exist
-    let file_io = iceberg::io::FileIO::from_path("s3a://")
-        .unwrap()
-        .with_props(props.clone())
-        .build()
-        .unwrap();
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        configured_scheme: "s3a".to_string(),
+        customized_credential_load: None,
+    }))
+    .with_props(props.clone())
+    .build();
 
     let mut retries = 0;
     while retries < 30 {

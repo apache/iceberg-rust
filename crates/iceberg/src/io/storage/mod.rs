@@ -17,15 +17,21 @@
 
 //! Storage interfaces for Iceberg.
 
+mod config;
+mod local_fs;
+mod memory;
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+pub use config::*;
+pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
+pub use memory::{MemoryStorage, MemoryStorageFactory};
 
 use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::Result;
-pub use crate::io::config::StorageConfig;
 
 /// Trait for storage operations in Iceberg.
 ///
@@ -59,11 +65,6 @@ pub use crate::io::config::StorageConfig;
 ///     }
 ///     // ... implement other methods
 /// }
-///
-/// TODO remove below when the trait is integrated with FileIO and Catalog
-/// # NOTE
-/// This trait is under heavy development and is not used anywhere as of now
-/// Please DO NOT implement it
 /// ```
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -120,11 +121,6 @@ pub trait Storage: Debug + Send + Sync {
 ///         todo!()
 ///     }
 /// }
-///
-/// TODO remove below when the trait is integrated with FileIO and Catalog
-/// # NOTE
-/// This trait is under heavy development and is not used anywhere as of now
-/// Please DO NOT implement it
 /// ```
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {

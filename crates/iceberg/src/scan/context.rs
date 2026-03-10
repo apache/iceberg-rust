@@ -117,6 +117,7 @@ impl ManifestEntryContext {
             .await;
 
         Ok(FileScanTask {
+            file_size_in_bytes: self.manifest_entry.file_size_in_bytes(),
             start: 0,
             length: self.manifest_entry.file_size_in_bytes(),
             record_count: Some(self.manifest_entry.record_count()),
