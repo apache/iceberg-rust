@@ -3650,7 +3650,7 @@ mod tests {
     async fn test_table_metadata_write_with_gzip_compression() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_str().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Get a test metadata and add gzip compression property
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
