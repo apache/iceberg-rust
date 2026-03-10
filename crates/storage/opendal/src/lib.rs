@@ -24,6 +24,7 @@
 
 mod utils;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -498,29 +499,36 @@ impl Storage for OpenDalStorage {
     }
 
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
-        // Get the first path to create the operator
-        let Some(first_path) = paths.next().await else {
-            return Ok(());
-        };
+        let mut deleters: HashMap<String, opendal::Deleter> = HashMap::new();
 
-        let (op, first_relative) = self.create_operator(&first_path)?;
-
-        let mut deleter = op.deleter().await.map_err(from_opendal_error)?;
-        deleter
-            .delete(first_relative)
-            .await
-            .map_err(from_opendal_error)?;
-
-        // Use relativize_path for remaining paths to avoid rebuilding the operator each time.
         while let Some(path) = paths.next().await {
-            let relative_path = self.relativize_path(&path)?;
-            deleter
+            let bucket = url::Url::parse(&path)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            let relative_path = if deleters.contains_key(&bucket) {
+                self.relativize_path(&path)?.to_string()
+            } else {
+                let (op, rel) = self.create_operator(&path)?;
+                let rel = rel.to_string();
+                let deleter = op.deleter().await.map_err(from_opendal_error)?;
+                deleters.insert(bucket.clone(), deleter);
+                rel
+            };
+
+            deleters
+                .get_mut(&bucket)
+                .unwrap()
                 .delete(relative_path)
                 .await
                 .map_err(from_opendal_error)?;
         }
 
-        deleter.close().await.map_err(from_opendal_error)?;
+        for (_, mut deleter) in deleters {
+            deleter.close().await.map_err(from_opendal_error)?;
+        }
+
         Ok(())
     }
 
