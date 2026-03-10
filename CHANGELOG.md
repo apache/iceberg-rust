@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.9.0] - 2026-03-09
+## [v0.9.0] - 2026-03-10
 
 ### Breaking Changes
 
@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   * feat!(io): Implement Storage for OpenDal (#2080) by @CTTY in https://github.com/apache/iceberg-rust/pull/2080
 
 * **Compatibility:**
+  * chore: Bumping MSRV to 1.92.0 (#2224) by @CTTY in https://github.com/apache/iceberg-rust/pull/2224
   * chore: Update MSRV to 1.91.0 (#2204) by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2204
 
 * **Dependency Updates:**
@@ -42,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### All Changes
 
+* feat(reader): support timestamp type in create_column (#2180) by @chenzl25 in https://github.com/apache/iceberg-rust/pull/2180
+* chore: Bumping MSRV to 1.92.0 (#2224) by @CTTY in https://github.com/apache/iceberg-rust/pull/2224
 * perf(reader): Avoid second `create_parquet_record_batch_stream_builder()` call for migrated tables (#2176) by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2176
 * doc: Update IO feature flag and examples (#2214) by @CTTY in https://github.com/apache/iceberg-rust/pull/2214
 * chore(deps): Bump uuid from 1.21.0 to 1.22.0 (#2221) by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2221
