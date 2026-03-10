@@ -90,40 +90,40 @@ darling_core@0.21.3											X
 darling_macro@0.20.11											X						
 darling_macro@0.21.3											X						
 dashmap@6.1.0											X						
-datafusion@52.1.0		X															
-datafusion-catalog@52.1.0		X															
-datafusion-catalog-listing@52.1.0		X															
-datafusion-common@52.1.0		X															
-datafusion-common-runtime@52.1.0		X															
-datafusion-datasource@52.1.0		X															
-datafusion-datasource-arrow@52.1.0		X															
-datafusion-datasource-csv@52.1.0		X															
-datafusion-datasource-json@52.1.0		X															
-datafusion-datasource-parquet@52.1.0		X															
-datafusion-doc@52.1.0		X															
-datafusion-execution@52.1.0		X															
-datafusion-expr@52.1.0		X															
-datafusion-expr-common@52.1.0		X															
+datafusion@52.2.0		X															
+datafusion-catalog@52.2.0		X															
+datafusion-catalog-listing@52.2.0		X															
+datafusion-common@52.2.0		X															
+datafusion-common-runtime@52.2.0		X															
+datafusion-datasource@52.2.0		X															
+datafusion-datasource-arrow@52.2.0		X															
+datafusion-datasource-csv@52.2.0		X															
+datafusion-datasource-json@52.2.0		X															
+datafusion-datasource-parquet@52.2.0		X															
+datafusion-doc@52.2.0		X															
+datafusion-execution@52.2.0		X															
+datafusion-expr@52.2.0		X															
+datafusion-expr-common@52.2.0		X															
 datafusion-ffi@52.1.0		X															
-datafusion-functions@52.1.0		X															
-datafusion-functions-aggregate@52.1.0		X															
-datafusion-functions-aggregate-common@52.1.0		X															
-datafusion-functions-nested@52.1.0		X															
-datafusion-functions-table@52.1.0		X															
-datafusion-functions-window@52.1.0		X															
-datafusion-functions-window-common@52.1.0		X															
-datafusion-macros@52.1.0		X															
-datafusion-optimizer@52.1.0		X															
-datafusion-physical-expr@52.1.0		X															
-datafusion-physical-expr-adapter@52.1.0		X															
-datafusion-physical-expr-common@52.1.0		X															
-datafusion-physical-optimizer@52.1.0		X															
-datafusion-physical-plan@52.1.0		X															
+datafusion-functions@52.2.0		X															
+datafusion-functions-aggregate@52.2.0		X															
+datafusion-functions-aggregate-common@52.2.0		X															
+datafusion-functions-nested@52.2.0		X															
+datafusion-functions-table@52.2.0		X															
+datafusion-functions-window@52.2.0		X															
+datafusion-functions-window-common@52.2.0		X															
+datafusion-macros@52.2.0		X															
+datafusion-optimizer@52.2.0		X															
+datafusion-physical-expr@52.2.0		X															
+datafusion-physical-expr-adapter@52.2.0		X															
+datafusion-physical-expr-common@52.2.0		X															
+datafusion-physical-optimizer@52.2.0		X															
+datafusion-physical-plan@52.2.0		X															
 datafusion-proto@52.1.0		X															
 datafusion-proto-common@52.1.0		X															
-datafusion-pruning@52.1.0		X															
-datafusion-session@52.1.0		X															
-datafusion-sql@52.1.0		X															
+datafusion-pruning@52.2.0		X															
+datafusion-session@52.2.0		X															
+datafusion-sql@52.2.0		X															
 derive_builder@0.20.2		X									X						
 derive_builder_core@0.20.2		X									X						
 derive_builder_macro@0.20.2		X									X						
@@ -180,8 +180,9 @@ hyper-rustls@0.27.7		X							X		X
 hyper-util@0.1.17											X						
 iana-time-zone@0.1.64		X									X						
 iana-time-zone-haiku@0.1.2		X									X						
-iceberg@0.8.0		X															
-iceberg-datafusion@0.8.0		X															
+iceberg@0.9.0		X															
+iceberg-datafusion@0.9.0		X															
+iceberg-storage-opendal@0.9.0		X															
 icu_collections@2.1.0														X			
 icu_locale_core@2.1.0														X			
 icu_normalizer@2.1.0														X			
@@ -262,7 +263,7 @@ proc-macro2@1.0.103		X									X
 prost@0.14.1		X															
 prost-derive@0.14.1		X															
 psm@0.1.28		X									X						
-pyiceberg_core_rust@0.8.0		X															
+pyiceberg_core_rust@0.9.0		X															
 pyo3@0.26.0		X									X						
 pyo3-build-config@0.26.0		X									X						
 pyo3-ffi@0.26.0		X									X						
