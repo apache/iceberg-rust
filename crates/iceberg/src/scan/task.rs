@@ -51,6 +51,9 @@ where D: serde::Deserializer<'de> {
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileScanTask {
+    /// The total size of the data file in bytes, from the manifest entry.
+    /// Used to skip a stat/HEAD request when reading Parquet footers.
+    pub file_size_in_bytes: u64,
     /// The start offset of the file to scan.
     pub start: u64,
     /// The length of the file to scan.
@@ -146,6 +149,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
     fn from(ctx: &DeleteFileContext) -> Self {
         FileScanTaskDeleteFile {
             file_path: ctx.manifest_entry.file_path().to_string(),
+            file_size_in_bytes: ctx.manifest_entry.file_size_in_bytes(),
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
             equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
@@ -158,6 +162,9 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
+
+    /// The total size of the delete file in bytes, from the manifest entry.
+    pub file_size_in_bytes: u64,
 
     /// delete file type
     pub file_type: DataContentType,

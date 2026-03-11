@@ -574,7 +574,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIOBuilder;
+    use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Manifest, ManifestContentType,
         ManifestEntry, ManifestMetadata, ManifestStatus, NestedField, PartitionSpec, PrimitiveType,
@@ -703,7 +703,7 @@ mod tests {
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -904,7 +904,7 @@ mod tests {
         // Write a V3 delete manifest
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("v3_delete_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
         let mut writer = ManifestWriterBuilder::new(
