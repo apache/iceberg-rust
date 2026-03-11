@@ -86,6 +86,9 @@ cfg_if! {
     }
 }
 
+mod resolving;
+pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
+
 /// OpenDAL-based storage factory.
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
