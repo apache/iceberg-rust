@@ -25,6 +25,7 @@
 mod utils;
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -507,19 +508,19 @@ impl Storage for OpenDalStorage {
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
                 .unwrap_or_default();
 
-            let relative_path = if deleters.contains_key(&bucket) {
-                self.relativize_path(&path)?.to_string()
-            } else {
-                let (op, rel) = self.create_operator(&path)?;
-                let rel = rel.to_string();
-                let deleter = op.deleter().await.map_err(from_opendal_error)?;
-                deleters.insert(bucket.clone(), deleter);
-                rel
+            let (relative_path, deleter) = match deleters.entry(bucket) {
+                Entry::Occupied(entry) => {
+                    (self.relativize_path(&path)?.to_string(), entry.into_mut())
+                }
+                Entry::Vacant(entry) => {
+                    let (op, rel) = self.create_operator(&path)?;
+                    let rel = rel.to_string();
+                    let deleter = op.deleter().await.map_err(from_opendal_error)?;
+                    (rel, entry.insert(deleter))
+                }
             };
 
-            deleters
-                .get_mut(&bucket)
-                .unwrap()
+            deleter
                 .delete(relative_path)
                 .await
                 .map_err(from_opendal_error)?;
