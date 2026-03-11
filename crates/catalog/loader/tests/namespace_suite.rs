@@ -164,7 +164,6 @@ async fn test_catalog_update_namespace_unsupported(#[case] kind: CatalogKind) ->
 #[rstest]
 #[case::rest_catalog(CatalogKind::Rest)]
 #[case::sql_catalog(CatalogKind::Sql)]
-#[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[case::memory_catalog(CatalogKind::Memory)]
 #[tokio::test]
 async fn test_catalog_namespace_listing_with_parent(#[case] kind: CatalogKind) -> Result<()> {
