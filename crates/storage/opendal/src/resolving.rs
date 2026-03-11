@@ -182,12 +182,14 @@ impl OpenDalResolvingStorage {
         let scheme = extract_scheme(path)?;
 
         // Fast path: check read lock first.
-        let cache = self
-            .storages
-            .read()
-            .map_err(|_| Error::new(ErrorKind::Unexpected, "Storage cache lock poisoned"))?;
-        if let Some(storage) = cache.get(&scheme) {
-            return Ok(storage.clone());
+        {
+            let cache = self
+                .storages
+                .read()
+                .map_err(|_| Error::new(ErrorKind::Unexpected, "Storage cache lock poisoned"))?;
+            if let Some(storage) = cache.get(&scheme) {
+                return Ok(storage.clone());
+            }
         }
 
         // Slow path: build and insert under write lock.
