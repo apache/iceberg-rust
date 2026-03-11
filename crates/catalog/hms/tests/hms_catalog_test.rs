@@ -21,13 +21,15 @@
 //! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent};
 use iceberg_catalog_hms::{
     HMS_CATALOG_PROP_THRIFT_TRANSPORT, HMS_CATALOG_PROP_URI, HMS_CATALOG_PROP_WAREHOUSE,
     HmsCatalog, HmsCatalogBuilder, THRIFT_TRANSPORT_BUFFERED,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{get_hms_endpoint, get_minio_endpoint, set_up};
 use tokio::time::sleep;
 use tracing::info;
@@ -57,11 +59,12 @@ async fn get_catalog() -> HmsCatalog {
     ]);
 
     // Wait for bucket to actually exist
-    let file_io = iceberg::io::FileIO::from_path("s3a://")
-        .unwrap()
-        .with_props(props.clone())
-        .build()
-        .unwrap();
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        configured_scheme: "s3a".to_string(),
+        customized_credential_load: None,
+    }))
+    .with_props(props.clone())
+    .build();
 
     let mut retries = 0;
     while retries < 30 {
@@ -75,6 +78,10 @@ async fn get_catalog() -> HmsCatalog {
     }
 
     HmsCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3a".to_string(),
+            customized_credential_load: None,
+        }))
         .load("hms", props)
         .await
         .unwrap()

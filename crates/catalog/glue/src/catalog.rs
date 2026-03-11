@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -24,7 +26,8 @@ use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
-    FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
+    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+    S3_SESSION_TOKEN, StorageFactory,
 };
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -32,6 +35,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
@@ -51,47 +55,58 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
 #[derive(Debug)]
-pub struct GlueCatalogBuilder(GlueCatalogConfig);
+pub struct GlueCatalogBuilder {
+    config: GlueCatalogConfig,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 impl Default for GlueCatalogBuilder {
     fn default() -> Self {
-        Self(GlueCatalogConfig {
-            name: None,
-            uri: None,
-            catalog_id: None,
-            warehouse: "".to_string(),
-            props: HashMap::new(),
-        })
+        Self {
+            config: GlueCatalogConfig {
+                name: None,
+                uri: None,
+                catalog_id: None,
+                warehouse: "".to_string(),
+                props: HashMap::new(),
+            },
+            storage_factory: None,
+        }
     }
 }
 
 impl CatalogBuilder for GlueCatalogBuilder {
     type C = GlueCatalog;
 
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.config.name = Some(name.into());
 
         if props.contains_key(GLUE_CATALOG_PROP_URI) {
-            self.0.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
+            self.config.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
-            self.0.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
+            self.config.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
         }
 
         if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
-            self.0.warehouse = props
+            self.config.warehouse = props
                 .get(GLUE_CATALOG_PROP_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.config.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != GLUE_CATALOG_PROP_URI
@@ -101,20 +116,20 @@ impl CatalogBuilder for GlueCatalogBuilder {
             .collect();
 
         async move {
-            if self.0.name.is_none() {
+            if self.config.name.is_none() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ));
             }
-            if self.0.warehouse.is_empty() {
+            if self.config.warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ));
             }
 
-            GlueCatalog::new(self.0).await
+            GlueCatalog::new(self.config, self.storage_factory).await
         }
     }
 }
@@ -148,7 +163,10 @@ impl Debug for GlueCatalog {
 
 impl GlueCatalog {
     /// Create a new glue catalog
-    async fn new(config: GlueCatalogConfig) -> Result<Self> {
+    async fn new(
+        config: GlueCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+    ) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
         let mut file_io_props = config.props.clone();
         if !file_io_props.contains_key(S3_ACCESS_KEY_ID)
@@ -182,9 +200,16 @@ impl GlueCatalog {
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
-        let file_io = FileIO::from_path(&config.warehouse)?
+        // Use provided factory or default to OpenDalStorageFactory::S3
+        let factory = storage_factory.unwrap_or_else(|| {
+            Arc::new(OpenDalStorageFactory::S3 {
+                configured_scheme: "s3a".to_string(),
+                customized_credential_load: None,
+            })
+        });
+        let file_io = FileIOBuilder::new(factory)
             .with_props(file_io_props)
-            .build()?;
+            .build();
 
         Ok(GlueCatalog {
             config,
@@ -559,14 +584,14 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
+        let metadata_location_str = metadata_location.to_string();
         let glue_table = convert_to_glue_table(
             &table_name,
-            metadata_location.clone(),
+            metadata_location_str.clone(),
             &metadata,
             metadata.properties(),
             None,
@@ -584,7 +609,7 @@ impl Catalog for GlueCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .build()
@@ -822,12 +847,13 @@ impl Catalog for GlueCatalog {
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         // Write new metadata
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         // Persist staged table to Glue with optimistic locking

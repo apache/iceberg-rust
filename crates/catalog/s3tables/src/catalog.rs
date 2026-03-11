@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_sdk_s3tables::operation::create_table::CreateTableOutput;
@@ -25,13 +27,14 @@ use aws_sdk_s3tables::operation::get_table::GetTableOutput;
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::utils::create_sdk_config;
 
@@ -65,18 +68,24 @@ struct S3TablesCatalogConfig {
 
 /// Builder for [`S3TablesCatalog`].
 #[derive(Debug)]
-pub struct S3TablesCatalogBuilder(S3TablesCatalogConfig);
+pub struct S3TablesCatalogBuilder {
+    config: S3TablesCatalogConfig,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 /// Default builder for [`S3TablesCatalog`].
 impl Default for S3TablesCatalogBuilder {
     fn default() -> Self {
-        Self(S3TablesCatalogConfig {
-            name: None,
-            table_bucket_arn: "".to_string(),
-            endpoint_url: None,
-            client: None,
-            props: HashMap::new(),
-        })
+        Self {
+            config: S3TablesCatalogConfig {
+                name: None,
+                table_bucket_arn: "".to_string(),
+                endpoint_url: None,
+                client: None,
+                props: HashMap::new(),
+            },
+            storage_factory: None,
+        }
     }
 }
 
@@ -91,13 +100,13 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
-        self.0.endpoint_url = Some(endpoint_url.into());
+        self.config.endpoint_url = Some(endpoint_url.into());
         self
     }
 
     /// Configure the catalog with a pre-built AWS SDK client.
     pub fn with_client(mut self, client: aws_sdk_s3tables::Client) -> Self {
-        self.0.client = Some(client);
+        self.config.client = Some(client);
         self
     }
 
@@ -110,7 +119,7 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_table_bucket_arn(mut self, table_bucket_arn: impl Into<String>) -> Self {
-        self.0.table_bucket_arn = table_bucket_arn.into();
+        self.config.table_bucket_arn = table_bucket_arn.into();
         self
     }
 }
@@ -118,27 +127,32 @@ impl S3TablesCatalogBuilder {
 impl CatalogBuilder for S3TablesCatalogBuilder {
     type C = S3TablesCatalog;
 
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let catalog_name = name.into();
-        self.0.name = Some(catalog_name.clone());
+        self.config.name = Some(catalog_name.clone());
 
         if props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
-            self.0.table_bucket_arn = props
+            self.config.table_bucket_arn = props
                 .get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN)
                 .cloned()
                 .unwrap_or_default();
         }
 
         if props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
-            self.0.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
+            self.config.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.config.props = props
             .into_iter()
             .filter(|(k, _)| {
                 k != S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN
@@ -152,13 +166,13 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
                 ))
-            } else if self.0.table_bucket_arn.is_empty() {
+            } else if self.config.table_bucket_arn.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Table bucket ARN is required",
                 ))
             } else {
-                S3TablesCatalog::new(self.0).await
+                S3TablesCatalog::new(self.config, self.storage_factory).await
             }
         }
     }
@@ -174,7 +188,10 @@ pub struct S3TablesCatalog {
 
 impl S3TablesCatalog {
     /// Creates a new S3Tables catalog.
-    async fn new(config: S3TablesCatalogConfig) -> Result<Self> {
+    async fn new(
+        config: S3TablesCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+    ) -> Result<Self> {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
         } else {
@@ -182,7 +199,16 @@ impl S3TablesCatalog {
             aws_sdk_s3tables::Client::new(&aws_config)
         };
 
-        let file_io = FileIOBuilder::new("s3").with_props(&config.props).build()?;
+        // Use provided factory or default to OpenDalStorageFactory::S3
+        let factory = storage_factory.unwrap_or_else(|| {
+            Arc::new(OpenDalStorageFactory::S3 {
+                configured_scheme: "s3a".to_string(),
+                customized_credential_load: None,
+            })
+        });
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(&config.props)
+            .build();
 
         Ok(Self {
             config,
@@ -469,9 +495,9 @@ impl Catalog for S3TablesCatalog {
             .await
             .map_err(from_aws_sdk_error)?;
 
-        // prepare metadata location. the warehouse location is generated by s3tables catalog,
+        // prepare table location. the warehouse location is generated by s3tables catalog,
         // which looks like: s3://e6c9bf20-991a-46fb-kni5xs1q2yxi3xxdyxzjzigdeop1quse2b--table-s3
-        let metadata_location = match &creation.location {
+        let table_location = match &creation.location {
             Some(_) => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -488,25 +514,26 @@ impl Catalog for S3TablesCatalog {
                     .send()
                     .await
                     .map_err(from_aws_sdk_error)?;
-                let warehouse_location = get_resp.warehouse_location().to_string();
-                MetadataLocation::new_with_table_location(warehouse_location).to_string()
+                get_resp.warehouse_location().to_string()
             }
         };
 
         // write metadata to file
-        creation.location = Some(metadata_location.clone());
+        creation.location = Some(table_location.clone());
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
+        let metadata_location = MetadataLocation::new_with_metadata(table_location, &metadata);
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
+        let metadata_location_str = metadata_location.to_string();
         self.s3tables_client
             .update_table_metadata_location()
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(namespace.to_url_string())
             .name(table_ident.name())
-            .metadata_location(metadata_location.clone())
+            .metadata_location(metadata_location_str.clone())
             .version_token(create_resp.version_token())
             .send()
             .await
@@ -514,7 +541,7 @@ impl Catalog for S3TablesCatalog {
 
         let table = Table::builder()
             .identifier(table_ident)
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
             .build()?;
@@ -625,11 +652,12 @@ impl Catalog for S3TablesCatalog {
             self.load_table_with_version_token(&table_ident).await?;
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         let builder = self
@@ -639,7 +667,7 @@ impl Catalog for S3TablesCatalog {
             .namespace(table_namespace.to_url_string())
             .name(table_ident.name())
             .version_token(version_token)
-            .metadata_location(staged_metadata_location);
+            .metadata_location(staged_metadata_location_str);
 
         let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
@@ -676,7 +704,218 @@ where T: std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
+
     use super::*;
+
+    async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
+        let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {
+            Some(table_bucket_arn) => table_bucket_arn,
+            None => return Ok(None),
+        };
+
+        let config = S3TablesCatalogConfig {
+            name: None,
+            table_bucket_arn,
+            endpoint_url: None,
+            client: None,
+            props: HashMap::new(),
+        };
+
+        Ok(Some(S3TablesCatalog::new(config, None).await?))
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_list_namespace() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        assert!(!namespaces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_list_tables() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        let tables = catalog
+            .list_tables(&NamespaceIdent::new("aws_s3_metadata".to_string()))
+            .await
+            .unwrap();
+        assert!(!tables.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_load_table() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        let table = catalog
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("aws_s3_metadata".to_string()),
+                "query_storage_metadata".to_string(),
+            ))
+            .await
+            .unwrap();
+        println!("{table:?}");
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_create_delete_namespace() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        let namespace = NamespaceIdent::new("test_s3tables_create_delete_namespace".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+        assert!(catalog.namespace_exists(&namespace).await.unwrap());
+        catalog.drop_namespace(&namespace).await.unwrap();
+        assert!(!catalog.namespace_exists(&namespace).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_create_delete_table() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        let creation = {
+            let schema = Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap();
+            TableCreation::builder()
+                .name("test_s3tables_create_delete_table".to_string())
+                .properties(HashMap::new())
+                .schema(schema)
+                .build()
+        };
+
+        let namespace = NamespaceIdent::new("test_s3tables_create_delete_table".to_string());
+        let table_ident = TableIdent::new(
+            namespace.clone(),
+            "test_s3tables_create_delete_table".to_string(),
+        );
+        catalog.drop_namespace(&namespace).await.ok();
+        catalog.drop_table(&table_ident).await.ok();
+
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+        catalog.create_table(&namespace, creation).await.unwrap();
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
+        catalog.drop_table(&table_ident).await.unwrap();
+        assert!(!catalog.table_exists(&table_ident).await.unwrap());
+        catalog.drop_namespace(&namespace).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_s3tables_update_table() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {e}"),
+        };
+
+        // Create a test namespace and table
+        let namespace = NamespaceIdent::new("test_s3tables_update_table".to_string());
+        let table_ident =
+            TableIdent::new(namespace.clone(), "test_s3tables_update_table".to_string());
+
+        // Clean up any existing resources from previous test runs
+        catalog.drop_table(&table_ident).await.ok();
+        catalog.drop_namespace(&namespace).await.ok();
+
+        // Create namespace and table
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let creation = {
+            let schema = Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap();
+            TableCreation::builder()
+                .name(table_ident.name().to_string())
+                .properties(HashMap::new())
+                .schema(schema)
+                .build()
+        };
+
+        let table = catalog.create_table(&namespace, creation).await.unwrap();
+
+        // Create a transaction to update the table
+        let tx = Transaction::new(&table);
+
+        // Store the original metadata location for comparison
+        let original_metadata_location = table.metadata_location();
+
+        // Update table properties using the transaction
+        let tx = tx
+            .update_table_properties()
+            .set("test_property".to_string(), "test_value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        // Commit the transaction to the catalog
+        let updated_table = tx.commit(&catalog).await.unwrap();
+
+        // Verify the update was successful
+        assert_eq!(
+            updated_table.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+
+        // Verify the metadata location has been updated
+        assert_ne!(
+            updated_table.metadata_location(),
+            original_metadata_location,
+            "Metadata location should be updated after commit"
+        );
+
+        // Load the table again from the catalog to verify changes were persisted
+        let reloaded_table = catalog.load_table(&table_ident).await.unwrap();
+
+        // Verify the reloaded table matches the updated table
+        assert_eq!(
+            reloaded_table.metadata().properties().get("test_property"),
+            Some(&"test_value".to_string())
+        );
+        assert_eq!(
+            reloaded_table.metadata_location(),
+            updated_table.metadata_location(),
+            "Reloaded table should have the same metadata location as the updated table"
+        );
+    }
 
     #[tokio::test]
     async fn test_builder_load_missing_bucket_arn() {

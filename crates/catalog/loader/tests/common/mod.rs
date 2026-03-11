@@ -23,7 +23,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    FileIOBuilder, LocalFsStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
+    S3_SECRET_ACCESS_KEY,
+};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
@@ -44,6 +47,7 @@ use iceberg_catalog_sql::{
     SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE, SqlBindStyle,
     SqlCatalogBuilder,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{
     get_glue_endpoint, get_hms_endpoint, get_minio_endpoint, get_rest_catalog_endpoint, set_up,
 };
@@ -109,6 +113,7 @@ pub async fn load_catalog(kind: CatalogKind) -> Option<CatalogHarness> {
             sqlx::Sqlite::create_database(&db_uri).await.unwrap();
 
             let catalog = SqlCatalogBuilder::default()
+                .with_storage_factory(Arc::new(LocalFsStorageFactory))
                 .load(
                     "sql",
                     HashMap::from([
@@ -200,6 +205,7 @@ async fn rest_catalog() -> RestCatalog {
     }
 
     RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(LocalFsStorageFactory))
         .load(
             "rest",
             HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_endpoint)]),
@@ -225,11 +231,12 @@ async fn glue_catalog() -> GlueCatalog {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let file_io = iceberg::io::FileIO::from_path("s3a://")
-        .unwrap()
-        .with_props(props.clone())
-        .build()
-        .unwrap();
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        configured_scheme: "s3a".to_string(),
+        customized_credential_load: None,
+    }))
+    .with_props(props.clone())
+    .build();
 
     let mut retries = 0;
     while retries < 30 {
@@ -275,11 +282,12 @@ async fn hms_catalog() -> HmsCatalog {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let file_io = iceberg::io::FileIO::from_path("s3a://")
-        .unwrap()
-        .with_props(props.clone())
-        .build()
-        .unwrap();
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+        configured_scheme: "s3a".to_string(),
+        customized_credential_load: None,
+    }))
+    .with_props(props.clone())
+    .build();
 
     let mut retries = 0;
     while retries < 30 {
@@ -291,6 +299,10 @@ async fn hms_catalog() -> HmsCatalog {
     }
 
     HmsCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3a".to_string(),
+            customized_credential_load: None,
+        }))
         .load("hms", props)
         .await
         .unwrap()
