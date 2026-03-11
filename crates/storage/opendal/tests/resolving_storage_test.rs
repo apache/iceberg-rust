@@ -280,10 +280,9 @@ mod tests {
         set_up();
         let minio_endpoint = get_minio_endpoint();
 
-        let factory = OpenDalResolvingStorageFactory::new()
-            .with_s3_credential_loader(CustomAwsCredentialLoader::new(Arc::new(
-                MinioCredentialLoader,
-            )));
+        let factory = OpenDalResolvingStorageFactory::new().with_s3_credential_loader(
+            CustomAwsCredentialLoader::new(Arc::new(MinioCredentialLoader)),
+        );
 
         let file_io = FileIOBuilder::new(Arc::new(factory))
             .with_props(vec![
