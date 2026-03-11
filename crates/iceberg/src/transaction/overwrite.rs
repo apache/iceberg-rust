@@ -420,9 +420,10 @@ mod tests {
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let spec_id = table.metadata().default_partition_spec_id();
 
-        let original_file = test_data_file("test/original.parquet", spec_id);
+        let original_file1 = test_data_file("test/original1.parquet", spec_id);
+        let original_file2 = test_data_file("test/original2.parquet", spec_id);
         let tx = Transaction::new(&table);
-        let action = tx.fast_append().add_data_files(vec![original_file.clone()]);
+        let action = tx.fast_append().add_data_files(vec![original_file1.clone(), original_file2.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
@@ -435,7 +436,7 @@ mod tests {
         let action = tx
             .overwrite()
             .add_data_files(vec![replacement_file.clone()])
-            .delete_data_files(vec![original_file.clone()]);
+            .delete_data_files(vec![original_file1.clone(), original_file2.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
@@ -454,13 +455,15 @@ mod tests {
             }
         }
 
-        assert!(
-            all_entries
-                .iter()
-                .any(|(status, path)| *status == ManifestStatus::Deleted
-                    && path == "test/original.parquet"),
-            "Original file should be marked as Deleted, entries: {all_entries:?}",
-        );
+        for original_file in ["test/original1.parquet", "test/original2.parquet"] {
+            assert!(
+                all_entries
+                    .iter()
+                    .any(|(status, path)| *status == ManifestStatus::Deleted
+                        && path == original_file),
+                "Original file {original_file} should be marked as Deleted, entries: {all_entries:?}",
+            );
+        }
 
         assert!(
             all_entries
@@ -477,7 +480,7 @@ mod tests {
                 .additional_properties
                 .get("deleted-data-files")
                 .map(|s| s.as_str()),
-            Some("1")
+            Some("2")
         );
         assert_eq!(
             snapshot
@@ -485,7 +488,7 @@ mod tests {
                 .additional_properties
                 .get("deleted-records")
                 .map(|s| s.as_str()),
-            Some("1")
+            Some("2")
         );
 
         // Step 3: Fast append after overwrite — delete-only manifest must survive.
@@ -510,12 +513,14 @@ mod tests {
         }
 
         // The deleted entry must still be present after fast_append.
-        assert!(
-            all_entries
-                .iter()
-                .any(|(status, path)| *status == ManifestStatus::Deleted
-                    && path == "test/original.parquet"),
-            "Deleted entry should survive fast_append, entries: {all_entries:?}",
-        );
+        for original_file in ["test/original1.parquet", "test/original2.parquet"] {
+            assert!(
+                all_entries
+                    .iter()
+                    .any(|(status, path)| *status == ManifestStatus::Deleted
+                        && path == original_file),
+                "Deleted entry should survive fast_append, entries: {all_entries:?}",
+            );
+        }
     }
 }
