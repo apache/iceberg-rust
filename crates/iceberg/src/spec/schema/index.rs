@@ -53,6 +53,10 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         fn primitive(&mut self, _: &PrimitiveType) -> Result<Self::T> {
             Ok(())
         }
+
+        fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+            Ok(())
+        }
     }
 
     let mut index = IndexById(HashMap::new());
@@ -143,6 +147,10 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+            Ok(())
+        }
+
+        fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -291,6 +299,10 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
         Ok(())
     }
 }

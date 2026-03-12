@@ -32,8 +32,8 @@ use serde_json::Value as JsonValue;
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
-use crate::spec::PrimitiveLiteral;
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
+use crate::spec::{FormatVersion, PrimitiveLiteral};
 
 /// Field name for list type.
 pub const LIST_FIELD_NAME: &str = "element";
@@ -41,6 +41,11 @@ pub const LIST_FIELD_NAME: &str = "element";
 pub const MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
 pub const MAP_VALUE_FIELD_NAME: &str = "value";
+
+/// Minimum format version required for nanosecond-precision timestamp types (v3).
+pub const MIN_FORMAT_VERSION_TIMESTAMP_NS: FormatVersion = FormatVersion::V3;
+/// Minimum format version required for the variant type (v3).
+pub const MIN_FORMAT_VERSION_VARIANT: FormatVersion = FormatVersion::V3;
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
@@ -90,6 +95,8 @@ pub enum Type {
     List(ListType),
     /// Map type
     Map(MapType),
+    /// Variant Type
+    Variant(VariantType),
 }
 
 impl fmt::Display for Type {
@@ -99,6 +106,7 @@ impl fmt::Display for Type {
             Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
+            Type::Variant(_) => write!(f, "variant"),
         }
     }
 }
@@ -120,6 +128,12 @@ impl Type {
     #[inline(always)]
     pub fn is_nested(&self) -> bool {
         matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
+    }
+
+    /// Whether the type is variant type.
+    #[inline(always)]
+    pub fn is_variant(&self) -> bool {
+        matches!(self, Type::Variant(_))
     }
 
     /// Convert Type to reference of PrimitiveType
@@ -177,6 +191,17 @@ impl Type {
             self,
             Type::Primitive(PrimitiveType::Float) | Type::Primitive(PrimitiveType::Double)
         )
+    }
+
+    /// Returns the minimum format version required for the type.
+    #[inline(always)]
+    pub fn min_format_version(&self) -> FormatVersion {
+        match self {
+            Type::Primitive(PrimitiveType::TimestampNs)
+            | Type::Primitive(PrimitiveType::TimestamptzNs) => MIN_FORMAT_VERSION_TIMESTAMP_NS,
+            Type::Variant(_) => MIN_FORMAT_VERSION_VARIANT,
+            _ => FormatVersion::V1,
+        }
     }
 }
 
@@ -710,6 +735,7 @@ pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+        VariantType,
     };
 
     /// List type for serialization and deserialization
@@ -737,6 +763,7 @@ pub(super) mod _serde {
             value: Cow<'a, Type>,
         },
         Primitive(PrimitiveType),
+        Variant(VariantType),
     }
 
     impl From<SerdeType<'_>> for Type {
@@ -775,6 +802,7 @@ pub(super) mod _serde {
                     Self::Struct(StructType::new(fields.into_owned()))
                 }
                 SerdeType::Primitive(p) => Self::Primitive(p),
+                SerdeType::Variant(v) => Self::Variant(v),
             }
         }
     }
@@ -801,6 +829,7 @@ pub(super) mod _serde {
                     fields: Cow::Borrowed(&s.fields),
                 },
                 Type::Primitive(p) => SerdeType::Primitive(p.clone()),
+                Type::Variant(v) => SerdeType::Variant(*v),
             }
         }
     }
@@ -824,6 +853,42 @@ impl MapType {
         Self {
             key_field,
             value_field,
+        }
+    }
+}
+
+/// Variant type - can hold semi-structured data of any type.
+/// This is an Iceberg V3 feature.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct VariantType;
+
+impl fmt::Display for VariantType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "variant")
+    }
+}
+
+impl From<VariantType> for Type {
+    fn from(_: VariantType) -> Self {
+        Type::Variant(VariantType)
+    }
+}
+
+impl Serialize for VariantType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str("variant")
+    }
+}
+
+impl<'de> Deserialize<'de> for VariantType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        if s == "variant" {
+            Ok(VariantType)
+        } else {
+            Err(D::Error::custom(format!("expected 'variant', got '{s}'")))
         }
     }
 }
@@ -1214,6 +1279,17 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+    }
+
+    #[test]
+    fn variant_type_serde() {
+        let json = r#"{"id": 1, "name": "v", "required": true, "type": "variant"}"#;
+        let field: NestedField = serde_json::from_str(json).unwrap();
+        assert_eq!(*field.field_type, Type::Variant(VariantType));
+
+        let serialized = serde_json::to_string(&field).unwrap();
+        let roundtrip: NestedField = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(field, roundtrip);
     }
 
     #[test]
