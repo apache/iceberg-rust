@@ -729,7 +729,7 @@ impl Catalog for SqlCatalog {
         }
     }
 
-    async fn drop_table(&self, identifier: &TableIdent) -> Result<()> {
+    async fn drop_table_with_purge(&self, identifier: &TableIdent, _purge: bool) -> Result<()> {
         if !self.table_exists(identifier).await? {
             return no_such_table_err(identifier);
         }
