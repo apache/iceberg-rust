@@ -504,7 +504,7 @@
 <a href=#504 id=504 data-nosnippet>504</a>                }
 <a href=#505 id=505 data-nosnippet>505</a>                StatusCode::NOT_FOUND =&gt; {
 <a href=#506 id=506 data-nosnippet>506</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#507 id=507 data-nosnippet>507</a>                        ErrorKind::Unexpected,
+<a href=#507 id=507 data-nosnippet>507</a>                        ErrorKind::NamespaceNotFound,
 <a href=#508 id=508 data-nosnippet>508</a>                        <span class="string">"The parent parameter of the namespace provided does not exist"</span>,
 <a href=#509 id=509 data-nosnippet>509</a>                    ));
 <a href=#510 id=510 data-nosnippet>510</a>                }
@@ -546,7 +546,7 @@
 <a href=#546 id=546 data-nosnippet>546</a>                <span class="prelude-val">Ok</span>(Namespace::from(response))
 <a href=#547 id=547 data-nosnippet>547</a>            }
 <a href=#548 id=548 data-nosnippet>548</a>            StatusCode::CONFLICT =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#549 id=549 data-nosnippet>549</a>                ErrorKind::Unexpected,
+<a href=#549 id=549 data-nosnippet>549</a>                ErrorKind::NamespaceAlreadyExists,
 <a href=#550 id=550 data-nosnippet>550</a>                <span class="string">"Tried to create a namespace that already exists"</span>,
 <a href=#551 id=551 data-nosnippet>551</a>            )),
 <a href=#552 id=552 data-nosnippet>552</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(
@@ -574,7 +574,7 @@
 <a href=#574 id=574 data-nosnippet>574</a>                <span class="prelude-val">Ok</span>(Namespace::from(response))
 <a href=#575 id=575 data-nosnippet>575</a>            }
 <a href=#576 id=576 data-nosnippet>576</a>            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#577 id=577 data-nosnippet>577</a>                ErrorKind::Unexpected,
+<a href=#577 id=577 data-nosnippet>577</a>                ErrorKind::NamespaceNotFound,
 <a href=#578 id=578 data-nosnippet>578</a>                <span class="string">"Tried to get a namespace that does not exist"</span>,
 <a href=#579 id=579 data-nosnippet>579</a>            )),
 <a href=#580 id=580 data-nosnippet>580</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(
@@ -630,7 +630,7 @@
 <a href=#630 id=630 data-nosnippet>630</a>        <span class="kw">match </span>http_response.status() {
 <a href=#631 id=631 data-nosnippet>631</a>            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
 <a href=#632 id=632 data-nosnippet>632</a>            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#633 id=633 data-nosnippet>633</a>                ErrorKind::Unexpected,
+<a href=#633 id=633 data-nosnippet>633</a>                ErrorKind::NamespaceNotFound,
 <a href=#634 id=634 data-nosnippet>634</a>                <span class="string">"Tried to drop a namespace that does not exist"</span>,
 <a href=#635 id=635 data-nosnippet>635</a>            )),
 <a href=#636 id=636 data-nosnippet>636</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(
@@ -670,7 +670,7 @@
 <a href=#670 id=670 data-nosnippet>670</a>                }
 <a href=#671 id=671 data-nosnippet>671</a>                StatusCode::NOT_FOUND =&gt; {
 <a href=#672 id=672 data-nosnippet>672</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#673 id=673 data-nosnippet>673</a>                        ErrorKind::Unexpected,
+<a href=#673 id=673 data-nosnippet>673</a>                        ErrorKind::NamespaceNotFound,
 <a href=#674 id=674 data-nosnippet>674</a>                        <span class="string">"Tried to list tables of a namespace that does not exist"</span>,
 <a href=#675 id=675 data-nosnippet>675</a>                    ));
 <a href=#676 id=676 data-nosnippet>676</a>                }
@@ -724,13 +724,13 @@
 <a href=#724 id=724 data-nosnippet>724</a>            </span>}
 <a href=#725 id=725 data-nosnippet>725</a>            StatusCode::NOT_FOUND =&gt; {
 <a href=#726 id=726 data-nosnippet>726</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#727 id=727 data-nosnippet>727</a>                    ErrorKind::Unexpected,
+<a href=#727 id=727 data-nosnippet>727</a>                    ErrorKind::NamespaceNotFound,
 <a href=#728 id=728 data-nosnippet>728</a>                    <span class="string">"Tried to create a table under a namespace that does not exist"</span>,
 <a href=#729 id=729 data-nosnippet>729</a>                ));
 <a href=#730 id=730 data-nosnippet>730</a>            }
 <a href=#731 id=731 data-nosnippet>731</a>            StatusCode::CONFLICT =&gt; {
 <a href=#732 id=732 data-nosnippet>732</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#733 id=733 data-nosnippet>733</a>                    ErrorKind::Unexpected,
+<a href=#733 id=733 data-nosnippet>733</a>                    ErrorKind::TableAlreadyExists,
 <a href=#734 id=734 data-nosnippet>734</a>                    <span class="string">"The table already exists"</span>,
 <a href=#735 id=735 data-nosnippet>735</a>                ));
 <a href=#736 id=736 data-nosnippet>736</a>            }
@@ -791,7 +791,7 @@
 <a href=#791 id=791 data-nosnippet>791</a>            </span>}
 <a href=#792 id=792 data-nosnippet>792</a>            StatusCode::NOT_FOUND =&gt; {
 <a href=#793 id=793 data-nosnippet>793</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#794 id=794 data-nosnippet>794</a>                    ErrorKind::Unexpected,
+<a href=#794 id=794 data-nosnippet>794</a>                    ErrorKind::TableNotFound,
 <a href=#795 id=795 data-nosnippet>795</a>                    <span class="string">"Tried to load a table that does not exist"</span>,
 <a href=#796 id=796 data-nosnippet>796</a>                ));
 <a href=#797 id=797 data-nosnippet>797</a>            }
@@ -840,7 +840,7 @@
 <a href=#840 id=840 data-nosnippet>840</a>        <span class="kw">match </span>http_response.status() {
 <a href=#841 id=841 data-nosnippet>841</a>            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
 <a href=#842 id=842 data-nosnippet>842</a>            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#843 id=843 data-nosnippet>843</a>                ErrorKind::Unexpected,
+<a href=#843 id=843 data-nosnippet>843</a>                ErrorKind::TableNotFound,
 <a href=#844 id=844 data-nosnippet>844</a>                <span class="string">"Tried to drop a table that does not exist"</span>,
 <a href=#845 id=845 data-nosnippet>845</a>            )),
 <a href=#846 id=846 data-nosnippet>846</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(
@@ -891,11 +891,11 @@
 <a href=#891 id=891 data-nosnippet>891</a>        <span class="kw">match </span>http_response.status() {
 <a href=#892 id=892 data-nosnippet>892</a>            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
 <a href=#893 id=893 data-nosnippet>893</a>            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#894 id=894 data-nosnippet>894</a>                ErrorKind::Unexpected,
+<a href=#894 id=894 data-nosnippet>894</a>                ErrorKind::TableNotFound,
 <a href=#895 id=895 data-nosnippet>895</a>                <span class="string">"Tried to rename a table that does not exist (is the namespace correct?)"</span>,
 <a href=#896 id=896 data-nosnippet>896</a>            )),
 <a href=#897 id=897 data-nosnippet>897</a>            StatusCode::CONFLICT =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#898 id=898 data-nosnippet>898</a>                ErrorKind::Unexpected,
+<a href=#898 id=898 data-nosnippet>898</a>                ErrorKind::TableAlreadyExists,
 <a href=#899 id=899 data-nosnippet>899</a>                <span class="string">"Tried to rename a table to a name that already exists"</span>,
 <a href=#900 id=900 data-nosnippet>900</a>            )),
 <a href=#901 id=901 data-nosnippet>901</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(

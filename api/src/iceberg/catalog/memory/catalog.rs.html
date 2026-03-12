@@ -322,9 +322,9 @@
 <a href=#322 id=322 data-nosnippet>322</a>    </span><span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span><span class="kw-2">mut </span>root_namespace_state = <span class="self">self</span>.root_namespace_state.lock().<span class="kw">await</span>;
 <a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a>        <span class="kw">let </span>metadata_location = root_namespace_state.remove_existing_table(table_ident)<span class="question-mark">?</span>;
-<a href=#326 id=326 data-nosnippet>326</a>        <span class="self">self</span>.file_io.delete(<span class="kw-2">&amp;</span>metadata_location).<span class="kw">await
-<a href=#327 id=327 data-nosnippet>327</a>    </span>}
+<a href=#325 id=325 data-nosnippet>325</a>        root_namespace_state.remove_existing_table(table_ident)<span class="question-mark">?</span>;
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="prelude-val">Ok</span>(())
+<a href=#327 id=327 data-nosnippet>327</a>    }
 <a href=#328 id=328 data-nosnippet>328</a>
 <a href=#329 id=329 data-nosnippet>329</a>    <span class="doccomment">/// Check if a table exists in the catalog.
 <a href=#330 id=330 data-nosnippet>330</a>    </span><span class="kw">async fn </span>table_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
