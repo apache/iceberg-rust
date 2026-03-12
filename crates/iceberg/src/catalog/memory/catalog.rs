@@ -319,7 +319,7 @@ impl Catalog for MemoryCatalog {
     }
 
     /// Drop a table from the catalog.
-    async fn drop_table(&self, table_ident: &TableIdent) -> Result<()> {
+    async fn drop_table_with_purge(&self, table_ident: &TableIdent, _purge: bool) -> Result<()> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
         root_namespace_state.remove_existing_table(table_ident)?;

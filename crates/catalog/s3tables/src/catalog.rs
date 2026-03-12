@@ -570,7 +570,7 @@ impl Catalog for S3TablesCatalog {
     /// This function can return an error in the following situations:
     /// - Errors from the underlying database deletion process, converted using
     /// `from_aws_sdk_error`.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+    async fn drop_table_with_purge(&self, table: &TableIdent, _purge: bool) -> Result<()> {
         let req = self
             .s3tables_client
             .delete_table()

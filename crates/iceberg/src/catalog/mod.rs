@@ -19,6 +19,7 @@
 
 pub mod memory;
 mod metadata_location;
+pub mod utils;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -95,8 +96,17 @@ pub trait Catalog: Debug + Sync + Send {
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
+    /// Drop a table from the catalog and purge its data, or returns error if it doesn't exist.
+    ///
+    /// This is equivalent to calling `drop_table_with_purge(table, true)`.
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        self.drop_table_with_purge(table, true).await
+    }
+
     /// Drop a table from the catalog, or returns error if it doesn't exist.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()>;
+    ///
+    /// If `purge` is true, the catalog should also delete the underlying table data.
+    async fn drop_table_with_purge(&self, table: &TableIdent, purge: bool) -> Result<()>;
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
