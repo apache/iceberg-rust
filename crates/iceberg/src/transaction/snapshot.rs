@@ -319,20 +319,48 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
+    // Write manifest file for deleted data files and return the ManifestFile for ManifestList.
+    async fn write_delete_manifest(
+        &mut self,
+        delete_entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        if delete_entries.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No delete entries found when writing a delete manifest file",
+            ));
+        }
+
+        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        for entry in delete_entries {
+            // Use add_delete_entry() to preserve Deleted status instead of add_entry()
+            // which always overwrites status to Added
+            writer.add_delete_entry(entry)?;
+        }
+        writer.write_manifest_file().await
+    }
+
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
+        // Check if there's any content to add to the new snapshot
+        let delete_entries = snapshot_produce_operation.delete_entries(self).await?;
+        let has_delete_entries = !delete_entries.is_empty();
+
         // Assert current snapshot producer contains new content to add to new snapshot.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+            && !has_delete_entries
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added data files, delete entries, or snapshot properties found when write a manifest file",
             ));
         }
 
@@ -345,8 +373,11 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
+        // Process delete entries.
+        if has_delete_entries {
+            let delete_manifest = self.write_delete_manifest(delete_entries).await?;
+            manifest_files.push(delete_manifest);
+        }
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
