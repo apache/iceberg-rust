@@ -162,6 +162,7 @@ mod tests {
             ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
+            schema,
             file_io,
             location_gen,
             file_name_gen,

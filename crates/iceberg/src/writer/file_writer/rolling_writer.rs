@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use arrow_array::RecordBatch;
 
 use crate::io::{FileIO, OutputFile};
-use crate::spec::{DataFileBuilder, PartitionKey, TableProperties};
+use crate::spec::{DataFileBuilder, PartitionKey, TableProperties, SchemaRef};
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
@@ -34,6 +34,7 @@ pub struct RollingFileWriterBuilder<
     F: FileNameGenerator,
 > {
     inner_builder: B,
+    schema: SchemaRef,
     target_file_size: usize,
     file_io: FileIO,
     location_generator: L,
@@ -51,6 +52,7 @@ where
     /// # Parameters
     ///
     /// * `inner_builder` - The builder for the underlying file writer
+    /// * `schema` - The schema for the data being written
     /// * `target_file_size` - The target file size in bytes that triggers rollover
     /// * `file_io` - The file IO interface for creating output files
     /// * `location_generator` - Generator for file locations
@@ -61,6 +63,7 @@ where
     /// A new `RollingFileWriterBuilder` instance
     pub fn new(
         inner_builder: B,
+        schema: SchemaRef,
         target_file_size: usize,
         file_io: FileIO,
         location_generator: L,
@@ -68,6 +71,7 @@ where
     ) -> Self {
         Self {
             inner_builder,
+            schema,
             target_file_size,
             file_io,
             location_generator,
@@ -80,6 +84,7 @@ where
     /// # Parameters
     ///
     /// * `inner_builder` - The builder for the underlying file writer
+    /// * `schema` - The schema for the data being written
     /// * `file_io` - The file IO interface for creating output files
     /// * `location_generator` - Generator for file locations
     /// * `file_name_generator` - Generator for file names
@@ -89,12 +94,14 @@ where
     /// A new `RollingFileWriterBuilder` instance with default target file size
     pub fn new_with_default_file_size(
         inner_builder: B,
+        schema: SchemaRef,
         file_io: FileIO,
         location_generator: L,
         file_name_generator: F,
     ) -> Self {
         Self {
             inner_builder,
+            schema,
             target_file_size: TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             file_io,
             location_generator,
@@ -107,6 +114,7 @@ where
         RollingFileWriter {
             inner: None,
             inner_builder: self.inner_builder.clone(),
+            schema: self.schema.clone(),
             target_file_size: self.target_file_size,
             data_file_builders: vec![],
             file_io: self.file_io.clone(),
@@ -125,6 +133,7 @@ where
 pub struct RollingFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: Option<B::R>,
     inner_builder: B,
+    schema: SchemaRef,
     target_file_size: usize,
     data_file_builders: Vec<DataFileBuilder>,
     file_io: FileIO,
@@ -247,11 +256,21 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFi
     }
 
     fn current_row_num(&self) -> usize {
-        self.inner.as_ref().unwrap().current_row_num()
+        self.inner
+            .as_ref()
+            .map(|inner| inner.current_row_num())
+            .unwrap_or(0)
     }
 
     fn current_written_size(&self) -> usize {
-        self.inner.as_ref().unwrap().current_written_size()
+        self.inner
+            .as_ref()
+            .map(|inner| inner.current_written_size())
+            .unwrap_or(0)
+    }
+
+    fn current_schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
@@ -312,15 +331,16 @@ mod tests {
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
         // Create schema
-        let schema = make_test_schema()?;
+        let schema = Arc::new(make_test_schema()?);
 
         // Create writer builders
         let parquet_writer_builder =
-            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
 
         // Set a large target size so no rolling occurs
         let rolling_file_writer_builder = RollingFileWriterBuilder::new(
             parquet_writer_builder,
+            schema,
             1024 * 1024,
             file_io.clone(),
             location_gen,
@@ -370,15 +390,16 @@ mod tests {
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
         // Create schema
-        let schema = make_test_schema()?;
+        let schema = Arc::new(make_test_schema()?);
 
         // Create writer builders
         let parquet_writer_builder =
-            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
 
         // Set a very small target size to trigger rolling
         let rolling_writer_builder = RollingFileWriterBuilder::new(
             parquet_writer_builder,
+            schema,
             1024,
             file_io,
             location_gen,
