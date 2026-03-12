@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Create unpartitioned test table
+statement ok
+CREATE TABLE default.default.test_unpartitioned_table (id INT NOT NULL, name STRING)
+
 # Verify the table is initially empty
 query IT rowsort
 SELECT * FROM default.default.test_unpartitioned_table

@@ -93,44 +93,18 @@ impl DataFusionEngine {
         let namespace = NamespaceIdent::new("default".to_string());
         catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-        // Create test tables
-        Self::create_unpartitioned_table(&catalog, &namespace).await?;
+        // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
+        Self::create_binary_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
         ))
     }
 
-    /// Create an unpartitioned test table with id and name columns
-    /// TODO: this can be removed when we support CREATE TABLE
-    async fn create_unpartitioned_table(
-        catalog: &impl Catalog,
-        namespace: &NamespaceIdent,
-    ) -> anyhow::Result<()> {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()?;
-
-        catalog
-            .create_table(
-                namespace,
-                TableCreation::builder()
-                    .name("test_unpartitioned_table".to_string())
-                    .schema(schema)
-                    .build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
     /// Create a partitioned test table with id, category, and value columns
     /// Partitioned by category using identity transform
-    /// TODO: this can be removed when we support CREATE TABLE
+    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
     async fn create_partitioned_table(
         catalog: &impl Catalog,
         namespace: &NamespaceIdent,
@@ -155,6 +129,33 @@ impl DataFusionEngine {
                     .name("test_partitioned_table".to_string())
                     .schema(schema)
                     .partition_spec(partition_spec)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Create a test table with binary type column
+    /// Used for testing binary predicate pushdown
+    /// TODO: this can be removed when we support CREATE TABLE
+    async fn create_binary_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Binary)).into(),
+            ])
+            .build()?;
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_binary_table".to_string())
+                    .schema(schema)
                     .build(),
             )
             .await?;

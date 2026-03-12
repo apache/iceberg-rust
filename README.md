@@ -74,14 +74,14 @@ The features that Iceberg Rust currently supports can be found [here](https://ic
 
 ## Supported Rust Version
 
-Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version).
+Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV (minimum supported rust version).
 At least three months from latest rust release is supported. MSRV is updated when we release iceberg-rust.
 
 Check the current MSRV on [crates.io](https://crates.io/crates/iceberg).
 
 ## Contribute
 
-Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). Iceberg-rust are always open to people who want to use or contribute to it. Here are some ways to get involved.
+Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). Apache Iceberg Rust is always open to people who want to use or contribute to it. Here are some ways to get involved.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
@@ -98,6 +98,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 - [Moonlink](https://github.com/Mooncake-Labs/moonlink): A Rust library that enables sub-second mirroring (CDC) of Postgres tables into Iceberg.
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 - [Wrappers](https://github.com/supabase/wrappers): Postgres Foreign Data Wrapper development framework in Rust.
+- [ETL](https://github.com/supabase/etl): Stream your Postgres data anywhere in real-time.
 
 ## License
 

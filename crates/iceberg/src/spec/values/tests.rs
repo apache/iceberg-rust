@@ -20,11 +20,11 @@
 use apache_avro::to_value;
 use apache_avro::types::Value;
 use ordered_float::OrderedFloat;
-use rust_decimal::Decimal;
 use serde_bytes::ByteBuf;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
+use super::decimal_utils::{decimal_from_i128_with_scale, decimal_new};
 use crate::ErrorKind;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::Schema;
@@ -395,11 +395,8 @@ fn avro_bytes_decimal() {
     for (input_bytes, decimal_num, expect_scale, expect_precision) in cases {
         check_avro_bytes_serde(
             input_bytes,
-            Datum::decimal_with_precision(
-                Decimal::new(decimal_num, expect_scale),
-                expect_precision,
-            )
-            .unwrap(),
+            Datum::decimal_with_precision(decimal_new(decimal_num, expect_scale), expect_precision)
+                .unwrap(),
             &PrimitiveType::Decimal {
                 precision: expect_precision,
                 scale: expect_scale,
@@ -414,10 +411,8 @@ fn avro_bytes_decimal_expect_error() {
     let cases = vec![(1234, 2, 1)];
 
     for (decimal_num, expect_scale, expect_precision) in cases {
-        let result = Datum::decimal_with_precision(
-            Decimal::new(decimal_num, expect_scale),
-            expect_precision,
-        );
+        let result =
+            Datum::decimal_with_precision(decimal_new(decimal_num, expect_scale), expect_precision);
         assert!(result.is_err(), "expect error but got {result:?}");
         assert_eq!(
             result.unwrap_err().kind(),
@@ -1053,7 +1048,7 @@ fn test_datum_ser_deser() {
     test_fn(datum);
     let datum = Datum::uuid(Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap());
     test_fn(datum);
-    let datum = Datum::decimal(1420).unwrap();
+    let datum = Datum::decimal(decimal_new(1420, 0)).unwrap();
     test_fn(datum);
     let datum = Datum::binary(vec![1, 2, 3, 4, 5]);
     test_fn(datum);
@@ -1140,7 +1135,7 @@ fn test_datum_long_convert_to_timestamptz() {
 
 #[test]
 fn test_datum_decimal_convert_to_long() {
-    let datum = Datum::decimal(12345).unwrap();
+    let datum = Datum::decimal(decimal_new(12345, 0)).unwrap();
 
     let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
 
@@ -1151,7 +1146,7 @@ fn test_datum_decimal_convert_to_long() {
 
 #[test]
 fn test_datum_decimal_convert_to_long_above_max() {
-    let datum = Datum::decimal(LONG_MAX as i128 + 1).unwrap();
+    let datum = Datum::decimal(decimal_from_i128_with_scale(LONG_MAX as i128 + 1, 0)).unwrap();
 
     let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
 
@@ -1162,7 +1157,7 @@ fn test_datum_decimal_convert_to_long_above_max() {
 
 #[test]
 fn test_datum_decimal_convert_to_long_below_min() {
-    let datum = Datum::decimal(LONG_MIN as i128 - 1).unwrap();
+    let datum = Datum::decimal(decimal_from_i128_with_scale(LONG_MIN as i128 - 1, 0)).unwrap();
 
     let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
 

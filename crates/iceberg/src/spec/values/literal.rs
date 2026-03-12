@@ -22,11 +22,13 @@ use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
-use rust_decimal::Decimal;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
 use super::Map;
+use super::decimal_utils::{
+    decimal_from_str_exact, decimal_mantissa, decimal_rescale, try_decimal_from_i128_with_scale,
+};
 use super::primitive::PrimitiveLiteral;
 use super::struct_value::Struct;
 use super::temporal::{date, time, timestamp, timestamptz};
@@ -396,23 +398,20 @@ impl Literal {
         Self::Primitive(PrimitiveLiteral::Int128(decimal))
     }
 
-    /// Creates decimal literal from string. See [`Decimal::from_str_exact`].
+    /// Creates decimal literal from string.
     ///
     /// Example:
     ///
     /// ```rust
     /// use iceberg::spec::Literal;
-    /// use rust_decimal::Decimal;
     /// let t1 = Literal::decimal(12345);
     /// let t2 = Literal::decimal_from_str("123.45").unwrap();
     ///
     /// assert_eq!(t1, t2);
     /// ```
     pub fn decimal_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let decimal = Decimal::from_str_exact(s.as_ref()).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse decimal.").with_source(e)
-        })?;
-        Ok(Self::decimal(decimal.mantissa()))
+        let decimal = decimal_from_str_exact(s.as_ref())?;
+        Ok(Self::decimal(decimal_mantissa(&decimal)))
     }
 
     /// Attempts to convert the Literal to a PrimitiveLiteral
@@ -509,10 +508,10 @@ impl Literal {
                     },
                     JsonValue::String(s),
                 ) => {
-                    let mut decimal = Decimal::from_str_exact(&s)?;
-                    decimal.rescale(*scale);
+                    let decimal = decimal_from_str_exact(&s)?;
+                    let rescaled = decimal_rescale(decimal, *scale);
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(
-                        decimal.mantissa(),
+                        decimal_mantissa(&rescaled),
                     ))))
                 }
                 (_, JsonValue::Null) => Ok(None),
@@ -672,7 +671,7 @@ impl Literal {
                         precision: _precision,
                         scale,
                     }) => {
-                        let decimal = Decimal::try_from_i128_with_scale(val, *scale)?;
+                        let decimal = try_decimal_from_i128_with_scale(val, *scale)?;
                         Ok(JsonValue::String(decimal.to_string()))
                     }
                     _ => Err(Error::new(

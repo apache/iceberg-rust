@@ -20,8 +20,8 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::compression::CompressionCodec;
 use crate::io::{FileRead, InputFile};
-use crate::puffin::compression::CompressionCodec;
 use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
@@ -285,10 +285,13 @@ impl FileMetadata {
 
         let input_file_length = input_file.metadata().await?.size;
         let footer_payload_length =
-            FileMetadata::read_footer_payload_length(&file_read, input_file_length).await?;
-        let footer_bytes =
-            FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length)
-                .await?;
+            FileMetadata::read_footer_payload_length(file_read.as_ref(), input_file_length).await?;
+        let footer_bytes = FileMetadata::read_footer_bytes(
+            file_read.as_ref(),
+            input_file_length,
+            footer_payload_length,
+        )
+        .await?;
 
         let magic_length = FileMetadata::MAGIC_LENGTH as usize;
         // check first four bytes of footer
@@ -385,7 +388,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::io::{FileIOBuilder, InputFile};
+    use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,
@@ -397,7 +400,7 @@ mod tests {
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
 
     async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFile {
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let path_buf = temp_dir.path().join("abc.puffin");
         let temp_path = path_buf.to_str().unwrap();
@@ -953,5 +956,35 @@ mod tests {
             .unwrap();
 
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata());
+    }
+
+    #[tokio::test]
+    async fn test_gzip_compression_allowed_in_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a JSON payload with Gzip compression codec
+        // Metadata should be readable, but accessing the blob will fail
+        let payload = r#"{
+            "blobs": [
+                {
+                    "type": "test-type",
+                    "fields": [1],
+                    "snapshot-id": 1,
+                    "sequence-number": 1,
+                    "offset": 4,
+                    "length": 10,
+                    "compression-codec": "gzip"
+                }
+            ]
+        }"#;
+
+        let input_file = input_file_with_payload(&temp_dir, payload).await;
+
+        // Reading metadata should succeed (lazy validation)
+        let result = FileMetadata::read(&input_file).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+        assert_eq!(metadata.blobs.len(), 1);
+        assert_eq!(metadata.blobs[0].compression_codec, CompressionCodec::Gzip);
     }
 }
