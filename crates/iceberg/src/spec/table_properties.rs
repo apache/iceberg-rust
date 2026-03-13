@@ -19,8 +19,11 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
+use apache_avro::Codec;
+
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::avro_util;
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
@@ -110,6 +113,8 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub avro_compression_codec: Codec,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -203,6 +208,14 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
+    /// Default Avro compression codec - gzip
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str = "gzip";
+
+    /// Compression level for Avro files
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
+
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
@@ -250,6 +263,29 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            avro_compression_codec: {
+                // Parse codec name and level from properties
+                let codec_name = parse_property(
+                    props,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
+                )?;
+
+                // Parse optional compression level (sentinel value 255 means not specified)
+                let level_raw = parse_property(
+                    props,
+                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
+                    255u8,
+                )?;
+                let level = if level_raw == 255 {
+                    None
+                } else {
+                    Some(level_raw)
+                };
+
+                // Convert to Codec
+                avro_util::codec_from_str(Some(&codec_name), level)
+            },
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
@@ -262,6 +298,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 
 #[cfg(test)]
 mod tests {
+    use apache_avro::{DeflateSettings, ZstandardSettings};
+    use miniz_oxide::deflate::CompressionLevel;
+
     use super::*;
     use crate::compression::CompressionCodec;
 
@@ -289,10 +328,40 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+        // Test compression defaults - should be gzip with default level (9)
+        assert_eq!(
+            table_properties.avro_compression_codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+        );
         // Test compression defaults (none means CompressionCodec::None)
         assert_eq!(
             table_properties.metadata_compression_codec,
             CompressionCodec::None
+        );
+        // Test datafusion fanout writer default
+        assert_eq!(
+            table_properties.write_datafusion_fanout_enabled,
+            TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_avro_compression() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
+                "zstd".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+                "3".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        // Check that it parsed to a Zstandard codec with level 3
+        assert_eq!(
+            table_properties.avro_compression_codec,
+            Codec::Zstandard(ZstandardSettings::new(3))
         );
     }
 
