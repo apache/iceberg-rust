@@ -27,6 +27,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use config::*;
+use futures::stream::BoxStream;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
 
@@ -92,6 +93,9 @@ pub trait Storage: Debug + Send + Sync {
 
     /// Delete all files with the given prefix
     async fn delete_prefix(&self, path: &str) -> Result<()>;
+
+    /// Delete multiple files from a stream of paths.
+    async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()>;
 
     /// Create a new input file for reading
     fn new_input(&self, path: &str) -> Result<InputFile>;

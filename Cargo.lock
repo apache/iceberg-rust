@@ -3583,6 +3583,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "cfg-if",
+ "futures",
  "iceberg",
  "iceberg_test_utils",
  "opendal",
