@@ -53,11 +53,13 @@ impl SensitiveBytes {
     }
 
     /// Returns the number of bytes.
+    #[allow(dead_code)] // Encryption work is ongoing to currently unused
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns `true` if the byte slice is empty.
+    #[allow(dead_code)] // Encryption work is ongoing to currently unused
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
