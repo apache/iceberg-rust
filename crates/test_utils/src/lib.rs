@@ -42,6 +42,8 @@ mod common {
     pub const ENV_HMS_ENDPOINT: &str = "ICEBERG_TEST_HMS_ENDPOINT";
     pub const ENV_GLUE_ENDPOINT: &str = "ICEBERG_TEST_GLUE_ENDPOINT";
     pub const ENV_GCS_ENDPOINT: &str = "ICEBERG_TEST_GCS_ENDPOINT";
+    pub const ENV_POSTGRES_ENDPOINT: &str = "ICEBERG_TEST_POSTGRES_ENDPOINT";
+    pub const ENV_MYSQL_ENDPOINT: &str = "ICEBERG_TEST_MYSQL_ENDPOINT";
 
     // Default ports matching dev/docker-compose.yaml
     pub const DEFAULT_MINIO_PORT: u16 = 9000;
@@ -49,6 +51,8 @@ mod common {
     pub const DEFAULT_HMS_PORT: u16 = 9083;
     pub const DEFAULT_GLUE_PORT: u16 = 5001;
     pub const DEFAULT_GCS_PORT: u16 = 4443;
+    pub const DEFAULT_POSTGRES_PORT: u16 = 5432;
+    pub const DEFAULT_MYSQL_PORT: u16 = 3306;
 
     /// Returns the MinIO S3-compatible endpoint.
     /// Checks ICEBERG_TEST_MINIO_ENDPOINT env var, otherwise returns localhost default.
@@ -82,6 +86,22 @@ mod common {
     pub fn get_gcs_endpoint() -> String {
         std::env::var(ENV_GCS_ENDPOINT)
             .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_GCS_PORT}"))
+    }
+
+    /// Returns the PostgreSQL connection URI for SQL catalog tests.
+    /// Checks ICEBERG_TEST_POSTGRES_ENDPOINT env var, otherwise returns localhost default.
+    pub fn get_postgres_endpoint() -> String {
+        std::env::var(ENV_POSTGRES_ENDPOINT).unwrap_or_else(|_| {
+            format!("postgres://iceberg:password@localhost:{DEFAULT_POSTGRES_PORT}/iceberg_catalog")
+        })
+    }
+
+    /// Returns the MySQL connection URI for SQL catalog tests.
+    /// Checks ICEBERG_TEST_MYSQL_ENDPOINT env var, otherwise returns localhost default.
+    pub fn get_mysql_endpoint() -> String {
+        std::env::var(ENV_MYSQL_ENDPOINT).unwrap_or_else(|_| {
+            format!("mysql://iceberg:password@localhost:{DEFAULT_MYSQL_PORT}/iceberg_catalog")
+        })
     }
 
     /// Helper to clean up a namespace and its tables before a test runs.

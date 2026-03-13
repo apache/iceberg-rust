@@ -3478,12 +3478,14 @@ version = "0.9.0"
 dependencies = [
  "async-trait",
  "iceberg",
+ "iceberg_test_utils",
  "itertools 0.13.0",
  "regex",
  "sqlx",
  "strum",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6327,6 +6329,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx-core",
+ "sqlx-mysql",
+ "sqlx-postgres",
  "sqlx-sqlite",
  "syn",
  "tokio",
@@ -6364,6 +6368,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.5",
  "rsa",
+ "serde",
  "sha1",
  "sha2",
  "smallvec",

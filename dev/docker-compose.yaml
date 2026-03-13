@@ -159,6 +159,47 @@ services:
     command: --scheme http
 
   # =============================================================================
+  # PostgreSQL - for SQL catalog integration tests
+  # =============================================================================
+  postgres:
+    image: postgres:18
+    networks:
+      iceberg_test:
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=iceberg
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=iceberg_catalog
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg_catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # =============================================================================
+  # MySQL - for SQL catalog integration tests
+  # =============================================================================
+  mysql:
+    image: mysql:8
+    networks:
+      iceberg_test:
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=iceberg_catalog
+      - MYSQL_USER=iceberg
+      - MYSQL_PASSWORD=password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "iceberg", "-ppassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # =============================================================================
   # Spark - Spark with Iceberg for integration tests
   # =============================================================================
   spark-iceberg:
