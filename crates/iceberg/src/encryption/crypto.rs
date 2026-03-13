@@ -175,7 +175,7 @@ impl SecureKey {
 
     /// Returns the key bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.key.as_bytes()
+        self.key.as_bytes()
     }
 }
 
