@@ -18,7 +18,9 @@
 //! Iceberg sql catalog implementation.
 //!
 //! To build a sql catalog with configurations
-//! # Example
+//! # Examples
+//!
+//! ## Generic
 //!
 //! ```rust, no_run
 //! use std::collections::HashMap;
@@ -46,6 +48,42 @@
 //!                 (
 //!                     SQL_CATALOG_PROP_BIND_STYLE.to_string(),
 //!                     SqlBindStyle::QMark.to_string(),
+//!                 ),
+//!             ]),
+//!         )
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
+//!
+//! ## Postgres
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::CatalogBuilder;
+//! use iceberg_catalog_sql::{
+//!     SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
+//!     SqlBindStyle, SqlCatalogBuilder,
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let _catalog = SqlCatalogBuilder::default()
+//!         .load(
+//!             "postgres",
+//!             HashMap::from_iter([
+//!                 (
+//!                     SQL_CATALOG_PROP_URI.to_string(),
+//!                     "postgres://iceberg:playground@localhost:5432".to_string(),
+//!                 ),
+//!                 (
+//!                     SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+//!                     "s3://localhost:9000".to_string(),
+//!                 ),
+//!                 (
+//!                     SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+//!                     SqlBindStyle::DollarNumeric.to_string(),
 //!                 ),
 //!             ]),
 //!         )
