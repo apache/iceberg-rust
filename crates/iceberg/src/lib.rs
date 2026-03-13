@@ -99,3 +99,5 @@ pub mod writer;
 mod delete_vector;
 pub mod metadata_columns;
 pub mod puffin;
+/// Utility functions and modules.
+pub mod util;
