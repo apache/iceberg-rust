@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use typed_builder::TypedBuilder;
 
 use crate::spec::{
     ListType, Literal, MapType, NestedField, NestedFieldRef, Schema, StructType, Type,
@@ -29,14 +30,78 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 /// Sentinel parent ID representing the table root (top-level columns).
 const TABLE_ROOT_ID: i32 = -1;
+// Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
+const DEFAULT_ID: i32 = 0;
 
-/// A pending column addition, recording the parent path and the field to add.
-struct PendingAdd {
-    /// `None` means a root-level addition; `Some("person")` or `Some("person.address")`
-    /// identifies the nested struct to add the column to.
+#[derive(TypedBuilder)]
+/// Declarative specification for adding a column in [`UpdateSchemaAction`].
+///
+/// Use helper constructors such as [`AddColumn::optional`] and [`AddColumn::required`],
+/// optionally combined with [`AddColumn::with_parent`] and [`AddColumn::with_doc`], then pass
+/// the value to
+/// [`UpdateSchemaAction::add_column`].
+pub struct AddColumn {
+    #[builder(default = None, setter(strip_option, into))]
     parent: Option<String>,
-    /// The field to add. Uses placeholder ID `0` which is auto-assigned at commit time.
-    field: NestedFieldRef,
+    #[builder(setter(into))]
+    name: String,
+    #[builder(default = false)]
+    required: bool,
+    field_type: Type,
+    #[builder(default = None, setter(strip_option, into))]
+    doc: Option<String>,
+    #[builder(default = None, setter(strip_option))]
+    initial_default: Option<Literal>,
+    #[builder(default = None, setter(strip_option))]
+    write_default: Option<Literal>,
+}
+
+impl AddColumn {
+    /// Create a root-level optional column specification.
+    pub fn optional(name: impl ToString, field_type: Type) -> Self {
+        Self::builder()
+            .name(name.to_string())
+            .field_type(field_type)
+            .required(false)
+            .build()
+    }
+
+    /// Create a root-level required column specification.
+    pub fn required(name: impl ToString, field_type: Type, initial_default: Literal) -> Self {
+        Self::builder()
+            .name(name.to_string())
+            .field_type(field_type)
+            .required(true)
+            .initial_default(initial_default.clone())
+            .write_default(initial_default)
+            .build()
+    }
+
+    /// Return a copy with an updated parent path.
+    pub fn with_parent(mut self, parent: impl ToString) -> Self {
+        self.parent = Some(parent.to_string());
+        self
+    }
+
+    /// Return a copy with an updated doc string.
+    pub fn with_doc(mut self, doc: impl ToString) -> Self {
+        self.doc = Some(doc.to_string());
+        self
+    }
+
+    fn to_nested_field(&self) -> NestedFieldRef {
+        let mut field = NestedField::new(
+            DEFAULT_ID,
+            self.name.clone(),
+            self.field_type.clone(),
+            self.required,
+        );
+
+        field.doc = self.doc.clone();
+        field.initial_default = self.initial_default.clone();
+        field.write_default = self.write_default.clone();
+        Arc::new(field)
+    }
 }
 
 /// Schema evolution API modeled after the Java `SchemaUpdate` implementation.
@@ -52,14 +117,17 @@ struct PendingAdd {
 /// ```ignore
 /// let tx = Transaction::new(&table);
 /// let action = tx.update_schema()
-///     .add_column("new_col", Type::Primitive(PrimitiveType::Int))
-///     .add_column_to("person", "email", Type::Primitive(PrimitiveType::String))
+///     .add_column(AddColumn::optional("new_col", Type::Primitive(PrimitiveType::Int)))
+///     .add_column(
+///         AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
+///             .with_parent("person")
+///     )
 ///     .delete_column("old_col");
 /// let tx = action.apply(tx).unwrap();
 /// let table = tx.commit(&catalog).await.unwrap();
 /// ```
 pub struct UpdateSchemaAction {
-    additions: Vec<PendingAdd>,
+    additions: Vec<AddColumn>,
     deletes: Vec<String>,
     auto_assign_ids: bool,
 }
@@ -76,153 +144,14 @@ impl UpdateSchemaAction {
 
     // --- Root-level additions ---
 
-    /// Add a `NestedFieldRef` column to the table root.
-    pub fn add_field(self, field: NestedFieldRef) -> Self {
-        self.add_field_internal(None, field)
-    }
-
-    /// Add an optional column to the table root.
+    /// Add a column to the table schema.
     ///
-    /// The field ID is a placeholder (`0`) and will be auto-assigned at commit time.
-    pub fn add_column(self, name: impl ToString, field_type: Type) -> Self {
-        self.add_field(Arc::new(NestedField::optional(0, name, field_type)))
-    }
-
-    /// Add an optional column with a doc string to the table root.
-    ///
-    /// The field ID is a placeholder (`0`) and will be auto-assigned at commit time.
-    pub fn add_column_with_doc(
-        self,
-        name: impl ToString,
-        field_type: Type,
-        doc: impl ToString,
-    ) -> Self {
-        self.add_field(Arc::new(
-            NestedField::optional(0, name, field_type).with_doc(doc),
-        ))
-    }
-
-    /// Add a required column to the table root.
-    ///
-    /// An `initial_default` value is required per the Iceberg spec: it is used to populate
-    /// this field for all records that were written before the field was added.
-    /// The field ID is a placeholder (`0`) and will be auto-assigned at commit time.
-    pub fn add_required_column(
-        self,
-        name: impl ToString,
-        field_type: Type,
-        initial_default: Literal,
-    ) -> Self {
-        self.add_field(Arc::new(
-            NestedField::required(0, name, field_type)
-                .with_initial_default(initial_default.clone())
-                .with_write_default(initial_default),
-        ))
-    }
-
-    /// Add a required column with a doc string to the table root.
-    ///
-    /// An `initial_default` value is required per the Iceberg spec: it is used to populate
-    /// this field for all records that were written before the field was added.
-    /// The field ID is a placeholder (`0`) and will be auto-assigned at commit time.
-    pub fn add_required_column_with_doc(
-        self,
-        name: impl ToString,
-        field_type: Type,
-        initial_default: Literal,
-        doc: impl ToString,
-    ) -> Self {
-        self.add_field(Arc::new(
-            NestedField::required(0, name, field_type)
-                .with_initial_default(initial_default.clone())
-                .with_write_default(initial_default)
-                .with_doc(doc),
-        ))
-    }
-
-    // --- Nested additions ---
-
-    /// Add a `NestedFieldRef` column under a parent struct identified by name.
-    ///
-    /// If the parent is a map, the column is added to the map value's struct.
-    /// If the parent is a list, the column is added to the list element's struct.
-    pub fn add_field_to(self, parent: impl ToString, field: NestedFieldRef) -> Self {
-        self.add_field_internal(Some(parent.to_string()), field)
-    }
-
-    /// Add an optional column under a parent struct identified by name.
-    ///
-    /// The `parent` can be a dotted path (e.g. `"person"` or `"person.address"`).
-    /// If the parent is a map, the column is added to the map value's struct.
-    /// If the parent is a list, the column is added to the list element's struct.
-    /// The field ID is a placeholder (`0`) and will be auto-assigned at commit time.
-    pub fn add_column_to(
-        self,
-        parent: impl ToString,
-        name: impl ToString,
-        field_type: Type,
-    ) -> Self {
-        self.add_field_to(parent, Arc::new(NestedField::optional(0, name, field_type)))
-    }
-
-    /// Add an optional column with a doc string under a parent struct.
-    ///
-    /// See [`add_column_to`](Self::add_column_to) for parent path details.
-    pub fn add_column_to_with_doc(
-        self,
-        parent: impl ToString,
-        name: impl ToString,
-        field_type: Type,
-        doc: impl ToString,
-    ) -> Self {
-        self.add_field_to(
-            parent,
-            Arc::new(NestedField::optional(0, name, field_type).with_doc(doc)),
-        )
-    }
-
-    /// Add a required column under a parent struct.
-    ///
-    /// See [`add_column_to`](Self::add_column_to) for parent path details.
-    /// An `initial_default` value is required per the Iceberg spec.
-    pub fn add_required_column_to(
-        self,
-        parent: impl ToString,
-        name: impl ToString,
-        field_type: Type,
-        initial_default: Literal,
-    ) -> Self {
-        self.add_field_to(
-            parent,
-            Arc::new(
-                NestedField::required(0, name, field_type)
-                    .with_initial_default(initial_default.clone())
-                    .with_write_default(initial_default),
-            ),
-        )
-    }
-
-    /// Add a required column with a doc string under a parent struct.
-    ///
-    /// See [`add_column_to`](Self::add_column_to) for parent path details.
-    /// An `initial_default` value is required per the Iceberg spec.
-    pub fn add_required_column_to_with_doc(
-        self,
-        parent: impl ToString,
-        name: impl ToString,
-        field_type: Type,
-        initial_default: Literal,
-        doc: impl ToString,
-    ) -> Self {
-        self.add_field_to(
-            parent,
-            Arc::new(
-                NestedField::required(0, name, field_type)
-                    .with_initial_default(initial_default.clone())
-                    .with_write_default(initial_default)
-                    .with_doc(doc),
-            ),
-        )
+    /// To add a root-level column, leave `AddColumn::parent` as `None`.
+    /// For nested additions, set a parent path (for example via [`AddColumn::with_parent`]).
+    /// If the parent resolves to a map/list, the column is added to map value/list element.
+    pub fn add_column(mut self, add_column: AddColumn) -> Self {
+        self.additions.push(add_column);
+        self
     }
 
     // --- Other builder methods ---
@@ -243,11 +172,6 @@ impl UpdateSchemaAction {
     }
 
     // --- Internal helpers ---
-
-    fn add_field_internal(mut self, parent: Option<String>, field: NestedFieldRef) -> Self {
-        self.additions.push(PendingAdd { parent, field });
-        self
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +184,7 @@ impl UpdateSchemaAction {
 /// from `crate::spec::schema::id_reassigner`, but operates on new fields with placeholder
 /// IDs rather than reassigning an existing schema. `ReassignFieldIds` cannot be used
 /// directly here because it rejects duplicate old IDs (all new fields share placeholder
-/// ID `0`).
+/// ID `DEFAULT_ID`).
 fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
     *next_id += 1;
     let new_id = *next_id;
@@ -468,40 +392,42 @@ impl TransactionAction for UpdateSchemaAction {
         // since HashMap iteration order is non-deterministic.
         let mut additions_by_parent: HashMap<i32, Vec<NestedFieldRef>> = HashMap::new();
 
-        for pending in &self.additions {
+        for add in &self.additions {
+            let pending_field = add.to_nested_field();
+
             // Check that name does not contain ".".
-            if pending.field.name.contains('.') {
+            if pending_field.name.contains('.') {
                 return Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!(
-                        "Cannot add column with ambiguous name: {}. Use the `add_column_to` method to add a column to a nested struct.",
-                        pending.field.name
+                        "Cannot add column with ambiguous name: {}. Use `AddColumn::with_parent` to add a column to a nested struct.",
+                        pending_field.name
                     ),
                 ));
             }
 
             // Required columns without an initial default need allow_incompatible_changes.
-            if pending.field.required && pending.field.initial_default.is_none() {
+            if pending_field.required && pending_field.initial_default.is_none() {
                 return Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!(
                         "Incompatible change: cannot add required column without an initial default: {}",
-                        pending.field.name
+                        pending_field.name
                     ),
                 ));
             }
 
-            let parent_id = match &pending.parent {
+            let parent_id = match &add.parent {
                 None => {
                     // Root-level: check name conflict against root-level fields.
-                    if let Some(existing) = base_schema.field_by_name(&pending.field.name)
+                    if let Some(existing) = base_schema.field_by_name(&pending_field.name)
                         && !delete_ids.contains(&existing.id)
                     {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
                             format!(
                                 "Cannot add column, name already exists: {}",
-                                pending.field.name
+                                pending_field.name
                             ),
                         ));
                     }
@@ -513,7 +439,7 @@ impl TransactionAction for UpdateSchemaAction {
                         resolve_parent_target(base_schema, parent_path)?;
 
                     if parent_struct.fields().iter().any(|f| {
-                        f.name == pending.field.name
+                        f.name == pending_field.name
                             && !delete_ids.contains(&f.id)
                             && !delete_ids.contains(&parent_id)
                     }) {
@@ -521,7 +447,7 @@ impl TransactionAction for UpdateSchemaAction {
                             ErrorKind::PreconditionFailed,
                             format!(
                                 "Cannot add column, name already exists in '{}': {}",
-                                parent_path, pending.field.name
+                                parent_path, pending_field.name
                             ),
                         ));
                     }
@@ -532,9 +458,9 @@ impl TransactionAction for UpdateSchemaAction {
 
             // Assign fresh IDs immediately, preserving insertion order.
             let field = if self.auto_assign_ids {
-                assign_fresh_ids(&pending.field, &mut last_column_id)
+                assign_fresh_ids(&pending_field, &mut last_column_id)
             } else {
-                pending.field.clone()
+                pending_field
             };
 
             additions_by_parent
@@ -582,7 +508,7 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
     use crate::transaction::tests::make_v2_table;
-    use crate::transaction::update_schema::UpdateSchemaAction;
+    use crate::transaction::update_schema::{AddColumn, DEFAULT_ID, UpdateSchemaAction};
     use crate::{ErrorKind, TableIdent, TableRequirement, TableUpdate};
 
     // The V2 test table has:
@@ -696,9 +622,10 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let action = tx
-            .update_schema()
-            .add_column("new_col", Type::Primitive(PrimitiveType::Int));
+        let action = tx.update_schema().add_column(AddColumn::optional(
+            "new_col",
+            Type::Primitive(PrimitiveType::Int),
+        ));
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -740,10 +667,9 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column_with_doc(
-            "documented_col",
-            Type::Primitive(PrimitiveType::String),
-            "A documented column",
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("documented_col", Type::Primitive(PrimitiveType::String))
+                .with_doc("A documented column"),
         );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -767,11 +693,11 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_required_column(
+        let action = tx.update_schema().add_column(AddColumn::required(
             "req_col",
             Type::Primitive(PrimitiveType::Int),
             Literal::int(0),
-        );
+        ));
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -796,9 +722,10 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // "x" already exists in the V2 test schema.
-        let action = tx
-            .update_schema()
-            .add_column("x", Type::Primitive(PrimitiveType::Int));
+        let action = tx.update_schema().add_column(AddColumn::optional(
+            "x",
+            Type::Primitive(PrimitiveType::Int),
+        ));
 
         let result = Arc::new(action).commit(&table).await;
         let err = match result {
@@ -866,7 +793,10 @@ mod tests {
         let action = tx
             .update_schema()
             .delete_column("z")
-            .add_column("w", Type::Primitive(PrimitiveType::Boolean));
+            .add_column(AddColumn::optional(
+                "w",
+                Type::Primitive(PrimitiveType::Boolean),
+            ));
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -894,7 +824,10 @@ mod tests {
         let action = tx
             .update_schema()
             .delete_column("z")
-            .add_column("z", Type::Primitive(PrimitiveType::Boolean));
+            .add_column(AddColumn::optional(
+                "z",
+                Type::Primitive(PrimitiveType::Boolean),
+            ));
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -918,7 +851,10 @@ mod tests {
 
         let tx = tx
             .update_schema()
-            .add_column("new_col", Type::Primitive(PrimitiveType::Int))
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ))
             .apply(tx)
             .unwrap();
 
@@ -938,10 +874,9 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // Add "email" to the "person" struct.
-        let action = tx.update_schema().add_column_to(
-            "person",
-            "email",
-            Type::Primitive(PrimitiveType::String),
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
+                .with_parent("person"),
         );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -970,11 +905,10 @@ mod tests {
         let table = make_v2_table_with_nested();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column_to_with_doc(
-            "person",
-            "phone",
-            Type::Primitive(PrimitiveType::String),
-            "Phone number",
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("phone", Type::Primitive(PrimitiveType::String))
+                .with_parent("person")
+                .with_doc("Phone number"),
         );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -999,10 +933,9 @@ mod tests {
 
         // "tags" is a list<struct{key, value}>. Adding to the list navigates to its
         // element struct automatically.
-        let action = tx.update_schema().add_column_to(
-            "tags",
-            "score",
-            Type::Primitive(PrimitiveType::Double),
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("score", Type::Primitive(PrimitiveType::Double))
+                .with_parent("tags"),
         );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -1032,10 +965,9 @@ mod tests {
 
         // "props" is a map<string, struct{data}>. Adding to the map navigates to its
         // value struct automatically.
-        let action = tx.update_schema().add_column_to(
-            "props",
-            "version",
-            Type::Primitive(PrimitiveType::Int),
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("version", Type::Primitive(PrimitiveType::Int))
+                .with_parent("props"),
         );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
@@ -1060,10 +992,9 @@ mod tests {
         let table = make_v2_table_with_nested();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column_to(
-            "nonexistent",
-            "col",
-            Type::Primitive(PrimitiveType::Int),
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("col", Type::Primitive(PrimitiveType::Int))
+                .with_parent("nonexistent"),
         );
 
         let err = match Arc::new(action).commit(&table).await {
@@ -1084,9 +1015,9 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // "x" is a primitive (long), not a struct.
-        let action =
-            tx.update_schema()
-                .add_column_to("x", "col", Type::Primitive(PrimitiveType::Int));
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("col", Type::Primitive(PrimitiveType::Int)).with_parent("x"),
+        );
 
         let err = match Arc::new(action).commit(&table).await {
             Err(e) => e,
@@ -1106,10 +1037,9 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // "name" already exists in the "person" struct.
-        let action = tx.update_schema().add_column_to(
-            "person",
-            "name",
-            Type::Primitive(PrimitiveType::String),
+        let action = tx.update_schema().add_column(
+            AddColumn::optional("name", Type::Primitive(PrimitiveType::String))
+                .with_parent("person"),
         );
 
         let err = match Arc::new(action).commit(&table).await {
@@ -1132,8 +1062,14 @@ mod tests {
         // Add a root column and a nested column in the same action.
         let action = tx
             .update_schema()
-            .add_column("root_col", Type::Primitive(PrimitiveType::Boolean))
-            .add_column_to("person", "email", Type::Primitive(PrimitiveType::String));
+            .add_column(AddColumn::optional(
+                "root_col",
+                Type::Primitive(PrimitiveType::Boolean),
+            ))
+            .add_column(
+                AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
+                    .with_parent("person"),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -1158,19 +1094,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_nested_struct_type_with_fresh_ids() {
-        // Exercises the assign_fresh_ids bug fix: adding a new column whose TYPE
-        // contains nested fields (e.g. a struct column). All sub-fields must receive
-        // fresh IDs, not placeholder 0.
+        // Adding a new column whose TYPE contains nested fields (e.g. a struct column). All sub-fields must receive
+        // fresh IDs, not placeholder `DEFAULT_ID`.
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column(
+        let action = tx.update_schema().add_column(AddColumn::optional(
             "address",
             Type::Struct(StructType::new(vec![
-                NestedField::optional(0, "street", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(0, "city", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(DEFAULT_ID, "street", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::optional(DEFAULT_ID, "city", Type::Primitive(PrimitiveType::String))
+                    .into(),
             ])),
-        );
+        ));
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray, StructArray};
 use common::{random_ns, test_schema};
 use futures::TryStreamExt;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::transaction::{AddColumn, ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -146,10 +146,10 @@ async fn test_add_field() {
 
     // Add a new optional primitive field to the table
     let tx = Transaction::new(&table);
-    let add_action = tx.update_schema().add_column(
+    let add_action = tx.update_schema().add_column(AddColumn::optional(
         "a",
         iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::Int),
-    );
+    ));
     let tx = add_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
@@ -168,7 +168,7 @@ async fn test_add_field() {
 
     // Add a struct column, then add a nested column inside it
     let tx = Transaction::new(&table);
-    let add_action = tx.update_schema().add_column(
+    let add_action = tx.update_schema().add_column(AddColumn::optional(
         "info",
         iceberg::spec::Type::Struct(iceberg::spec::StructType::new(vec![Arc::new(
             iceberg::spec::NestedField::optional(
@@ -177,7 +177,7 @@ async fn test_add_field() {
                 iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::String),
             ),
         )])),
-    );
+    ));
     let tx = add_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
@@ -200,10 +200,12 @@ async fn test_add_field() {
 
     // Add a nested column to the struct
     let tx = Transaction::new(&table);
-    let add_action = tx.update_schema().add_column_to(
-        "info",
-        "zip",
-        iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::String),
+    let add_action = tx.update_schema().add_column(
+        AddColumn::optional(
+            "zip",
+            iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::String),
+        )
+        .with_parent("info"),
     );
     let tx = add_action.apply(tx).unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
