@@ -512,11 +512,11 @@ impl TransactionAction for UpdateSchemaAction {
                     let (parent_id, parent_struct) =
                         resolve_parent_target(base_schema, parent_path)?;
 
-                    if parent_struct
-                        .fields()
-                        .iter()
-                        .any(|f| f.name == pending.field.name && !delete_ids.contains(&f.id))
-                    {
+                    if parent_struct.fields().iter().any(|f| {
+                        f.name == pending.field.name
+                            && !delete_ids.contains(&f.id)
+                            && !delete_ids.contains(&parent_id)
+                    }) {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
                             format!(
