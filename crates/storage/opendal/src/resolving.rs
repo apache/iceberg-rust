@@ -28,6 +28,7 @@ use iceberg::io::{
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
+use opendal::Scheme;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -35,7 +36,28 @@ use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
 
-/// Extract the scheme from a path string (e.g., `"s3://bucket/key"` → `"s3"`).
+/// Parse a URL scheme string into an [`opendal::Scheme`].
+///
+/// Handles Iceberg/Hadoop-specific aliases that opendal doesn't know about
+/// (e.g. `s3a`, `s3n`, `gcs`, `abfs`, `abfss`, `wasb`, `wasbs`).
+fn parse_scheme(scheme: &str) -> Result<Scheme> {
+    match scheme {
+        "memory" => Ok(Scheme::Memory),
+        "file" | "" => Ok(Scheme::Fs),
+        "s3" | "s3a" | "s3n" => Ok(Scheme::S3),
+        "gs" | "gcs" => Ok(Scheme::Gcs),
+        "oss" => Ok(Scheme::Oss),
+        "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
+        s => s.parse::<Scheme>().map_err(|e| {
+            Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Unsupported storage scheme: {s}: {e}"),
+            )
+        }),
+    }
+}
+
+/// Extract the scheme string from a path URL.
 fn extract_scheme(path: &str) -> Result<String> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(
@@ -52,9 +74,9 @@ fn build_storage_for_scheme(
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
 ) -> Result<OpenDalStorage> {
-    match scheme {
+    match parse_scheme(scheme)? {
         #[cfg(feature = "opendal-s3")]
-        "s3" | "s3a" | "s3n" => {
+        Scheme::S3 => {
             let config = crate::s3::s3_config_parse(props.clone())?;
             Ok(OpenDalStorage::S3 {
                 configured_scheme: scheme.to_string(),
@@ -63,21 +85,21 @@ fn build_storage_for_scheme(
             })
         }
         #[cfg(feature = "opendal-gcs")]
-        "gs" => {
+        Scheme::Gcs => {
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
             })
         }
         #[cfg(feature = "opendal-oss")]
-        "oss" => {
+        Scheme::Oss => {
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
             })
         }
         #[cfg(feature = "opendal-azdls")]
-        "abfs" | "abfss" | "wasb" | "wasbs" => {
+        Scheme::Azdls => {
             let configured_scheme: crate::azdls::AzureStorageScheme = scheme.parse()?;
             let config = crate::azdls::azdls_config_parse(props.clone())?;
             Ok(OpenDalStorage::Azdls {
@@ -86,12 +108,12 @@ fn build_storage_for_scheme(
             })
         }
         #[cfg(feature = "opendal-fs")]
-        "file" => Ok(OpenDalStorage::LocalFs),
+        Scheme::Fs => Ok(OpenDalStorage::LocalFs),
         #[cfg(feature = "opendal-memory")]
-        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
-        _ => Err(Error::new(
+        Scheme::Memory => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        unsupported => Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            format!("Unsupported storage scheme: {scheme}"),
+            format!("Unsupported storage scheme: {unsupported}"),
         )),
     }
 }
