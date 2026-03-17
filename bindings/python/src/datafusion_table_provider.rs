@@ -22,39 +22,16 @@ use std::sync::Arc;
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use iceberg::TableIdent;
-use iceberg::io::{FileIOBuilder, StorageFactory};
+use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
 use iceberg_datafusion::table::IcebergStaticTableProvider;
-use iceberg_storage_opendal::OpenDalStorageFactory;
+use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::{PyAnyMethods, PyCapsuleMethods, *};
 use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
 
-/// Parse the scheme from a URL and return the appropriate StorageFactory.
-fn storage_factory_from_path(path: &str) -> PyResult<Arc<dyn StorageFactory>> {
-    let scheme = path
-        .split("://")
-        .next()
-        .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid path, missing scheme: {path}")))?;
-
-    let factory: Arc<dyn StorageFactory> = match scheme {
-        "file" | "" => Arc::new(OpenDalStorageFactory::Fs),
-        "s3" | "s3a" => Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: scheme.to_string(),
-            customized_credential_load: None,
-        }),
-        "memory" => Arc::new(OpenDalStorageFactory::Memory),
-        _ => {
-            return Err(PyRuntimeError::new_err(format!(
-                "Unsupported storage scheme: {scheme}"
-            )));
-        }
-    };
-
-    Ok(factory)
-}
 
 pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule.name()?;
@@ -110,7 +87,7 @@ impl PyIcebergDataFusionTable {
             let table_ident = TableIdent::from_strs(identifier)
                 .map_err(|e| PyRuntimeError::new_err(format!("Invalid table identifier: {e}")))?;
 
-            let factory = storage_factory_from_path(&metadata_location)?;
+            let factory = Arc::new(OpenDalResolvingStorageFactory::new());
 
             let mut builder = FileIOBuilder::new(factory);
 
