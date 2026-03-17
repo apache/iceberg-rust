@@ -26,6 +26,7 @@ use fs_err::read_to_string;
 use iceberg::CatalogBuilder;
 use iceberg::memory::MemoryCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_catalog_sql::SqlCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
 
@@ -97,10 +98,11 @@ impl IcebergCatalogList {
         // Create catalog based on type using the appropriate builder
         let catalog: Arc<dyn iceberg::Catalog> = match r#type {
             "rest" => Arc::new(RestCatalogBuilder::default().load(name, props).await?),
+            "sql" => Arc::new(SqlCatalogBuilder::default().load(name, props).await?),
             "memory" => Arc::new(MemoryCatalogBuilder::default().load(name, props).await?),
             _ => {
                 return Err(anyhow::anyhow!(
-                    "Unsupported catalog type: '{type}'. Supported types: rest, memory"
+                    "Unsupported catalog type: '{type}'. Supported types: rest, sql, memory"
                 ));
             }
         };
@@ -139,7 +141,44 @@ impl CatalogProviderList for IcebergCatalogList {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::migrate::MigrateDatabase;
+
     use super::*;
+
+    fn temp_path() -> String {
+        let uuid = uuid::Uuid::new_v4();
+        format!("/tmp/iceberg-test-{uuid}")
+    }
+
+    #[tokio::test]
+    async fn test_parse_sql_catalog() {
+        let db_path = temp_path();
+        let sql_uri = format!("sqlite:{db_path}");
+
+        // Create the SQLite database file first
+        sqlx::Sqlite::create_database(&sql_uri).await.unwrap();
+
+        let config = format!(
+            r#"
+            [[catalogs]]
+            name = "test_sql"
+            type = "sql"
+            [catalogs.config]
+            uri = "{sql_uri}"
+            warehouse = "/tmp/sql-warehouse"
+        "#
+        );
+
+        let toml_table: TomlTable = toml::from_str(&config).unwrap();
+        let catalog_list = IcebergCatalogList::parse_table(&toml_table).await.unwrap();
+
+        assert!(
+            catalog_list
+                .catalog_names()
+                .contains(&"test_sql".to_string())
+        );
+        assert!(catalog_list.catalog("test_sql").is_some());
+    }
 
     #[tokio::test]
     async fn test_parse_memory_catalog() {
@@ -179,7 +218,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Unsupported catalog type"));
         assert!(err_msg.contains("hive"));
-        assert!(err_msg.contains("rest, memory"));
+        assert!(err_msg.contains("rest, sql, memory"));
     }
 
     #[tokio::test]
