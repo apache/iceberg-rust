@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod replace_data_files;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -71,6 +72,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::replace_data_files::ReplaceDataFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -139,6 +141,11 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a replace data files action for compaction operations.
+    pub fn replace_data_files(&self) -> ReplaceDataFilesAction {
+        ReplaceDataFilesAction::new()
     }
 
     /// Creates replace sort order action.
@@ -235,7 +242,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use crate::catalog::MockCatalog;
+    use crate::catalog::{MockCatalog, TableUpdate};
     use crate::io::FileIO;
     use crate::spec::TableMetadata;
     use crate::table::Table;
@@ -297,6 +304,15 @@ mod tests {
             .file_io(FileIO::new_with_memory())
             .build()
             .unwrap()
+    }
+
+    pub fn apply_updates_to_table(table: &Table, updates: &[TableUpdate]) -> Table {
+        let mut builder = table.metadata().clone().into_builder(None);
+        for update in updates {
+            builder = update.clone().apply(builder).unwrap();
+        }
+        let metadata = Arc::new(builder.build().unwrap().metadata);
+        table.clone().with_metadata(metadata)
     }
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {

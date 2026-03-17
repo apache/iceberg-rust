@@ -114,6 +114,12 @@ pub(crate) struct SnapshotProducer<'a> {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    removed_data_files: Vec<DataFile>,
+    /// Explicit data sequence number for added manifest entries. When `Some`, all entries written
+    /// by `write_added_manifest()` carry this sequence number instead of inheriting from the new
+    /// snapshot. Used by `ReplaceDataFilesAction::data_sequence_number()` to preserve the
+    /// original sequence number of compacted files when equality deletes are present.
+    data_sequence_number: Option<i64>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -135,8 +141,20 @@ impl<'a> SnapshotProducer<'a> {
             key_metadata,
             snapshot_properties,
             added_data_files,
+            removed_data_files: vec![],
+            data_sequence_number: None,
             manifest_counter: (0..),
         }
+    }
+
+    pub(crate) fn with_removed_data_files(mut self, files: Vec<DataFile>) -> Self {
+        self.removed_data_files = files;
+        self
+    }
+
+    pub(crate) fn with_data_sequence_number(mut self, seq_num: i64) -> Self {
+        self.data_sequence_number = Some(seq_num);
+        self
     }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
@@ -288,6 +306,23 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    // Write a manifest containing deleted entries and return the ManifestFile for the ManifestList.
+    //
+    // ManifestContentType::Data is correct here: we are writing a data manifest that records
+    // which data files were deleted (Deleted-status entries). This is distinct from
+    // ManifestContentType::Deletes, which is for Iceberg v2 delete files (position/equality
+    // deletes). Do not change this to ManifestContentType::Deletes.
+    async fn write_delete_manifest(
+        &mut self,
+        deleted_entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        for entry in deleted_entries {
+            writer.add_delete_entry(entry)?;
+        }
+        writer.write_manifest_file().await
+    }
+
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
@@ -300,12 +335,19 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
+        let data_sequence_number = self.data_sequence_number;
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
+            } else if let Some(seq_num) = data_sequence_number {
+                // Explicitly set sequence number instead of inheriting from the new snapshot.
+                // Required when compacting files that predate an equality delete: the compacted
+                // files must retain the original sequence number so equality deletes with a higher
+                // sequence number continue to apply.
+                builder.sequence_number(seq_num).build()
             } else {
                 // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
                 // commit failed.
@@ -347,6 +389,11 @@ impl<'a> SnapshotProducer<'a> {
 
         // # TODO
         // Support process delete entries.
+        let deleted_entries = snapshot_produce_operation.delete_entries(self).await?;
+        if !deleted_entries.is_empty() {
+            let delete_manifest = self.write_delete_manifest(deleted_entries).await?;
+            manifest_files.push(delete_manifest);
+        }
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
@@ -383,10 +430,20 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        let previous_snapshot = table_metadata
-            .snapshot_by_id(self.snapshot_id)
-            .and_then(|snapshot| snapshot.parent_snapshot_id())
-            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id));
+        // NOTE: summary statistics for removed files (deleted-records, removed-files-size, etc.)
+        // come from the caller-supplied DataFile structs, not from the actual snapshot entries.
+        // delete_entries() validates that paths exist but does not verify metadata matches.
+        // Callers must ensure the DataFile statistics they pass are accurate.
+        for data_file in &self.removed_data_files {
+            summary_collector.remove_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
+        }
+
+        // The current snapshot becomes the parent of the new one being created.
+        let previous_snapshot = table_metadata.current_snapshot();
 
         let mut additional_properties = summary_collector.build();
         additional_properties.extend(self.snapshot_properties.clone());

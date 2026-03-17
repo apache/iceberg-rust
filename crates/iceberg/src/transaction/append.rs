@@ -138,7 +138,9 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Ok(manifest_list
             .entries()
             .iter()
-            .filter(|entry| entry.has_added_files() || entry.has_existing_files())
+            .filter(|entry| {
+                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
+            })
             .cloned()
             .collect())
     }
