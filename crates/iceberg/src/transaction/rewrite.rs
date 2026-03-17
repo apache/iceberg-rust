@@ -99,7 +99,7 @@ impl TransactionAction for RewriteAction {
             .map(|f| f.file_path.clone())
             .collect();
 
-        let snapshot_id = snapshot_producer.table.metadata().current_snapshot_id.unwrap();
+        let snapshot_id = snapshot_producer.snapshot_id();
         snapshot_producer
             .commit(
                 RewriteOperation {

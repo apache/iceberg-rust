@@ -122,6 +122,10 @@ pub(crate) struct SnapshotProducer<'a> {
 }
 
 impl<'a> SnapshotProducer<'a> {
+    pub(crate) fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
