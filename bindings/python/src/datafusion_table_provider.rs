@@ -32,7 +32,6 @@ use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
 
-
 pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule.name()?;
     if capsule_name.is_none() {
