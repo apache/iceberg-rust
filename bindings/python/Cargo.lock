@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -2298,11 +2298,9 @@ dependencies = [
  "moka",
  "murmur3",
  "once_cell",
- "opendal",
  "ordered-float 4.6.0",
  "parquet",
  "rand 0.8.5",
- "reqsign",
  "reqwest",
  "roaring",
  "serde",
@@ -2322,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2333,6 +2331,24 @@ dependencies = [
  "parquet",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "iceberg-storage-opendal"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cfg-if",
+ "futures",
+ "iceberg",
+ "opendal",
+ "reqsign",
+ "reqwest",
+ "serde",
+ "typetag",
+ "url",
 ]
 
 [[package]]
@@ -3163,12 +3179,13 @@ dependencies = [
 
 [[package]]
 name = "pyiceberg_core_rust"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "datafusion-ffi",
  "iceberg",
  "iceberg-datafusion",
+ "iceberg-storage-opendal",
  "pyo3",
  "tokio",
 ]
