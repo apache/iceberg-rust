@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::spec::TableMetadata;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
@@ -33,7 +34,7 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Client, Method, StatusCode, Url};
+use reqwest::{Client, Method, StatusCode};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -406,27 +407,12 @@ impl RestCatalog {
 
     async fn load_file_io(
         &self,
-        metadata_location: Option<&str>,
+        metadata: &TableMetadata,
         extra_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
         let mut props = self.context().await?.config.props.clone();
         if let Some(config) = extra_config {
             props.extend(config);
-        }
-
-        // If the warehouse is a logical identifier instead of a URL we don't want
-        // to raise an exception
-        let warehouse_path = match self.context().await?.config.warehouse.as_deref() {
-            Some(url) if Url::parse(url).is_ok() => Some(url),
-            Some(_) => None,
-            None => None,
-        };
-
-        if metadata_location.or(warehouse_path).is_none() {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Unable to load file io, neither warehouse nor metadata location is set!",
-            ));
         }
 
         // Require a StorageFactory to be provided
@@ -438,7 +424,8 @@ impl RestCatalog {
                     ErrorKind::Unexpected,
                     "StorageFactory must be provided for RestCatalog. Use `with_storage_factory` to configure it.",
                 )
-            })?;
+            })?
+            .with_metadata(metadata)?;
 
         let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
@@ -743,10 +730,12 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            "Metadata location missing in `create_table` response!",
-        ))?;
+        if response.metadata_location.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Metadata location missing in `create_table` response!",
+            ));
+        }
 
         let config = response
             .config
@@ -754,9 +743,7 @@ impl Catalog for RestCatalog {
             .chain(self.user_config.props.clone())
             .collect();
 
-        let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
-            .await?;
+        let file_io = self.load_file_io(&response.metadata, Some(config)).await?;
 
         let table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -810,9 +797,7 @@ impl Catalog for RestCatalog {
             .chain(self.user_config.props.clone())
             .collect();
 
-        let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
-            .await?;
+        let file_io = self.load_file_io(&response.metadata, Some(config)).await?;
 
         let table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -960,7 +945,7 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let file_io = self.load_file_io(&response.metadata, None).await?;
 
         Table::builder()
             .identifier(table_ident.clone())
@@ -1030,9 +1015,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
-            .await?;
+        let file_io = self.load_file_io(&response.metadata, None).await?;
 
         Table::builder()
             .identifier(commit.identifier().clone())
