@@ -308,6 +308,13 @@ impl Catalog for S3TablesCatalog {
         namespace: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .create_namespace()
@@ -330,6 +337,13 @@ impl Catalog for S3TablesCatalog {
     /// - If there is an error querying the database, returned by
     /// `from_aws_sdk_error`.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .get_namespace()
@@ -397,6 +411,13 @@ impl Catalog for S3TablesCatalog {
     /// - Errors from the underlying database deletion process, converted using
     /// `from_aws_sdk_error`.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .delete_namespace()
