@@ -504,7 +504,7 @@ impl Catalog for RestCatalog {
                 }
                 StatusCode::NOT_FOUND => {
                     return Err(Error::new(
-                        ErrorKind::Unexpected,
+                        ErrorKind::NamespaceNotFound,
                         "The parent parameter of the namespace provided does not exist",
                     ));
                 }
@@ -546,7 +546,7 @@ impl Catalog for RestCatalog {
                 Ok(Namespace::from(response))
             }
             StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceAlreadyExists,
                 "Tried to create a namespace that already exists",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -574,7 +574,7 @@ impl Catalog for RestCatalog {
                 Ok(Namespace::from(response))
             }
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceNotFound,
                 "Tried to get a namespace that does not exist",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -630,7 +630,7 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceNotFound,
                 "Tried to drop a namespace that does not exist",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -670,7 +670,7 @@ impl Catalog for RestCatalog {
                 }
                 StatusCode::NOT_FOUND => {
                     return Err(Error::new(
-                        ErrorKind::Unexpected,
+                        ErrorKind::NamespaceNotFound,
                         "Tried to list tables of a namespace that does not exist",
                     ));
                 }
@@ -724,13 +724,13 @@ impl Catalog for RestCatalog {
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::NamespaceNotFound,
                     "Tried to create a table under a namespace that does not exist",
                 ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::TableAlreadyExists,
                     "The table already exists",
                 ));
             }
@@ -791,7 +791,7 @@ impl Catalog for RestCatalog {
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::TableNotFound,
                     "Tried to load a table that does not exist",
                 ));
             }
@@ -840,7 +840,7 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 "Tried to drop a table that does not exist",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -891,11 +891,11 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 "Tried to rename a table that does not exist (is the namespace correct?)",
             )),
             StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableAlreadyExists,
                 "Tried to rename a table to a name that already exists",
             )),
             _ => Err(deserialize_unexpected_catalog_error(

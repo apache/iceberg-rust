@@ -18,6 +18,7 @@
 //! This module contains memory catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -295,15 +296,15 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location, &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
-        root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
+        root_namespace_state.insert_new_table(&table_ident, metadata_location.to_string())?;
 
         Table::builder()
             .file_io(self.file_io.clone())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
             .build()
@@ -321,8 +322,8 @@ impl Catalog for MemoryCatalog {
     async fn drop_table(&self, table_ident: &TableIdent) -> Result<()> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
-        self.file_io.delete(&metadata_location).await
+        root_namespace_state.remove_existing_table(table_ident)?;
+        Ok(())
     }
 
     /// Check if a table exists in the catalog.
@@ -381,12 +382,11 @@ impl Catalog for MemoryCatalog {
         let staged_table = commit.apply(current_table)?;
 
         // Write table metadata to the new location
+        let metadata_location =
+            MetadataLocation::from_str(staged_table.metadata_location_result()?)?;
         staged_table
             .metadata()
-            .write_to(
-                staged_table.file_io(),
-                staged_table.metadata_location_result()?,
-            )
+            .write_to(staged_table.file_io(), &metadata_location)
             .await?;
 
         // Flip the pointer to reference the new metadata file.

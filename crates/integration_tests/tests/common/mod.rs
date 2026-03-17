@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use iceberg::io::OpenDalStorageFactory;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_integration_tests::get_test_fixture;
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 pub async fn random_ns() -> Namespace {
     let fixture = get_test_fixture();

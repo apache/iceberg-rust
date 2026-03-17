@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -25,8 +26,8 @@ use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
-    FileIO, FileIOBuilder, OpenDalStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-    S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, StorageFactory,
+    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+    S3_SESSION_TOKEN, StorageFactory,
 };
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -34,6 +35,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
 };
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
@@ -337,6 +339,13 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
+
         let db_input = convert_to_database(namespace, &properties)?;
 
         let builder = self.client.0.create_database().database_input(db_input);
@@ -363,7 +372,19 @@ impl Catalog for GlueCatalog {
         let builder = self.client.0.get_database().name(&db_name);
         let builder = with_catalog_id!(builder, self.config);
 
-        let resp = builder.send().await.map_err(from_aws_sdk_error)?;
+        let resp = builder.send().await.map_err(|err| {
+            if err
+                .as_service_error()
+                .map(|e| e.is_entity_not_found_exception())
+                == Some(true)
+            {
+                return Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    format!("Namespace {namespace:?} does not exist"),
+                );
+            }
+            from_aws_sdk_error(err)
+        })?;
 
         match resp.database() {
             Some(db) => {
@@ -371,7 +392,7 @@ impl Catalog for GlueCatalog {
                 Ok(namespace)
             }
             None => Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::NamespaceNotFound,
                 format!("Database with name: {db_name} does not exist"),
             )),
         }
@@ -427,6 +448,13 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let db_name = validate_namespace(namespace)?;
         let db_input = convert_to_database(namespace, &properties)?;
 
@@ -454,6 +482,13 @@ impl Catalog for GlueCatalog {
     /// - `Err(...)` signifies failure to drop the namespace due to validation
     /// errors, connectivity issues, or Glue Catalog constraints.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let db_name = validate_namespace(namespace)?;
         let table_list = self.list_tables(namespace).await?;
 
@@ -549,14 +584,14 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
+        let metadata_location_str = metadata_location.to_string();
         let glue_table = convert_to_glue_table(
             &table_name,
-            metadata_location.clone(),
+            metadata_location_str.clone(),
             &metadata,
             metadata.properties(),
             None,
@@ -574,7 +609,7 @@ impl Catalog for GlueCatalog {
 
         Table::builder()
             .file_io(self.file_io())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .build()
@@ -812,12 +847,13 @@ impl Catalog for GlueCatalog {
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         // Write new metadata
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         // Persist staged table to Glue with optimistic locking
