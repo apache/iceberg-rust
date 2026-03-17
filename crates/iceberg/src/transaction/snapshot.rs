@@ -114,6 +114,7 @@ pub(crate) struct SnapshotProducer<'a> {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -127,6 +128,7 @@ impl<'a> SnapshotProducer<'a> {
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
+        deleted_data_files: Vec<DataFile>
     ) -> Self {
         Self {
             table,
@@ -135,6 +137,7 @@ impl<'a> SnapshotProducer<'a> {
             key_metadata,
             snapshot_properties,
             added_data_files,
+            deleted_data_files,
             manifest_counter: (0..),
         }
     }
@@ -287,7 +290,7 @@ impl<'a> SnapshotProducer<'a> {
         }
         Ok(())
     }
-
+    
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);

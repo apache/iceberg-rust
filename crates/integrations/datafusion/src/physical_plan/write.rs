@@ -45,7 +45,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::{Error, ErrorKind};
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
