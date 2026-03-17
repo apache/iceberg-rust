@@ -119,7 +119,7 @@ struct RewriteOperation {
 
 impl SnapshotProduceOperation for RewriteOperation {
     fn operation(&self) -> Operation {
-        Operation::Overwrite
+        Operation::Replace
     }
 
     async fn delete_entries(
