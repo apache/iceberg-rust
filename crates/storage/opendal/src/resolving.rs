@@ -23,6 +23,8 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
@@ -281,6 +283,24 @@ impl Storage for OpenDalResolvingStorage {
 
     async fn delete_prefix(&self, path: &str) -> Result<()> {
         self.resolve(path)?.delete_prefix(path).await
+    }
+
+    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
+        // Group paths by scheme so each resolved storage receives a batch,
+        // avoiding repeated operator creation per path.
+        let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+        while let Some(path) = paths.next().await {
+            let scheme = extract_scheme(&path)?;
+            grouped.entry(scheme).or_default().push(path);
+        }
+
+        for (_, paths) in grouped {
+            let storage = self.resolve(&paths[0])?;
+            storage
+                .delete_stream(futures::stream::iter(paths).boxed())
+                .await?;
+        }
+        Ok(())
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
