@@ -51,9 +51,6 @@ pub const SCHEME_WASBS: &str = "wasbs";
 pub const SCHEME_WASB: &str = "wasb";
 
 /// Parse a URL scheme string into an [`opendal::Scheme`].
-///
-/// Handles Iceberg/Hadoop-specific aliases that opendal doesn't know about
-/// (e.g. `s3a`, `s3n`, `gcs`, `abfs`, `abfss`, `wasb`, `wasbs`).
 fn parse_scheme(scheme: &str) -> Result<Scheme> {
     match scheme {
         SCHEME_MEMORY => Ok(Scheme::Memory),
