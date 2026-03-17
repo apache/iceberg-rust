@@ -36,18 +36,32 @@ use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
 
+/// Schemes supported by OpenDalResolvingStorage
+pub const SCHEME_MEMORY: &str = "memory";
+pub const SCHEME_FILE: &str = "file";
+pub const SCHEME_S3: &str = "s3";
+pub const SCHEME_S3A: &str = "s3a";
+pub const SCHEME_S3N: &str = "s3n";
+pub const SCHEME_GS: &str = "gs";
+pub const SCHEME_GCS: &str = "gcs";
+pub const SCHEME_OSS: &str = "oss";
+pub const SCHEME_ABFSS: &str = "abfss";
+pub const SCHEME_ABFS: &str = "abfs";
+pub const SCHEME_WASBS: &str = "wasbs";
+pub const SCHEME_WASB: &str = "wasb";
+
 /// Parse a URL scheme string into an [`opendal::Scheme`].
 ///
 /// Handles Iceberg/Hadoop-specific aliases that opendal doesn't know about
 /// (e.g. `s3a`, `s3n`, `gcs`, `abfs`, `abfss`, `wasb`, `wasbs`).
 fn parse_scheme(scheme: &str) -> Result<Scheme> {
     match scheme {
-        "memory" => Ok(Scheme::Memory),
-        "file" | "" => Ok(Scheme::Fs),
-        "s3" | "s3a" | "s3n" => Ok(Scheme::S3),
-        "gs" | "gcs" => Ok(Scheme::Gcs),
-        "oss" => Ok(Scheme::Oss),
-        "abfss" | "abfs" | "wasbs" | "wasb" => Ok(Scheme::Azdls),
+        SCHEME_MEMORY => Ok(Scheme::Memory),
+        SCHEME_FILE | "" => Ok(Scheme::Fs),
+        SCHEME_S3 | SCHEME_S3A | SCHEME_S3N => Ok(Scheme::S3),
+        SCHEME_GS | SCHEME_GCS => Ok(Scheme::Gcs),
+        SCHEME_OSS => Ok(Scheme::Oss),
+        SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok(Scheme::Azdls),
         s => s.parse::<Scheme>().map_err(|e| {
             Error::new(
                 ErrorKind::FeatureUnsupported,
