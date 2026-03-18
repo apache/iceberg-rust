@@ -20,7 +20,6 @@
 mod config;
 mod local_fs;
 mod memory;
-mod opendal;
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -28,11 +27,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use config::*;
+use futures::stream::BoxStream;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
-#[cfg(feature = "storage-s3")]
-pub use opendal::CustomAwsCredentialLoader;
-pub use opendal::{OpenDalStorage, OpenDalStorageFactory};
 
 use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::Result;
@@ -69,11 +66,6 @@ use crate::Result;
 ///     }
 ///     // ... implement other methods
 /// }
-///
-/// TODO remove below when the trait is integrated with FileIO and Catalog
-/// # NOTE
-/// This trait is under heavy development and is not used anywhere as of now
-/// Please DO NOT implement it
 /// ```
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -101,6 +93,9 @@ pub trait Storage: Debug + Send + Sync {
 
     /// Delete all files with the given prefix
     async fn delete_prefix(&self, path: &str) -> Result<()>;
+
+    /// Delete multiple files from a stream of paths.
+    async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()>;
 
     /// Create a new input file for reading
     fn new_input(&self, path: &str) -> Result<InputFile>;
@@ -130,11 +125,6 @@ pub trait Storage: Debug + Send + Sync {
 ///         todo!()
 ///     }
 /// }
-///
-/// TODO remove below when the trait is integrated with FileIO and Catalog
-/// # NOTE
-/// This trait is under heavy development and is not used anywhere as of now
-/// Please DO NOT implement it
 /// ```
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {

@@ -651,7 +651,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::{
@@ -814,7 +814,7 @@ mod tests {
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -888,7 +888,7 @@ mod tests {
     #[tokio::test]
     async fn test_parquet_writer_with_complex_schema() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1111,7 +1111,7 @@ mod tests {
     #[tokio::test]
     async fn test_all_type_for_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1352,7 +1352,7 @@ mod tests {
     #[tokio::test]
     async fn test_decimal_bound() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1597,7 +1597,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1647,7 +1647,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_primitive_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1735,7 +1735,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_struct_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1875,7 +1875,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_list_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -2077,7 +2077,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_map_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -2233,7 +2233,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_empty_parquet_file() {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );

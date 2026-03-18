@@ -19,8 +19,8 @@
 edition = "2024"
 homepage = "https://rust.iceberg.apache.org"
 name = "pyiceberg_core_rust"
-rust-version = "1.88"
-version = "0.8.0"
+rust-version = "1.92"
+version = "0.9.0"
 # This crate is used to build python bindings, we don't want to publish it
 publish = false
 
@@ -33,6 +33,7 @@ crate-type = ["cdylib"]
 [dependencies]
 arrow = { version = "57.1", features = ["pyarrow", "chrono-tz"] }
 iceberg = { path = "../../crates/iceberg" }
+iceberg-storage-opendal = { path = "../../crates/storage/opendal", features = ["opendal-s3", "opendal-fs", "opendal-memory"] }
 pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
 datafusion-ffi = { version = "52.1" }
