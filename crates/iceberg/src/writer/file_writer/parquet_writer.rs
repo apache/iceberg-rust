@@ -2339,7 +2339,7 @@ mod tests {
         props: WriterProperties,
     ) -> Result<(DataFile, FileIO, TempDir)> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -2527,7 +2527,7 @@ mod tests {
             .unwrap();
 
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
