@@ -830,11 +830,10 @@ impl Catalog for RestCatalog {
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let context = self.context().await?;
 
-        let request_builder = context
+        let request = context
             .client
-            .request(Method::DELETE, context.config.table_endpoint(table));
-
-        let request = request_builder.build()?;
+            .request(Method::DELETE, context.config.table_endpoint(table))
+            .build()?;
 
         let http_response = context.client.query_catalog(request).await?;
 
