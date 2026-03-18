@@ -19,7 +19,7 @@
 
 pub mod memory;
 mod metadata_location;
-pub mod utils;
+pub(crate) mod utils;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
