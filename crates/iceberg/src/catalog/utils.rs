@@ -50,15 +50,9 @@ pub async fn drop_table_data(
         }
 
         // Load all manifests from this snapshot
-        match snapshot.load_manifest_list(io, metadata).await {
-            Ok(manifest_list) => {
-                for manifest_file in manifest_list.entries() {
-                    manifests_to_delete.insert(manifest_file.manifest_path.clone());
-                }
-            }
-            Err(_) => {
-                // Suppress failure to continue cleanup
-            }
+        let manifest_list = snapshot.load_manifest_list(io, metadata).await?;
+        for manifest_file in manifest_list.entries() {
+            manifests_to_delete.insert(manifest_file.manifest_path.clone());
         }
     }
 

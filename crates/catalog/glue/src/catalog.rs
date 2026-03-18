@@ -642,7 +642,7 @@ impl Catalog for GlueCatalog {
     /// attempting to drop the table. This includes scenarios where
     /// the table does not exist.
     /// - Any network or communication error occurs with the database backend.
-    async fn drop_table_with_purge(&self, table: &TableIdent, _purge: bool) -> Result<()> {
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let db_name = validate_namespace(table.namespace())?;
         let table_name = table.name();
 

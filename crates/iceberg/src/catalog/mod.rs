@@ -96,17 +96,24 @@ pub trait Catalog: Debug + Sync + Send {
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
-    /// Drop a table from the catalog and purge its data, or returns error if it doesn't exist.
-    ///
-    /// This is equivalent to calling `drop_table_with_purge(table, true)`.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        self.drop_table_with_purge(table, true).await
-    }
-
     /// Drop a table from the catalog, or returns error if it doesn't exist.
+    async fn drop_table(&self, table: &TableIdent) -> Result<()>;
+
+    /// Drop a table from the catalog and delete the underlying table data.
     ///
-    /// If `purge` is true, the catalog should also delete the underlying table data.
-    async fn drop_table_with_purge(&self, table: &TableIdent, purge: bool) -> Result<()>;
+    /// The default implementation loads the table metadata, drops the table
+    /// from the catalog, then deletes all associated data and metadata files
+    /// using [`drop_table_data`](utils::drop_table_data).
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        let table_info = self.load_table(table).await?;
+        self.drop_table(table).await?;
+        utils::drop_table_data(
+            table_info.file_io(),
+            table_info.metadata(),
+            table_info.metadata_location(),
+        )
+        .await
+    }
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool>;

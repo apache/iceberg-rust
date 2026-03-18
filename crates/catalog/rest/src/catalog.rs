@@ -827,16 +827,12 @@ impl Catalog for RestCatalog {
     }
 
     /// Drop a table from the catalog.
-    async fn drop_table_with_purge(&self, table: &TableIdent, purge: bool) -> Result<()> {
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let context = self.context().await?;
 
-        let mut request_builder = context
+        let request_builder = context
             .client
             .request(Method::DELETE, context.config.table_endpoint(table));
-
-        if purge {
-            request_builder = request_builder.query(&[("purgeRequested", "true")]);
-        }
 
         let request = request_builder.build()?;
 
