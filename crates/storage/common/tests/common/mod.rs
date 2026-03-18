@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use iceberg::io::{
-    FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, S3_ACCESS_KEY_ID, S3_ENDPOINT,
-    S3_REGION, S3_SECRET_ACCESS_KEY,
+    FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
+    S3_SECRET_ACCESS_KEY,
 };
 use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
 use iceberg_test_utils::{get_gcs_endpoint, get_minio_endpoint, set_up};
@@ -100,7 +100,13 @@ async fn load_opendal_gcs() -> Option<StorageHarness> {
 
     let client = reqwest::Client::new();
     let endpoint = format!("{gcs_endpoint}/storage/v1/b");
-    if client.post(&endpoint).json(&bucket_data).send().await.is_err() {
+    if client
+        .post(&endpoint)
+        .json(&bucket_data)
+        .send()
+        .await
+        .is_err()
+    {
         return None;
     }
 

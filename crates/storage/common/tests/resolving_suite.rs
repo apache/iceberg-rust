@@ -22,7 +22,7 @@ mod common;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{load_storage, unique_path, StorageKind};
+use common::{StorageKind, load_storage, unique_path};
 use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_REGION};
 use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalResolvingStorageFactory};
 use iceberg_test_utils::{get_minio_endpoint, set_up};
@@ -297,10 +297,12 @@ async fn test_invalid_scheme(#[case] kind: StorageKind) -> iceberg::Result<()> {
 
     let result = harness.file_io.exists("unknown://bucket/key").await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Unsupported storage scheme"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported storage scheme")
+    );
 
     Ok(())
 }
@@ -333,10 +335,7 @@ async fn test_resolving_with_custom_credential_loader(
 
     #[async_trait]
     impl AwsCredentialLoad for MinioCredentialLoader {
-        async fn load_credential(
-            &self,
-            _client: Client,
-        ) -> anyhow::Result<Option<AwsCredential>> {
+        async fn load_credential(&self, _client: Client) -> anyhow::Result<Option<AwsCredential>> {
             Ok(Some(AwsCredential {
                 access_key_id: "admin".to_string(),
                 secret_access_key: "password".to_string(),
@@ -349,10 +348,9 @@ async fn test_resolving_with_custom_credential_loader(
     set_up();
     let minio_endpoint = get_minio_endpoint();
 
-    let factory = OpenDalResolvingStorageFactory::new()
-        .with_s3_credential_loader(CustomAwsCredentialLoader::new(Arc::new(
-            MinioCredentialLoader,
-        )));
+    let factory = OpenDalResolvingStorageFactory::new().with_s3_credential_loader(
+        CustomAwsCredentialLoader::new(Arc::new(MinioCredentialLoader)),
+    );
 
     let file_io = FileIOBuilder::new(Arc::new(factory))
         .with_props(vec![
