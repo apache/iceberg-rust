@@ -24,23 +24,23 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
+use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::arrow::AsyncArrowWriter;
 use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, ArrowFileReader, FieldMatchMode,
-    NanValueCountVisitor, DEFAULT_MAP_FIELD_NAME,
+    ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
-    MapType, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
-    Struct, StructType, TableMetadata, Type,
+    DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
+    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
+    StructType, TableMetadata, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -750,17 +750,21 @@ mod tests {
                 NestedField::required(
                     4,
                     "col4",
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        8,
-                        "col_4_8",
-                        Type::Struct(StructType::new(vec![NestedField::required(
-                            9,
-                            "col_4_8_9",
-                            Type::Primitive(PrimitiveType::Long),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(
+                            8,
+                            "col_4_8",
+                            Type::Struct(StructType::new(vec![
+                                NestedField::required(
+                                    9,
+                                    "col_4_8_9",
+                                    Type::Primitive(PrimitiveType::Long),
+                                )
+                                .into(),
+                            ])),
                         )
-                        .into()])),
-                    )
-                    .into()])),
+                        .into(),
+                    ])),
                 )
                 .into(),
                 NestedField::required(
@@ -1249,10 +1253,12 @@ mod tests {
         // check data file
         assert_eq!(data_file.record_count(), 4);
         assert!(data_file.value_counts().iter().all(|(_, &v)| { v == 4 }));
-        assert!(data_file
-            .null_value_counts()
-            .iter()
-            .all(|(_, &v)| { v == 1 }));
+        assert!(
+            data_file
+                .null_value_counts()
+                .iter()
+                .all(|(_, &v)| { v == 1 })
+        );
         assert_eq!(
             *data_file.lower_bounds(),
             HashMap::from([
@@ -1356,15 +1362,17 @@ mod tests {
         // test 1.1 and 2.2
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    0,
-                    "decimal",
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: 28,
-                        scale: 10,
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(
+                        0,
+                        "decimal",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 28,
+                            scale: 10,
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap(),
         );
@@ -1406,15 +1414,17 @@ mod tests {
         // test -1.1 and -2.2
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    0,
-                    "decimal",
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: 28,
-                        scale: 10,
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(
+                        0,
+                        "decimal",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 28,
+                            scale: 10,
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap(),
         );
@@ -1462,15 +1472,17 @@ mod tests {
         assert_eq!(decimal_scale(&decimal_max), decimal_scale(&decimal_min));
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    0,
-                    "decimal",
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: 38,
-                        scale: decimal_scale(&decimal_max),
-                    }),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(
+                        0,
+                        "decimal",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 38,
+                            scale: decimal_scale(&decimal_max),
+                        }),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap(),
         );
@@ -1730,29 +1742,31 @@ mod tests {
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
-        let schema_struct_float_fields =
-            Fields::from(vec![Field::new("col4", DataType::Float32, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "4".to_string(),
-                )]))]);
+        let schema_struct_float_fields = Fields::from(vec![
+            Field::new("col4", DataType::Float32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "4".to_string(),
+            )])),
+        ]);
 
-        let schema_struct_nested_float_fields =
-            Fields::from(vec![Field::new("col7", DataType::Float32, false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "7".to_string(),
-                )]))]);
+        let schema_struct_nested_float_fields = Fields::from(vec![
+            Field::new("col7", DataType::Float32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "7".to_string(),
+            )])),
+        ]);
 
-        let schema_struct_nested_fields = Fields::from(vec![Field::new(
-            "col6",
-            arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "6".to_string(),
-        )]))]);
+        let schema_struct_nested_fields = Fields::from(vec![
+            Field::new(
+                "col6",
+                arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "6".to_string(),
+            )])),
+        ]);
 
         // prepare data
         let arrow_schema = {
@@ -1878,15 +1892,11 @@ mod tests {
                 "4".to_string(),
             )]));
 
-        let schema_struct_list_field = Fields::from(vec![Field::new_list(
-            "col2",
-            schema_struct_list_float_field.clone(),
-            true,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "3".to_string(),
-        )]))]);
+        let schema_struct_list_field = Fields::from(vec![
+            Field::new_list("col2", schema_struct_list_float_field.clone(), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+            ),
+        ]);
 
         let arrow_schema = {
             let fields = vec![
@@ -2094,18 +2104,20 @@ mod tests {
                 [(PARQUET_FIELD_ID_META_KEY.to_string(), "7".to_string())],
             ));
 
-        let schema_struct_map_field = Fields::from(vec![Field::new_map(
-            "col3",
-            DEFAULT_MAP_FIELD_NAME,
-            struct_map_key_field_schema.clone(),
-            struct_map_value_field_schema.clone(),
-            false,
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "5".to_string(),
-        )]))]);
+        let schema_struct_map_field = Fields::from(vec![
+            Field::new_map(
+                "col3",
+                DEFAULT_MAP_FIELD_NAME,
+                struct_map_key_field_schema.clone(),
+                struct_map_value_field_schema.clone(),
+                false,
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "5".to_string(),
+            )])),
+        ]);
 
         let arrow_schema = {
             let fields = vec![
@@ -2237,13 +2249,11 @@ mod tests {
             Arc::new(
                 Schema::builder()
                     .with_schema_id(1)
-                    .with_fields(vec![NestedField::required(
-                        0,
-                        "col",
-                        Type::Primitive(PrimitiveType::Long),
-                    )
-                    .with_id(0)
-                    .into()])
+                    .with_fields(vec![
+                        NestedField::required(0, "col", Type::Primitive(PrimitiveType::Long))
+                            .with_id(0)
+                            .into(),
+                    ])
                     .build()
                     .expect("Failed to create schema"),
             ),
@@ -2264,13 +2274,11 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
-                .with_fields(vec![NestedField::required(
-                    0,
-                    "col",
-                    Type::Primitive(PrimitiveType::Int),
-                )
-                .with_id(0)
-                .into()])
+                .with_fields(vec![
+                    NestedField::required(0, "col", Type::Primitive(PrimitiveType::Int))
+                        .with_id(0)
+                        .into(),
+                ])
                 .build()
                 .expect("Failed to create schema"),
         );
