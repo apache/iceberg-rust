@@ -23,7 +23,7 @@ use futures::stream;
 
 use crate::Result;
 use crate::io::FileIO;
-use crate::spec::{TableMetadata, TableProperties};
+use crate::spec::TableMetadata;
 
 /// Deletes all data and metadata files referenced by the given table metadata.
 ///
@@ -34,9 +34,6 @@ use crate::spec::{TableMetadata, TableProperties};
 /// Data files within manifests are only deleted if the `gc.enabled` table
 /// property is `true` (the default), to avoid corrupting other tables that
 /// may share the same data files.
-///
-/// Individual file deletion failures are suppressed to complete as much
-/// cleanup as possible, matching the Java behavior.
 pub async fn drop_table_data(
     io: &FileIO,
     metadata: &TableMetadata,
@@ -65,18 +62,17 @@ pub async fn drop_table_data(
         }
     }
 
-    // Delete manifest files only if gc.enabled is true, to avoid corrupting shared tables
+    // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
     if metadata.table_properties()?.gc_enabled {
-        delete_data_files(io, &manifests_to_delete).await;
+        delete_data_files(io, &manifests_to_delete).await?;
     }
 
     // Delete manifest files
-    let manifest_paths: Vec<String> = manifests_to_delete.into_iter().collect();
-    let _ = io.delete_stream(stream::iter(manifest_paths)).await;
+    io.delete_stream(stream::iter(manifests_to_delete)).await?;
 
     // Delete manifest lists
-    let manifest_list_paths: Vec<String> = manifest_lists_to_delete.into_iter().collect();
-    let _ = io.delete_stream(stream::iter(manifest_list_paths)).await;
+    io.delete_stream(stream::iter(manifest_lists_to_delete))
+        .await?;
 
     // Delete previous metadata files
     let prev_metadata_paths: Vec<String> = metadata
@@ -84,47 +80,37 @@ pub async fn drop_table_data(
         .iter()
         .map(|m| m.metadata_file.clone())
         .collect();
-    let _ = io.delete_stream(stream::iter(prev_metadata_paths)).await;
+    io.delete_stream(stream::iter(prev_metadata_paths)).await?;
 
     // Delete statistics files
     let stats_paths: Vec<String> = metadata
         .statistics_iter()
         .map(|s| s.statistics_path.clone())
         .collect();
-    let _ = io.delete_stream(stream::iter(stats_paths)).await;
+    io.delete_stream(stream::iter(stats_paths)).await?;
 
     // Delete partition statistics files
     let partition_stats_paths: Vec<String> = metadata
         .partition_statistics_iter()
         .map(|s| s.statistics_path.clone())
         .collect();
-    let _ = io.delete_stream(stream::iter(partition_stats_paths)).await;
+    io.delete_stream(stream::iter(partition_stats_paths))
+        .await?;
 
     // Delete the current metadata file
     if let Some(location) = metadata_location {
-        let _ = io.delete(location).await;
+        io.delete(location).await?;
     }
 
     Ok(())
 }
 
 /// Reads each manifest and deletes the data files referenced within.
-async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) {
+async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Result<()> {
     for manifest_path in manifest_paths {
-        let input = match io.new_input(manifest_path) {
-            Ok(input) => input,
-            Err(_) => continue,
-        };
-
-        let manifest_content = match input.read().await {
-            Ok(content) => content,
-            Err(_) => continue,
-        };
-
-        let manifest = match crate::spec::Manifest::parse_avro(&manifest_content) {
-            Ok(manifest) => manifest,
-            Err(_) => continue,
-        };
+        let input = io.new_input(manifest_path)?;
+        let manifest_content = input.read().await?;
+        let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
 
         let data_file_paths: Vec<String> = manifest
             .entries()
@@ -132,6 +118,8 @@ async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) {
             .map(|entry| entry.data_file.file_path().to_string())
             .collect();
 
-        let _ = io.delete_stream(stream::iter(data_file_paths)).await;
+        io.delete_stream(stream::iter(data_file_paths)).await?;
     }
+
+    Ok(())
 }

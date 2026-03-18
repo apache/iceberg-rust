@@ -115,7 +115,7 @@ pub struct TableProperties {
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
-    /// When `false`, manifest files will not be deleted when a table is dropped.
+    /// When `false`, data files will not be deleted when a table is dropped.
     pub gc_enabled: bool,
 }
 
@@ -217,7 +217,7 @@ impl TableProperties {
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 
     /// Property key for enabling garbage collection on drop.
-    /// When set to `false`, manifest files will not be deleted when a table is dropped.
+    /// When set to `false`, data files will not be deleted when a table is dropped.
     /// Defaults to `true`.
     pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
     /// Default value for gc.enabled
