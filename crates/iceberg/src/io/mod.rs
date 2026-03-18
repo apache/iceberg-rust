@@ -19,42 +19,24 @@
 //!
 //! # How to build `FileIO`
 //!
-//! We provided a `FileIOBuilder` to build `FileIO` from scratch. For example:
+//! `FileIO` uses explicit `StorageFactory` injection for storage creation.
+//! We provide convenience constructors for common use cases:
 //!
-//! ```rust
-//! use iceberg::Result;
-//! use iceberg::io::{FileIOBuilder, S3_REGION};
+//! ```rust,ignore
+//! use iceberg::io::{FileIO, FileIOBuilder};
+//! use iceberg::io::{LocalFsStorageFactory, MemoryStorageFactory};
+//! use std::sync::Arc;
 //!
-//! # fn test() -> Result<()> {
-//! // Build a memory file io.
-//! let file_io = FileIOBuilder::new("memory").build()?;
-//! // Build an fs file io.
-//! let file_io = FileIOBuilder::new("fs").build()?;
-//! // Build an s3 file io.
-//! let file_io = FileIOBuilder::new("s3")
-//!     .with_prop(S3_REGION, "us-east-1")
-//!     .build()?;
-//! # Ok(())
-//! # }
-//! ```
+//! // Build a memory file io for testing
+//! let file_io = FileIO::new_with_memory();
 //!
-//! Or you can pass a path to ask `FileIO` to infer schema for you:
+//! // Build a local filesystem file io
+//! let file_io = FileIO::new_with_fs();
 //!
-//! ```rust
-//! use iceberg::Result;
-//! use iceberg::io::{FileIO, S3_REGION};
-//!
-//! # fn test() -> Result<()> {
-//! // Build a memory file io.
-//! let file_io = FileIO::from_path("memory:///")?.build()?;
-//! // Build an fs file io.
-//! let file_io = FileIO::from_path("fs:///tmp")?.build()?;
-//! // Build an s3 file io.
-//! let file_io = FileIO::from_path("s3://bucket/a")?
-//!     .with_prop(S3_REGION, "us-east-1")
-//!     .build()?;
-//! # Ok(())
-//! # }
+//! // Build with explicit factory and configuration
+//! let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
+//!     .with_prop("key", "value")
+//!     .build();
 //! ```
 //!
 //! # How to use `FileIO`
@@ -62,6 +44,7 @@
 //! Currently `FileIO` provides simple methods for file operations:
 //!
 //! - `delete`: Delete file.
+//! - `delete_prefix`: Delete all files with a given prefix.
 //! - `exists`: Check if file exists.
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
