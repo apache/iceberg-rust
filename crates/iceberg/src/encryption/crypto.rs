@@ -71,6 +71,12 @@ impl fmt::Debug for SensitiveBytes {
     }
 }
 
+impl fmt::Display for SensitiveBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes REDACTED]", self.0.len())
+    }
+}
+
 /// Supported encryption algorithm.
 /// Currently only AES-128-GCM is supported as it's the only algorithm
 /// compatible with arrow-rs Parquet encryption.
@@ -188,11 +194,11 @@ enum CipherImpl {
 /// AES-GCM encryptor for encrypting and decrypting data.
 ///
 /// The cipher is initialized once at construction time.
-pub struct AesGcmEncryptor {
+pub struct AesGcmCipher {
     cipher: CipherImpl,
 }
 
-impl AesGcmEncryptor {
+impl AesGcmCipher {
     /// Creates a new encryptor with the specified key.
     ///
     /// The key schedule is expanded once here. The `aes` crate's `zeroize`
@@ -357,7 +363,7 @@ mod tests {
     #[test]
     fn test_aes128_gcm_encryption_roundtrip() {
         let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmEncryptor::new(key);
+        let encryptor = AesGcmCipher::new(key);
 
         let plaintext = b"Hello, Iceberg encryption!";
         let aad = b"additional authenticated data";
@@ -382,7 +388,7 @@ mod tests {
     #[test]
     fn test_encryption_with_empty_plaintext() {
         let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmEncryptor::new(key);
+        let encryptor = AesGcmCipher::new(key);
 
         let plaintext = b"";
         let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
@@ -397,7 +403,7 @@ mod tests {
     #[test]
     fn test_decryption_with_tampered_ciphertext() {
         let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmEncryptor::new(key);
+        let encryptor = AesGcmCipher::new(key);
 
         let plaintext = b"Sensitive data";
         let mut ciphertext = encryptor.encrypt(plaintext, None).unwrap();
@@ -416,8 +422,8 @@ mod tests {
         let key1 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
         let key2 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
 
-        let encryptor1 = AesGcmEncryptor::new(key1);
-        let encryptor2 = AesGcmEncryptor::new(key2);
+        let encryptor1 = AesGcmCipher::new(key1);
+        let encryptor2 = AesGcmCipher::new(key2);
 
         let plaintext = b"Same plaintext";
 
@@ -433,7 +439,7 @@ mod tests {
     fn test_ciphertext_format_java_compatible() {
         // Test that our ciphertext format matches Java's: [12-byte nonce][ciphertext][16-byte tag]
         let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmEncryptor::new(key);
+        let encryptor = AesGcmCipher::new(key);
 
         let plaintext = b"Test data";
         let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
