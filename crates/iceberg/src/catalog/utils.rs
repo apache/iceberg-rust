@@ -19,15 +19,11 @@
 
 use std::collections::HashSet;
 
-use crate::io::FileIO;
-use crate::spec::TableMetadata;
-use crate::Result;
+use futures::stream;
 
-/// Property key for enabling garbage collection on drop.
-/// When set to `false`, data files will not be deleted when a table is dropped.
-/// Defaults to `true`.
-pub const GC_ENABLED: &str = "gc.enabled";
-const GC_ENABLED_DEFAULT: bool = true;
+use crate::Result;
+use crate::io::FileIO;
+use crate::spec::{TableMetadata, TableProperties};
 
 /// Deletes all data and metadata files referenced by the given table metadata.
 ///
@@ -69,47 +65,40 @@ pub async fn drop_table_data(
         }
     }
 
-    let gc_enabled = metadata
-        .properties()
-        .get(GC_ENABLED)
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(GC_ENABLED_DEFAULT);
-
-    // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
-    if gc_enabled {
+    // Delete manifest files only if gc.enabled is true, to avoid corrupting shared tables
+    if metadata.table_properties()?.gc_enabled {
         delete_data_files(io, &manifests_to_delete).await;
     }
 
     // Delete manifest files
-    delete_files(io, manifests_to_delete.iter().map(String::as_str)).await;
+    let manifest_paths: Vec<String> = manifests_to_delete.into_iter().collect();
+    let _ = io.delete_stream(stream::iter(manifest_paths)).await;
 
     // Delete manifest lists
-    delete_files(io, manifest_lists_to_delete.iter().map(String::as_str)).await;
+    let manifest_list_paths: Vec<String> = manifest_lists_to_delete.into_iter().collect();
+    let _ = io.delete_stream(stream::iter(manifest_list_paths)).await;
 
     // Delete previous metadata files
-    delete_files(
-        io,
-        metadata.metadata_log().iter().map(|m| m.metadata_file.as_str()),
-    )
-    .await;
+    let prev_metadata_paths: Vec<String> = metadata
+        .metadata_log()
+        .iter()
+        .map(|m| m.metadata_file.clone())
+        .collect();
+    let _ = io.delete_stream(stream::iter(prev_metadata_paths)).await;
 
     // Delete statistics files
-    delete_files(
-        io,
-        metadata
-            .statistics_iter()
-            .map(|s| s.statistics_path.as_str()),
-    )
-    .await;
+    let stats_paths: Vec<String> = metadata
+        .statistics_iter()
+        .map(|s| s.statistics_path.clone())
+        .collect();
+    let _ = io.delete_stream(stream::iter(stats_paths)).await;
 
     // Delete partition statistics files
-    delete_files(
-        io,
-        metadata
-            .partition_statistics_iter()
-            .map(|s| s.statistics_path.as_str()),
-    )
-    .await;
+    let partition_stats_paths: Vec<String> = metadata
+        .partition_statistics_iter()
+        .map(|s| s.statistics_path.clone())
+        .collect();
+    let _ = io.delete_stream(stream::iter(partition_stats_paths)).await;
 
     // Delete the current metadata file
     if let Some(location) = metadata_location {
@@ -137,15 +126,12 @@ async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) {
             Err(_) => continue,
         };
 
-        for entry in manifest.entries() {
-            let _ = io.delete(entry.data_file.file_path()).await;
-        }
-    }
-}
+        let data_file_paths: Vec<String> = manifest
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file.file_path().to_string())
+            .collect();
 
-/// Deletes a collection of files, suppressing individual failures.
-async fn delete_files<'a>(io: &FileIO, paths: impl Iterator<Item = &'a str>) {
-    for path in paths {
-        let _ = io.delete(path).await;
+        let _ = io.delete_stream(stream::iter(data_file_paths)).await;
     }
 }
