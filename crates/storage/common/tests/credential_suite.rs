@@ -22,7 +22,7 @@ mod common;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{load_storage, StorageKind};
+use common::{StorageKind, load_storage};
 use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_REGION};
 use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
 use iceberg_test_utils::get_minio_endpoint;
@@ -132,9 +132,10 @@ async fn test_s3_with_custom_credential_loader_failure(
     match file_io_with_custom_creds.exists("s3://bucket1/any").await {
         Ok(_) => panic!("Expected error, but got Ok"),
         Err(e) => {
-            assert!(e
-                .to_string()
-                .contains("no valid credential found and anonymous access is not allowed"));
+            assert!(
+                e.to_string()
+                    .contains("no valid credential found and anonymous access is not allowed")
+            );
         }
     }
 

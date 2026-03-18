@@ -21,7 +21,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{load_storage, unique_path, StorageKind};
+use common::{StorageKind, load_storage, unique_path};
 use futures::StreamExt;
 use iceberg::io::{FileIOBuilder, LocalFsStorageFactory};
 use rstest::rstest;
@@ -116,7 +116,6 @@ async fn test_file_io_delete_nonexistent(#[case] kind: StorageKind) -> iceberg::
     Ok(())
 }
 
-
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
 #[case::opendal_gcs(StorageKind::OpenDalGcs)]
@@ -158,7 +157,6 @@ async fn test_file_io_delete_stream_empty(#[case] kind: StorageKind) -> iceberg:
     harness.file_io.delete_stream(stream).await.unwrap();
     Ok(())
 }
-
 
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
@@ -204,7 +202,6 @@ async fn test_file_io_delete_prefix_nonexistent(#[case] kind: StorageKind) -> ic
     Ok(())
 }
 
-
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
 #[case::opendal_gcs(StorageKind::OpenDalGcs)]
@@ -243,7 +240,6 @@ async fn test_file_io_metadata_nonexistent(#[case] kind: StorageKind) -> iceberg
     Ok(())
 }
 
-
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
 #[case::opendal_gcs(StorageKind::OpenDalGcs)]
@@ -268,7 +264,6 @@ async fn test_file_io_range_read(#[case] kind: StorageKind) -> iceberg::Result<(
     assert_eq!(range_data.as_ref(), &content[4..10]);
     Ok(())
 }
-
 
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
@@ -306,10 +301,7 @@ async fn test_file_io_streaming_write_double_close(
     let path = unique_path(&harness, "test_file_io_streaming_write_double_close");
     let output_file = harness.file_io.new_output(&path).unwrap();
     let mut writer = output_file.writer().await.unwrap();
-    writer
-        .write(bytes::Bytes::from("data"))
-        .await
-        .unwrap();
+    writer.write(bytes::Bytes::from("data")).await.unwrap();
     writer.close().await.unwrap();
     // Second close should error
     let result = writer.close().await;
@@ -317,11 +309,9 @@ async fn test_file_io_streaming_write_double_close(
     Ok(())
 }
 
-
 #[tokio::test]
 async fn test_file_io_builder_with_prop() {
-    let builder =
-        FileIOBuilder::new(Arc::new(LocalFsStorageFactory)).with_prop("key1", "value1");
+    let builder = FileIOBuilder::new(Arc::new(LocalFsStorageFactory)).with_prop("key1", "value1");
     assert_eq!(builder.config().get("key1"), Some(&"value1".to_string()));
 }
 
