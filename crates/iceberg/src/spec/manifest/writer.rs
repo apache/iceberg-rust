@@ -19,7 +19,7 @@ use std::cmp::min;
 use std::future::Future;
 use std::pin::Pin;
 
-use apache_avro::{Codec, Writer as AvroWriter, to_value};
+use apache_avro::{Writer as AvroWriter, to_value};
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -28,14 +28,14 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::EncryptedOutputFile;
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, avro_util,
 };
 use crate::{Error, ErrorKind};
 
@@ -53,7 +53,7 @@ pub struct ManifestWriterBuilder {
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
-    compression: Codec,
+    compression: CompressionCodec,
 }
 
 impl ManifestWriterBuilder {
@@ -64,7 +64,7 @@ impl ManifestWriterBuilder {
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         let location = output.location().to_owned();
         Self {
@@ -204,7 +204,7 @@ pub struct ManifestWriter {
 
     metadata: ManifestMetadata,
 
-    compression: Codec,
+    compression: CompressionCodec,
 }
 
 impl ManifestWriter {
@@ -216,7 +216,7 @@ impl ManifestWriter {
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         Self {
             writer_future,
@@ -443,7 +443,11 @@ impl ManifestWriter {
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
 
-        let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), self.compression);
+        let mut avro_writer = AvroWriter::with_codec(
+            &avro_schema,
+            Vec::new(),
+            avro_util::to_avro_codec(self.compression),
+        );
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema).map_err(|err| {
@@ -591,12 +595,11 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use apache_avro::DeflateSettings;
-    use miniz_oxide::deflate::CompressionLevel;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::{FileIO, FileIOBuilder};
+    use crate::compression::CompressionCodec;
+    use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Manifest, ManifestContentType,
         ManifestEntry, ManifestMetadata, ManifestStatus, NestedField, PartitionSpec, PrimitiveType,
@@ -733,7 +736,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            Codec::Null,
+            CompressionCodec::None,
         )
         .build_v2_data();
         writer.add_entry(entries[0].clone()).unwrap();
@@ -868,7 +871,7 @@ mod tests {
         // Write uncompressed manifest with multiple entries to make compression effective
         let tmp_dir = TempDir::new().unwrap();
         let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(uncompressed_path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -876,7 +879,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
-            Codec::Null,
+            CompressionCodec::None,
         )
         .build_v2_data();
         // Add multiple entries with long paths to create compressible data
@@ -908,7 +911,7 @@ mod tests {
         // Write compressed manifest with gzip
         let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
         let output_file = io.new_output(compressed_path.to_str().unwrap()).unwrap();
-        let compression = Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression));
+        let compression = CompressionCodec::Gzip(Some(9));
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),

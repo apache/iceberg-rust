@@ -24,7 +24,7 @@ use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::avro_util::codec_from_str;
+use crate::spec::avro_util::to_avro_codec;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
@@ -274,7 +274,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-            codec_from_str(Some(&table_props.avro_compression_codec), table_props.avro_compression_level),
+            table_props.avro_compression_codec,
         );
 
         match self.table.metadata().format_version() {
@@ -467,7 +467,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_source(e)
             })?;
 
-        let compression = codec_from_str(Some(&table_props.avro_compression_codec), table_props.avro_compression_level);
+        let compression = to_avro_codec(table_props.avro_compression_codec);
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
