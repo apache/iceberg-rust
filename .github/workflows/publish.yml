@@ -38,6 +38,7 @@ jobs:
         # Order here is sensitive, as it will be used to determine the order of publishing
         package:
           - "crates/iceberg"
+          - "crates/storage/object_store"
           - "crates/storage/opendal"
           - "crates/catalog/glue"
           - "crates/catalog/hms"
