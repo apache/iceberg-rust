@@ -164,7 +164,9 @@ async fn test_file_io_delete_stream_empty(#[case] kind: StorageKind) -> iceberg:
 
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
-#[case::opendal_gcs(StorageKind::OpenDalGcs)]
+// We use fake-gcs-server for testing and it doesn't support batch delete
+// https://github.com/fsouza/fake-gcs-server/issues/1443
+// #[case::opendal_gcs(StorageKind::OpenDalGcs)]
 #[tokio::test]
 async fn test_file_io_delete_prefix(#[case] kind: StorageKind) -> iceberg::Result<()> {
     let Some(harness) = load_storage(kind).await else {
@@ -194,7 +196,9 @@ async fn test_file_io_delete_prefix(#[case] kind: StorageKind) -> iceberg::Resul
 
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
-#[case::opendal_gcs(StorageKind::OpenDalGcs)]
+// We use fake-gcs-server for testing and it doesn't support batch delete
+// https://github.com/fsouza/fake-gcs-server/issues/1443
+// #[case::opendal_gcs(StorageKind::OpenDalGcs)]
 #[tokio::test]
 async fn test_file_io_delete_prefix_nonexistent(#[case] kind: StorageKind) -> iceberg::Result<()> {
     let Some(harness) = load_storage(kind).await else {
