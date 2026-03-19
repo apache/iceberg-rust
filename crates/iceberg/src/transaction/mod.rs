@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod replace_data_files;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -71,6 +72,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::replace_data_files::ReplaceDataFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -154,6 +156,11 @@ impl Transaction {
     /// Update the statistics of table
     pub fn update_statistics(&self) -> UpdateStatisticsAction {
         UpdateStatisticsAction::new()
+    }
+
+    /// Creates a replace data files action (for compaction).
+    pub fn replace_data_files(&self) -> ReplaceDataFilesAction {
+        ReplaceDataFilesAction::new()
     }
 
     /// Commit transaction.
