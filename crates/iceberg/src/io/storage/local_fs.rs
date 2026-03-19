@@ -328,6 +328,13 @@ pub struct LocalFsStorageFactory;
 
 #[typetag::serde]
 impl StorageFactory for LocalFsStorageFactory {
+    fn with_metadata(
+        &self,
+        _metadata: &crate::spec::TableMetadata,
+    ) -> Result<Arc<dyn StorageFactory>> {
+        Ok(Arc::new(self.clone()))
+    }
+
     fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(LocalFsStorage::new()))
     }

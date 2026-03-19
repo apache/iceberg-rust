@@ -182,6 +182,13 @@ impl OpenDalResolvingStorageFactory {
 
 #[typetag::serde]
 impl StorageFactory for OpenDalResolvingStorageFactory {
+    fn with_metadata(
+        &self,
+        _metadata: &iceberg::spec::TableMetadata,
+    ) -> Result<Arc<dyn StorageFactory>> {
+        Ok(Arc::new(self.clone()))
+    }
+
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
             props: config.props().clone(),

@@ -33,6 +33,7 @@ pub use memory::{MemoryStorage, MemoryStorageFactory};
 
 use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::Result;
+use crate::spec::TableMetadata;
 
 /// Trait for storage operations in Iceberg.
 ///
@@ -128,6 +129,19 @@ pub trait Storage: Debug + Send + Sync {
 /// ```
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {
+    /// Create a new factory instance enriched with table metadata.
+    ///
+    /// This allows storage factories to incorporate table-level metadata
+    /// (e.g., table properties) into the storage initialization.
+    ///
+    /// Implementations that don't need table metadata should return
+    /// a clone of themselves: `Ok(Arc::new(self.clone()))`.
+    ///
+    /// # Arguments
+    ///
+    /// * `metadata` - The table metadata to incorporate
+    fn with_metadata(&self, metadata: &TableMetadata) -> Result<Arc<dyn StorageFactory>>;
+
     /// Build a new Storage instance from the given configuration.
     ///
     /// # Arguments
