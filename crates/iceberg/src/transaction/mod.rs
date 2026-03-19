@@ -61,6 +61,7 @@ mod update_properties;
 mod update_statistics;
 mod upgrade_format_version;
 mod rewrite;
+mod rewrite_manifest;
 
 use std::sync::Arc;
 use std::time::Duration;
