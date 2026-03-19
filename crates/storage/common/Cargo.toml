@@ -16,37 +16,32 @@
 # under the License.
 
 [package]
-name = "iceberg-storage-opendal"
+name = "iceberg-storage-common"
 edition = { workspace = true }
 version = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg OpenDAL storage implementation"
-keywords = ["iceberg", "opendal", "storage"]
-
-[features]
-default = ["opendal-memory", "opendal-fs", "opendal-s3"]
-opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls"]
-
-opendal-azdls = ["opendal/services-azdls"]
-opendal-fs = ["opendal/services-fs"]
-opendal-gcs = ["opendal/services-gcs"]
-opendal-memory = ["opendal/services-memory"]
-opendal-oss = ["opendal/services-oss"]
-opendal-s3 = ["opendal/services-s3", "reqsign"]
+description = "Apache Iceberg Storage Common Test Suite"
+keywords = ["iceberg", "storage"]
 
 [dependencies]
-anyhow = { workspace = true }
-cfg-if = { workspace = true }
 iceberg = { workspace = true }
-opendal = { workspace = true }
-async-trait = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+iceberg = { workspace = true }
+iceberg-storage-opendal = { workspace = true, features = ["opendal-all"] }
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes = { workspace = true }
-reqsign = { version = "0.16.3", optional = true, default-features = false }
-reqwest = { workspace = true }
-serde = { workspace = true }
-typetag = { workspace = true }
-url = { workspace = true }
 futures = { workspace = true }
+async-trait = { workspace = true }
+reqsign = { version = "0.16.3", default-features = false }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+proptest = { version = "1" }
