@@ -20,6 +20,9 @@
 use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
 use log::warn;
 use miniz_oxide::deflate::CompressionLevel;
+use serde_json::Value;
+
+use crate::compression::CompressionCodec;
 
 /// Codec name for gzip compression
 pub const CODEC_GZIP: &str = "gzip";
@@ -37,36 +40,39 @@ const DEFAULT_ZSTD_LEVEL: u8 = 1;
 /// Max supported level for ZSTD
 const MAX_ZSTD_LEVEL: u8 = 22;
 
-/// Convert codec name and level to apache_avro::Codec.
-/// Returns Codec::Null for unknown or unsupported codecs.
+/// Parse codec name and optional level into a [`CompressionCodec`].
+/// Returns `CompressionCodec::None` for unknown or unsupported codecs.
 ///
 /// # Arguments
 ///
 /// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "snappy", "uncompressed")
-/// * `level` - The compression level. For gzip/deflate:
-///   - 0: NoCompression
-///   - 1: BestSpeed
-///   - 9: BestCompression
-///   - 10: UberCompression
-///   - 6: DefaultLevel (balanced speed/compression)
-///   - Other values: DefaultLevel
-///
-///   For zstd, level is clamped to valid range (0-22).
-///   When `None`, uses codec-specific defaults.
-///
-/// # Supported Codecs
-///
-/// - `gzip`: Uses Deflate compression with specified level
-/// - `zstd`: Uses Zstandard compression (level clamped to valid zstd range 0-22)
-/// - `snappy`: Uses Snappy compression (level parameter ignored)
-/// - `uncompressed` or `None`: No compression
-/// - Any other value: Defaults to no compression (Codec::Null)
-pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
-    // Use case-insensitive comparison to match Java implementation
-    match codec.map(|s| s.to_lowercase()).as_deref() {
-        Some(c) if c == CODEC_GZIP => {
-            // Map compression level to miniz_oxide::deflate::CompressionLevel
-            // Reference: https://docs.rs/miniz_oxide/latest/miniz_oxide/deflate/enum.CompressionLevel.html
+/// * `level` - Optional compression level stored as-is; codec-specific defaults are applied
+///   in [`to_avro_codec`] at the point of use.
+pub(crate) fn parse_avro_codec(codec: Option<&str>, level: Option<u8>) -> CompressionCodec {
+    let Some(codec_str) = codec else {
+        return CompressionCodec::None;
+    };
+    let lowercase = codec_str.to_lowercase();
+    // "uncompressed" is Avro-specific and not in the standard CompressionCodec names
+    if lowercase == CODEC_UNCOMPRESSED {
+        return CompressionCodec::None;
+    }
+    let base: CompressionCodec =
+        serde_json::from_value(Value::String(lowercase)).unwrap_or_else(|_| {
+            warn!("Unrecognized compression codec '{codec_str}', using no compression");
+            CompressionCodec::None
+        });
+    base.with_level(level)
+}
+
+/// Convert a [`CompressionCodec`] to an [`apache_avro::Codec`] for use in Avro writers.
+/// Codec-specific defaults are applied here (e.g. gzip defaults to level 9, zstd to level 1).
+pub(crate) fn to_avro_codec(codec: CompressionCodec) -> Codec {
+    match codec {
+        CompressionCodec::None => Codec::Null,
+        CompressionCodec::Snappy => Codec::Snappy,
+        CompressionCodec::Lz4 => Codec::Null,
+        CompressionCodec::Gzip(level) => {
             let compression_level = match level.unwrap_or(DEFAULT_GZIP_LEVEL) {
                 0 => CompressionLevel::NoCompression,
                 1 => CompressionLevel::BestSpeed,
@@ -74,20 +80,11 @@ pub(crate) fn codec_from_str(codec: Option<&str>, level: Option<u8>) -> Codec {
                 10 => CompressionLevel::UberCompression,
                 _ => CompressionLevel::DefaultLevel,
             };
-
             Codec::Deflate(DeflateSettings::new(compression_level))
         }
-        Some(c) if c == CODEC_ZSTD => {
-            // Zstandard supports levels 0-22, clamp to valid range
+        CompressionCodec::Zstd(level) => {
             let zstd_level = level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(MAX_ZSTD_LEVEL);
             Codec::Zstandard(ZstandardSettings::new(zstd_level))
-        }
-        Some(c) if c == CODEC_SNAPPY => Codec::Snappy,
-        Some(c) if c == CODEC_UNCOMPRESSED => Codec::Null,
-        None => Codec::Null,
-        Some(unknown) => {
-            warn!("Unrecognized compression codec '{unknown}', using no compression (Codec::Null)");
-            Codec::Null
         }
     }
 }
@@ -100,68 +97,106 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_codec_from_str_gzip() {
+    fn test_parse_avro_codec_gzip() {
         // Test with mixed case to verify case-insensitive matching
-        let codec = codec_from_str(Some("GZip"), Some(5));
+        let codec = parse_avro_codec(Some("GZip"), Some(5));
+        assert_eq!(codec, CompressionCodec::Gzip(Some(5)));
+    }
+
+    #[test]
+    fn test_parse_avro_codec_snappy() {
+        let codec = parse_avro_codec(Some("snappy"), None);
+        assert_eq!(codec, CompressionCodec::Snappy);
+    }
+
+    #[test]
+    fn test_parse_avro_codec_zstd() {
+        let codec = parse_avro_codec(Some("zstd"), Some(3));
+        assert_eq!(codec, CompressionCodec::Zstd(Some(3)));
+    }
+
+    #[test]
+    fn test_parse_avro_codec_uncompressed() {
+        let codec = parse_avro_codec(Some("uncompressed"), None);
+        assert_eq!(codec, CompressionCodec::None);
+    }
+
+    #[test]
+    fn test_parse_avro_codec_null() {
+        let codec = parse_avro_codec(None, None);
+        assert_eq!(codec, CompressionCodec::None);
+    }
+
+    #[test]
+    fn test_parse_avro_codec_unknown() {
+        let codec = parse_avro_codec(Some("unknown"), Some(1));
+        assert_eq!(codec, CompressionCodec::None);
+    }
+
+    #[test]
+    fn test_parse_avro_codec_gzip_no_level() {
+        // Level is stored as-is (None), default applied in to_avro_codec
+        let codec = parse_avro_codec(Some("gzip"), None);
+        assert_eq!(codec, CompressionCodec::Gzip(None));
+    }
+
+    #[test]
+    fn test_parse_avro_codec_zstd_no_level() {
+        let codec = parse_avro_codec(Some("zstd"), None);
+        assert_eq!(codec, CompressionCodec::Zstd(None));
+    }
+
+    #[test]
+    fn test_to_avro_codec_gzip_default() {
+        // None level → default 9 (BestCompression)
+        let avro_codec = to_avro_codec(CompressionCodec::Gzip(None));
         assert_eq!(
-            codec,
-            Codec::Deflate(DeflateSettings::new(CompressionLevel::DefaultLevel))
-        );
-    }
-
-    #[test]
-    fn test_codec_from_str_snappy() {
-        let codec = codec_from_str(Some("snappy"), None);
-        assert_eq!(codec, Codec::Snappy);
-    }
-
-    #[test]
-    fn test_codec_from_str_zstd() {
-        let codec = codec_from_str(Some("zstd"), Some(3));
-        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(3)));
-    }
-
-    #[test]
-    fn test_codec_from_str_zstd_clamping() {
-        let codec = codec_from_str(Some("zstd"), Some(MAX_ZSTD_LEVEL + 1));
-        assert_eq!(
-            codec,
-            Codec::Zstandard(ZstandardSettings::new(MAX_ZSTD_LEVEL))
-        );
-    }
-
-    #[test]
-    fn test_codec_from_str_uncompressed() {
-        let codec = codec_from_str(Some("uncompressed"), None);
-        assert!(matches!(codec, Codec::Null));
-    }
-
-    #[test]
-    fn test_codec_from_str_null() {
-        let codec = codec_from_str(None, None);
-        assert!(matches!(codec, Codec::Null));
-    }
-
-    #[test]
-    fn test_codec_from_str_unknown() {
-        let codec = codec_from_str(Some("unknown"), Some(1));
-        assert!(matches!(codec, Codec::Null));
-    }
-
-    #[test]
-    fn test_codec_from_str_gzip_default_level() {
-        // Test that None level defaults to 9 for gzip
-        let codec = codec_from_str(Some("gzip"), None);
-        assert_eq!(
-            codec,
+            avro_codec,
             Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
         );
     }
 
     #[test]
-    fn test_codec_from_str_zstd_default_level() {
-        // Test that None level defaults to 1 for zstd
-        let codec = codec_from_str(Some("zstd"), None);
-        assert_eq!(codec, Codec::Zstandard(ZstandardSettings::new(1)));
+    fn test_to_avro_codec_gzip_level5() {
+        let avro_codec = to_avro_codec(CompressionCodec::Gzip(Some(5)));
+        assert_eq!(
+            avro_codec,
+            Codec::Deflate(DeflateSettings::new(CompressionLevel::DefaultLevel))
+        );
+    }
+
+    #[test]
+    fn test_to_avro_codec_zstd_default() {
+        // None level → default 1
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(None));
+        assert_eq!(avro_codec, Codec::Zstandard(ZstandardSettings::new(1)));
+    }
+
+    #[test]
+    fn test_to_avro_codec_zstd_level3() {
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(3)));
+        assert_eq!(avro_codec, Codec::Zstandard(ZstandardSettings::new(3)));
+    }
+
+    #[test]
+    fn test_to_avro_codec_zstd_clamping() {
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(MAX_ZSTD_LEVEL + 1)));
+        assert_eq!(
+            avro_codec,
+            Codec::Zstandard(ZstandardSettings::new(MAX_ZSTD_LEVEL))
+        );
+    }
+
+    #[test]
+    fn test_to_avro_codec_null() {
+        assert!(matches!(to_avro_codec(CompressionCodec::None), Codec::Null));
+    }
+
+    #[test]
+    fn test_to_avro_codec_snappy() {
+        assert!(matches!(
+            to_avro_codec(CompressionCodec::Snappy),
+            Codec::Snappy
+        ));
     }
 }

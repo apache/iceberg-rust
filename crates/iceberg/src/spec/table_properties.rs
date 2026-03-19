@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use apache_avro::Codec;
-
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::avro_util;
@@ -88,8 +86,8 @@ pub(crate) fn parse_metadata_file_compression(
 
     // Validate that only None and Gzip are used for metadata
     match codec {
-        CompressionCodec::None | CompressionCodec::Gzip => Ok(codec),
-        CompressionCodec::Lz4 | CompressionCodec::Zstd => Err(Error::new(
+        CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
+        _ => Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
                 "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported for metadata files."
@@ -114,7 +112,7 @@ pub struct TableProperties {
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
     /// Compression codec for Avro files (manifests, manifest lists)
-    pub avro_compression_codec: Codec,
+    pub avro_compression_codec: CompressionCodec,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -264,27 +262,21 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
             avro_compression_codec: {
-                // Parse codec name and level from properties
                 let codec_name = parse_property(
                     props,
                     TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
                     TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
                 )?;
 
-                // Parse optional compression level (sentinel value 255 means not specified)
+                // Sentinel value 255 means level was not specified
                 let level_raw = parse_property(
                     props,
                     TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
                     255u8,
                 )?;
-                let level = if level_raw == 255 {
-                    None
-                } else {
-                    Some(level_raw)
-                };
+                let level = if level_raw == 255 { None } else { Some(level_raw) };
 
-                // Convert to Codec
-                avro_util::codec_from_str(Some(&codec_name), level)
+                avro_util::parse_avro_codec(Some(&codec_name), level)
             },
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
@@ -298,9 +290,6 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 
 #[cfg(test)]
 mod tests {
-    use apache_avro::{DeflateSettings, ZstandardSettings};
-    use miniz_oxide::deflate::CompressionLevel;
-
     use super::*;
     use crate::compression::CompressionCodec;
 
@@ -328,10 +317,10 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
-        // Test compression defaults - should be gzip with default level (9)
+        // Test compression defaults - should be gzip with no level specified
         assert_eq!(
             table_properties.avro_compression_codec,
-            Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
+            CompressionCodec::Gzip(None)
         );
         // Test compression defaults (none means CompressionCodec::None)
         assert_eq!(
@@ -358,10 +347,10 @@ mod tests {
             ),
         ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
-        // Check that it parsed to a Zstandard codec with level 3
+        // Check that it parsed to a Zstd codec with level 3
         assert_eq!(
             table_properties.avro_compression_codec,
-            Codec::Zstandard(ZstandardSettings::new(3))
+            CompressionCodec::Zstd(Some(3))
         );
     }
 
@@ -374,7 +363,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
     }
 
@@ -401,7 +390,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_upper).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
 
         // Test mixed case
@@ -412,7 +401,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_mixed).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
 
         // Test "NONE" should also be case-insensitive
@@ -551,7 +540,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
 
         // Test case insensitivity - "NONE"
@@ -571,7 +560,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
 
         // Test case insensitivity - "GzIp"
@@ -581,7 +570,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::Gzip(None)
         );
 
         // Test default when property is missing

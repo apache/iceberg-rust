@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
-use apache_avro::{Codec, Reader, Writer, from_value};
+use apache_avro::{Reader, Writer, from_value};
 use bytes::Bytes;
 pub use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
@@ -29,8 +29,10 @@ use serde_derive::{Deserialize, Serialize};
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest};
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
+use crate::spec::avro_util;
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
 use crate::spec::manifest_list::_serde::ManifestFileV3;
 use crate::{Error, ErrorKind};
@@ -121,7 +123,7 @@ impl ManifestListWriter {
         output_file: OutputFile,
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -150,7 +152,7 @@ impl ManifestListWriter {
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -181,7 +183,7 @@ impl ManifestListWriter {
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
         first_row_id: Option<u64>, // Always None for delete manifests
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -218,7 +220,7 @@ impl ManifestListWriter {
         sequence_number: i64,
         snapshot_id: i64,
         first_row_id: Option<u64>,
-        compression: Codec,
+        compression: CompressionCodec,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -226,7 +228,11 @@ impl ManifestListWriter {
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
 
-        let mut avro_writer = Writer::with_codec(avro_schema, Vec::new(), compression);
+        let mut avro_writer = Writer::with_codec(
+            avro_schema,
+            Vec::new(),
+            avro_util::to_avro_codec(compression),
+        );
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
@@ -1373,12 +1379,12 @@ pub(super) mod _serde {
 mod test {
     use std::fs;
 
-    use apache_avro::{Codec, DeflateSettings, Reader, Schema};
-    use miniz_oxide::deflate::CompressionLevel;
+    use apache_avro::{Reader, Schema};
     use tempfile::TempDir;
 
     use super::_serde::ManifestListV2;
-    use crate::io::{FileIO, FileIOBuilder};
+    use crate::compression::CompressionCodec;
+    use crate::io::FileIO;
     use crate::spec::manifest_list::_serde::{ManifestFileV1, ManifestListV1, ManifestListV3};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
@@ -1420,7 +1426,7 @@ mod test {
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
-            Codec::Null,
+            CompressionCodec::None,
         );
 
         writer
@@ -1494,7 +1500,7 @@ mod test {
             1646658105718557341,
             Some(1646658105718557341),
             1,
-            Codec::Null,
+            CompressionCodec::None,
         );
 
         writer
@@ -1569,7 +1575,7 @@ mod test {
             Some(377075049360453639),
             1,
             Some(10),
-            Codec::Null,
+            CompressionCodec::None,
         );
 
         writer
@@ -1706,8 +1712,12 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1754,8 +1764,13 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, Codec::Null);
+        let mut writer = ManifestListWriter::v2(
+            output_file,
+            snapshot_id,
+            Some(0),
+            seq_num,
+            CompressionCodec::None,
+        );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1809,7 +1824,7 @@ mod test {
             Some(0),
             seq_num,
             Some(10),
-            Codec::Null,
+            CompressionCodec::None,
         );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
@@ -1857,8 +1872,12 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1903,8 +1922,12 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), Codec::Null);
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1951,8 +1974,13 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, Codec::Null);
+        let mut writer = ManifestListWriter::v2(
+            output_file,
+            snapshot_id,
+            Some(0),
+            seq_num,
+            CompressionCodec::None,
+        );
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -2096,7 +2124,7 @@ mod test {
         }
         let manifest_list = ManifestList { entries };
 
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let tmp_dir = TempDir::new().unwrap();
 
         // Write uncompressed manifest list
@@ -2111,7 +2139,7 @@ mod test {
             1646658105718557341,
             Some(0),
             1,
-            Codec::Null,
+            CompressionCodec::None,
         );
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -2127,7 +2155,7 @@ mod test {
             .unwrap()
             .to_string();
 
-        let compression = Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression));
+        let compression = CompressionCodec::Gzip(Some(9));
         let mut writer = ManifestListWriter::v2(
             file_io.new_output(&compressed_path).unwrap(),
             1646658105718557341,

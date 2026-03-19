@@ -144,7 +144,7 @@ mod tests {
             sequence_number: 1,
             offset: 4,
             length: 10,
-            compression_codec: CompressionCodec::Gzip,
+            compression_codec: CompressionCodec::Gzip(None),
             properties: HashMap::new(),
         };
 
