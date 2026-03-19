@@ -41,7 +41,7 @@ rust-version = "1.92"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = { version = "0.21", features = ["zstandard"] }
+apache-avro = { version = "0.21", features = ["zstandard", "snappy"] }
 array-init = "2"
 arrow-arith = "57.1"
 arrow-array = "57.1"
@@ -96,6 +96,7 @@ log = "0.4.28"
 metainfo = "0.7.14"
 mimalloc = "0.1.46"
 minijinja = "2.12.0"
+miniz_oxide = "0.8"
 mockall = "0.13.1"
 mockito = "1"
 motore-macros = "0.4.3"

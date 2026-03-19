@@ -22,23 +22,53 @@ use std::io::{Read, Write};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Error, ErrorKind, Result};
 
 /// Data compression formats
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum CompressionCodec {
     #[default]
     /// No compression
     None,
     /// LZ4 single compression frame with content size present
     Lz4,
-    /// Zstandard single compression frame with content size present
-    Zstd,
-    /// Gzip compression
-    Gzip,
+    /// Zstandard single compression frame with content size present. Optional level 0–22.
+    Zstd(Option<u8>),
+    /// Gzip compression. Optional level 0–9.
+    Gzip(Option<u8>),
+    /// Snappy compression
+    Snappy,
+}
+
+impl Serialize for CompressionCodec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let s = match self {
+            CompressionCodec::None => "none",
+            CompressionCodec::Lz4 => "lz4",
+            CompressionCodec::Zstd(_) => "zstd",
+            CompressionCodec::Gzip(_) => "gzip",
+            CompressionCodec::Snappy => "snappy",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompressionCodec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
+            "none" => Ok(CompressionCodec::None),
+            "lz4" => Ok(CompressionCodec::Lz4),
+            "zstd" => Ok(CompressionCodec::Zstd(None)),
+            "gzip" => Ok(CompressionCodec::Gzip(None)),
+            "snappy" => Ok(CompressionCodec::Snappy),
+            other => Err(serde::de::Error::unknown_variant(other, &[
+                "none", "lz4", "zstd", "gzip", "snappy",
+            ])),
+        }
+    }
 }
 
 impl CompressionCodec {
@@ -49,13 +79,17 @@ impl CompressionCodec {
                 ErrorKind::FeatureUnsupported,
                 "LZ4 decompression is not supported currently",
             )),
-            CompressionCodec::Zstd => Ok(zstd::stream::decode_all(&bytes[..])?),
-            CompressionCodec::Gzip => {
+            CompressionCodec::Zstd(_) => Ok(zstd::stream::decode_all(&bytes[..])?),
+            CompressionCodec::Gzip(_) => {
                 let mut decoder = GzDecoder::new(&bytes[..]);
                 let mut decompressed = Vec::new();
                 decoder.read_to_end(&mut decompressed)?;
                 Ok(decompressed)
             }
+            CompressionCodec::Snappy => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Snappy decompression is not supported currently",
+            )),
         }
     }
 
@@ -66,19 +100,34 @@ impl CompressionCodec {
                 ErrorKind::FeatureUnsupported,
                 "LZ4 compression is not supported currently",
             )),
-            CompressionCodec::Zstd => {
+            CompressionCodec::Zstd(level) => {
                 let writer = Vec::<u8>::new();
-                let mut encoder = zstd::stream::Encoder::new(writer, 3)?;
+                let mut encoder = zstd::stream::Encoder::new(writer, level.unwrap_or(3) as i32)?;
                 encoder.include_checksum(true)?;
                 encoder.set_pledged_src_size(Some(bytes.len().try_into()?))?;
                 std::io::copy(&mut &bytes[..], &mut encoder)?;
                 Ok(encoder.finish()?)
             }
-            CompressionCodec::Gzip => {
-                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            CompressionCodec::Gzip(level) => {
+                let compression = Compression::new(level.unwrap_or(6).min(9) as u32);
+                let mut encoder = GzEncoder::new(Vec::new(), compression);
                 encoder.write_all(&bytes)?;
                 Ok(encoder.finish()?)
             }
+            CompressionCodec::Snappy => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Snappy compression is not supported currently",
+            )),
+        }
+    }
+
+    /// Replace the compression level, if this variant carries one.
+    /// Variants without a level (`None`, `Lz4`, `Snappy`) are returned unchanged.
+    pub(crate) fn with_level(self, level: Option<u8>) -> Self {
+        match self {
+            CompressionCodec::Gzip(_) => CompressionCodec::Gzip(level),
+            CompressionCodec::Zstd(_) => CompressionCodec::Zstd(level),
+            other => other,
         }
     }
 
@@ -91,12 +140,14 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    /// Returns an error for Lz4, Zstd, and Snappy as they are not fully supported.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
-            CompressionCodec::Gzip => Ok(".gz"),
-            codec @ (CompressionCodec::Lz4 | CompressionCodec::Zstd) => Err(Error::new(
+            CompressionCodec::Gzip(_) => Ok(".gz"),
+            codec @ (CompressionCodec::Lz4
+            | CompressionCodec::Zstd(_)
+            | CompressionCodec::Snappy) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("suffix not defined for {codec:?}"),
             )),
@@ -123,7 +174,7 @@ mod tests {
     async fn test_compression_codec_compress() {
         let bytes_vec = [0_u8; 100].to_vec();
 
-        let compression_codecs = [CompressionCodec::Zstd, CompressionCodec::Gzip];
+        let compression_codecs = [CompressionCodec::Zstd(None), CompressionCodec::Gzip(None)];
 
         for codec in compression_codecs {
             let compressed = codec.compress(bytes_vec.clone()).unwrap();
@@ -155,16 +206,17 @@ mod tests {
     fn test_suffix() {
         // Test supported codecs
         assert_eq!(CompressionCodec::None.suffix().unwrap(), "");
-        assert_eq!(CompressionCodec::Gzip.suffix().unwrap(), ".gz");
+        assert_eq!(CompressionCodec::Gzip(None).suffix().unwrap(), ".gz");
 
         // Test unsupported codecs return errors
         assert!(CompressionCodec::Lz4.suffix().is_err());
-        assert!(CompressionCodec::Zstd.suffix().is_err());
+        assert!(CompressionCodec::Zstd(None).suffix().is_err());
+        assert!(CompressionCodec::Snappy.suffix().is_err());
 
         let lz4_err = CompressionCodec::Lz4.suffix().unwrap_err();
         assert!(lz4_err.to_string().contains("suffix not defined for Lz4"));
 
-        let zstd_err = CompressionCodec::Zstd.suffix().unwrap_err();
+        let zstd_err = CompressionCodec::Zstd(None).suffix().unwrap_err();
         assert!(zstd_err.to_string().contains("suffix not defined for Zstd"));
     }
 }
