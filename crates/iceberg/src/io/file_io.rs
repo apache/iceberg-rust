@@ -19,6 +19,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
+use futures::{Stream, StreamExt};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -138,6 +139,18 @@ impl FileIO {
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
         self.get_storage()?.delete_prefix(path.as_ref()).await
+    }
+
+    /// Delete multiple files from a stream of paths.
+    ///
+    /// # Arguments
+    ///
+    /// * paths: A stream of absolute paths starting with the scheme string used to construct [`FileIO`].
+    pub async fn delete_stream(
+        &self,
+        paths: impl Stream<Item = String> + Send + 'static,
+    ) -> Result<()> {
+        self.get_storage()?.delete_stream(paths.boxed()).await
     }
 
     /// Check file exists.
