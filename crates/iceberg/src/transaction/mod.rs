@@ -80,6 +80,7 @@ use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 use crate::transaction::rewrite::RewriteAction;
+use crate::transaction::rewrite_manifest::RewriteManifestsAction;
 
 /// Table transaction.
 #[derive(Clone)]
@@ -143,8 +144,14 @@ impl Transaction {
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
     }
+    /// Creates a rewrite action for rewriting data files.
     pub fn rewrite(&self) -> RewriteAction {
         RewriteAction::new()
+    }
+
+    /// Creates a rewrite manifests action for manifest compaction.
+    pub fn rewrite_manifests(&self) -> RewriteManifestsAction {
+        RewriteManifestsAction::new()
     }
 
     /// Creates replace sort order action.

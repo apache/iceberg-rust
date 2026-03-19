@@ -209,25 +209,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     fn generate_unique_snapshot_id(table: &Table) -> i64 {
-        let generate_random_id = || -> i64 {
-            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-            let snapshot_id = (lhs ^ rhs) as i64;
-            if snapshot_id < 0 {
-                -snapshot_id
-            } else {
-                snapshot_id
-            }
-        };
-        let mut snapshot_id = generate_random_id();
-
-        while table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
-            snapshot_id = generate_random_id();
-        }
-        snapshot_id
+        generate_unique_snapshot_id(table)
     }
 
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
@@ -517,4 +499,27 @@ impl<'a> SnapshotProducer<'a> {
 
         Ok(ActionCommit::new(updates, requirements))
     }
+}
+
+/// Generate a unique snapshot ID that does not collide with any existing snapshot in the table.
+pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
+    let generate_random_id = || -> i64 {
+        let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
+        let snapshot_id = (lhs ^ rhs) as i64;
+        if snapshot_id < 0 {
+            -snapshot_id
+        } else {
+            snapshot_id
+        }
+    };
+    let mut snapshot_id = generate_random_id();
+
+    while table
+        .metadata()
+        .snapshots()
+        .any(|s| s.snapshot_id() == snapshot_id)
+    {
+        snapshot_id = generate_random_id();
+    }
+    snapshot_id
 }
