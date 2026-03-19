@@ -50,10 +50,3 @@ serde = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
-
-[dev-dependencies]
-async-trait = { workspace = true }
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-reqsign = { version = "0.16.3", default-features = false }
-reqwest = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
