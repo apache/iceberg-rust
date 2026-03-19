@@ -60,9 +60,3 @@ reqsign-core = { version = "3.0.0", optional = true }
 serde = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
-
-[dev-dependencies]
-async-trait = { workspace = true }
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-reqwest = { workspace = true }
-tokio = { workspace = true, features = ["macros"] }

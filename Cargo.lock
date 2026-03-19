@@ -3823,13 +3823,11 @@ dependencies = [
  "cfg-if 1.0.4",
  "futures",
  "iceberg",
- "iceberg_test_utils",
  "opendal",
  "reqsign-aws-v4",
  "reqsign-core",
  "reqwest 0.12.28",
  "serde",
- "tokio",
  "typetag",
  "url",
 ]
