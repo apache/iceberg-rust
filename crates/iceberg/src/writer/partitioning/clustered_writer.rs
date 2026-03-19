@@ -198,6 +198,7 @@ mod tests {
         // Create rolling file writer builder
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
+            schema.clone(),
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -316,6 +317,7 @@ mod tests {
         // Create rolling file writer builder
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
+            schema.clone(),
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -449,6 +451,7 @@ mod tests {
         // Create rolling file writer builder
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
+            schema.clone(),
             file_io.clone(),
             location_gen,
             file_name_gen,

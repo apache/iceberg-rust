@@ -86,14 +86,14 @@
 //!     );
 //!
 //!     // Create a parquet file writer builder. The parameter can get from table.
-//!     let parquet_writer_builder = ParquetWriterBuilder::new(
-//!         WriterProperties::default(),
-//!         table.metadata().current_schema().clone(),
-//!     );
+//!     let schema = table.metadata().current_schema().clone();
+//!     let parquet_writer_builder =
+//!         ParquetWriterBuilder::new(WriterProperties::default(), schema.clone());
 //!
 //!     // Create a rolling file writer using parquet file writer builder.
 //!     let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
 //!         parquet_writer_builder,
+//!         schema,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
 //!         file_name_generator.clone(),
@@ -215,14 +215,14 @@
 //!     );
 //!
 //!     // Create a parquet file writer builder. The parameter can get from table.
-//!     let parquet_writer_builder = ParquetWriterBuilder::new(
-//!         WriterProperties::default(),
-//!         table.metadata().current_schema().clone(),
-//!     );
+//!     let schema = table.metadata().current_schema().clone();
+//!     let parquet_writer_builder =
+//!         ParquetWriterBuilder::new(WriterProperties::default(), schema.clone());
 //!
 //!     // Create a rolling file writer
 //!     let rolling_file_writer_builder = RollingFileWriterBuilder::new(
 //!         parquet_writer_builder,
+//!         schema,
 //!         512 * 1024 * 1024,
 //!         table.file_io().clone(),
 //!         location_generator.clone(),
@@ -274,9 +274,10 @@
 //! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
 //! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
-//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+//! # let schema = table.metadata().current_schema().clone();
+//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), schema.clone());
 //! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
-//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+//! #     parquet_writer_builder, schema, table.file_io().clone(), location_generator, file_name_generator);
 //! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 //!
 //! // Wrap the data file writer with FanoutWriter for partitioning
@@ -338,9 +339,10 @@
 //! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
 //! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
 //! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
-//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
+//! # let schema = table.metadata().current_schema().clone();
+//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), schema.clone());
 //! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
-//! #     parquet_writer_builder, table.file_io().clone(), location_generator, file_name_generator);
+//! #     parquet_writer_builder, schema, table.file_io().clone(), location_generator, file_name_generator);
 //! # let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 //!
 //! // Wrap the data file writer with ClusteredWriter for sorted partitioning
@@ -385,13 +387,14 @@
 //! ```
 
 pub mod base_writer;
+pub mod combined_writer;
 pub mod file_writer;
 pub mod partitioning;
 
 use arrow_array::RecordBatch;
 
 use crate::Result;
-use crate::spec::{DataFile, PartitionKey};
+use crate::spec::{DataFile, PartitionKey, SchemaRef};
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
@@ -426,6 +429,8 @@ pub trait CurrentFileStatus {
     fn current_row_num(&self) -> usize;
     /// Get the current file written size.
     fn current_written_size(&self) -> usize;
+    /// Get the current schema used by the writer.
+    fn current_schema(&self) -> SchemaRef;
 }
 
 #[cfg(test)]
