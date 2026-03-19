@@ -107,6 +107,7 @@ iceberg-catalog-s3tables = { version = "0.10.0", path = "./crates/catalog/s3tabl
 iceberg-catalog-sql = { version = "0.10.0", path = "./crates/catalog/sql" }
 iceberg-datafusion = { version = "0.10.0", path = "./crates/integrations/datafusion" }
 iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" }
+iceberg-storage-object_store = { version = "0.10.0", path = "./crates/storage/object_store" }
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
 indicatif = "0.18"
 itertools = "0.13"
