@@ -263,7 +263,7 @@ mod tests {
     async fn test_empty_data_overwrite_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let action = tx.overwrite().add_data_files(vec![]);
+        let action = tx.rewrite().add_data_files(vec![]);
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
 
