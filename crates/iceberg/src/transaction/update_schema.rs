@@ -490,7 +490,7 @@ mod tests {
 
     use as_any::Downcast;
 
-    use crate::spec::{Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type};
+    use crate::spec::{Literal, NestedField, PrimitiveType, Schema, StructType, TableMetadata, Type};
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
@@ -626,19 +626,16 @@ mod tests {
             other => panic!("expected AddSchema, got {other:?}"),
         };
 
-        // The new field should have ID = last_column_id + 1 = 4.
-        let new_field = new_schema
-            .field_by_name("new_col")
-            .expect("new_col should exist");
-        assert_eq!(new_field.id, 4);
-        assert!(!new_field.required);
-        assert_eq!(*new_field.field_type, Type::Primitive(PrimitiveType::Int));
-        assert!(new_field.doc.is_none());
-
-        // Original fields should still be there.
-        assert!(new_schema.field_by_name("x").is_some());
-        assert!(new_schema.field_by_name("y").is_some());
-        assert!(new_schema.field_by_name("z").is_some());
+        let mut expected_fields = table.metadata().current_schema().as_struct().fields().to_vec();
+        expected_fields.push(
+            NestedField::optional(4, "new_col", Type::Primitive(PrimitiveType::Int)).into(),
+        );
+        let expected_schema = Schema::builder()
+            .with_fields(expected_fields)
+            .with_identifier_field_ids(table.metadata().current_schema().identifier_field_ids())
+            .build()
+            .unwrap();
+        assert_eq!(new_schema, &expected_schema);
 
         assert_eq!(updates[1], TableUpdate::SetCurrentSchema { schema_id: -1 });
 
@@ -654,10 +651,15 @@ mod tests {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("documented_col", Type::Primitive(PrimitiveType::String))
-                .with_doc("A documented column"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("documented_col")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .doc("A documented column")
+                    .build(),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -861,10 +863,15 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // Add "email" to the "person" struct.
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
-                .with_parent("person"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("email")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .build(),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -892,11 +899,16 @@ mod tests {
         let table = make_v2_table_with_nested();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("phone", Type::Primitive(PrimitiveType::String))
-                .with_parent("person")
-                .with_doc("Phone number"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("phone")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .doc("Phone number")
+                    .build(),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -920,10 +932,15 @@ mod tests {
 
         // "tags" is a list<struct{key, value}>. Adding to the list navigates to its
         // element struct automatically.
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("score", Type::Primitive(PrimitiveType::Double))
-                .with_parent("tags"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("score")
+                    .field_type(Type::Primitive(PrimitiveType::Double))
+                    .parent("tags")
+                    .build(),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -952,10 +969,15 @@ mod tests {
 
         // "props" is a map<string, struct{data}>. Adding to the map navigates to its
         // value struct automatically.
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("version", Type::Primitive(PrimitiveType::Int))
-                .with_parent("props"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("version")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .parent("props")
+                    .build(),
+            );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
@@ -979,10 +1001,15 @@ mod tests {
         let table = make_v2_table_with_nested();
         let tx = Transaction::new(&table);
 
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("col", Type::Primitive(PrimitiveType::Int))
-                .with_parent("nonexistent"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("col")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .parent("nonexistent")
+                    .build(),
+            );
 
         let err = match Arc::new(action).commit(&table).await {
             Err(e) => e,
@@ -1002,9 +1029,15 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // "x" is a primitive (long), not a struct.
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("col", Type::Primitive(PrimitiveType::Int)).with_parent("x"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("col")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .parent("x")
+                    .build(),
+            );
 
         let err = match Arc::new(action).commit(&table).await {
             Err(e) => e,
@@ -1024,10 +1057,15 @@ mod tests {
         let tx = Transaction::new(&table);
 
         // "name" already exists in the "person" struct.
-        let action = tx.update_schema().add_column(
-            AddColumn::optional("name", Type::Primitive(PrimitiveType::String))
-                .with_parent("person"),
-        );
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("name")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .build(),
+            );
 
         let err = match Arc::new(action).commit(&table).await {
             Err(e) => e,
@@ -1054,8 +1092,11 @@ mod tests {
                 Type::Primitive(PrimitiveType::Boolean),
             ))
             .add_column(
-                AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
-                    .with_parent("person"),
+                AddColumn::builder()
+                    .name("email")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .build(),
             );
 
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
