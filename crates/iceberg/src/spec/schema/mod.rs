@@ -51,6 +51,8 @@ pub type SchemaId = i32;
 pub type SchemaRef = Arc<Schema>;
 /// Default schema id.
 pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
+/// Delimiter for schema name, which denotes a nested struct.
+pub const SCHEMA_NAME_DELIMITER: &str = ".";
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]

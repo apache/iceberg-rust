@@ -22,7 +22,8 @@ use async_trait::async_trait;
 use typed_builder::TypedBuilder;
 
 use crate::spec::{
-    ListType, Literal, MapType, NestedField, NestedFieldRef, Schema, StructType, Type,
+    ListType, Literal, MapType, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
+    StructType, Type,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
@@ -33,13 +34,13 @@ const TABLE_ROOT_ID: i32 = -1;
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
 const DEFAULT_ID: i32 = 0;
 
-#[derive(TypedBuilder)]
 /// Declarative specification for adding a column in [`UpdateSchemaAction`].
 ///
 /// Use helper constructors such as [`AddColumn::optional`] and [`AddColumn::required`],
 /// optionally combined with [`AddColumn::with_parent`] and [`AddColumn::with_doc`], then pass
 /// the value to
 /// [`UpdateSchemaAction::add_column`].
+#[derive(TypedBuilder)]
 pub struct AddColumn {
     #[builder(default = None, setter(strip_option, into))]
     parent: Option<String>,
@@ -75,18 +76,6 @@ impl AddColumn {
             .initial_default(initial_default.clone())
             .write_default(initial_default)
             .build()
-    }
-
-    /// Return a copy with an updated parent path.
-    pub fn with_parent(mut self, parent: impl ToString) -> Self {
-        self.parent = Some(parent.to_string());
-        self
-    }
-
-    /// Return a copy with an updated doc string.
-    pub fn with_doc(mut self, doc: impl ToString) -> Self {
-        self.doc = Some(doc.to_string());
-        self
     }
 
     fn to_nested_field(&self) -> NestedFieldRef {
@@ -170,8 +159,6 @@ impl UpdateSchemaAction {
         self.auto_assign_ids = false;
         self
     }
-
-    // --- Internal helpers ---
 }
 
 // ---------------------------------------------------------------------------
@@ -395,8 +382,8 @@ impl TransactionAction for UpdateSchemaAction {
         for add in &self.additions {
             let pending_field = add.to_nested_field();
 
-            // Check that name does not contain ".".
-            if pending_field.name.contains('.') {
+            // Check that name does not contain `SCHEMA_NAME_DELIMITER`.
+            if pending_field.name.contains(SCHEMA_NAME_DELIMITER) {
                 return Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!(
