@@ -48,11 +48,10 @@ logical_plan
 01)Filter: default.default.test_timestamp_table.ts = TimestampNanosecond(1672921800000000000, None)
 02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts = TimestampNanosecond(1672921800000000000, None)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 = 1672921800000000000
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[ts = 2023-01-05 12:30:00]
+01)FilterExec: ts@1 = 1672921800000000000
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,ts] predicate:[ts = 2023-01-05 12:30:00]
 
 # Verify timestamp equality filtering works
 query I?
@@ -68,11 +67,10 @@ logical_plan
 01)Filter: default.default.test_timestamp_table.ts > TimestampNanosecond(1673308800000000000, None)
 02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts > TimestampNanosecond(1673308800000000000, None)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 > 1673308800000000000
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-10 00:00:00]
+01)FilterExec: ts@1 > 1673308800000000000
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-10 00:00:00]
 
 # Verify timestamp greater than filtering
 query I? rowsort
@@ -99,11 +97,10 @@ logical_plan
 01)Filter: default.default.test_timestamp_table.ts >= TimestampNanosecond(1672876800000000000, None) AND default.default.test_timestamp_table.ts <= TimestampNanosecond(1673827199000000000, None)
 02)--TableScan: default.default.test_timestamp_table projection=[id, ts], partial_filters=[default.default.test_timestamp_table.ts >= TimestampNanosecond(1672876800000000000, None), default.default.test_timestamp_table.ts <= TimestampNanosecond(1673827199000000000, None)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 >= 1672876800000000000 AND ts@1 <= 1673827199000000000
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[(ts >= 2023-01-05 00:00:00) AND (ts <= 2023-01-15 23:59:59)]
+01)FilterExec: ts@1 >= 1672876800000000000 AND ts@1 <= 1673827199000000000
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,ts] predicate:[(ts >= 2023-01-05 00:00:00) AND (ts <= 2023-01-15 23:59:59)]
 
 # Test timestamp range predicate filtering
 query I? rowsort
@@ -166,11 +163,10 @@ logical_plan
 01)Filter: default.default.test_timestamp_micros.ts > TimestampMicrosecond(1672531200000000, None)
 02)--TableScan: default.default.test_timestamp_micros projection=[id, ts], partial_filters=[default.default.test_timestamp_micros.ts > TimestampMicrosecond(1672531200000000, None)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: ts@1 > 1672531200000000
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CooperativeExec
-05)--------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-01 00:00:00]
+01)FilterExec: ts@1 > 1672531200000000
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----CooperativeExec
+04)------IcebergTableScan projection:[id,ts] predicate:[ts > 2023-01-01 00:00:00]
 
 query I?
 SELECT * FROM default.default.test_timestamp_micros WHERE ts > CAST('2023-01-01 00:00:00' AS TIMESTAMP)
@@ -189,4 +185,3 @@ CREATE TABLE default.default.test_timestamp_millis (id INT NOT NULL, ts TIMESTAM
 # This should fail because Iceberg doesn't support second precision
 statement error DataFusion error: External error: DataInvalid => Unsupported Arrow data type: Timestamp\(s\)
 CREATE TABLE default.default.test_timestamp_seconds (id INT NOT NULL, ts TIMESTAMP(0))
-

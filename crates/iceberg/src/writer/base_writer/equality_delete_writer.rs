@@ -213,7 +213,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
-    use crate::io::{FileIO, FileIOBuilder};
+    use crate::io::FileIO;
     use crate::spec::{
         DataFile, DataFileFormat, ListType, MapType, NestedField, PrimitiveType, Schema,
         StructType, Type,
@@ -307,7 +307,7 @@ mod test {
     #[tokio::test]
     async fn test_equality_delete_writer() -> Result<(), anyhow::Error> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -545,7 +545,7 @@ mod test {
     #[tokio::test]
     async fn test_equality_delete_with_primitive_type() -> Result<(), anyhow::Error> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );

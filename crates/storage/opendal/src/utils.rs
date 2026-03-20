@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use opendal::Operator;
-use opendal::services::MemoryConfig;
+pub(crate) fn is_truthy(value: &str) -> bool {
+    ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
+}
 
-use crate::Result;
-
-pub(crate) fn memory_config_build() -> Result<Operator> {
-    Ok(Operator::from_config(MemoryConfig::default())?.finish())
+/// Convert an opendal error into an iceberg error.
+pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
+    iceberg::Error::new(
+        iceberg::ErrorKind::Unexpected,
+        "Failure in doing io operation",
+    )
+    .with_source(e)
 }

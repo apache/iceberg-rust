@@ -372,10 +372,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             metadata_file_name
         );
-        let file_io = FileIO::from_path(&metadata_file_path)
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
         let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
         let static_table =
             StaticTable::from_metadata_file(&metadata_file_path, static_identifier, file_io)

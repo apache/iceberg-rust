@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use iceberg::Result;
 use opendal::Operator;
-use opendal::services::FsConfig;
+use opendal::services::MemoryConfig;
 
-use crate::Result;
+use crate::utils::from_opendal_error;
 
-/// Build new opendal operator from give path.
-pub(crate) fn fs_config_build() -> Result<Operator> {
-    let mut cfg = FsConfig::default();
-    cfg.root = Some("/".to_string());
-
-    Ok(Operator::from_config(cfg)?.finish())
+pub(crate) fn memory_config_build() -> Result<Operator> {
+    Ok(Operator::from_config(MemoryConfig::default())
+        .map_err(from_opendal_error)?
+        .finish())
 }

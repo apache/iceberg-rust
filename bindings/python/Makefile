@@ -15,12 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
-install:
-	uv sync --group dev --no-install-project
+.PHONY: build install test
 
 build:
 	uv run maturin develop
+
+# uv sync may remove local editable pyiceberg-core, so install rebuilds it afterwards.
+install:
+	uv sync --group dev --no-install-project
+	$(MAKE) build
 
 test:
 	uv run --no-sync pytest
