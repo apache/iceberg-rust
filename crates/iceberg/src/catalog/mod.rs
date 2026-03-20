@@ -101,19 +101,11 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Drop a table from the catalog and delete the underlying table data.
     ///
-    /// The default implementation loads the table metadata, drops the table
-    /// from the catalog, then deletes all associated data and metadata files
-    /// using [`drop_table_data`](utils::drop_table_data).
-    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
-        let table_info = self.load_table(table).await?;
-        self.drop_table(table).await?;
-        utils::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
-    }
+    /// Implementations should load the table metadata, drop the table
+    /// from the catalog, then delete all associated data and metadata files.
+    /// The [`drop_table_data`](utils::drop_table_data) utility function can
+    /// be used for the file cleanup step.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
