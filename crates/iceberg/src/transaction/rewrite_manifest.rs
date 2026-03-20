@@ -527,3 +527,380 @@ fn compare_literal(a: &Literal, b: &Literal) -> Ordering {
         (Some(_), None) => Ordering::Greater,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Operation,
+        Struct,
+    };
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::{Catalog, CatalogBuilder};
+
+    /// Create a memory catalog that works on all platforms (including Windows)
+    /// by using a `memory://` warehouse path instead of a local filesystem path.
+    async fn new_test_catalog() -> impl Catalog {
+        MemoryCatalogBuilder::default()
+            .load(
+                "test",
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    "memory://test-warehouse".to_string(),
+                )]),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn test_data_file(path: &str, partition_spec_id: i32, partition_val: i64) -> crate::spec::DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(partition_spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(partition_val))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Helper: do N fast appends with one file each, returning the updated table.
+    async fn append_n_files(
+        catalog: &impl Catalog,
+        table: crate::table::Table,
+        n: usize,
+    ) -> crate::table::Table {
+        let spec_id = table.metadata().default_partition_spec_id();
+        let mut table = table;
+        for i in 0..n {
+            let file = test_data_file(
+                &format!("test/file_{i}.parquet"),
+                spec_id,
+                (i as i64) * 100,
+            );
+            let tx = Transaction::new(&table);
+            let action = tx.fast_append().add_data_files(vec![file]);
+            let tx = action.apply(tx).unwrap();
+            table = tx.commit(catalog).await.unwrap();
+        }
+        table
+    }
+
+    /// Helper: count manifests in the current snapshot.
+    async fn count_manifests(table: &crate::table::Table) -> usize {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        manifest_list.entries().len()
+    }
+
+    /// Helper: collect all alive (file_path, status, snapshot_id, sequence_number) from current snapshot.
+    async fn collect_entries(
+        table: &crate::table::Table,
+    ) -> Vec<(String, ManifestStatus, Option<i64>, Option<i64>)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                entries.push((
+                    entry.file_path().to_string(),
+                    entry.status(),
+                    entry.snapshot_id(),
+                    entry.sequence_number(),
+                ));
+            }
+        }
+        entries
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_no_snapshot() {
+        // Compacting a table with no snapshot should error.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_manifests();
+        let result = Arc::new(action).commit(&table).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(
+            err.to_string().contains("no current snapshot"),
+            "Expected 'no current snapshot' error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_basic_compaction() {
+        // Multiple appends create multiple manifests; compaction merges them.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 3 appends → 3 manifests
+        let table = append_n_files(&catalog, table, 3).await;
+        assert_eq!(count_manifests(&table).await, 3);
+
+        // Compact with a large min_size so all manifests are considered "small"
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Should now have fewer manifests (1 group → 1 output manifest)
+        assert_eq!(count_manifests(&table).await, 1);
+
+        // All 3 files should still be alive
+        let entries = collect_entries(&table).await;
+        assert_eq!(entries.len(), 3);
+        for (path, status, _, _) in &entries {
+            assert_eq!(*status, ManifestStatus::Existing, "entry {path}");
+        }
+
+        // Operation should be Replace
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.summary().operation, Operation::Replace);
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_preserves_entry_metadata() {
+        // Verify that snapshot_id, sequence_number are preserved through compaction.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Append files in separate commits to get distinct snapshot/sequence numbers
+        let table = append_n_files(&catalog, table, 2).await;
+        let entries_before = collect_entries(&table).await;
+
+        // Compact — large min_size forces all manifests into compaction
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries_after = collect_entries(&table).await;
+
+        // Same number of entries
+        assert_eq!(entries_before.len(), entries_after.len());
+
+        // For each file, the snapshot_id and sequence_number should be preserved
+        for (path, _, snap_before, seq_before) in &entries_before {
+            let after = entries_after
+                .iter()
+                .find(|(p, _, _, _)| p == path)
+                .unwrap_or_else(|| panic!("File {path} missing after compaction"));
+            assert_eq!(
+                snap_before, &after.2,
+                "snapshot_id mismatch for {path}"
+            );
+            assert_eq!(
+                seq_before, &after.3,
+                "sequence_number mismatch for {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_skips_large_manifests() {
+        // Manifests at or above min_manifest_size_bytes should be kept as-is.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 3 appends → 3 manifests
+        let table = append_n_files(&catalog, table, 3).await;
+        assert_eq!(count_manifests(&table).await, 3);
+
+        // Set min_size=0 so all manifests have length >= 0, hence "large" and skipped
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(0);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // All manifests kept → still 3
+        assert_eq!(count_manifests(&table).await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_deleted_entries_filtered() {
+        // After a rewrite that marks files as deleted, compaction should drop them.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file
+        let original = test_data_file("test/original.parquet", spec_id, 100);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: delete original, add replacement
+        let replacement = test_data_file("test/replacement.parquet", spec_id, 200);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Should have entries including a deleted one
+        let entries_before = collect_entries(&table).await;
+        assert!(
+            entries_before
+                .iter()
+                .any(|(p, s, _, _)| p == "test/original.parquet" && *s == ManifestStatus::Deleted)
+        );
+
+        // Compact — large min_size forces all manifests into compaction
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // After compaction, deleted entries should be gone
+        let entries_after = collect_entries(&table).await;
+        assert!(
+            !entries_after
+                .iter()
+                .any(|(p, _, _, _)| p == "test/original.parquet"),
+            "Deleted file should not survive compaction, entries: {entries_after:?}"
+        );
+
+        // Replacement should still be alive
+        assert!(
+            entries_after
+                .iter()
+                .any(|(p, s, _, _)| p == "test/replacement.parquet"
+                    && *s == ManifestStatus::Existing),
+            "Replacement file should be Existing after compaction, entries: {entries_after:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_rolling_writer() {
+        // With a very small target size, the rolling writer should produce
+        // multiple output manifests.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 5 appends → 5 manifests
+        let table = append_n_files(&catalog, table, 5).await;
+        assert_eq!(count_manifests(&table).await, 5);
+
+        // Compact with large min_size to force compaction, target_size=1 to roll per entry
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX)
+            .set_target_manifest_size_bytes(1);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Should have multiple output manifests (one per entry, so 5)
+        let manifest_count = count_manifests(&table).await;
+        assert!(
+            manifest_count >= 5,
+            "Expected at least 5 manifests with target_size=1, got {manifest_count}"
+        );
+
+        // All files should still be present and alive
+        let entries = collect_entries(&table).await;
+        assert_eq!(entries.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_entries_sorted_by_partition() {
+        // After compaction, entries should be sorted by partition value.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append files with decreasing partition values
+        let files = vec![
+            test_data_file("test/c.parquet", spec_id, 300),
+            test_data_file("test/a.parquet", spec_id, 100),
+            test_data_file("test/b.parquet", spec_id, 200),
+        ];
+        let mut table = table;
+        for file in files {
+            let tx = Transaction::new(&table);
+            let action = tx.fast_append().add_data_files(vec![file]);
+            let tx = action.apply(tx).unwrap();
+            table = tx.commit(&catalog).await.unwrap();
+        }
+
+        // Compact — large min_size forces all manifests into compaction
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(count_manifests(&table).await, 1);
+
+        // Entries should be sorted by partition value
+        let entries = collect_entries(&table).await;
+        assert_eq!(entries.len(), 3);
+        // The paths should be in partition-value order: a (100), b (200), c (300)
+        assert_eq!(entries[0].0, "test/a.parquet");
+        assert_eq!(entries[1].0, "test/b.parquet");
+        assert_eq!(entries[2].0, "test/c.parquet");
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_manifests_idempotent() {
+        // Compacting twice should produce the same result.
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_n_files(&catalog, table, 3).await;
+
+        // First compaction — large min_size forces all manifests into compaction
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let entries_after_first = collect_entries(&table).await;
+
+        // Second compaction
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let entries_after_second = collect_entries(&table).await;
+
+        // Same files, same metadata
+        assert_eq!(entries_after_first.len(), entries_after_second.len());
+        for (first, second) in entries_after_first.iter().zip(entries_after_second.iter()) {
+            assert_eq!(first.0, second.0, "file path mismatch");
+            assert_eq!(first.2, second.2, "snapshot_id mismatch");
+            assert_eq!(first.3, second.3, "sequence_number mismatch");
+        }
+    }
+}
