@@ -110,7 +110,7 @@ async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Res
         .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_path| async move {
             let input = io.new_input(manifest_path)?;
             let manifest_content = input.read().await?;
-            let manifest = crate::spec::Manifest::parse_avro(&manifest_bytes)?;
+            let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
 
             let data_file_paths = manifest
                 .entries()
