@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn test_nested_partition() {
         let address_struct = StructType::new(vec![
-            NestedField::required(3, "street", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(3, "street", Type::Primitive(PrimitiveType::String)).into(),
             NestedField::required(4, "city", Type::Primitive(PrimitiveType::String)).into(),
         ]);
 
@@ -347,7 +347,7 @@ mod tests {
             .unwrap();
 
         let struct_fields = Fields::from(vec![
-            Field::new("street", DataType::Utf8, false),
+            Field::new("street", DataType::Utf8, true),
             Field::new("city", DataType::Utf8, false),
         ]);
 
@@ -367,7 +367,7 @@ mod tests {
 
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("street", DataType::Utf8, false)),
+                Arc::new(Field::new("street", DataType::Utf8, true)),
                 street_array as ArrayRef,
             ),
             (
