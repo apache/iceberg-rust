@@ -27,17 +27,17 @@ use crate::metadata_table::IcebergMetadataTableProvider;
 #[derive(Debug)]
 pub struct IcebergMetadataScan {
     provider: IcebergMetadataTableProvider,
-    properties: PlanProperties,
+    properties: std::sync::Arc<PlanProperties>,
 }
 
 impl IcebergMetadataScan {
     pub fn new(provider: IcebergMetadataTableProvider) -> Self {
-        let properties = PlanProperties::new(
+        let properties = std::sync::Arc::new(PlanProperties::new(
             EquivalenceProperties::new(provider.schema()),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             provider,
             properties,
@@ -64,7 +64,7 @@ impl ExecutionPlan for IcebergMetadataScan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &std::sync::Arc<PlanProperties> {
         &self.properties
     }
 

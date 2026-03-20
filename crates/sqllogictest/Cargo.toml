@@ -39,7 +39,7 @@ sqllogictest = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 libtest-mimic = { workspace = true }
