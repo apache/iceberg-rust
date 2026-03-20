@@ -20,17 +20,21 @@
 use std::fmt;
 use std::str::FromStr;
 
-use aes_gcm::aead::generic_array::typenum::Unsigned;
+use aes_gcm::aead::generic_array::typenum::U12;
 use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, KeySizeUser, OsRng, Payload};
-use aes_gcm::{Aes128Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
 use zeroize::Zeroizing;
+
+/// AES-192-GCM with 96-bit nonce. Not provided by `aes-gcm` but constructible
+/// from the underlying primitives, same as `Aes128Gcm` and `Aes256Gcm`.
+type Aes192Gcm = AesGcm<aes_gcm::aes::Aes192, U12>;
 
 use crate::{Error, ErrorKind, Result};
 
 /// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
 /// - Zeroizes memory on drop
-/// - Redacts content in [`Debug`] output
+/// - Redacts content in [`Debug`] and [`Display`] output
 /// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
 /// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
 ///
@@ -53,13 +57,13 @@ impl SensitiveBytes {
     }
 
     /// Returns the number of bytes.
-    #[allow(dead_code)] // Encryption work is ongoing to currently unused
+    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns `true` if the byte slice is empty.
-    #[allow(dead_code)] // Encryption work is ongoing to currently unused
+    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -77,61 +81,58 @@ impl fmt::Display for SensitiveBytes {
     }
 }
 
-/// Supported encryption algorithm.
-/// Currently only AES-128-GCM is supported as it's the only algorithm
-/// compatible with arrow-rs Parquet encryption.
+/// Supported AES key sizes for AES-GCM encryption.
+///
+/// The Iceberg spec supports 128, 192, and 256-bit keys for AES-GCM.
+/// See: <https://iceberg.apache.org/gcm-stream-spec/#goals>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EncryptionAlgorithm {
-    /// AES-128 in GCM mode
-    Aes128Gcm,
+pub enum AesKeySize {
+    /// 128-bit AES key (16 bytes)
+    Bits128 = 128,
+    /// 192-bit AES key (24 bytes)
+    Bits192 = 192,
+    /// 256-bit AES key (32 bytes)
+    Bits256 = 256,
 }
 
-impl EncryptionAlgorithm {
-    /// Returns the key length in bytes for this algorithm.
+impl AesKeySize {
+    /// Returns the key length in bytes for this key size.
     pub fn key_length(&self) -> usize {
         match self {
-            Self::Aes128Gcm => <Aes128Gcm as KeySizeUser>::KeySize::USIZE,
+            Self::Bits128 => 16,
+            Self::Bits192 => 24,
+            Self::Bits256 => 32,
         }
     }
 
-    /// Returns the nonce/IV length in bytes for this algorithm.
-    pub fn nonce_length(&self) -> usize {
-        match self {
-            Self::Aes128Gcm => <Aes128Gcm as AeadCore>::NonceSize::USIZE,
-        }
-    }
-
-    /// Returns the string identifier for this algorithm.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Aes128Gcm => "AES_GCM_128",
-        }
-    }
-
-    /// Returns the algorithm for a given DEK length in bytes.
+    /// Returns the key size for a given DEK length in bytes.
     ///
     /// Matches Java's `encryption.data-key-length` property semantics:
-    /// 16 → AES-128-GCM.
+    /// 16 → 128-bit, 24 → 192-bit, 32 → 256-bit.
     pub fn from_key_length(len: usize) -> Result<Self> {
         match len {
-            16 => Ok(Self::Aes128Gcm),
+            16 => Ok(Self::Bits128),
+            24 => Ok(Self::Bits192),
+            32 => Ok(Self::Bits256),
             _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported data key length: {len} (must be 16)"),
+                ErrorKind::FeatureUnsupported,
+                format!("Unsupported data key length: {len} (must be 16, 24, or 32)"),
             )),
         }
     }
 }
 
-impl FromStr for EncryptionAlgorithm {
+impl FromStr for AesKeySize {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "AES_GCM_128" | "AES128_GCM" => Ok(Self::Aes128Gcm),
+            "128" | "AES_GCM_128" | "AES128_GCM" => Ok(Self::Bits128),
+            "192" | "AES_GCM_192" | "AES192_GCM" => Ok(Self::Bits192),
+            "256" | "AES_GCM_256" | "AES256_GCM" => Ok(Self::Bits256),
             _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported encryption algorithm: {s}"),
+                ErrorKind::FeatureUnsupported,
+                format!("Unsupported AES key size: {s}"),
             )),
         }
     }
@@ -140,45 +141,45 @@ impl FromStr for EncryptionAlgorithm {
 /// A secure encryption key that zeroes its memory on drop.
 pub struct SecureKey {
     key: SensitiveBytes,
-    algorithm: EncryptionAlgorithm,
+    key_size: AesKeySize,
 }
 
 impl SecureKey {
-    /// Creates a new secure key with the specified algorithm.
+    /// Creates a new secure key with the specified key size.
     ///
     /// # Errors
-    /// Returns an error if the key length doesn't match the algorithm requirements.
-    pub fn new(key: &[u8], algorithm: EncryptionAlgorithm) -> Result<Self> {
-        if key.len() != algorithm.key_length() {
+    /// Returns an error if the key length doesn't match the key size requirements.
+    pub fn new(key: &[u8], key_size: AesKeySize) -> Result<Self> {
+        if key.len() != key_size.key_length() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
                     "Invalid key length for {:?}: expected {} bytes, got {}",
-                    algorithm,
-                    algorithm.key_length(),
+                    key_size,
+                    key_size.key_length(),
                     key.len()
                 ),
             ));
         }
         Ok(Self {
             key: SensitiveBytes::new(key),
-            algorithm,
+            key_size,
         })
     }
 
-    /// Generates a new random key for the specified algorithm.
-    pub fn generate(algorithm: EncryptionAlgorithm) -> Self {
-        let mut key = vec![0u8; algorithm.key_length()];
+    /// Generates a new random key for the specified key size.
+    pub fn generate(key_size: AesKeySize) -> Self {
+        let mut key = vec![0u8; key_size.key_length()];
         OsRng.fill_bytes(&mut key);
         Self {
             key: SensitiveBytes::new(key),
-            algorithm,
+            key_size,
         }
     }
 
-    /// Returns the encryption algorithm for this key.
-    pub fn algorithm(&self) -> EncryptionAlgorithm {
-        self.algorithm
+    /// Returns the AES key size.
+    pub fn key_size(&self) -> AesKeySize {
+        self.key_size
     }
 
     /// Returns the key bytes.
@@ -187,30 +188,24 @@ impl SecureKey {
     }
 }
 
-enum CipherImpl {
-    Aes128Gcm(Aes128Gcm),
-}
-
-/// AES-GCM encryptor for encrypting and decrypting data.
-///
-/// The cipher is initialized once at construction time.
+/// AES-GCM cipher for encrypting and decrypting data.
 pub struct AesGcmCipher {
-    cipher: CipherImpl,
+    key: SensitiveBytes,
+    key_size: AesKeySize,
 }
 
 impl AesGcmCipher {
-    /// Creates a new encryptor with the specified key.
-    ///
-    /// The key schedule is expanded once here. The `aes` crate's `zeroize`
-    /// feature ensures the expanded key schedule is zeroed on drop.
+    /// AES-GCM nonce length in bytes (96 bits).
+    pub const NONCE_LEN: usize = 12;
+    /// AES-GCM authentication tag length in bytes (128 bits).
+    pub const TAG_LEN: usize = 16;
+
+    /// Creates a new cipher with the specified key.
     pub fn new(key: SecureKey) -> Self {
-        let cipher = match key.algorithm() {
-            EncryptionAlgorithm::Aes128Gcm => {
-                let aes_key = Key::<Aes128Gcm>::from_slice(key.as_bytes());
-                CipherImpl::Aes128Gcm(Aes128Gcm::new(aes_key))
-            }
-        };
-        Self { cipher }
+        Self {
+            key: SensitiveBytes::new(key.as_bytes()),
+            key_size: key.key_size(),
+        }
     }
 
     /// Encrypts data using AES-GCM.
@@ -223,8 +218,16 @@ impl AesGcmCipher {
     /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
     /// This matches the Java implementation format for compatibility.
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
-        match &self.cipher {
-            CipherImpl::Aes128Gcm(cipher) => self.encrypt_aes128_gcm(cipher, plaintext, aad),
+        match self.key_size {
+            AesKeySize::Bits128 => {
+                encrypt_aes_gcm::<Aes128Gcm>(self.key.as_bytes(), plaintext, aad)
+            }
+            AesKeySize::Bits192 => {
+                encrypt_aes_gcm::<Aes192Gcm>(self.key.as_bytes(), plaintext, aad)
+            }
+            AesKeySize::Bits256 => {
+                encrypt_aes_gcm::<Aes256Gcm>(self.key.as_bytes(), plaintext, aad)
+            }
         }
     }
 
@@ -237,87 +240,81 @@ impl AesGcmCipher {
     /// # Returns
     /// The decrypted plaintext.
     pub fn decrypt(&self, ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
-        const NONCE_LEN: usize = 12;
-        const TAG_LEN: usize = 16;
-
-        if ciphertext.len() < NONCE_LEN + TAG_LEN {
+        if ciphertext.len() < Self::NONCE_LEN + Self::TAG_LEN {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
                     "Ciphertext too short: expected at least {} bytes, got {}",
-                    NONCE_LEN + TAG_LEN,
+                    Self::NONCE_LEN + Self::TAG_LEN,
                     ciphertext.len()
                 ),
             ));
         }
 
-        let nonce = &ciphertext[..NONCE_LEN];
-        let encrypted_data = &ciphertext[NONCE_LEN..];
-        match &self.cipher {
-            CipherImpl::Aes128Gcm(cipher) => {
-                self.decrypt_aes128_gcm(cipher, nonce, encrypted_data, aad)
+        match self.key_size {
+            AesKeySize::Bits128 => {
+                decrypt_aes_gcm::<Aes128Gcm>(self.key.as_bytes(), ciphertext, aad)
+            }
+            AesKeySize::Bits192 => {
+                decrypt_aes_gcm::<Aes192Gcm>(self.key.as_bytes(), ciphertext, aad)
+            }
+            AesKeySize::Bits256 => {
+                decrypt_aes_gcm::<Aes256Gcm>(self.key.as_bytes(), ciphertext, aad)
             }
         }
     }
+}
 
-    fn encrypt_aes128_gcm(
-        &self,
-        cipher: &Aes128Gcm,
-        plaintext: &[u8],
-        aad: Option<&[u8]>,
-    ) -> Result<Vec<u8>> {
-        let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
+fn encrypt_aes_gcm<C>(key_bytes: &[u8], plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>>
+where C: Aead + AeadCore + KeyInit {
+    let cipher = C::new_from_slice(key_bytes).map_err(|e| {
+        Error::new(ErrorKind::DataInvalid, "Invalid AES key").with_source(anyhow::anyhow!(e))
+    })?;
+    let nonce = C::generate_nonce(&mut OsRng);
 
-        let ciphertext = if let Some(aad) = aad {
-            let payload = Payload {
-                msg: plaintext,
-                aad,
-            };
-            cipher.encrypt(&nonce, payload).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-128-GCM encryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        } else {
-            cipher.encrypt(&nonce, plaintext).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-128-GCM encryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        };
-
-        // Prepend nonce to ciphertext (Java compatible format)
-        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
-        result.extend_from_slice(&nonce);
-        result.extend_from_slice(&ciphertext);
-        Ok(result)
+    let ciphertext = if let Some(aad) = aad {
+        cipher.encrypt(&nonce, Payload {
+            msg: plaintext,
+            aad,
+        })
+    } else {
+        cipher.encrypt(&nonce, plaintext.as_ref())
     }
+    .map_err(|e| {
+        Error::new(ErrorKind::Unexpected, "AES-GCM encryption failed")
+            .with_source(anyhow::anyhow!(e))
+    })?;
 
-    fn decrypt_aes128_gcm(
-        &self,
-        cipher: &Aes128Gcm,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        aad: Option<&[u8]>,
-    ) -> Result<Vec<u8>> {
-        let nonce = Nonce::from_slice(nonce);
+    // Prepend nonce to ciphertext (Java compatible format)
+    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+    result.extend_from_slice(&nonce);
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
 
-        let plaintext = if let Some(aad) = aad {
-            let payload = Payload {
-                msg: ciphertext,
-                aad,
-            };
-            cipher.decrypt(nonce, payload).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-128-GCM decryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        } else {
-            cipher.decrypt(nonce, ciphertext).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "AES-128-GCM decryption failed")
-                    .with_source(anyhow::anyhow!(e))
-            })?
-        };
+fn decrypt_aes_gcm<C>(key_bytes: &[u8], ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>>
+where C: Aead + AeadCore + KeyInit {
+    let cipher = C::new_from_slice(key_bytes).map_err(|e| {
+        Error::new(ErrorKind::DataInvalid, "Invalid AES key").with_source(anyhow::anyhow!(e))
+    })?;
 
-        Ok(plaintext)
+    let nonce = Nonce::from_slice(&ciphertext[..AesGcmCipher::NONCE_LEN]);
+    let encrypted_data = &ciphertext[AesGcmCipher::NONCE_LEN..];
+
+    let plaintext = if let Some(aad) = aad {
+        cipher.decrypt(nonce, Payload {
+            msg: encrypted_data,
+            aad,
+        })
+    } else {
+        cipher.decrypt(nonce, encrypted_data)
     }
+    .map_err(|e| {
+        Error::new(ErrorKind::Unexpected, "AES-GCM decryption failed")
+            .with_source(anyhow::anyhow!(e))
+    })?;
+
+    Ok(plaintext)
 }
 
 #[cfg(test)]
@@ -325,88 +322,158 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encryption_algorithm() {
-        assert_eq!(EncryptionAlgorithm::Aes128Gcm.key_length(), 16);
-        assert_eq!(EncryptionAlgorithm::Aes128Gcm.nonce_length(), 12);
+    fn test_aes_key_size() {
+        assert_eq!(AesKeySize::Bits128.key_length(), 16);
+        assert_eq!(AesKeySize::Bits192.key_length(), 24);
+        assert_eq!(AesKeySize::Bits256.key_length(), 32);
 
         assert_eq!(
-            EncryptionAlgorithm::from_str("AES_GCM_128").unwrap(),
-            EncryptionAlgorithm::Aes128Gcm
+            AesKeySize::from_key_length(16).unwrap(),
+            AesKeySize::Bits128
         );
         assert_eq!(
-            EncryptionAlgorithm::from_str("AES128_GCM").unwrap(),
-            EncryptionAlgorithm::Aes128Gcm
+            AesKeySize::from_key_length(24).unwrap(),
+            AesKeySize::Bits192
         );
+        assert_eq!(
+            AesKeySize::from_key_length(32).unwrap(),
+            AesKeySize::Bits256
+        );
+        assert!(AesKeySize::from_key_length(8).is_err());
 
-        assert!(EncryptionAlgorithm::from_str("INVALID").is_err());
-        assert!(EncryptionAlgorithm::from_str("AES_GCM_256").is_err());
-        assert!(EncryptionAlgorithm::from_str("AES256_GCM").is_err());
-
-        assert_eq!(EncryptionAlgorithm::Aes128Gcm.as_str(), "AES_GCM_128");
+        assert_eq!(AesKeySize::from_str("128").unwrap(), AesKeySize::Bits128);
+        assert_eq!(
+            AesKeySize::from_str("AES_GCM_128").unwrap(),
+            AesKeySize::Bits128
+        );
+        assert_eq!(
+            AesKeySize::from_str("AES_GCM_256").unwrap(),
+            AesKeySize::Bits256
+        );
+        assert!(AesKeySize::from_str("INVALID").is_err());
     }
 
     #[test]
     fn test_secure_key() {
         // Test key generation
-        let key1 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
+        let key1 = SecureKey::generate(AesKeySize::Bits128);
         assert_eq!(key1.as_bytes().len(), 16);
-        assert_eq!(key1.algorithm(), EncryptionAlgorithm::Aes128Gcm);
+        assert_eq!(key1.key_size(), AesKeySize::Bits128);
 
         // Test key creation with validation
         let valid_key = [0u8; 16];
-        assert!(SecureKey::new(valid_key.as_slice(), EncryptionAlgorithm::Aes128Gcm).is_ok());
+        assert!(SecureKey::new(valid_key.as_slice(), AesKeySize::Bits128).is_ok());
 
         let invalid_key = [0u8; 32];
-        assert!(SecureKey::new(invalid_key.as_slice(), EncryptionAlgorithm::Aes128Gcm).is_err());
+        assert!(SecureKey::new(invalid_key.as_slice(), AesKeySize::Bits128).is_err());
     }
 
     #[test]
     fn test_aes128_gcm_encryption_roundtrip() {
-        let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmCipher::new(key);
+        let key = SecureKey::generate(AesKeySize::Bits128);
+        let cipher = AesGcmCipher::new(key);
 
         let plaintext = b"Hello, Iceberg encryption!";
         let aad = b"additional authenticated data";
 
         // Test without AAD
-        let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
+        let ciphertext = cipher.encrypt(plaintext, None).unwrap();
         assert!(ciphertext.len() > plaintext.len() + 12); // nonce + tag
         assert_ne!(&ciphertext[12..], plaintext); // encrypted portion differs
 
-        let decrypted = encryptor.decrypt(&ciphertext, None).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, None).unwrap();
         assert_eq!(decrypted, plaintext);
 
         // Test with AAD
-        let ciphertext = encryptor.encrypt(plaintext, Some(aad)).unwrap();
-        let decrypted = encryptor.decrypt(&ciphertext, Some(aad)).unwrap();
+        let ciphertext = cipher.encrypt(plaintext, Some(aad)).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, Some(aad)).unwrap();
         assert_eq!(decrypted, plaintext);
 
         // Test with wrong AAD fails
-        assert!(encryptor.decrypt(&ciphertext, Some(b"wrong aad")).is_err());
+        assert!(cipher.decrypt(&ciphertext, Some(b"wrong aad")).is_err());
+    }
+
+    #[test]
+    fn test_aes192_gcm_encryption_roundtrip() {
+        let key = SecureKey::generate(AesKeySize::Bits192);
+        let cipher = AesGcmCipher::new(key);
+
+        let plaintext = b"Hello, Iceberg encryption!";
+        let aad = b"additional authenticated data";
+
+        // Test without AAD
+        let ciphertext = cipher.encrypt(plaintext, None).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, None).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // Test with AAD
+        let ciphertext = cipher.encrypt(plaintext, Some(aad)).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, Some(aad)).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // Test with wrong AAD fails
+        assert!(cipher.decrypt(&ciphertext, Some(b"wrong aad")).is_err());
+    }
+
+    #[test]
+    fn test_aes256_gcm_encryption_roundtrip() {
+        let key = SecureKey::generate(AesKeySize::Bits256);
+        let cipher = AesGcmCipher::new(key);
+
+        let plaintext = b"Hello, Iceberg encryption!";
+        let aad = b"additional authenticated data";
+
+        // Test without AAD
+        let ciphertext = cipher.encrypt(plaintext, None).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, None).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // Test with AAD
+        let ciphertext = cipher.encrypt(plaintext, Some(aad)).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, Some(aad)).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // Test with wrong AAD fails
+        assert!(cipher.decrypt(&ciphertext, Some(b"wrong aad")).is_err());
+    }
+
+    #[test]
+    fn test_cross_key_size_incompatibility() {
+        let plaintext = b"Cross-key test";
+
+        let key128 = SecureKey::generate(AesKeySize::Bits128);
+        let key256 = SecureKey::generate(AesKeySize::Bits256);
+
+        let cipher128 = AesGcmCipher::new(key128);
+        let cipher256 = AesGcmCipher::new(key256);
+
+        // Ciphertext from 128-bit key should not decrypt with 256-bit key
+        let ciphertext = cipher128.encrypt(plaintext, None).unwrap();
+        assert!(cipher256.decrypt(&ciphertext, None).is_err());
     }
 
     #[test]
     fn test_encryption_with_empty_plaintext() {
-        let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmCipher::new(key);
+        let key = SecureKey::generate(AesKeySize::Bits128);
+        let cipher = AesGcmCipher::new(key);
 
         let plaintext = b"";
-        let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
+        let ciphertext = cipher.encrypt(plaintext, None).unwrap();
 
         // Even empty plaintext produces nonce + tag
         assert_eq!(ciphertext.len(), 12 + 16); // 12-byte nonce + 16-byte tag
 
-        let decrypted = encryptor.decrypt(&ciphertext, None).unwrap();
+        let decrypted = cipher.decrypt(&ciphertext, None).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
     fn test_decryption_with_tampered_ciphertext() {
-        let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmCipher::new(key);
+        let key = SecureKey::generate(AesKeySize::Bits128);
+        let cipher = AesGcmCipher::new(key);
 
         let plaintext = b"Sensitive data";
-        let mut ciphertext = encryptor.encrypt(plaintext, None).unwrap();
+        let mut ciphertext = cipher.encrypt(plaintext, None).unwrap();
 
         // Tamper with the encrypted portion (after the nonce)
         if ciphertext.len() > 12 {
@@ -414,21 +481,21 @@ mod tests {
         }
 
         // Decryption should fail due to authentication tag mismatch
-        assert!(encryptor.decrypt(&ciphertext, None).is_err());
+        assert!(cipher.decrypt(&ciphertext, None).is_err());
     }
 
     #[test]
     fn test_different_keys_produce_different_ciphertexts() {
-        let key1 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let key2 = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
+        let key1 = SecureKey::generate(AesKeySize::Bits128);
+        let key2 = SecureKey::generate(AesKeySize::Bits128);
 
-        let encryptor1 = AesGcmCipher::new(key1);
-        let encryptor2 = AesGcmCipher::new(key2);
+        let cipher1 = AesGcmCipher::new(key1);
+        let cipher2 = AesGcmCipher::new(key2);
 
         let plaintext = b"Same plaintext";
 
-        let ciphertext1 = encryptor1.encrypt(plaintext, None).unwrap();
-        let ciphertext2 = encryptor2.encrypt(plaintext, None).unwrap();
+        let ciphertext1 = cipher1.encrypt(plaintext, None).unwrap();
+        let ciphertext2 = cipher2.encrypt(plaintext, None).unwrap();
 
         // Different keys should produce different ciphertexts (comparing the encrypted portion)
         // Note: The nonces will also be different, but we're mainly interested in the encrypted data
@@ -438,11 +505,11 @@ mod tests {
     #[test]
     fn test_ciphertext_format_java_compatible() {
         // Test that our ciphertext format matches Java's: [12-byte nonce][ciphertext][16-byte tag]
-        let key = SecureKey::generate(EncryptionAlgorithm::Aes128Gcm);
-        let encryptor = AesGcmCipher::new(key);
+        let key = SecureKey::generate(AesKeySize::Bits128);
+        let cipher = AesGcmCipher::new(key);
 
         let plaintext = b"Test data";
-        let ciphertext = encryptor.encrypt(plaintext, None).unwrap();
+        let ciphertext = cipher.encrypt(plaintext, None).unwrap();
 
         // Format should be: [12-byte nonce][encrypted_data + 16-byte GCM tag]
         assert_eq!(
