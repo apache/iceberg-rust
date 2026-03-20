@@ -85,7 +85,10 @@ async fn test_add_field_with_memory_catalog() {
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .add_column(AddColumn::optional("a", Type::Primitive(PrimitiveType::Int)))
+        .add_column(AddColumn::optional(
+            "a",
+            Type::Primitive(PrimitiveType::Int),
+        ))
         .apply(tx)
         .unwrap();
 
@@ -109,12 +112,7 @@ async fn test_add_nested_and_delete_field_with_memory_catalog() {
         .add_column(AddColumn::optional(
             "info",
             Type::Struct(iceberg::spec::StructType::new(vec![
-                NestedField::optional(
-                    0,
-                    "city",
-                    Type::Primitive(PrimitiveType::String),
-                )
-                .into(),
+                NestedField::optional(0, "city", Type::Primitive(PrimitiveType::String)).into(),
             ])),
         ))
         .apply(tx)
