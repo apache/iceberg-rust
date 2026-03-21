@@ -36,7 +36,7 @@ iceberg = { path = "../../crates/iceberg" }
 iceberg-storage-opendal = { path = "../../crates/storage/opendal", features = ["opendal-all"] }
 pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
 iceberg-datafusion = { path = "../../crates/integrations/datafusion" }
-datafusion-ffi = { version = "52.1" }
+datafusion-ffi = { version = "52.3" }
 tokio = { version = "1.46.1", default-features = false }
 
 [profile.release]
