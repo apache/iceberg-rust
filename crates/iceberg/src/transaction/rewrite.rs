@@ -222,7 +222,11 @@ impl RewriteOperation {
         for entry in manifest.entries() {
             if entry.is_alive() && self.deleted_file_paths.contains(entry.file_path()) {
                 let mut deleted: ManifestEntry = (**entry).clone();
-                writer.add_delete_entry(deleted)?;
+                writer.add_delete_file(
+                    deleted.data_file.clone(),
+                    deleted.sequence_number.unwrap(),
+                    deleted.sequence_number
+                )?;
             } else {
                 let cloned: ManifestEntry = (**entry).clone();
                 writer.add_existing_entry(cloned)?;
