@@ -312,16 +312,16 @@ mod tests {
             .unwrap()
     }
 
-    pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
-        make_table_in_catalog(catalog, crate::spec::FormatVersion::V3).await
-    }
-
     pub(crate) async fn make_v1_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
         make_table_in_catalog(catalog, crate::spec::FormatVersion::V1).await
     }
 
     pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
         make_table_in_catalog(catalog, crate::spec::FormatVersion::V2).await
+    }
+
+    pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_table_in_catalog(catalog, crate::spec::FormatVersion::V3).await
     }
 
     /// Helper to create a minimal table with the given format version via a catalog.

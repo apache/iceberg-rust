@@ -946,45 +946,79 @@ mod tests {
     }
 
     /// Some manifests are above the threshold (kept), others below (compacted).
-    /// The kept manifests should be preserved, and the small ones merged.
+    /// The kept manifests should be preserved unchanged, and the small ones merged.
     #[tokio::test]
     async fn test_rewrite_manifests_mixed_large_and_small() {
         let catalog = new_test_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
-        // 4 appends → 4 manifests
-        let table = append_n_files(&catalog, table, 4).await;
-        assert_eq!(count_manifests(&table).await, 4);
+        // Step 1: Create a "large" manifest by compacting 3 files into one manifest.
+        let table = append_n_files(&catalog, table, 3).await;
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(count_manifests(&table).await, 1);
 
-        // Get manifest sizes to find a threshold that splits them
+        // Record the large manifest's path — it should survive the next compaction.
         let snapshot = table.metadata().current_snapshot().unwrap();
         let manifest_list = snapshot
             .load_manifest_list(table.file_io(), table.metadata())
             .await
             .unwrap();
-        let manifest_lengths: Vec<i64> = manifest_list
-            .entries()
-            .iter()
-            .map(|m| m.manifest_length)
-            .collect();
+        let large_manifest_path = manifest_list.entries()[0].manifest_path.clone();
+        let large_manifest_size = manifest_list.entries()[0].manifest_length;
 
-        // All test manifests are roughly the same size.
-        // Use max_length + 1 as threshold to force all into compaction,
-        // then verify they compact into 1.
-        let max_len = *manifest_lengths.iter().max().unwrap();
+        // Step 2: Append 2 more files with distinct names → 2 new small manifests.
+        let spec_id = table.metadata().default_partition_spec_id();
+        let mut table = table;
+        for i in 0..2 {
+            let file = test_data_file(
+                &format!("test/extra_{i}.parquet"),
+                spec_id,
+                (i as i64 + 10) * 100,
+            );
+            let tx = Transaction::new(&table);
+            let action = tx.fast_append().add_data_files(vec![file]);
+            let tx = action.apply(tx).unwrap();
+            table = tx.commit(&catalog).await.unwrap();
+        }
+        assert_eq!(count_manifests(&table).await, 3); // 1 large + 2 small
+
+        // Step 3: Compact with threshold = large manifest's size.
+        // The large manifest is at/above threshold → kept as-is.
+        // The 2 small manifests are below → compacted into 1.
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite_manifests()
-            .set_min_manifest_size_bytes((max_len + 1) as u64);
+            .set_min_manifest_size_bytes(u64::try_from(large_manifest_size).unwrap());
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
-        // All below threshold → compacted into 1
-        assert_eq!(count_manifests(&table).await, 1);
+        // Result: 2 manifests (1 kept large + 1 compacted from small)
+        assert_eq!(count_manifests(&table).await, 2);
 
-        // All 4 entries should still exist
+        // The large manifest should be the same object (unchanged path)
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let paths_after: Vec<&str> = manifest_list
+            .entries()
+            .iter()
+            .map(|m| m.manifest_path.as_str())
+            .collect();
+        assert!(
+            paths_after.contains(&large_manifest_path.as_str()),
+            "Large manifest should be preserved. Path: {large_manifest_path}, After: {paths_after:?}"
+        );
+
+        // All 5 files should still be alive
         let entries = collect_entries(&table).await;
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 5);
     }
 
     /// After a rewrite that deletes ALL files then adds replacements,
@@ -1660,5 +1694,74 @@ mod tests {
 
         let entries = collect_entries(&table).await;
         assert_eq!(entries.len(), 5, "V1: All files should survive rolling split");
+    }
+
+    // ========================================================================
+    // Negative / edge-case tests
+    // ========================================================================
+
+    /// target_manifest_size_bytes = 0 should produce one manifest per entry
+    /// (every entry exceeds a 0-byte target).
+    #[tokio::test]
+    async fn test_rewrite_manifests_zero_target_size() {
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_n_files(&catalog, table, 3).await;
+        assert_eq!(count_manifests(&table).await, 3);
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX)
+            .set_target_manifest_size_bytes(0);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // With target=0, every entry triggers a roll → at least 3 manifests
+        let manifest_count = count_manifests(&table).await;
+        assert!(
+            manifest_count >= 3,
+            "target_size=0 should produce at least one manifest per entry, got {manifest_count}"
+        );
+
+        // All files should still be alive
+        let entries = collect_entries(&table).await;
+        assert_eq!(entries.len(), 3);
+    }
+
+    /// min_manifest_size_bytes > target_manifest_size_bytes is a contradictory
+    /// configuration but should not panic. Large manifests are kept, small ones
+    /// are compacted into targets smaller than the threshold — the next
+    /// compaction run would re-compact them.
+    #[tokio::test]
+    async fn test_rewrite_manifests_min_larger_than_target() {
+        let catalog = new_test_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_n_files(&catalog, table, 4).await;
+        assert_eq!(count_manifests(&table).await, 4);
+
+        // min=MAX means all manifests are "small" → compacted.
+        // target=1 means rolling writer rolls after every entry.
+        // This is contradictory (output manifests will be smaller than min)
+        // but the operation should complete without panic.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_manifests()
+            .set_min_manifest_size_bytes(u64::MAX)
+            .set_target_manifest_size_bytes(1);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(
+            result.is_ok(),
+            "Contradictory config should not panic, got: {:?}",
+            result.err()
+        );
+
+        let table = result.unwrap();
+        let entries = collect_entries(&table).await;
+        assert_eq!(entries.len(), 4, "All files should survive");
     }
 }
