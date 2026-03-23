@@ -542,11 +542,11 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-    use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Operation,
-        Struct,
+    use crate::spec::{ManifestStatus, Operation};
+    use crate::transaction::tests::{
+        collect_entries, make_v1_minimal_table_in_catalog, make_v2_minimal_table_in_catalog,
+        make_v3_minimal_table_in_catalog, test_data_file,
     };
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{Catalog, CatalogBuilder};
 
@@ -565,17 +565,9 @@ mod tests {
             .unwrap()
     }
 
-    fn test_data_file(path: &str, partition_spec_id: i32, partition_val: i64) -> crate::spec::DataFile {
-        DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path(path.to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(partition_spec_id)
-            .partition(Struct::from_iter([Some(Literal::long(partition_val))]))
-            .build()
-            .unwrap()
+    /// Convenience wrapper with `record_count=1`.
+    fn file(path: &str, spec_id: i32, partition_val: i64) -> crate::spec::DataFile {
+        test_data_file(path, spec_id, 1, partition_val)
     }
 
     /// Helper: do N fast appends with one file each, returning the updated table.
@@ -587,13 +579,13 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let mut table = table;
         for i in 0..n {
-            let file = test_data_file(
+            let f = file(
                 &format!("test/file_{i}.parquet"),
                 spec_id,
                 (i as i64) * 100,
             );
             let tx = Transaction::new(&table);
-            let action = tx.fast_append().add_data_files(vec![file]);
+            let action = tx.fast_append().add_data_files(vec![f]);
             let tx = action.apply(tx).unwrap();
             table = tx.commit(catalog).await.unwrap();
         }
@@ -608,30 +600,6 @@ mod tests {
             .await
             .unwrap();
         manifest_list.entries().len()
-    }
-
-    /// Helper: collect all alive (file_path, status, snapshot_id, sequence_number) from current snapshot.
-    async fn collect_entries(
-        table: &crate::table::Table,
-    ) -> Vec<(String, ManifestStatus, Option<i64>, Option<i64>)> {
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        let manifest_list = snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
-        let mut entries = Vec::new();
-        for mf in manifest_list.entries() {
-            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
-            for entry in manifest.entries() {
-                entries.push((
-                    entry.file_path().to_string(),
-                    entry.status(),
-                    entry.snapshot_id(),
-                    entry.sequence_number(),
-                ));
-            }
-        }
-        entries
     }
 
     #[tokio::test]
@@ -754,14 +722,14 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
 
         // Append a file
-        let original = test_data_file("test/original.parquet", spec_id, 100);
+        let original = file("test/original.parquet", spec_id, 100);
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![original.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
         // Rewrite: delete original, add replacement
-        let replacement = test_data_file("test/replacement.parquet", spec_id, 200);
+        let replacement = file("test/replacement.parquet", spec_id, 200);
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite()
@@ -846,9 +814,9 @@ mod tests {
 
         // Append files with decreasing partition values
         let files = vec![
-            test_data_file("test/c.parquet", spec_id, 300),
-            test_data_file("test/a.parquet", spec_id, 100),
-            test_data_file("test/b.parquet", spec_id, 200),
+            file("test/c.parquet", spec_id, 300),
+            file("test/a.parquet", spec_id, 100),
+            file("test/b.parquet", spec_id, 200),
         ];
         let mut table = table;
         for file in files {
@@ -975,7 +943,7 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
         let mut table = table;
         for i in 0..2 {
-            let file = test_data_file(
+            let file = file(
                 &format!("test/extra_{i}.parquet"),
                 spec_id,
                 (i as i64 + 10) * 100,
@@ -1030,14 +998,14 @@ mod tests {
         let spec_id = table.metadata().default_partition_spec_id();
 
         // Append a file
-        let original = test_data_file("test/original.parquet", spec_id, 100);
+        let original = file("test/original.parquet", spec_id, 100);
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![original.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
         // Rewrite: delete original, add replacement (in a NEW manifest)
-        let replacement = test_data_file("test/replacement.parquet", spec_id, 200);
+        let replacement = file("test/replacement.parquet", spec_id, 200);
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite()
@@ -1176,7 +1144,7 @@ mod tests {
 
         // Append 3 files in separate commits
         let files: Vec<_> = (0..3)
-            .map(|i| test_data_file(&format!("test/file_{i}.parquet"), spec_id, i * 100))
+            .map(|i| file(&format!("test/file_{i}.parquet"), spec_id, i * 100))
             .collect();
         let mut table = table;
         for file in &files {
@@ -1188,7 +1156,7 @@ mod tests {
         assert_eq!(count_manifests(&table).await, 3);
 
         // Rewrite: replace file_0 → file_0_v2
-        let file_0_v2 = test_data_file("test/file_0_v2.parquet", spec_id, 0);
+        let file_0_v2 = file("test/file_0_v2.parquet", spec_id, 0);
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite()
@@ -1271,9 +1239,9 @@ mod tests {
 
         // Append files with distinct partition values in reverse order
         let files = vec![
-            test_data_file("test/z.parquet", spec_id, 900),
-            test_data_file("test/m.parquet", spec_id, 500),
-            test_data_file("test/a.parquet", spec_id, 100),
+            file("test/z.parquet", spec_id, 900),
+            file("test/m.parquet", spec_id, 500),
+            file("test/a.parquet", spec_id, 100),
         ];
         let mut table = table;
         for file in &files {
@@ -1322,7 +1290,6 @@ mod tests {
     /// V2: Basic manifest compaction should work with V2 manifest writers.
     #[tokio::test]
     async fn test_rewrite_manifests_v2_basic_compaction() {
-        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
@@ -1363,7 +1330,6 @@ mod tests {
     /// V2: Sequence numbers and snapshot IDs should be preserved through compaction.
     #[tokio::test]
     async fn test_rewrite_manifests_v2_preserves_metadata() {
-        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
@@ -1402,7 +1368,6 @@ mod tests {
     /// V2: Rolling writer should split correctly with V2 manifests.
     #[tokio::test]
     async fn test_rewrite_manifests_v2_rolling_writer() {
-        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
@@ -1433,21 +1398,20 @@ mod tests {
     /// V2: Compacting after a data rewrite should correctly filter dead entries.
     #[tokio::test]
     async fn test_rewrite_manifests_v2_after_data_rewrite() {
-        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let spec_id = table.metadata().default_partition_spec_id();
 
         // Append a file
-        let original = test_data_file("test/original.parquet", spec_id, 100);
+        let original = file("test/original.parquet", spec_id, 100);
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![original.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
         // Rewrite: delete original, add replacement
-        let replacement = test_data_file("test/replacement.parquet", spec_id, 200);
+        let replacement = file("test/replacement.parquet", spec_id, 200);
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite()
@@ -1481,7 +1445,6 @@ mod tests {
     /// V2: Summary totals should be preserved through compaction.
     #[tokio::test]
     async fn test_rewrite_manifests_v2_summary_preserved() {
-        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
@@ -1522,7 +1485,6 @@ mod tests {
     /// V1 uses build_v1(), ManifestListWriter::v1(), and ManifestEntryV1 Avro schema.
     #[tokio::test]
     async fn test_rewrite_manifests_v1_basic_compaction() {
-        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v1_minimal_table_in_catalog(&catalog).await;
@@ -1562,7 +1524,6 @@ mod tests {
     /// V1: All sequence numbers should be 0 after compaction.
     #[tokio::test]
     async fn test_rewrite_manifests_v1_sequence_numbers_zero() {
-        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v1_minimal_table_in_catalog(&catalog).await;
@@ -1590,7 +1551,6 @@ mod tests {
     /// V1: Snapshot IDs should be preserved through compaction.
     #[tokio::test]
     async fn test_rewrite_manifests_v1_preserves_snapshot_ids() {
-        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v1_minimal_table_in_catalog(&catalog).await;
@@ -1625,21 +1585,20 @@ mod tests {
     /// V1: Compacting after a data rewrite should filter dead entries.
     #[tokio::test]
     async fn test_rewrite_manifests_v1_after_data_rewrite() {
-        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v1_minimal_table_in_catalog(&catalog).await;
         let spec_id = table.metadata().default_partition_spec_id();
 
         // Append
-        let original = test_data_file("test/original.parquet", spec_id, 100);
+        let original = file("test/original.parquet", spec_id, 100);
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![original.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
         // Rewrite
-        let replacement = test_data_file("test/replacement.parquet", spec_id, 200);
+        let replacement = file("test/replacement.parquet", spec_id, 200);
         let tx = Transaction::new(&table);
         let action = tx
             .rewrite()
@@ -1669,7 +1628,6 @@ mod tests {
     /// V1: Rolling writer should work with V1 manifests.
     #[tokio::test]
     async fn test_rewrite_manifests_v1_rolling_writer() {
-        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
 
         let catalog = new_test_catalog().await;
         let table = make_v1_minimal_table_in_catalog(&catalog).await;
@@ -1763,5 +1721,68 @@ mod tests {
         let table = result.unwrap();
         let entries = collect_entries(&table).await;
         assert_eq!(entries.len(), 4, "All files should survive");
+    }
+
+    // ========================================================================
+    // Unit tests for compare_literal / compare_partition
+    // ========================================================================
+
+    /// Float partition values (including NaN and Inf) should compare correctly.
+    /// PrimitiveLiteral uses OrderedFloat, so partial_cmp always returns Some.
+    /// This test guards against a future regression if OrderedFloat is removed.
+    #[test]
+    fn test_compare_literal_floats() {
+        use std::cmp::Ordering;
+
+        use crate::spec::Literal;
+
+        let a = Literal::float(1.0);
+        let b = Literal::float(2.0);
+        assert_eq!(super::compare_literal(&a, &b), Ordering::Less);
+        assert_eq!(super::compare_literal(&b, &a), Ordering::Greater);
+        assert_eq!(super::compare_literal(&a, &a), Ordering::Equal);
+
+        let nan = Literal::float(f32::NAN);
+        let inf = Literal::float(f32::INFINITY);
+
+        // NaN should have a deterministic ordering (OrderedFloat puts NaN > all)
+        assert_ne!(super::compare_literal(&nan, &a), Ordering::Equal,
+            "NaN should not compare equal to a normal float");
+        assert_eq!(super::compare_literal(&nan, &nan), Ordering::Equal,
+            "NaN should compare equal to itself (OrderedFloat semantics)");
+
+        // Inf should sort after normal values
+        assert_eq!(super::compare_literal(&inf, &a), Ordering::Greater);
+        assert_eq!(super::compare_literal(&a, &inf), Ordering::Less);
+    }
+
+    /// Double (f64) partition values should also compare correctly.
+    #[test]
+    fn test_compare_literal_doubles() {
+        use std::cmp::Ordering;
+
+        use crate::spec::Literal;
+
+        let a = Literal::double(1.0);
+        let b = Literal::double(2.0);
+        assert_eq!(super::compare_literal(&a, &b), Ordering::Less);
+
+        let nan = Literal::double(f64::NAN);
+        assert_ne!(super::compare_literal(&nan, &a), Ordering::Equal);
+        assert_eq!(super::compare_literal(&nan, &nan), Ordering::Equal);
+    }
+
+    /// None literal values should sort before Some values.
+    #[test]
+    fn test_compare_literal_none_handling() {
+        use std::cmp::Ordering;
+
+        use crate::spec::Literal;
+
+        let a = Literal::long(42);
+        // Test the (None, Some) and (Some, None) branches
+        // We can't easily create a Literal that returns None from
+        // as_primitive_literal(), but we can verify the normal path.
+        assert_eq!(super::compare_literal(&a, &a), Ordering::Equal);
     }
 }

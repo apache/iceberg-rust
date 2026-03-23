@@ -250,7 +250,10 @@ mod tests {
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Struct,
+        TableMetadata,
+    };
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
@@ -362,6 +365,55 @@ mod tests {
             .create_table(table_ident.namespace(), table_creation)
             .await
             .unwrap()
+    }
+
+    /// Create a test data file with the given parameters.
+    ///
+    /// This is the single shared helper used by both `rewrite::tests` and
+    /// `rewrite_manifest::tests` to avoid duplicated builder code.
+    pub(crate) fn test_data_file(
+        path: &str,
+        partition_spec_id: i32,
+        record_count: u64,
+        partition_val: i64,
+    ) -> crate::spec::DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(record_count)
+            .partition_spec_id(partition_spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(partition_val))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Collect all `(file_path, status, snapshot_id, sequence_number)` entries
+    /// from the current snapshot's manifests.
+    ///
+    /// Shared between `rewrite::tests` and `rewrite_manifest::tests`.
+    pub(crate) async fn collect_entries(
+        table: &Table,
+    ) -> Vec<(String, ManifestStatus, Option<i64>, Option<i64>)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                entries.push((
+                    entry.file_path().to_string(),
+                    entry.status(),
+                    entry.snapshot_id(),
+                    entry.sequence_number(),
+                ));
+            }
+        }
+        entries
     }
 
     /// Helper function to create a test table with retry properties
