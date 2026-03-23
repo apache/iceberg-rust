@@ -313,6 +313,25 @@ mod tests {
     }
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_table_in_catalog(catalog, crate::spec::FormatVersion::V3).await
+    }
+
+    pub(crate) async fn make_v1_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_table_in_catalog(catalog, crate::spec::FormatVersion::V1).await
+    }
+
+    pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_table_in_catalog(catalog, crate::spec::FormatVersion::V2).await
+    }
+
+    /// Helper to create a minimal table with the given format version via a catalog.
+    ///
+    /// Uses the V2 minimal metadata as a template for schema/partition/sort-order,
+    /// which is compatible across all format versions.
+    async fn make_table_in_catalog(
+        catalog: &impl Catalog,
+        format_version: crate::spec::FormatVersion,
+    ) -> Table {
         let table_ident =
             TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
                 .unwrap();
@@ -325,7 +344,7 @@ mod tests {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidMinimal.json"
+            "TableMetadataV2ValidMinimal.json"
         ))
         .unwrap();
         let reader = BufReader::new(file);
@@ -336,7 +355,7 @@ mod tests {
             .partition_spec((**base_metadata.default_partition_spec()).clone())
             .sort_order((**base_metadata.default_sort_order()).clone())
             .name(table_ident.name().to_string())
-            .format_version(crate::spec::FormatVersion::V3)
+            .format_version(format_version)
             .build();
 
         catalog

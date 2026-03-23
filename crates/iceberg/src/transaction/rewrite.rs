@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -5,6 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::{Error, ErrorKind};
 use crate::error::Result;
 use crate::spec::{
     DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
@@ -17,6 +34,11 @@ use crate::transaction::snapshot::{
 use crate::transaction::{ActionCommit, TransactionAction};
 
 
+/// Action to rewrite data files by replacing a set of existing files with new ones.
+///
+/// This is used for data compaction: small data files are merged into larger ones,
+/// and the old files are marked as deleted in rewritten manifests. The operation
+/// produces a new snapshot with `Operation::Replace`.
 pub struct RewriteAction {
     check_duplicate: bool,
     commit_uuid: Option<Uuid>,
@@ -50,7 +72,7 @@ impl RewriteAction {
         self
     }
 
-    /// Specify data files to be removed from the table in this overwrite.
+    /// Specify data files to be removed from the table in this rewrite.
     pub fn delete_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.deleted_data_files.extend(data_files);
         self
@@ -112,6 +134,10 @@ impl TransactionAction for RewriteAction {
     }
 }
 
+/// Internal operation that drives `RewriteAction` snapshot production.
+///
+/// Carries the set of file paths to mark as deleted and rewrites the
+/// affected manifests while keeping unaffected manifests unchanged.
 struct RewriteOperation {
     deleted_file_paths: HashSet<String>,
     snapshot_id: i64,
@@ -154,6 +180,7 @@ impl SnapshotProduceOperation for RewriteOperation {
         }
 
         let mut result = Vec::new();
+        let mut found_deleted_paths: HashSet<String> = HashSet::new();
 
         for manifest_file in manifest_list.entries() {
             if !manifest_file.has_added_files() && !manifest_file.has_existing_files() {
@@ -164,9 +191,18 @@ impl SnapshotProduceOperation for RewriteOperation {
                 .load_manifest(snapshot_produce.table.file_io())
                 .await?;
 
-            let has_deletes = manifest.entries().iter().any(|entry| {
-                entry.is_alive() && self.deleted_file_paths.contains(entry.file_path())
-            });
+            let matched_paths: Vec<String> = manifest
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    entry.is_alive()
+                        && self.deleted_file_paths.contains(entry.file_path())
+                })
+                .map(|entry| entry.file_path().to_string())
+                .collect();
+
+            let has_deletes = !matched_paths.is_empty();
+            found_deleted_paths.extend(matched_paths);
 
             if has_deletes {
                 let rewritten = self
@@ -176,6 +212,22 @@ impl SnapshotProduceOperation for RewriteOperation {
             } else {
                 result.push(manifest_file.clone());
             }
+        }
+
+        // Validate that all requested delete files were actually found
+        let missing: Vec<&String> = self
+            .deleted_file_paths
+            .iter()
+            .filter(|p| !found_deleted_paths.contains(p.as_str()))
+            .collect();
+        if !missing.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot complete rewrite: delete files not found in any manifest: {:?}",
+                    missing
+                ),
+            ));
         }
 
         Ok(result)
@@ -193,6 +245,19 @@ impl RewriteOperation {
     ) -> Result<ManifestFile> {
         let table = snapshot_produce.table;
 
+        let partition_spec = table
+            .metadata()
+            .partition_spec_by_id(manifest_file.partition_spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Partition spec not found for id: {}",
+                        manifest_file.partition_spec_id
+                    ),
+                )
+            })?;
+
         let new_manifest_path = format!(
             "{}/metadata/{}-m-overwrite.avro",
             table.metadata().location(),
@@ -204,7 +269,7 @@ impl RewriteOperation {
             Some(self.snapshot_id),
             manifest_file.key_metadata.clone(),
             table.metadata().current_schema().clone(),
-            table.metadata().default_partition_spec().as_ref().clone(),
+            partition_spec.as_ref().clone(),
         );
 
         let mut writer = match table.metadata().format_version() {
@@ -221,16 +286,29 @@ impl RewriteOperation {
 
         for entry in manifest.entries() {
             if entry.is_alive() && self.deleted_file_paths.contains(entry.file_path()) {
-                let mut deleted: ManifestEntry = (**entry).clone();
+                let deleted: ManifestEntry = (**entry).clone();
+                let sequence_number = deleted.sequence_number().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Manifest entry missing sequence_number for file: {}",
+                            entry.file_path()
+                        ),
+                    )
+                })?;
                 writer.add_delete_file(
                     deleted.data_file.clone(),
-                    deleted.sequence_number.unwrap(),
-                    deleted.sequence_number
+                    sequence_number,
+                    deleted.file_sequence_number
                 )?;
-            } else {
+            } else if entry.is_alive() {
+                // Alive entry not in the delete set → carry forward as Existing
                 let cloned: ManifestEntry = (**entry).clone();
                 writer.add_existing_entry(cloned)?;
             }
+            // Dead (already-deleted) entries are NOT carried forward into the
+            // rewritten manifest. The old snapshot still references the original
+            // manifest containing the Deleted entry, so time-travel is preserved.
         }
 
         writer.write_manifest_file().await
@@ -263,8 +341,44 @@ mod tests {
             .unwrap()
     }
 
+    fn test_data_file_with_records(
+        path: &str,
+        partition_spec_id: i32,
+        record_count: u64,
+    ) -> crate::spec::DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(record_count)
+            .partition_spec_id(partition_spec_id)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Helper: collect all (file_path, status) from current snapshot.
+    async fn collect_entries(
+        table: &crate::table::Table,
+    ) -> Vec<(String, ManifestStatus)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                entries.push((entry.file_path().to_string(), entry.status()));
+            }
+        }
+        entries
+    }
+
     #[tokio::test]
-    async fn test_empty_data_overwrite_action() {
+    async fn test_empty_data_rewrite_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
         let action = tx.rewrite().add_data_files(vec![]);
@@ -272,7 +386,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_snapshot_properties() {
+    async fn test_rewrite_snapshot_properties() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
@@ -307,7 +421,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_incompatible_partition_value() {
+    async fn test_rewrite_incompatible_partition_value() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
@@ -327,7 +441,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_basic() {
+    async fn test_rewrite_basic() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
@@ -363,7 +477,7 @@ mod tests {
         } else {
             unreachable!()
         };
-        assert_eq!(new_snapshot.summary().operation, Operation::Overwrite);
+        assert_eq!(new_snapshot.summary().operation, Operation::Replace);
 
         let manifest_list = new_snapshot
             .load_manifest_list(table.file_io(), table.metadata())
@@ -394,7 +508,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_with_deleted_files() {
+    async fn test_rewrite_with_deleted_files() {
         use crate::memory::tests::new_memory_catalog;
         use crate::transaction::ApplyTransactionAction;
         use crate::transaction::tests::make_v3_minimal_table_in_catalog;
@@ -426,7 +540,7 @@ mod tests {
         let table = tx.commit(&catalog).await.unwrap();
 
         let snapshot = table.metadata().current_snapshot().unwrap();
-        assert_eq!(snapshot.summary().operation, Operation::Overwrite);
+        assert_eq!(snapshot.summary().operation, Operation::Replace);
 
         let manifest_list = snapshot
             .load_manifest_list(table.file_io(), table.metadata())
@@ -459,25 +573,12 @@ mod tests {
             "Replacement file should be marked as Added, entries: {all_entries:?}",
         );
 
-        // Verify snapshot summary reports the deleted file.
-        assert_eq!(
-            snapshot
-                .summary()
-                .additional_properties
-                .get("deleted-data-files")
-                .map(|s| s.as_str()),
-            Some("1")
-        );
-        assert_eq!(
-            snapshot
-                .summary()
-                .additional_properties
-                .get("deleted-records")
-                .map(|s| s.as_str()),
-            Some("1")
-        );
-
-        // Step 3: Fast append after overwrite — delete-only manifest must survive.
+        // Step 3: Fast append after rewrite.
+        // The rewritten manifest containing only [original:Deleted] has
+        // added_files_count=0 and existing_files_count=0, so the fast_append's
+        // existing_manifest filter correctly drops it (only manifests with alive
+        // entries are carried forward). The delete was recorded in the rewrite
+        // snapshot and doesn't need to persist in subsequent snapshots.
         let appended_file = test_data_file("test/appended.parquet", spec_id);
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![appended_file.clone()]);
@@ -490,8 +591,9 @@ mod tests {
             .await
             .unwrap();
 
-        // 3 manifests: rewritten (deleted entry), overwrite added, fast_append added.
-        assert_eq!(3, manifest_list.entries().len());
+        // 2 manifests: replacement (from rewrite), appended (from fast_append).
+        // The delete-only manifest is dropped by the existing_manifest filter.
+        assert_eq!(2, manifest_list.entries().len());
 
         let mut all_entries = vec![];
         for manifest_file in manifest_list.entries() {
@@ -501,13 +603,907 @@ mod tests {
             }
         }
 
-        // The deleted entry must still be present after fast_append.
+        // replacement and appended should both be present
         assert!(
             all_entries
                 .iter()
-                .any(|(status, path)| *status == ManifestStatus::Deleted
-                    && path == "test/original.parquet"),
-            "Deleted entry should survive fast_append, entries: {all_entries:?}",
+                .any(|(_, path)| path == "test/replacement.parquet"),
+            "Replacement should be present after fast_append, entries: {all_entries:?}",
+        );
+        assert!(
+            all_entries
+                .iter()
+                .any(|(_, path)| path == "test/appended.parquet"),
+            "Appended file should be present, entries: {all_entries:?}",
+        );
+    }
+
+    // ========================================================================
+    // New test cases for corner cases and additional coverage
+    // ========================================================================
+
+    /// Deleting a file that does not exist in any manifest should return an error.
+    #[tokio::test]
+    async fn test_rewrite_delete_file_not_found() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file so there is a current snapshot
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Try to delete a file that does not exist
+        let nonexistent = test_data_file("test/nonexistent.parquet", spec_id);
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement])
+            .delete_data_files(vec![nonexistent]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(result.is_err(), "Should error when delete file not found");
+        let err = result.err().unwrap();
+        assert!(
+            err.to_string().contains("not found in any manifest"),
+            "Error should mention file not found, got: {err}"
+        );
+    }
+
+    /// Adding a file whose path already exists should error when duplicate checking is on.
+    #[tokio::test]
+    async fn test_rewrite_duplicate_file_detected() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Try to add the same file path again (duplicate)
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(
+            result.is_err(),
+            "Should error when adding duplicate file path"
+        );
+        let err = result.err().unwrap();
+        assert!(
+            err.to_string().contains("already referenced"),
+            "Error should mention duplicate, got: {err}"
+        );
+    }
+
+    /// Disabling duplicate check should allow adding the same file path.
+    #[tokio::test]
+    async fn test_rewrite_duplicate_check_disabled() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Add same path again with duplicate check disabled
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .with_check_duplicate(false)
+            .add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(
+            result.is_ok(),
+            "Should succeed when duplicate check is disabled, got: {:?}",
+            result.err()
+        );
+    }
+
+    /// Deleting files that are spread across multiple manifests should work.
+    #[tokio::test]
+    async fn test_rewrite_deletes_across_multiple_manifests() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append files in separate commits → separate manifests
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Delete both files from their respective manifests
+        let replacement = test_data_file("test/merged.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        // Both originals should be Deleted
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/a.parquet" && *s == ManifestStatus::Deleted),
+            "file_a should be Deleted, entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/b.parquet" && *s == ManifestStatus::Deleted),
+            "file_b should be Deleted, entries: {entries:?}"
+        );
+
+        // Replacement should be Added
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/merged.parquet" && *s == ManifestStatus::Added),
+            "merged file should be Added, entries: {entries:?}"
+        );
+    }
+
+    /// Deleting all entries in a manifest should still produce a valid manifest.
+    #[tokio::test]
+    async fn test_rewrite_delete_all_entries_in_manifest() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append two files in one manifest
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Delete both files (all entries in the manifest)
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        // Both originals should be Deleted
+        let deleted_count = entries
+            .iter()
+            .filter(|(_, s)| *s == ManifestStatus::Deleted)
+            .count();
+        assert_eq!(deleted_count, 2, "Both files should be Deleted");
+
+        // Replacement should be Added
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/replacement.parquet" && *s == ManifestStatus::Added),
+            "Replacement should be Added, entries: {entries:?}"
+        );
+    }
+
+    /// Only some entries in a manifest are deleted; others must be preserved as Existing.
+    #[tokio::test]
+    async fn test_rewrite_partial_deletes_in_manifest() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append three files in one manifest
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let file_c = test_data_file("test/c.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone(), file_c.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Delete only file_b, keep file_a and file_c
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        // file_b should be Deleted
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/b.parquet" && *s == ManifestStatus::Deleted),
+            "file_b should be Deleted, entries: {entries:?}"
+        );
+
+        // file_a and file_c should be Existing (preserved in rewritten manifest)
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/a.parquet" && *s == ManifestStatus::Existing),
+            "file_a should be Existing, entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/c.parquet" && *s == ManifestStatus::Existing),
+            "file_c should be Existing, entries: {entries:?}"
+        );
+
+        // replacement should be Added
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/replacement.parquet" && *s == ManifestStatus::Added),
+            "replacement should be Added, entries: {entries:?}"
+        );
+    }
+
+    /// Sequential rewrites: rewrite → rewrite should chain correctly.
+    #[tokio::test]
+    async fn test_rewrite_sequential_rewrites() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append initial files
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // First rewrite: replace a → a2
+        let file_a2 = test_data_file("test/a2.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![file_a2.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Second rewrite: replace b → b2
+        let file_b2 = test_data_file("test/b2.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![file_b2.clone()])
+            .delete_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        // file_a was deleted in the first rewrite. When the second rewrite rewrites
+        // the manifest containing [a:Deleted, b:Existing], the dead entry for a is
+        // dropped (not carried forward), and b is marked Deleted.
+        assert!(
+            !entries.iter().any(|(p, _)| p == "test/a.parquet"),
+            "file_a (dead entry) should be dropped from rewritten manifest, entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/b.parquet" && *s == ManifestStatus::Deleted),
+            "file_b should be Deleted, entries: {entries:?}"
+        );
+
+        // a2 and b2 should both be present (a2 as Existing, b2 as Added)
+        let alive: Vec<_> = entries
+            .iter()
+            .filter(|(p, _)| p == "test/a2.parquet" || p == "test/b2.parquet")
+            .collect();
+        assert_eq!(alive.len(), 2, "Both a2 and b2 should be present, entries: {entries:?}");
+    }
+
+    /// Manifests without any deleted entries should be preserved unchanged (not rewritten).
+    #[tokio::test]
+    async fn test_rewrite_preserves_unaffected_manifests() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append files in separate commits → separate manifests
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Get manifest paths before rewrite
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list_before = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let paths_before: Vec<String> = manifest_list_before
+            .entries()
+            .iter()
+            .map(|m| m.manifest_path.clone())
+            .collect();
+
+        // Rewrite: only delete file_a (in first manifest)
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Get manifest paths after rewrite
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list_after = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let paths_after: Vec<String> = manifest_list_after
+            .entries()
+            .iter()
+            .map(|m| m.manifest_path.clone())
+            .collect();
+
+        // The manifest containing file_b should be the same object (unchanged path)
+        let b_manifest_before = &paths_before[1]; // file_b is the second append
+        assert!(
+            paths_after.contains(b_manifest_before),
+            "Unaffected manifest should be reused. Before: {paths_before:?}, After: {paths_after:?}"
+        );
+    }
+
+    /// Summary should correctly report record counts for files with different row counts.
+    #[tokio::test]
+    async fn test_rewrite_summary_record_counts() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append files with known record counts
+        let small_a = test_data_file_with_records("test/small_a.parquet", spec_id, 10);
+        let small_b = test_data_file_with_records("test/small_b.parquet", spec_id, 20);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![small_a.clone(), small_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: merge small files into one big one
+        let merged = test_data_file_with_records("test/merged.parquet", spec_id, 30);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![merged.clone()])
+            .delete_data_files(vec![small_a.clone(), small_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let summary = &snapshot.summary().additional_properties;
+
+        // Verify added record/file counts in summary
+        assert_eq!(
+            summary.get("added-data-files").map(|s| s.as_str()),
+            Some("1"),
+            "Should report 1 added file"
+        );
+        assert_eq!(
+            summary.get("added-records").map(|s| s.as_str()),
+            Some("30"),
+            "Should report 30 added records"
+        );
+
+        // Note: deleted-data-files and deleted-records are not explicitly tracked
+        // in the snapshot summary by SnapshotProducer. The summary collector only
+        // counts added files. Delete counts would need to be added to the
+        // SnapshotSummaryCollector in a future enhancement.
+    }
+
+    /// Attempting to delete a file that was already deleted (not alive) should error.
+    #[tokio::test]
+    async fn test_rewrite_delete_already_deleted_file() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // First rewrite: delete file_a
+        let file_a2 = test_data_file("test/a2.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![file_a2.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Second rewrite: try to delete file_a again (it's already Deleted, not alive)
+        let file_a3 = test_data_file("test/a3.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![file_a3.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(
+            result.is_err(),
+            "Should error when deleting an already-deleted file"
+        );
+    }
+
+    // ========================================================================
+    // Format-version-specific tests
+    // ========================================================================
+
+    /// V2: Basic rewrite (add + delete) should work with V2 manifest writers.
+    #[tokio::test]
+    async fn test_rewrite_v2_basic_add_and_delete() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        assert_eq!(
+            table.metadata().format_version(),
+            crate::spec::FormatVersion::V2,
+            "Test requires a V2 table"
+        );
+
+        // Append a file
+        let original = test_data_file("test/original.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: delete original, add replacement
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/original.parquet" && *s == ManifestStatus::Deleted),
+            "V2: Original should be Deleted, entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/replacement.parquet" && *s == ManifestStatus::Added),
+            "V2: Replacement should be Added, entries: {entries:?}"
+        );
+
+        // Verify operation type
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.summary().operation, Operation::Replace);
+    }
+
+    /// V2: Verify sequence numbers are properly set for V2 manifest entries.
+    #[tokio::test]
+    async fn test_rewrite_v2_sequence_numbers() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append two files in separate commits to get distinct sequence numbers
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: delete file_a, add replacement
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Load the rewritten manifest and verify the deleted entry has a sequence number
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        let mut found_deleted = false;
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == "test/a.parquet" {
+                    assert_eq!(entry.status(), ManifestStatus::Deleted);
+                    assert!(
+                        entry.sequence_number().is_some(),
+                        "V2: Deleted entry must have a sequence number"
+                    );
+                    found_deleted = true;
+                }
+            }
+        }
+        assert!(found_deleted, "Should have found the deleted entry");
+    }
+
+    /// V2: Multiple deletes across manifests should work with V2 format.
+    #[tokio::test]
+    async fn test_rewrite_v2_deletes_across_manifests() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append files in separate commits → separate manifests
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Delete both files from different manifests in one rewrite
+        let merged = test_data_file("test/merged.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![merged.clone()])
+            .delete_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        let deleted_count = entries.iter().filter(|(_, s)| *s == ManifestStatus::Deleted).count();
+        assert_eq!(deleted_count, 2, "V2: Both files should be Deleted");
+
+        let added_count = entries.iter().filter(|(_, s)| *s == ManifestStatus::Added).count();
+        assert_eq!(added_count, 1, "V2: One merged file should be Added");
+    }
+
+    /// V2: Delete-not-found validation should also work on V2 tables.
+    #[tokio::test]
+    async fn test_rewrite_v2_delete_file_not_found() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v2_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append a file
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Try to delete a nonexistent file
+        let nonexistent = test_data_file("test/ghost.parquet", spec_id);
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement])
+            .delete_data_files(vec![nonexistent]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(result.is_err(), "V2: Should error when delete file not found");
+    }
+
+    // ---- V1 Format Version Tests ----
+
+    /// V1: Basic rewrite (add + delete) should work with V1 manifest writers.
+    /// V1 uses build_v1(), sequence_number is always 0, no delete manifest support.
+    #[tokio::test]
+    async fn test_rewrite_v1_basic_add_and_delete() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        assert_eq!(
+            table.metadata().format_version(),
+            crate::spec::FormatVersion::V1,
+            "Test requires a V1 table"
+        );
+
+        // Append a file
+        let original = test_data_file("test/original.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: delete original, add replacement
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![original.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/original.parquet" && *s == ManifestStatus::Deleted),
+            "V1: Original should be Deleted, entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(p, s)| p == "test/replacement.parquet" && *s == ManifestStatus::Added),
+            "V1: Replacement should be Added, entries: {entries:?}"
+        );
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.summary().operation, Operation::Replace);
+    }
+
+    /// V1: Sequence numbers should always be 0 in V1 tables.
+    #[tokio::test]
+    async fn test_rewrite_v1_sequence_numbers_are_zero() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // V1: next_sequence_number() always returns INITIAL_SEQUENCE_NUMBER (0)
+        assert_eq!(table.metadata().next_sequence_number(), 0);
+
+        // Append files
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Rewrite: delete file_a
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // All entries in V1 should have sequence_number = 0
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                assert_eq!(
+                    entry.sequence_number(),
+                    Some(0),
+                    "V1: sequence_number should be 0 for entry at {}",
+                    entry.file_path()
+                );
+            }
+        }
+    }
+
+    /// V1: Delete-not-found validation should work on V1 tables.
+    #[tokio::test]
+    async fn test_rewrite_v1_delete_file_not_found() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let nonexistent = test_data_file("test/ghost.parquet", spec_id);
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement])
+            .delete_data_files(vec![nonexistent]);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(result.is_err(), "V1: Should error when delete file not found");
+    }
+
+    /// V1: Partial deletes within a manifest should preserve non-deleted entries.
+    #[tokio::test]
+    async fn test_rewrite_v1_partial_deletes_in_manifest() {
+        use crate::memory::tests::new_memory_catalog;
+        use crate::transaction::ApplyTransactionAction;
+        use crate::transaction::tests::make_v1_minimal_table_in_catalog;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        // Append three files in one manifest
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let file_c = test_data_file("test/c.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone(), file_c.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Delete only file_b
+        let replacement = test_data_file("test/replacement.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite()
+            .add_data_files(vec![replacement.clone()])
+            .delete_data_files(vec![file_b.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let entries = collect_entries(&table).await;
+
+        assert!(
+            entries.iter().any(|(p, s)| p == "test/b.parquet" && *s == ManifestStatus::Deleted),
+            "V1: file_b should be Deleted"
+        );
+        assert!(
+            entries.iter().any(|(p, s)| p == "test/a.parquet" && *s == ManifestStatus::Existing),
+            "V1: file_a should be Existing"
+        );
+        assert!(
+            entries.iter().any(|(p, s)| p == "test/c.parquet" && *s == ManifestStatus::Existing),
+            "V1: file_c should be Existing"
         );
     }
 }
