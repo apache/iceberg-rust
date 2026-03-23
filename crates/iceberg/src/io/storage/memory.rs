@@ -565,7 +565,7 @@ mod tests {
     fn test_memory_storage_factory() {
         let factory = MemoryStorageFactory;
         let config = StorageConfig::new();
-        let storage = factory.build(&config).unwrap();
+        let storage = factory.build(&config, None).unwrap();
 
         // Verify we got a valid storage instance
         assert!(format!("{storage:?}").contains("MemoryStorage"));
@@ -583,7 +583,7 @@ mod tests {
 
         // Verify the deserialized factory works
         let config = StorageConfig::new();
-        let storage = deserialized.build(&config).unwrap();
+        let storage = deserialized.build(&config, None).unwrap();
         assert!(format!("{storage:?}").contains("MemoryStorage"));
     }
 

@@ -529,7 +529,7 @@ mod tests {
     fn test_local_fs_storage_factory() {
         let factory = LocalFsStorageFactory;
         let config = StorageConfig::new();
-        let storage = factory.build(&config).unwrap();
+        let storage = factory.build(&config, None).unwrap();
 
         // Verify we got a valid storage instance
         assert!(format!("{storage:?}").contains("LocalFsStorage"));
