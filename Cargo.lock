@@ -2239,9 +2239,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "52.2.0"
+version = "52.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15d28510abfc85709578fcf9065325d43ee3303012c0ccec2dce351bdc577d00"
+checksum = "25f2e5519037772210eee5bb87a95dc953e1bd94bc2f9c9d6bb14b0c7fb9ab0a"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2280,9 +2280,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "52.2.0"
+version = "52.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccb859e97759dcbff66b484bdf4f251f9a76784d3dd7883c124de57510b1e1c2"
+checksum = "74e697441492ce35353b07842181f0f92765c5d6ac1daaead4974ecf20058247"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2306,9 +2306,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "52.2.0"
+version = "52.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "199790fd96e852997b30da4ff11109378c944841757d93875ea85fc69587ec91"
+checksum = "fe00df31ca03a167d3e40054120930fe5fb689e66bc625b602fac7153b222aea"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -4918,7 +4918,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -4937,7 +4937,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn",
