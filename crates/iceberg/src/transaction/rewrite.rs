@@ -256,7 +256,7 @@ impl RewriteOperation {
             })?;
 
         let new_manifest_path = format!(
-            "{}/metadata/{}-m-overwrite.avro",
+            "{}/metadata/{}-m-rewrite.avro",
             table.metadata().location(),
             Uuid::now_v7(),
         );
