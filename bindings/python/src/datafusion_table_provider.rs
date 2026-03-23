@@ -118,7 +118,9 @@ impl PyIcebergDataFusionTable {
                 builder = builder.with_props(props);
             }
 
-            let file_io = builder.build();
+            let file_io = builder.build(None).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to build FileIO: {e}"))
+            })?;
 
             let static_table =
                 StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)

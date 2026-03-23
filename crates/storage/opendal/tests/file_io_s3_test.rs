@@ -48,7 +48,8 @@ mod tests {
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
         ])
-        .build()
+        .build(None)
+        .unwrap()
     }
 
     #[tokio::test]
@@ -161,7 +162,8 @@ mod tests {
             (S3_ENDPOINT, minio_endpoint),
             (S3_REGION, "us-east-1".to_string()),
         ])
-        .build();
+        .build(None)
+        .unwrap();
 
         // Test that the FileIO was built successfully with the custom loader
         match file_io_with_custom_creds.exists("s3://bucket1/any").await {
@@ -189,7 +191,8 @@ mod tests {
             (S3_ENDPOINT, minio_endpoint),
             (S3_REGION, "us-east-1".to_string()),
         ])
-        .build();
+        .build(None)
+        .unwrap();
 
         // Test that the FileIO was built successfully with the custom loader
         match file_io_with_custom_creds.exists("s3://bucket1/any").await {

@@ -209,7 +209,7 @@ impl GlueCatalog {
         });
         let file_io = FileIOBuilder::new(factory)
             .with_props(file_io_props)
-            .build();
+            .build(None)?;
 
         Ok(GlueCatalog {
             config,

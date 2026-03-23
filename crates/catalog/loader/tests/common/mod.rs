@@ -236,7 +236,8 @@ async fn glue_catalog() -> GlueCatalog {
         customized_credential_load: None,
     }))
     .with_props(props.clone())
-    .build();
+    .build(None)
+    .unwrap();
 
     let mut retries = 0;
     while retries < 30 {
@@ -287,7 +288,8 @@ async fn hms_catalog() -> HmsCatalog {
         customized_credential_load: None,
     }))
     .with_props(props.clone())
-    .build();
+    .build(None)
+    .unwrap();
 
     let mut retries = 0;
     while retries < 30 {

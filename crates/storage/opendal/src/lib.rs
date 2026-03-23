@@ -131,15 +131,12 @@ pub enum OpenDalStorageFactory {
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
 impl StorageFactory for OpenDalStorageFactory {
-    fn with_metadata(
-        &self,
-        _metadata: &iceberg::spec::TableMetadata,
-    ) -> Result<Arc<dyn StorageFactory>> {
-        Ok(Arc::new(self.clone()))
-    }
-
     #[allow(unused_variables)]
-    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+    fn build(
+        &self,
+        config: &StorageConfig,
+        metadata: Option<&iceberg::spec::TableMetadata>,
+    ) -> Result<Arc<dyn Storage>> {
         match self {
             #[cfg(feature = "opendal-memory")]
             OpenDalStorageFactory::Memory => {

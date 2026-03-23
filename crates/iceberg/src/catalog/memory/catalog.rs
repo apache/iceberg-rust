@@ -134,7 +134,9 @@ impl MemoryCatalog {
 
         Ok(Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
+            file_io: FileIOBuilder::new(factory)
+                .with_props(config.props)
+                .build(None)?,
             warehouse_location: config.warehouse,
         })
     }

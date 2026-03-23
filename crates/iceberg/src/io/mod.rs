@@ -36,7 +36,7 @@
 //! // Build with explicit factory and configuration
 //! let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
 //!     .with_prop("key", "value")
-//!     .build();
+//!     .build(None)?;
 //! ```
 //!
 //! # How to use `FileIO`

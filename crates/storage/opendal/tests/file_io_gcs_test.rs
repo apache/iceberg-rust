@@ -44,7 +44,8 @@ mod tests {
                 (GCS_SERVICE_PATH, gcs_endpoint),
                 (GCS_NO_AUTH, "true".to_string()),
             ])
-            .build()
+            .build(None)
+            .unwrap()
     }
 
     // Create a bucket against the emulated GCS storage server.

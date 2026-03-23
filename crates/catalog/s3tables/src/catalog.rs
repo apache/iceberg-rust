@@ -208,7 +208,7 @@ impl S3TablesCatalog {
         });
         let file_io = FileIOBuilder::new(factory)
             .with_props(&config.props)
-            .build();
+            .build(None)?;
 
         Ok(Self {
             config,

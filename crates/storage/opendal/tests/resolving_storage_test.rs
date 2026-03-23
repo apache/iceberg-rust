@@ -46,7 +46,8 @@ mod tests {
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
             ])
-            .build()
+            .build(None)
+            .unwrap()
     }
 
     fn temp_fs_path(name: &str) -> String {
@@ -289,7 +290,8 @@ mod tests {
                 (S3_ENDPOINT, minio_endpoint),
                 (S3_REGION, "us-east-1".to_string()),
             ])
-            .build();
+            .build(None)
+            .unwrap();
 
         // Should be able to access S3 using the custom credential loader
         assert!(file_io.exists("s3://bucket1/").await.unwrap());

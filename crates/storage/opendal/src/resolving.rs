@@ -147,7 +147,7 @@ fn build_storage_for_scheme(
 /// let factory = OpenDalResolvingStorageFactory::new();
 /// let file_io = FileIOBuilder::new(Arc::new(factory))
 ///     .with_prop("s3.region", "us-east-1")
-///     .build();
+///     .build(None)?;
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OpenDalResolvingStorageFactory {
@@ -182,14 +182,11 @@ impl OpenDalResolvingStorageFactory {
 
 #[typetag::serde]
 impl StorageFactory for OpenDalResolvingStorageFactory {
-    fn with_metadata(
+    fn build(
         &self,
-        _metadata: &iceberg::spec::TableMetadata,
-    ) -> Result<Arc<dyn StorageFactory>> {
-        Ok(Arc::new(self.clone()))
-    }
-
-    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        config: &StorageConfig,
+        _metadata: Option<&iceberg::spec::TableMetadata>,
+    ) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
             props: config.props().clone(),
             storages: RwLock::new(HashMap::new()),

@@ -248,14 +248,11 @@ pub struct MemoryStorageFactory;
 
 #[typetag::serde]
 impl StorageFactory for MemoryStorageFactory {
-    fn with_metadata(
+    fn build(
         &self,
-        _metadata: &crate::spec::TableMetadata,
-    ) -> Result<Arc<dyn StorageFactory>> {
-        Ok(Arc::new(self.clone()))
-    }
-
-    fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        _config: &StorageConfig,
+        _metadata: Option<&crate::spec::TableMetadata>,
+    ) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(MemoryStorage::new()))
     }
 }

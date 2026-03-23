@@ -424,10 +424,11 @@ impl RestCatalog {
                     ErrorKind::Unexpected,
                     "StorageFactory must be provided for RestCatalog. Use `with_storage_factory` to configure it.",
                 )
-            })?
-            .with_metadata(metadata)?;
+            })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(props)
+            .build(Some(metadata))?;
 
         Ok(file_io)
     }

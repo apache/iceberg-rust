@@ -209,7 +209,7 @@ async fn create_static_table(
     let table_ident = TableIdent::from_strs(table_name.to_vec())?;
     let file_io = FileIOBuilder::new(storage_factory)
         .with_props(props)
-        .build();
+        .build(None)?;
     StaticTable::from_metadata_file(metadata_file_path, table_ident, file_io).await
 }
 

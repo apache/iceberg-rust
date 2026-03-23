@@ -16,7 +16,7 @@
 // under the License.
 
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -25,11 +25,11 @@ use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
 };
 use crate::Result;
+use crate::spec::TableMetadata;
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
-/// FileIO wraps a `dyn Storage` with lazy initialization via `StorageFactory`.
-/// The storage is created on first use and cached for subsequent operations.
+/// FileIO wraps a `dyn Storage` that is eagerly constructed at build time.
 ///
 /// # Note
 ///
@@ -57,16 +57,14 @@ use crate::Result;
 /// // Create FileIO with custom factory
 /// let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
 ///     .with_prop("key", "value")
-///     .build();
+///     .build(None)?;
 /// ```
 #[derive(Clone, Debug)]
 pub struct FileIO {
     /// Storage configuration containing properties
     config: StorageConfig,
-    /// Factory for creating storage instances
-    factory: Arc<dyn StorageFactory>,
-    /// Cached storage instance (lazily initialized)
-    storage: Arc<OnceLock<Arc<dyn Storage>>>,
+    /// Eagerly constructed storage instance
+    storage: Arc<dyn Storage>,
 }
 
 impl FileIO {
@@ -74,47 +72,27 @@ impl FileIO {
     ///
     /// This is useful for testing scenarios where persistent storage is not needed.
     pub fn new_with_memory() -> Self {
-        Self {
-            config: StorageConfig::new(),
-            factory: Arc::new(MemoryStorageFactory),
-            storage: Arc::new(OnceLock::new()),
-        }
+        let config = StorageConfig::new();
+        let storage = MemoryStorageFactory
+            .build(&config, None)
+            .expect("MemoryStorage construction should not fail");
+        Self { config, storage }
     }
 
     /// Create a new FileIO backed by local filesystem storage.
     ///
     /// This is useful for local development and testing with real files.
     pub fn new_with_fs() -> Self {
-        Self {
-            config: StorageConfig::new(),
-            factory: Arc::new(LocalFsStorageFactory),
-            storage: Arc::new(OnceLock::new()),
-        }
+        let config = StorageConfig::new();
+        let storage = LocalFsStorageFactory
+            .build(&config, None)
+            .expect("LocalFsStorage construction should not fail");
+        Self { config, storage }
     }
 
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig {
         &self.config
-    }
-
-    /// Get or create the storage instance.
-    ///
-    /// The factory is invoked on first access and the result is cached
-    /// for all subsequent operations.
-    fn get_storage(&self) -> Result<Arc<dyn Storage>> {
-        // Check if already initialized
-        if let Some(storage) = self.storage.get() {
-            return Ok(storage.clone());
-        }
-
-        // Build the storage
-        let storage = self.factory.build(&self.config)?;
-
-        // Try to set it (another thread might have set it first)
-        let _ = self.storage.set(storage.clone());
-
-        // Return whatever is in the cell (either ours or another thread's)
-        Ok(self.storage.get().unwrap().clone())
     }
 
     /// Deletes file.
@@ -123,7 +101,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete(path.as_ref()).await
+        self.storage.delete(path.as_ref()).await
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -138,7 +116,7 @@ impl FileIO {
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete_prefix(path.as_ref()).await
+        self.storage.delete_prefix(path.as_ref()).await
     }
 
     /// Delete multiple files from a stream of paths.
@@ -150,7 +128,7 @@ impl FileIO {
         &self,
         paths: impl Stream<Item = String> + Send + 'static,
     ) -> Result<()> {
-        self.get_storage()?.delete_stream(paths.boxed()).await
+        self.storage.delete_stream(paths.boxed()).await
     }
 
     /// Check file exists.
@@ -159,7 +137,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.get_storage()?.exists(path.as_ref()).await
+        self.storage.exists(path.as_ref()).await
     }
 
     /// Creates input file.
@@ -168,7 +146,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.get_storage()?.new_input(path.as_ref())
+        self.storage.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -177,14 +155,14 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.get_storage()?.new_output(path.as_ref())
+        self.storage.new_output(path.as_ref())
     }
 }
 
 /// Builder for [`FileIO`].
 ///
 /// The builder accepts an explicit `StorageFactory` and configuration properties.
-/// Storage is lazily initialized on first use.
+/// Storage is eagerly constructed when `build()` is called.
 #[derive(Clone, Debug)]
 pub struct FileIOBuilder {
     /// Factory for creating storage instances
@@ -224,13 +202,18 @@ impl FileIOBuilder {
         &self.config
     }
 
-    /// Builds [`FileIO`].
-    pub fn build(self) -> FileIO {
-        FileIO {
+    /// Builds [`FileIO`] by eagerly constructing the storage backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `metadata` - Optional table metadata for storage backends that need
+    ///   table-level configuration.
+    pub fn build(self, metadata: Option<&TableMetadata>) -> Result<FileIO> {
+        let storage = self.factory.build(&self.config, metadata)?;
+        Ok(FileIO {
             config: self.config,
-            factory: self.factory,
-            storage: Arc::new(OnceLock::new()),
-        }
+            storage,
+        })
     }
 }
 
@@ -522,7 +505,8 @@ mod tests {
         let file_io = FileIOBuilder::new(factory)
             .with_prop("key1", "value1")
             .with_prop("key2", "value2")
-            .build();
+            .build(None)
+            .unwrap();
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
@@ -532,7 +516,10 @@ mod tests {
     async fn test_file_io_builder_with_multiple_props() {
         let factory = Arc::new(LocalFsStorageFactory);
         let props = vec![("key1", "value1"), ("key2", "value2")];
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(props)
+            .build(None)
+            .unwrap();
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));

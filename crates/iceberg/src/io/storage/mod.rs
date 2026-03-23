@@ -108,8 +108,7 @@ pub trait Storage: Debug + Send + Sync {
 /// Factory for creating Storage instances from configuration.
 ///
 /// Implement this trait to provide custom storage backends. The factory pattern
-/// allows for lazy initialization of storage instances and enables users to
-/// inject custom storage implementations into catalogs.
+/// enables users to inject custom storage implementations into catalogs.
 ///
 /// # Example
 ///
@@ -121,7 +120,11 @@ pub trait Storage: Debug + Send + Sync {
 ///
 /// #[typetag::serde]
 /// impl StorageFactory for MyCustomStorageFactory {
-///     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+///     fn build(
+///         &self,
+///         config: &StorageConfig,
+///         metadata: Option<&TableMetadata>,
+///     ) -> Result<Arc<dyn Storage>> {
 ///         // Create and return custom storage implementation
 ///         todo!()
 ///     }
@@ -129,28 +132,21 @@ pub trait Storage: Debug + Send + Sync {
 /// ```
 #[typetag::serde(tag = "type")]
 pub trait StorageFactory: Debug + Send + Sync {
-    /// Create a new factory instance enriched with table metadata.
-    ///
-    /// This allows storage factories to incorporate table-level metadata
-    /// (e.g., table properties) into the storage initialization.
-    ///
-    /// Implementations that don't need table metadata should return
-    /// a clone of themselves: `Ok(Arc::new(self.clone()))`.
-    ///
-    /// # Arguments
-    ///
-    /// * `metadata` - The table metadata to incorporate
-    fn with_metadata(&self, metadata: &TableMetadata) -> Result<Arc<dyn StorageFactory>>;
-
     /// Build a new Storage instance from the given configuration.
     ///
     /// # Arguments
     ///
     /// * `config` - The storage configuration containing scheme and properties
+    /// * `metadata` - Optional table metadata that storage backends can use
+    ///   for table-level configuration (e.g., table properties).
     ///
     /// # Returns
     ///
     /// A `Result` containing an `Arc<dyn Storage>` on success, or an error
     /// if the storage could not be created.
-    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>>;
+    fn build(
+        &self,
+        config: &StorageConfig,
+        metadata: Option<&TableMetadata>,
+    ) -> Result<Arc<dyn Storage>>;
 }
