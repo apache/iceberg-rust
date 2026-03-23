@@ -101,7 +101,7 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: "bindings/python"
           command: build
-          args: --release -o dist
+          args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
