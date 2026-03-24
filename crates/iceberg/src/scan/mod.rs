@@ -683,6 +683,39 @@ pub mod tests {
             }
         }
 
+        /// Creates a fixture with 5 snapshots chained as:
+        ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
+        /// Useful for testing snapshot history traversal.
+        pub fn new_with_deep_history() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::new_with_fs();
+
+            let table_metadata = {
+                let json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2_deep_history.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                serde_json::from_str::<TableMetadata>(&json_str).unwrap()
+            };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
         pub fn new_unpartitioned() -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");

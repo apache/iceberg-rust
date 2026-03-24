@@ -76,14 +76,15 @@ mod tests {
     use super::*;
     use crate::scan::tests::TableTestFixture;
 
-    // The TableTestFixture has two snapshots:
-    //   root:  id = 3051729675574597004, no parent
-    //   child: id = 3055729675574597004, parent = root
-    const ROOT_ID: i64 = 3051729675574597004;
-    const CHILD_ID: i64 = 3055729675574597004;
+    // Five snapshots chained as: S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
+    const S1: i64 = 3051729675574597004;
+    const S2: i64 = 3055729675574597004;
+    const S3: i64 = 3056729675574597004;
+    const S4: i64 = 3057729675574597004;
+    const S5: i64 = 3059729675574597004;
 
     fn metadata() -> TableMetadataRef {
-        let fixture = TableTestFixture::new();
+        let fixture = TableTestFixture::new_with_deep_history();
         std::sync::Arc::new(fixture.table.metadata().clone())
     }
 
@@ -99,19 +100,29 @@ mod tests {
     #[test]
     fn test_ancestors_of_root_returns_only_root() {
         let meta = metadata();
-        let ids: Vec<i64> = ancestors_of(&meta, ROOT_ID)
-            .map(|s| s.snapshot_id())
-            .collect();
-        assert_eq!(ids, vec![ROOT_ID]);
+        let ids: Vec<i64> = ancestors_of(&meta, S1).map(|s| s.snapshot_id()).collect();
+        assert_eq!(ids, vec![S1]);
     }
 
     #[test]
-    fn test_ancestors_of_child_returns_chain_newest_first() {
+    fn test_ancestors_of_leaf_returns_full_chain() {
         let meta = metadata();
-        let ids: Vec<i64> = ancestors_of(&meta, CHILD_ID)
-            .map(|s| s.snapshot_id())
-            .collect();
-        assert_eq!(ids, vec![CHILD_ID, ROOT_ID]);
+        let ids: Vec<i64> = ancestors_of(&meta, S5).map(|s| s.snapshot_id()).collect();
+        assert_eq!(ids, vec![S5, S4, S3, S2, S1]);
+    }
+
+    #[test]
+    fn test_ancestors_of_mid_chain_returns_partial_chain() {
+        let meta = metadata();
+        let ids: Vec<i64> = ancestors_of(&meta, S3).map(|s| s.snapshot_id()).collect();
+        assert_eq!(ids, vec![S3, S2, S1]);
+    }
+
+    #[test]
+    fn test_ancestors_of_second_snapshot() {
+        let meta = metadata();
+        let ids: Vec<i64> = ancestors_of(&meta, S2).map(|s| s.snapshot_id()).collect();
+        assert_eq!(ids, vec![S2, S1]);
     }
 
     // --- ancestors_between ---
@@ -119,7 +130,7 @@ mod tests {
     #[test]
     fn test_ancestors_between_same_id_returns_empty() {
         let meta = metadata();
-        let ids: Vec<i64> = ancestors_between(&meta, CHILD_ID, Some(CHILD_ID))
+        let ids: Vec<i64> = ancestors_between(&meta, S3, Some(S3))
             .map(|s| s.snapshot_id())
             .collect();
         assert!(ids.is_empty());
@@ -128,19 +139,58 @@ mod tests {
     #[test]
     fn test_ancestors_between_no_oldest_returns_all_ancestors() {
         let meta = metadata();
-        let ids: Vec<i64> = ancestors_between(&meta, CHILD_ID, None)
+        let ids: Vec<i64> = ancestors_between(&meta, S5, None)
             .map(|s| s.snapshot_id())
             .collect();
-        assert_eq!(ids, vec![CHILD_ID, ROOT_ID]);
+        assert_eq!(ids, vec![S5, S4, S3, S2, S1]);
     }
 
     #[test]
     fn test_ancestors_between_excludes_oldest_snapshot() {
         let meta = metadata();
-        // From child up to (but not including) root.
-        let ids: Vec<i64> = ancestors_between(&meta, CHILD_ID, Some(ROOT_ID))
+        // S5 down to (but not including) S2
+        let ids: Vec<i64> = ancestors_between(&meta, S5, Some(S2))
             .map(|s| s.snapshot_id())
             .collect();
-        assert_eq!(ids, vec![CHILD_ID]);
+        assert_eq!(ids, vec![S5, S4, S3]);
+    }
+
+    #[test]
+    fn test_ancestors_between_adjacent_snapshots() {
+        let meta = metadata();
+        // S3 down to (but not including) S2 — only S3 itself
+        let ids: Vec<i64> = ancestors_between(&meta, S3, Some(S2))
+            .map(|s| s.snapshot_id())
+            .collect();
+        assert_eq!(ids, vec![S3]);
+    }
+
+    #[test]
+    fn test_ancestors_between_leaf_and_root() {
+        let meta = metadata();
+        // S5 down to (but not including) S1
+        let ids: Vec<i64> = ancestors_between(&meta, S5, Some(S1))
+            .map(|s| s.snapshot_id())
+            .collect();
+        assert_eq!(ids, vec![S5, S4, S3, S2]);
+    }
+
+    #[test]
+    fn test_ancestors_between_nonexistent_oldest_returns_full_chain() {
+        let meta = metadata();
+        // oldest_snapshot_id doesn't exist in the chain, so take_while never stops
+        let ids: Vec<i64> = ancestors_between(&meta, S5, Some(999))
+            .map(|s| s.snapshot_id())
+            .collect();
+        assert_eq!(ids, vec![S5, S4, S3, S2, S1]);
+    }
+
+    #[test]
+    fn test_ancestors_between_nonexistent_latest_returns_empty() {
+        let meta = metadata();
+        let ids: Vec<i64> = ancestors_between(&meta, 999, Some(S1))
+            .map(|s| s.snapshot_id())
+            .collect();
+        assert!(ids.is_empty());
     }
 }
