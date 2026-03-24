@@ -43,7 +43,7 @@ use crate::{Error, ErrorKind, Result};
 /// containing `SensitiveBytes` can safely derive or implement `Debug`
 /// without risk of leaking key material.
 #[derive(Clone, PartialEq, Eq)]
-pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
+struct SensitiveBytes(Zeroizing<Box<[u8]>>);
 
 impl SensitiveBytes {
     /// Wraps the given bytes as sensitive material.
@@ -149,18 +149,8 @@ impl SecureKey {
     ///
     /// # Errors
     /// Returns an error if the key length doesn't match the key size requirements.
-    pub fn new(key: &[u8], key_size: AesKeySize) -> Result<Self> {
-        if key.len() != key_size.key_length() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid key length for {:?}: expected {} bytes, got {}",
-                    key_size,
-                    key_size.key_length(),
-                    key.len()
-                ),
-            ));
-        }
+    pub fn new(key: &[u8]) -> Result<Self> {
+        let key_size = AesKeySize::from_key_length(key.len())?;
         Ok(Self {
             key: SensitiveBytes::new(key),
             key_size,
@@ -362,10 +352,10 @@ mod tests {
 
         // Test key creation with validation
         let valid_key = [0u8; 16];
-        assert!(SecureKey::new(valid_key.as_slice(), AesKeySize::Bits128).is_ok());
+        assert!(SecureKey::new(valid_key.as_slice()).is_ok());
 
-        let invalid_key = [0u8; 32];
-        assert!(SecureKey::new(invalid_key.as_slice(), AesKeySize::Bits128).is_err());
+        let invalid_key = [0u8; 33];
+        assert!(SecureKey::new(invalid_key.as_slice()).is_err());
     }
 
     #[test]

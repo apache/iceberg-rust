@@ -22,4 +22,4 @@
 
 mod crypto;
 
-pub use crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};
