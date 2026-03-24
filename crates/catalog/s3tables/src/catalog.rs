@@ -563,7 +563,7 @@ impl Catalog for S3TablesCatalog {
     }
 
     /// Not supported for S3Tables. Use `purge_table` instead.
-    /// 
+    ///
     /// S3 Tables doesn't support soft delete, so dropping a table will permanently remove it from the catalog.
     async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
         Err(Error::new(
