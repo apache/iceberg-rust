@@ -335,7 +335,7 @@ pub fn assert_map_contains(expected: &HashMap<String, String>, actual: &HashMap<
 pub async fn cleanup_namespace_dyn(catalog: &dyn Catalog, namespace: &NamespaceIdent) {
     if let Ok(tables) = catalog.list_tables(namespace).await {
         for table in tables {
-            let _ = catalog.drop_table(&table).await;
+            let _ = catalog.purge_table(&table).await;
         }
     }
     let _ = catalog.drop_namespace(namespace).await;
