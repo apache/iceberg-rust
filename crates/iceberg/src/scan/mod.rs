@@ -40,7 +40,7 @@ use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
-use crate::utils::available_parallelism;
+use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
