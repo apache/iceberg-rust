@@ -789,6 +789,11 @@ partition_struct: {:?}, partition_type: {:?}",
         self.new_data_file_sequence_number = Some(new_data_file_sequence_number);
     }
 
+    /// Replace snapshot properties, overriding any previously set values.
+    pub(crate) fn set_snapshot_properties(&mut self, properties: HashMap<String, String>) {
+        self.snapshot_properties = properties;
+    }
+
     /// Set the target branch for this snapshot
     pub fn set_target_branch(&mut self, target_branch: String) {
         self.target_branch = target_branch;

@@ -56,6 +56,7 @@ pub use action::*;
 mod append;
 
 pub use append::FastAppendAction;
+pub use rewrite_manifests::RewriteManifestsAction;
 pub use update_schema::UpdateSchemaAction;
 mod manifest_filter;
 
@@ -63,6 +64,7 @@ pub use manifest_filter::*;
 mod overwrite_files;
 mod remove_snapshots;
 mod rewrite_files;
+mod rewrite_manifests;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -204,6 +206,14 @@ impl Transaction {
     /// Creates an overwrite files action.
     pub fn overwrite_files(&self) -> OverwriteFilesAction {
         OverwriteFilesAction::new()
+    }
+
+    /// Creates a rewrite manifests action.
+    ///
+    /// This action reorganizes manifest files without changing the underlying data.
+    /// It can consolidate small manifests or re-cluster entries.
+    pub fn rewrite_manifests(&self) -> RewriteManifestsAction {
+        RewriteManifestsAction::new()
     }
 
     /// Commit transaction.
@@ -350,6 +360,25 @@ mod tests {
         Table::builder()
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap()
+    }
+
+    pub fn make_v3_minimal_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v3.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
