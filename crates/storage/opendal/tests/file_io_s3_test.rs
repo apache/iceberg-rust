@@ -24,6 +24,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     };
@@ -202,5 +203,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_delete_stream() {
+        let file_io = get_file_io().await;
+
+        // Write multiple files
+        let paths: Vec<String> = (0..5)
+            .map(|i| {
+                format!(
+                    "s3://bucket1/{}/file-{i}",
+                    normalize_test_name_with_parts!("test_file_io_s3_delete_stream")
+                )
+            })
+            .collect();
+        for path in &paths {
+            let _ = file_io.delete(path).await;
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("delete-me".into())
+                .await
+                .unwrap();
+            assert!(file_io.exists(path).await.unwrap());
+        }
+
+        // Delete via delete_stream
+        let stream = futures::stream::iter(paths.clone()).boxed();
+        file_io.delete_stream(stream).await.unwrap();
+
+        // Verify all files are gone
+        for path in &paths {
+            assert!(!file_io.exists(path).await.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_delete_stream_empty() {
+        let file_io = get_file_io().await;
+        let stream = futures::stream::empty().boxed();
+        // Should succeed with no-op
+        file_io.delete_stream(stream).await.unwrap();
     }
 }

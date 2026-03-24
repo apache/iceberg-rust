@@ -160,7 +160,7 @@ impl FromStr for AzureStorageScheme {
 }
 
 /// Validates whether the given path matches what's configured for the backend.
-fn match_path_with_config(
+pub(crate) fn match_path_with_config(
     path: &AzureStoragePath,
     config: &AzdlsConfig,
     configured_scheme: &AzureStorageScheme,
@@ -220,7 +220,7 @@ fn azdls_config_build(config: &AzdlsConfig, path: &AzureStoragePath) -> Result<o
 
 /// Represents a fully qualified path to blob/ file in Azure Storage.
 #[derive(Debug, PartialEq)]
-struct AzureStoragePath {
+pub(crate) struct AzureStoragePath {
     /// The scheme of the URL, e.g., `abfss`, `abfs`, `wasbs`, or `wasb`.
     scheme: AzureStorageScheme,
 
@@ -236,7 +236,7 @@ struct AzureStoragePath {
     /// Path to the file.
     ///
     /// It is relative to the `root` of the `AzdlsConfig`.
-    path: String,
+    pub(crate) path: String,
 }
 
 impl AzureStoragePath {
