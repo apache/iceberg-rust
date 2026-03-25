@@ -2546,7 +2546,7 @@
 <a href=#2546 id=2546 data-nosnippet>2546</a>
 <a href=#2547 id=2547 data-nosnippet>2547</a>        <span class="kw">let </span>props = WriterProperties::builder()
 <a href=#2548 id=2548 data-nosnippet>2548</a>            .set_compression(Compression::SNAPPY)
-<a href=#2549 id=2549 data-nosnippet>2549</a>            .set_max_row_group_size(<span class="number">100</span>)
+<a href=#2549 id=2549 data-nosnippet>2549</a>            .set_max_row_group_row_count(<span class="prelude-val">Some</span>(<span class="number">100</span>))
 <a href=#2550 id=2550 data-nosnippet>2550</a>            .build();
 <a href=#2551 id=2551 data-nosnippet>2551</a>
 <a href=#2552 id=2552 data-nosnippet>2552</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>file_path).unwrap();
@@ -2861,7 +2861,7 @@
 <a href=#2861 id=2861 data-nosnippet>2861</a>        <span class="comment">// Force each batch into its own row group
 <a href=#2862 id=2862 data-nosnippet>2862</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
 <a href=#2863 id=2863 data-nosnippet>2863</a>            .set_compression(Compression::SNAPPY)
-<a href=#2864 id=2864 data-nosnippet>2864</a>            .set_max_row_group_size(<span class="number">100</span>)
+<a href=#2864 id=2864 data-nosnippet>2864</a>            .set_max_row_group_row_count(<span class="prelude-val">Some</span>(<span class="number">100</span>))
 <a href=#2865 id=2865 data-nosnippet>2865</a>            .build();
 <a href=#2866 id=2866 data-nosnippet>2866</a>
 <a href=#2867 id=2867 data-nosnippet>2867</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>data_file_path).unwrap();
@@ -3057,7 +3057,7 @@
 <a href=#3057 id=3057 data-nosnippet>3057</a>        <span class="comment">// Force each batch into its own row group
 <a href=#3058 id=3058 data-nosnippet>3058</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
 <a href=#3059 id=3059 data-nosnippet>3059</a>            .set_compression(Compression::SNAPPY)
-<a href=#3060 id=3060 data-nosnippet>3060</a>            .set_max_row_group_size(<span class="number">100</span>)
+<a href=#3060 id=3060 data-nosnippet>3060</a>            .set_max_row_group_row_count(<span class="prelude-val">Some</span>(<span class="number">100</span>))
 <a href=#3061 id=3061 data-nosnippet>3061</a>            .build();
 <a href=#3062 id=3062 data-nosnippet>3062</a>
 <a href=#3063 id=3063 data-nosnippet>3063</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>data_file_path).unwrap();
@@ -3281,7 +3281,7 @@
 <a href=#3281 id=3281 data-nosnippet>3281</a>        <span class="comment">// Force each batch into its own row group
 <a href=#3282 id=3282 data-nosnippet>3282</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
 <a href=#3283 id=3283 data-nosnippet>3283</a>            .set_compression(Compression::SNAPPY)
-<a href=#3284 id=3284 data-nosnippet>3284</a>            .set_max_row_group_size(<span class="number">100</span>)
+<a href=#3284 id=3284 data-nosnippet>3284</a>            .set_max_row_group_row_count(<span class="prelude-val">Some</span>(<span class="number">100</span>))
 <a href=#3285 id=3285 data-nosnippet>3285</a>            .build();
 <a href=#3286 id=3286 data-nosnippet>3286</a>
 <a href=#3287 id=3287 data-nosnippet>3287</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>data_file_path).unwrap();
@@ -3729,7 +3729,7 @@
 <a href=#3729 id=3729 data-nosnippet>3729</a>        </span><span class="kw">let </span>props = WriterProperties::builder()
 <a href=#3730 id=3730 data-nosnippet>3730</a>            .set_compression(Compression::SNAPPY)
 <a href=#3731 id=3731 data-nosnippet>3731</a>            .set_write_batch_size(<span class="number">2</span>)
-<a href=#3732 id=3732 data-nosnippet>3732</a>            .set_max_row_group_size(<span class="number">2</span>)
+<a href=#3732 id=3732 data-nosnippet>3732</a>            .set_max_row_group_row_count(<span class="prelude-val">Some</span>(<span class="number">2</span>))
 <a href=#3733 id=3733 data-nosnippet>3733</a>            .build();
 <a href=#3734 id=3734 data-nosnippet>3734</a>
 <a href=#3735 id=3735 data-nosnippet>3735</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>)).unwrap();

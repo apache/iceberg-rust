@@ -81,7 +81,7 @@
 <a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
 <a href=#82 id=82 data-nosnippet>82</a>        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
 <a href=#83 id=83 data-nosnippet>83</a>            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; {
-<a href=#84 id=84 data-nosnippet>84</a>                Date32Type::to_naive_date(<span class="kw-2">*</span>v).year() - UNIX_EPOCH_YEAR
+<a href=#84 id=84 data-nosnippet>84</a>                Date32Type::to_naive_date_opt(<span class="kw-2">*</span>v).unwrap().year() - UNIX_EPOCH_YEAR
 <a href=#85 id=85 data-nosnippet>85</a>            }
 <a href=#86 id=86 data-nosnippet>86</a>            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; {
 <a href=#87 id=87 data-nosnippet>87</a>                <span class="self">Self</span>::timestamp_to_year_micros(<span class="kw-2">*</span>v)<span class="question-mark">?
@@ -178,8 +178,8 @@
 <a href=#178 id=178 data-nosnippet>178</a>    <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
 <a href=#179 id=179 data-nosnippet>179</a>        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
 <a href=#180 id=180 data-nosnippet>180</a>            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; {
-<a href=#181 id=181 data-nosnippet>181</a>                (Date32Type::to_naive_date(<span class="kw-2">*</span>v).year() - UNIX_EPOCH_YEAR) * <span class="number">12
-<a href=#182 id=182 data-nosnippet>182</a>                    </span>+ Date32Type::to_naive_date(<span class="kw-2">*</span>v).month0() <span class="kw">as </span>i32
+<a href=#181 id=181 data-nosnippet>181</a>                (Date32Type::to_naive_date_opt(<span class="kw-2">*</span>v).unwrap().year() - UNIX_EPOCH_YEAR) * <span class="number">12
+<a href=#182 id=182 data-nosnippet>182</a>                    </span>+ Date32Type::to_naive_date_opt(<span class="kw-2">*</span>v).unwrap().month0() <span class="kw">as </span>i32
 <a href=#183 id=183 data-nosnippet>183</a>            }
 <a href=#184 id=184 data-nosnippet>184</a>            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; {
 <a href=#185 id=185 data-nosnippet>185</a>                <span class="self">Self</span>::timestamp_to_month_micros(<span class="kw-2">*</span>v)<span class="question-mark">?

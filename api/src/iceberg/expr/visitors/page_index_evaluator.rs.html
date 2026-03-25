@@ -791,7 +791,7 @@
 <a href=#791 id=791 data-nosnippet>791</a>    <span class="kw">use </span>parquet::arrow::arrow_reader::{
 <a href=#792 id=792 data-nosnippet>792</a>        ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
 <a href=#793 id=793 data-nosnippet>793</a>    };
-<a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
+<a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">use </span>parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 <a href=#795 id=795 data-nosnippet>795</a>    <span class="kw">use </span>parquet::file::properties::WriterProperties;
 <a href=#796 id=796 data-nosnippet>796</a>    <span class="kw">use </span>rand::{Rng, thread_rng};
 <a href=#797 id=797 data-nosnippet>797</a>    <span class="kw">use </span>tempfile::NamedTempFile;
@@ -895,7 +895,7 @@
 <a href=#895 id=895 data-nosnippet>895</a>        writer.close().unwrap();
 <a href=#896 id=896 data-nosnippet>896</a>
 <a href=#897 id=897 data-nosnippet>897</a>        <span class="kw">let </span>file = temp_file.reopen().unwrap();
-<a href=#898 id=898 data-nosnippet>898</a>        <span class="kw">let </span>options = ArrowReaderOptions::new().with_page_index(<span class="bool-val">true</span>);
+<a href=#898 id=898 data-nosnippet>898</a>        <span class="kw">let </span>options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
 <a href=#899 id=899 data-nosnippet>899</a>        <span class="kw">let </span>reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
 <a href=#900 id=900 data-nosnippet>900</a>        <span class="kw">let </span>metadata = reader.metadata().clone();
 <a href=#901 id=901 data-nosnippet>901</a>
@@ -936,7 +936,7 @@
 <a href=#936 id=936 data-nosnippet>936</a>        writer.close().unwrap();
 <a href=#937 id=937 data-nosnippet>937</a>
 <a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>file = temp_file.reopen().unwrap();
-<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>options = ArrowReaderOptions::new().with_page_index(<span class="bool-val">true</span>);
+<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
 <a href=#940 id=940 data-nosnippet>940</a>        <span class="kw">let </span>reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
 <a href=#941 id=941 data-nosnippet>941</a>        <span class="kw">let </span>metadata = reader.metadata();
 <a href=#942 id=942 data-nosnippet>942</a>
