@@ -27,48 +27,37 @@ impl Iterator for Ancestors {
 
     fn next(&mut self) -> Option<Self::Item> {
         let snapshot = self.next.take()?;
-        let result = snapshot.clone();
         self.next = snapshot
             .parent_snapshot_id()
             .and_then(|id| (self.get_snapshot)(id));
-        Some(result)
+        Some(snapshot)
     }
 }
 
-/// Iterate starting from `snapshot` (inclusive) to the root snapshot.
+/// Iterate starting from `snapshot_id` (inclusive) to the root snapshot.
 pub fn ancestors_of(
     table_metadata: &TableMetadataRef,
-    snapshot: i64,
-) -> Box<dyn Iterator<Item = SnapshotRef> + Send> {
-    if let Some(snapshot) = table_metadata.snapshot_by_id(snapshot) {
-        let table_metadata = table_metadata.clone();
-        Box::new(Ancestors {
-            next: Some(snapshot.clone()),
-            get_snapshot: Box::new(move |id| table_metadata.snapshot_by_id(id).cloned()),
-        })
-    } else {
-        Box::new(std::iter::empty())
+    snapshot_id: i64,
+) -> impl Iterator<Item = SnapshotRef> + Send {
+    let initial = table_metadata.snapshot_by_id(snapshot_id).cloned();
+    let table_metadata = table_metadata.clone();
+    Ancestors {
+        next: initial,
+        get_snapshot: Box::new(move |id| table_metadata.snapshot_by_id(id).cloned()),
     }
 }
 
-/// Iterate starting from `snapshot` (inclusive) to `oldest_snapshot_id` (exclusive).
+/// Iterate starting from `latest_snapshot_id` (inclusive) to `oldest_snapshot_id` (exclusive).
 pub fn ancestors_between(
     table_metadata: &TableMetadataRef,
     latest_snapshot_id: i64,
     oldest_snapshot_id: Option<i64>,
-) -> Box<dyn Iterator<Item = SnapshotRef> + Send> {
-    let Some(oldest_snapshot_id) = oldest_snapshot_id else {
-        return Box::new(ancestors_of(table_metadata, latest_snapshot_id));
-    };
-
-    if latest_snapshot_id == oldest_snapshot_id {
-        return Box::new(std::iter::empty());
-    }
-
-    Box::new(
-        ancestors_of(table_metadata, latest_snapshot_id)
-            .take_while(move |snapshot| snapshot.snapshot_id() != oldest_snapshot_id),
-    )
+) -> impl Iterator<Item = SnapshotRef> + Send {
+    ancestors_of(table_metadata, latest_snapshot_id).take_while(move |snapshot| {
+        oldest_snapshot_id
+            .map(|id| snapshot.snapshot_id() != id)
+            .unwrap_or(true)
+    })
 }
 
 #[cfg(test)]
