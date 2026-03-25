@@ -346,7 +346,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.to_string().contains("gzip"));
+        assert!(err.to_string().contains("Gzip"));
         assert!(
             err.to_string()
                 .contains("is not supported for Puffin files")

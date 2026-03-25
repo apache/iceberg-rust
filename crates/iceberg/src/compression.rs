@@ -75,13 +75,13 @@ impl<'de> Deserialize<'de> for CompressionCodec {
 impl fmt::Display for CompressionCodec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CompressionCodec::None => write!(f, "none"),
-            CompressionCodec::Lz4 => write!(f, "lz4"),
-            CompressionCodec::Zstd(Some(level)) => write!(f, "zstd(level={level})"),
-            CompressionCodec::Zstd(None) => write!(f, "zstd"),
-            CompressionCodec::Gzip(Some(level)) => write!(f, "gzip(level={level})"),
-            CompressionCodec::Gzip(None) => write!(f, "gzip"),
-            CompressionCodec::Snappy => write!(f, "snappy"),
+            CompressionCodec::None => write!(f, "None"),
+            CompressionCodec::Lz4 => write!(f, "Lz4"),
+            CompressionCodec::Zstd(None) => write!(f, "Zstd"),
+            CompressionCodec::Zstd(Some(level)) => write!(f, "Zstd(level={level})"),
+            CompressionCodec::Gzip(None) => write!(f, "Gzip"),
+            CompressionCodec::Gzip(Some(level)) => write!(f, "Gzip(level={level})"),
+            CompressionCodec::Snappy => write!(f, "Snappy"),
         }
     }
 }
@@ -230,12 +230,12 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(CompressionCodec::None.to_string(), "none");
-        assert_eq!(CompressionCodec::Lz4.to_string(), "lz4");
-        assert_eq!(CompressionCodec::Zstd(None).to_string(), "zstd");
-        assert_eq!(CompressionCodec::Zstd(Some(3)).to_string(), "zstd(level=3)");
-        assert_eq!(CompressionCodec::Gzip(None).to_string(), "gzip");
-        assert_eq!(CompressionCodec::Gzip(Some(6)).to_string(), "gzip(level=6)");
-        assert_eq!(CompressionCodec::Snappy.to_string(), "snappy");
+        assert_eq!(CompressionCodec::None.to_string(), "None");
+        assert_eq!(CompressionCodec::Lz4.to_string(), "Lz4");
+        assert_eq!(CompressionCodec::Zstd(None).to_string(), "Zstd");
+        assert_eq!(CompressionCodec::Zstd(Some(3)).to_string(), "Zstd(level=3)");
+        assert_eq!(CompressionCodec::Gzip(None).to_string(), "Gzip");
+        assert_eq!(CompressionCodec::Gzip(Some(6)).to_string(), "Gzip(level=6)");
+        assert_eq!(CompressionCodec::Snappy.to_string(), "Snappy");
     }
 }
