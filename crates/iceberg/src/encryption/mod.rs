@@ -21,5 +21,11 @@
 //! and decrypting data in Iceberg tables.
 
 mod crypto;
+mod file_decryptor;
+mod file_encryptor;
+mod stream;
 
 pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};
+pub use file_decryptor::AesGcmFileDecryptor;
+pub use file_encryptor::AesGcmFileEncryptor;
+pub use stream::{AesGcmFileRead, AesGcmFileWrite};
