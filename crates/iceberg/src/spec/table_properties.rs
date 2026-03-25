@@ -86,12 +86,14 @@ pub(crate) fn parse_metadata_file_compression(
     // Validate that only None and Gzip are used for metadata
     match codec {
         CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        CompressionCodec::Lz4 | CompressionCodec::Zstd(_) | CompressionCodec::Snappy => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported for metadata files."
-            ),
-        )),
+        CompressionCodec::Lz4 | CompressionCodec::Zstd(_) | CompressionCodec::Snappy => {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported for metadata files."
+                ),
+            ))
+        }
     }
 }
 

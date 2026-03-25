@@ -65,10 +65,9 @@ impl<'de> Deserialize<'de> for CompressionCodec {
             "zstd" => Ok(CompressionCodec::Zstd(None)),
             "gzip" => Ok(CompressionCodec::Gzip(None)),
             "snappy" => Ok(CompressionCodec::Snappy),
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["none", "lz4", "zstd", "gzip", "snappy"],
-            )),
+            other => Err(serde::de::Error::unknown_variant(other, &[
+                "none", "lz4", "zstd", "gzip", "snappy",
+            ])),
         }
     }
 }
@@ -151,7 +150,9 @@ impl CompressionCodec {
         match self {
             CompressionCodec::None => Ok(""),
             CompressionCodec::Gzip(_) => Ok(".gz"),
-            codec @ (CompressionCodec::Lz4 | CompressionCodec::Zstd(_) | CompressionCodec::Snappy) => Err(Error::new(
+            codec @ (CompressionCodec::Lz4
+            | CompressionCodec::Zstd(_)
+            | CompressionCodec::Snappy) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("suffix not defined for {codec:?}"),
             )),
@@ -190,7 +191,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_compression_codec_unsupported() {
-        let unsupported_codecs = [(CompressionCodec::Lz4, "LZ4"), (CompressionCodec::Snappy, "Snappy")];
+        let unsupported_codecs = [
+            (CompressionCodec::Lz4, "LZ4"),
+            (CompressionCodec::Snappy, "Snappy"),
+        ];
         let bytes_vec = [0_u8; 100].to_vec();
 
         for (codec, name) in unsupported_codecs {

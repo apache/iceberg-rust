@@ -251,7 +251,8 @@ mod tests {
     async fn test_write_zstd_compressed_metric_data() {
         let temp_dir = TempDir::new().unwrap();
         let blobs = vec![blob_0(), blob_1()];
-        let blobs_with_compression = blobs_with_compression(blobs.clone(), CompressionCodec::Zstd(None));
+        let blobs_with_compression =
+            blobs_with_compression(blobs.clone(), CompressionCodec::Zstd(None));
 
         let input_file = write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
             .await

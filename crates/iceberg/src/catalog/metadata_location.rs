@@ -345,7 +345,10 @@ mod test {
             "/test/table/metadata/00005-81056704-ce5b-41c4-bb83-eb6408081af6.gz.metadata.json",
         )
         .unwrap();
-        assert_eq!(location_gzip.compression_codec, CompressionCodec::Gzip(None));
+        assert_eq!(
+            location_gzip.compression_codec,
+            CompressionCodec::Gzip(None)
+        );
 
         let next_gzip = location_gzip.with_next_version();
         assert_eq!(next_gzip.compression_codec, CompressionCodec::Gzip(None));
