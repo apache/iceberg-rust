@@ -18,5 +18,9 @@
 [type.rust]
 extend-ignore-identifiers-re = ["^bimap$"]
 
+[default.extend-words]
+ags = "ags"
+AGS = "AGS"
+
 [files]
 extend-exclude = ["**/testdata", "CHANGELOG.md"]
