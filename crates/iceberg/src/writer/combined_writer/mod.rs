@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Base writer module contains the basic writer provide by iceberg: `DataFileWriter`, `PositionDeleteFileWriter`, `EqualityDeleteFileWriter`.
+//! Combined writers compose multiple base writers into a single writer that can handle
+//! more complex writing scenarios, such as row-level changes involving both data files and delete files.
 
-pub mod data_file_writer;
-pub mod equality_delete_writer;
-pub mod position_delete_writer;
+pub mod delta_writer;

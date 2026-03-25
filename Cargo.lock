@@ -3294,6 +3294,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-cast",
  "arrow-ord",
+ "arrow-row",
  "arrow-schema",
  "arrow-select",
  "arrow-string",
