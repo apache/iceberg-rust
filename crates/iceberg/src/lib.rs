@@ -71,6 +71,7 @@ pub use error::{Error, ErrorKind, Result};
 
 mod catalog;
 
+pub use catalog::utils::drop_table_data;
 pub use catalog::*;
 
 pub mod table;

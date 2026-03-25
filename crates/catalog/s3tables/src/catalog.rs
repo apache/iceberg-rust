@@ -562,15 +562,18 @@ impl Catalog for S3TablesCatalog {
         Ok(self.load_table_with_version_token(table_ident).await?.0)
     }
 
-    /// Drops an existing table from the s3tables catalog.
+    /// Not supported for S3Tables. Use `purge_table` instead.
     ///
-    /// Validates the table identifier and then deletes the corresponding
-    /// table from the s3tables catalog.
-    ///
-    /// This function can return an error in the following situations:
-    /// - Errors from the underlying database deletion process, converted using
-    /// `from_aws_sdk_error`.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+    /// S3 Tables doesn't support soft delete, so dropping a table will permanently remove it from the catalog.
+    async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "drop_table is not supported for S3Tables; use purge_table instead",
+        ))
+    }
+
+    /// Purge a table from the S3 Tables catalog.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let req = self
             .s3tables_client
             .delete_table()
