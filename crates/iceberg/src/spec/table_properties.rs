@@ -114,6 +114,9 @@ pub struct TableProperties {
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
     pub write_datafusion_fanout_enabled: bool,
+    /// Whether garbage collection is enabled on drop.
+    /// When `false`, data files will not be deleted when a table is dropped.
+    pub gc_enabled: bool,
 }
 
 impl TableProperties {
@@ -212,6 +215,13 @@ impl TableProperties {
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
+
+    /// Property key for enabling garbage collection on drop.
+    /// When set to `false`, data files will not be deleted when a table is dropped.
+    /// Defaults to `true`.
+    pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
+    /// Default value for gc.enabled
+    pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -256,6 +266,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
+            gc_enabled: parse_property(
+                props,
+                TableProperties::PROPERTY_GC_ENABLED,
+                TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
+            )?,
         })
     }
 }
@@ -293,6 +308,10 @@ mod tests {
         assert_eq!(
             table_properties.metadata_compression_codec,
             CompressionCodec::None
+        );
+        assert_eq!(
+            table_properties.gc_enabled,
+            TableProperties::PROPERTY_GC_ENABLED_DEFAULT
         );
     }
 
@@ -377,12 +396,17 @@ mod tests {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
                 "512".to_string(),
             ),
+            (
+                TableProperties::PROPERTY_GC_ENABLED.to_string(),
+                "false".to_string(),
+            ),
         ]);
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(table_properties.commit_num_retries, 10);
         assert_eq!(table_properties.commit_max_retry_wait_ms, 20);
         assert_eq!(table_properties.write_format_default, "avro".to_string());
         assert_eq!(table_properties.write_target_file_size_bytes, 512);
+        assert!(!table_properties.gc_enabled);
     }
 
     #[test]
@@ -429,6 +453,17 @@ mod tests {
         assert!(table_properties.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
+
+        let invalid_gc_enabled = HashMap::from([(
+            TableProperties::PROPERTY_GC_ENABLED.to_string(),
+            "notabool".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&invalid_gc_enabled).unwrap_err();
+        assert!(
+            table_properties
+                .to_string()
+                .contains("Invalid value for gc.enabled")
+        );
     }
 
     #[test]

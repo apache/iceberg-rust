@@ -133,6 +133,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 - [Wrappers](https://github.com/supabase/wrappers): Postgres Foreign Data Wrapper development framework in Rust.
 - [ETL](https://github.com/supabase/etl): Stream your Postgres data anywhere in real-time.
+- [Apache DataFusion Comet](https://github.com/apache/datafusion-comet): High-performance accelerator for Apache Spark, built on top of the powerful Apache DataFusion query engine.
 
 ## License
 
