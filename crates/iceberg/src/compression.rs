@@ -35,9 +35,10 @@ pub enum CompressionCodec {
     None,
     /// LZ4 single compression frame with content size present
     Lz4,
-    /// Zstandard single compression frame with content size present. Optional level 0–22.
+    /// Zstandard single compression frame with content size present. Optional level 0–22,
+    /// where 0 means default compression level (not no compression, unlike Gzip).
     Zstd(Option<u8>),
-    /// Gzip compression. Optional level 0–9.
+    /// Gzip compression. Optional level 0–9, where 0 means no compression.
     Gzip(Option<u8>),
     /// Snappy compression
     Snappy,
@@ -124,7 +125,8 @@ impl CompressionCodec {
                 Ok(encoder.finish()?)
             }
             CompressionCodec::Gzip(level) => {
-                let compression = Compression::new(level.unwrap_or(6).min(9) as u32);
+                let compression =
+                    level.map_or_else(Compression::default, |l| Compression::new(l.min(9) as u32));
                 let mut encoder = GzEncoder::new(Vec::new(), compression);
                 encoder.write_all(&bytes)?;
                 Ok(encoder.finish()?)
