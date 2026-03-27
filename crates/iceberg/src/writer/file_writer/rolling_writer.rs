@@ -18,13 +18,17 @@
 use std::fmt::{Debug, Formatter};
 
 use arrow_array::RecordBatch;
+use futures::future::{self, BoxFuture};
 
 use crate::io::{FileIO, OutputFile};
+use crate::runtime::{JoinHandle, spawn};
 use crate::spec::{DataFileBuilder, PartitionKey, TableProperties};
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::{Error, ErrorKind, Result};
+
+type CloseFuture = BoxFuture<'static, Result<Vec<DataFileBuilder>>>;
 
 /// Builder for [`RollingFileWriter`].
 #[derive(Clone, Debug)]
@@ -38,6 +42,7 @@ pub struct RollingFileWriterBuilder<
     file_io: FileIO,
     location_generator: L,
     file_name_generator: F,
+    max_concurrent_closes: usize,
 }
 
 impl<B, L, F> RollingFileWriterBuilder<B, L, F>
@@ -72,6 +77,7 @@ where
             file_io,
             location_generator,
             file_name_generator,
+            max_concurrent_closes: 0,
         }
     }
 
@@ -99,7 +105,18 @@ where
             file_io,
             location_generator,
             file_name_generator,
+            max_concurrent_closes: 0,
         }
+    }
+
+    /// Allow rolled files to be closed in the background.
+    ///
+    /// A value of `0` disables background close and preserves the historical
+    /// synchronous behavior. Values greater than `0` allow up to that many
+    /// outstanding close tasks before writes wait for one to finish.
+    pub fn with_max_concurrent_closes(mut self, max_concurrent_closes: usize) -> Self {
+        self.max_concurrent_closes = max_concurrent_closes;
+        self
     }
 
     /// Build a new [`RollingFileWriter`].
@@ -112,6 +129,8 @@ where
             file_io: self.file_io.clone(),
             location_generator: self.location_generator.clone(),
             file_name_generator: self.file_name_generator.clone(),
+            close_futures: vec![],
+            max_concurrent_closes: self.max_concurrent_closes,
         }
     }
 }
@@ -130,6 +149,8 @@ pub struct RollingFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: File
     file_io: FileIO,
     location_generator: L,
     file_name_generator: F,
+    close_futures: Vec<CloseFuture>,
+    max_concurrent_closes: usize,
 }
 
 impl<B, L, F> Debug for RollingFileWriter<B, L, F>
@@ -169,6 +190,25 @@ where
             ))
     }
 
+    fn spawn_close(&mut self, inner: B::R) {
+        let handle: JoinHandle<Result<Vec<DataFileBuilder>>> =
+            spawn(async move { inner.close().await });
+        self.close_futures.push(Box::pin(handle));
+    }
+
+    async fn wait_for_one_close(&mut self) -> Result<()> {
+        if self.close_futures.is_empty() {
+            return Ok(());
+        }
+
+        let (result, _index, remaining) =
+            future::select_all(std::mem::take(&mut self.close_futures)).await;
+        self.close_futures = remaining;
+
+        self.data_file_builders.extend(result?);
+        Ok(())
+    }
+
     /// Writes a record batch to the current file, rolling over to a new file if necessary.
     ///
     /// # Parameters
@@ -197,18 +237,27 @@ where
             );
         }
 
-        if self.should_roll()
-            && let Some(inner) = self.inner.take()
-        {
-            // close the current writer, roll to a new file
-            self.data_file_builders.extend(inner.close().await?);
+        if self.should_roll() {
+            if self.max_concurrent_closes > 0
+                && self.close_futures.len() >= self.max_concurrent_closes
+            {
+                self.wait_for_one_close().await?;
+            }
 
-            // start a new writer
-            self.inner = Some(
-                self.inner_builder
-                    .build(self.new_output_file(partition_key)?)
-                    .await?,
-            );
+            if let Some(inner) = self.inner.take() {
+                if self.max_concurrent_closes == 0 {
+                    self.data_file_builders.extend(inner.close().await?);
+                } else {
+                    self.spawn_close(inner);
+                }
+
+                // start a new writer
+                self.inner = Some(
+                    self.inner_builder
+                        .build(self.new_output_file(partition_key)?)
+                        .await?,
+                );
+            }
         }
 
         // write the input
@@ -229,13 +278,29 @@ where
     /// A `Result` containing a vector of `DataFileBuilder` instances representing
     /// all files that were written, including any that were created due to rollover
     pub async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
+        let mut first_error = None;
+
         // close the current writer and merge the output
-        if let Some(current_writer) = self.inner {
-            self.data_file_builders
-                .extend(current_writer.close().await?);
+        if let Some(current_writer) = self.inner.take() {
+            match current_writer.close().await {
+                Ok(files) => self.data_file_builders.extend(files),
+                Err(err) => first_error = Some(err),
+            }
         }
 
-        Ok(self.data_file_builders)
+        while !self.close_futures.is_empty() {
+            if let Err(err) = self.wait_for_one_close().await
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+        }
+
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(self.data_file_builders)
+        }
     }
 }
 
@@ -261,8 +326,8 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFi
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -270,10 +335,12 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use rand::prelude::IteratorRandom;
     use tempfile::TempDir;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
 
     use super::*;
-    use crate::io::FileIOBuilder;
-    use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+    use crate::io::{FileIOBuilder, OutputFile};
+    use crate::spec::{DataContentType, DataFileFormat, NestedField, PrimitiveType, Schema, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{
@@ -441,6 +508,377 @@ mod tests {
             "Expected {expected_rows} total records across all files"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rolling_writer_with_rolling_and_background_close() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = make_test_schema()?;
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_writer_builder,
+            1024,
+            file_io,
+            location_gen,
+            file_name_gen,
+        )
+        .with_max_concurrent_closes(2);
+
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+        let mut writer = data_file_writer_builder.build(None).await?;
+
+        let arrow_schema = make_test_arrow_schema();
+        let arrow_schema_ref = Arc::new(arrow_schema.clone());
+
+        let names = vec![
+            "Alice", "Bob", "Charlie", "Dave", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy",
+            "Kelly", "Larry", "Mallory", "Shawn",
+        ];
+
+        let mut rng = rand::thread_rng();
+        let batch_num = 10;
+        let batch_rows = 100;
+        let expected_rows = batch_num * batch_rows;
+
+        for i in 0..batch_num {
+            let int_values: Vec<i32> = (0..batch_rows).map(|row| i * batch_rows + row).collect();
+            let str_values: Vec<&str> = (0..batch_rows)
+                .map(|_| *names.iter().choose(&mut rng).unwrap())
+                .collect();
+
+            let int_array = Arc::new(Int32Array::from(int_values)) as ArrayRef;
+            let str_array = Arc::new(StringArray::from(str_values)) as ArrayRef;
+
+            let batch =
+                RecordBatch::try_new(Arc::clone(&arrow_schema_ref), vec![int_array, str_array])
+                    .expect("Failed to create RecordBatch");
+
+            writer.write(batch).await?;
+        }
+
+        let data_files = writer.close().await?;
+
+        assert!(
+            data_files.len() > 4,
+            "Expected at least 4 data files to be created, but got {}",
+            data_files.len()
+        );
+
+        let total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
+        assert_eq!(
+            total_records, expected_rows as u64,
+            "Expected {expected_rows} total records across all files"
+        );
+
+        Ok(())
+    }
+
+    #[derive(Clone)]
+    struct MockFileWriterBuilder {
+        close_behaviors: Arc<Mutex<VecDeque<CloseBehavior>>>,
+        next_id: Arc<Mutex<usize>>,
+        closed_ids: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl MockFileWriterBuilder {
+        fn new(close_behaviors: Vec<CloseBehavior>) -> Self {
+            Self {
+                close_behaviors: Arc::new(Mutex::new(close_behaviors.into())),
+                next_id: Arc::new(Mutex::new(0)),
+                closed_ids: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn closed_ids(&self) -> Arc<Mutex<Vec<usize>>> {
+            Arc::clone(&self.closed_ids)
+        }
+    }
+
+    enum CloseBehavior {
+        Ok,
+        Wait(oneshot::Receiver<()>),
+        Fail(&'static str),
+    }
+
+    struct MockFileWriter {
+        id: usize,
+        written_size: usize,
+        close_behavior: CloseBehavior,
+        closed_ids: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl FileWriterBuilder for MockFileWriterBuilder {
+        type R = MockFileWriter;
+
+        async fn build(&self, _output_file: OutputFile) -> Result<Self::R> {
+            let mut next_id = self.next_id.lock().unwrap();
+            let id = *next_id;
+            *next_id += 1;
+
+            let close_behavior = self
+                .close_behaviors
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(CloseBehavior::Ok);
+
+            Ok(MockFileWriter {
+                id,
+                written_size: 0,
+                close_behavior,
+                closed_ids: Arc::clone(&self.closed_ids),
+            })
+        }
+    }
+
+    impl CurrentFileStatus for MockFileWriter {
+        fn current_file_path(&self) -> String {
+            format!("mock://{}", self.id)
+        }
+
+        fn current_row_num(&self) -> usize {
+            self.id + 1
+        }
+
+        fn current_written_size(&self) -> usize {
+            self.written_size
+        }
+    }
+
+    impl FileWriter for MockFileWriter {
+        async fn write(&mut self, _batch: &RecordBatch) -> Result<()> {
+            self.written_size = 32;
+            Ok(())
+        }
+
+        async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
+            self.closed_ids.lock().unwrap().push(self.id);
+
+            match std::mem::replace(&mut self.close_behavior, CloseBehavior::Ok) {
+                CloseBehavior::Ok => {}
+                CloseBehavior::Wait(receiver) => {
+                    receiver.await.expect("close sender dropped");
+                }
+                CloseBehavior::Fail(message) => {
+                    return Err(Error::new(ErrorKind::Unexpected, message));
+                }
+            }
+
+            let mut builder = DataFileBuilder::default();
+            builder.content(DataContentType::Data);
+            builder.file_path(format!("mock://{}", self.id));
+            builder.file_format(DataFileFormat::Parquet);
+            builder.record_count(self.id as u64);
+            builder.file_size_in_bytes((self.id + 1) as u64);
+
+            Ok(vec![builder])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_background_close_collects_all_files() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_string_lossy().into_owned(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let (tx0, rx0) = oneshot::channel();
+        let (tx1, rx1) = oneshot::channel();
+
+        let builder = RollingFileWriterBuilder::new(
+            MockFileWriterBuilder::new(vec![
+                CloseBehavior::Wait(rx0),
+                CloseBehavior::Wait(rx1),
+                CloseBehavior::Ok,
+            ]),
+            16,
+            file_io,
+            location_gen,
+            file_name_gen,
+        )
+        .with_max_concurrent_closes(2);
+
+        let mut writer = builder.build();
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])?;
+
+        writer.write(&None, &batch).await?;
+        writer.write(&None, &batch).await?;
+        writer.write(&None, &batch).await?;
+
+        tx1.send(()).unwrap();
+        tx0.send(()).unwrap();
+
+        let data_files = writer.close().await?;
+        let mut record_counts: Vec<u64> = data_files
+            .into_iter()
+            .map(|file| file.build().unwrap().record_count())
+            .collect();
+        record_counts.sort_unstable();
+
+        assert_eq!(record_counts, vec![0, 1, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_waiting_for_pending_close_can_resume_rolling() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_string_lossy().into_owned(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let (tx0, rx0) = oneshot::channel();
+
+        let builder = RollingFileWriterBuilder::new(
+            MockFileWriterBuilder::new(vec![
+                CloseBehavior::Wait(rx0),
+                CloseBehavior::Ok,
+                CloseBehavior::Ok,
+            ]),
+            16,
+            file_io,
+            location_gen,
+            file_name_gen,
+        )
+        .with_max_concurrent_closes(1);
+
+        let mut writer = builder.build();
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])?;
+
+        writer.write(&None, &batch).await?;
+        writer.write(&None, &batch).await?;
+
+        let batch_for_task = batch.clone();
+        let mut blocked_write = tokio::spawn(async move {
+            writer.write(&None, &batch_for_task).await?;
+            Ok::<RollingFileWriter<MockFileWriterBuilder, _, _>, Error>(writer)
+        });
+
+        assert!(
+            timeout(Duration::from_millis(50), &mut blocked_write)
+                .await
+                .is_err()
+        );
+
+        tx0.send(()).unwrap();
+
+        let writer = blocked_write.await.unwrap()?;
+        let data_files = writer.close().await?;
+        let mut record_counts: Vec<u64> = data_files
+            .into_iter()
+            .map(|file| file.build().unwrap().record_count())
+            .collect();
+        record_counts.sort_unstable();
+
+        assert_eq!(record_counts, vec![0, 1, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_pending_close_does_not_drop_active_writer() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_string_lossy().into_owned(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let mock_builder = MockFileWriterBuilder::new(vec![
+            CloseBehavior::Fail("background close failed"),
+            CloseBehavior::Ok,
+        ]);
+        let closed_ids = mock_builder.closed_ids();
+
+        let builder =
+            RollingFileWriterBuilder::new(mock_builder, 16, file_io, location_gen, file_name_gen)
+                .with_max_concurrent_closes(1);
+
+        let mut writer = builder.build();
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])?;
+
+        writer.write(&None, &batch).await?;
+        writer.write(&None, &batch).await?;
+        assert!(writer.write(&None, &batch).await.is_err());
+        let data_files = writer.close().await?;
+
+        let record_counts: Vec<u64> = data_files
+            .into_iter()
+            .map(|file| file.build().unwrap().record_count())
+            .collect();
+        assert_eq!(record_counts, vec![1]);
+
+        let mut closed_ids = closed_ids.lock().unwrap().clone();
+        closed_ids.sort_unstable();
+        assert_eq!(closed_ids, vec![0, 1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_close_still_closes_active_writer_after_pending_failure() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_string_lossy().into_owned(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let mock_builder = MockFileWriterBuilder::new(vec![
+            CloseBehavior::Fail("background close failed"),
+            CloseBehavior::Ok,
+        ]);
+        let closed_ids = mock_builder.closed_ids();
+
+        let builder =
+            RollingFileWriterBuilder::new(mock_builder, 16, file_io, location_gen, file_name_gen)
+                .with_max_concurrent_closes(2);
+
+        let mut writer = builder.build();
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])?;
+
+        writer.write(&None, &batch).await?;
+        writer.write(&None, &batch).await?;
+        assert!(writer.close().await.is_err());
+
+        let mut closed_ids = closed_ids.lock().unwrap().clone();
+        closed_ids.sort_unstable();
+        assert_eq!(closed_ids, vec![0, 1]);
         Ok(())
     }
 }
