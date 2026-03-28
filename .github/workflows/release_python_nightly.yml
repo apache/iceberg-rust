@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
         with:
@@ -77,6 +79,8 @@ jobs:
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
         with:

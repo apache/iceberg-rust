@@ -49,6 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          persist-credentials: false
 
       - name: Validate release tag format
         id: validate
@@ -115,6 +117,8 @@ jobs:
     needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -124,11 +128,13 @@ jobs:
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         working-directory: "bindings/python"
         run: |
-          echo "Setting cargo version to: ${{ needs.validate-release-tag.outputs.cargo-version }}"
-          toml set Cargo.toml package.version ${{ needs.validate-release-tag.outputs.cargo-version }} > Cargo.toml.tmp
+          echo "Setting cargo version to: ${NEEDS_VALIDATE_RELEASE_TAG_OUTPUTS_CARGO_VERSION}"
+          toml set Cargo.toml package.version ${NEEDS_VALIDATE_RELEASE_TAG_OUTPUTS_CARGO_VERSION} > Cargo.toml.tmp
           # doing this explicitly to avoid issue in Windows where `mv` does not overwrite existing file
           rm Cargo.toml
           mv Cargo.toml.tmp Cargo.toml
+        env:
+          NEEDS_VALIDATE_RELEASE_TAG_OUTPUTS_CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
 
       - uses: PyO3/maturin-action@v1
         with:
@@ -159,6 +165,8 @@ jobs:
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install toml-cli
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}

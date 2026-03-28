@@ -54,6 +54,8 @@ jobs:
           - macos-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -92,6 +94,8 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -118,6 +122,8 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -139,6 +145,8 @@ jobs:
     name: Tests (${{ matrix.test-suite.name }})
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -183,6 +191,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:

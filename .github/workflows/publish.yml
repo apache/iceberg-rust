@@ -47,6 +47,8 @@ jobs:
           - "crates/integrations/datafusion"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Get MSRV
         id: get-msrv
