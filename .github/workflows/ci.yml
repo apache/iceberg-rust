@@ -61,7 +61,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@e9f91c35e4d4ae4420f722aa6598c4a13cc69093 # v0.8.0
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
 
       - name: Check toml format
         run: make check-toml
@@ -101,7 +101,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
@@ -129,7 +129,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -157,7 +157,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.test-suite.name }}
 
