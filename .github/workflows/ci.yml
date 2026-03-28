@@ -53,7 +53,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
@@ -61,13 +61,13 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.8.0
+        uses: apache/skywalking-eyes/header@e9f91c35e4d4ae4420f722aa6598c4a13cc69093 # v0.8.0
 
       - name: Check toml format
         run: make check-toml
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -93,7 +93,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
@@ -101,10 +101,10 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -121,7 +121,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
@@ -129,7 +129,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -144,7 +144,7 @@ jobs:
           - { name: "doc", args: "--doc --all-features --workspace" }
     name: Tests (${{ matrix.test-suite.name }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
@@ -152,18 +152,18 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: ${{ matrix.test-suite.name }}
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@0fde6d128a3d980ceac30be8c8b8739abd963b81 # v2
         with:
           tool: cargo-nextest
 
@@ -190,11 +190,11 @@ jobs:
     name: Verify MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Get MSRV
