@@ -77,6 +77,11 @@ impl DeleteVector {
     }
 
     #[allow(unused)]
+    pub fn contains(&self, pos: u64) -> bool {
+        self.inner.contains(pos)
+    }
+
+    #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
@@ -255,12 +260,12 @@ mod tests {
         let inserted = dv.insert_range(start, end);
         assert_eq!(inserted, end - start);
         assert_eq!(dv.len(), end - start);
-        assert!(dv.iter().any(|p| p == start));
-        assert!(dv.iter().any(|p| p == end - 1));
-        assert!(dv.iter().any(|p| p == 1u64 << 32));
-        assert!(dv.iter().any(|p| p == (1u64 << 32) | 0xFFFFFFF0));
-        assert!(!dv.iter().any(|p| p == start - 1));
-        assert!(!dv.iter().any(|p| p == end));
+        assert!(dv.contains(start));
+        assert!(dv.contains(end - 1));
+        assert!(dv.contains(1u64 << 32));
+        assert!(dv.contains((1u64 << 32) | 0xFFFFFFF0));
+        assert!(!dv.contains(start - 1));
+        assert!(!dv.contains(end));
     }
 
     #[test]
