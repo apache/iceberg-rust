@@ -25,8 +25,6 @@ use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use fs_err::read_to_string;
 use iceberg::CatalogBuilder;
 use iceberg::memory::MemoryCatalogBuilder;
-use iceberg_catalog_hms::HmsCatalogBuilder;
-use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
 
@@ -95,16 +93,15 @@ impl IcebergCatalogList {
             props.insert(key.to_string(), value_str.to_string());
         }
 
-        // Create catalog based on type using the appropriate builder
-        let catalog: Arc<dyn iceberg::Catalog> = match r#type {
-            "rest" => Arc::new(RestCatalogBuilder::default().load(name, props).await?),
-            "memory" => Arc::new(MemoryCatalogBuilder::default().load(name, props).await?),
-            "hms" => Arc::new(HmsCatalogBuilder::default().load(name, props).await?),
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unsupported catalog type: '{type}'. Supported types: rest, memory, hms"
-                ));
-            }
+        // Create catalog based on type using the catalog loader.
+        // "memory" is special-cased because it lives in iceberg core, not in
+        // one of the catalog crates that the loader registry knows about.
+        let catalog: Arc<dyn iceberg::Catalog> = if r#type == "memory" {
+            Arc::new(MemoryCatalogBuilder::default().load(name, props).await?)
+        } else {
+            iceberg_catalog_loader::load(r#type)?
+                .load(name.to_string(), props)
+                .await?
         };
 
         Ok((
@@ -181,7 +178,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Unsupported catalog type"));
         assert!(err_msg.contains("hive"));
-        assert!(err_msg.contains("rest, memory, hms"));
+        assert!(err_msg.contains("rest"));
     }
 
     #[tokio::test]
