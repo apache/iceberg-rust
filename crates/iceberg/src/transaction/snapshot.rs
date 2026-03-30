@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -175,10 +177,15 @@ impl<'a> SnapshotProducer<'a> {
             let manifest_list = current_snapshot
                 .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
-            for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry
-                    .load_manifest(self.table.file_io())
-                    .await?;
+
+            let file_io = self.table.file_io();
+            let mut manifest_futures: FuturesUnordered<_> = manifest_list
+                .entries()
+                .iter()
+                .map(|entry| entry.load_manifest(file_io))
+                .collect();
+
+            while let Some(manifest) = manifest_futures.try_next().await? {
                 for entry in manifest.entries() {
                     let file_path = entry.file_path();
                     if new_files.contains(file_path) && entry.is_alive() {
