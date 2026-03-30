@@ -19,15 +19,28 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use opendal::Configurator;
-use opendal::services::AzdlsConfig;
-use url::Url;
-
-use crate::io::config::{
+use iceberg::io::{
     ADLS_ACCOUNT_KEY, ADLS_ACCOUNT_NAME, ADLS_AUTHORITY_HOST, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET,
     ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN, ADLS_TENANT_ID,
 };
-use crate::{Error, ErrorKind, Result, ensure_data_valid};
+use iceberg::{Error, ErrorKind, Result};
+use opendal::Configurator;
+use opendal::services::AzdlsConfig;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::utils::from_opendal_error;
+
+/// Local version of `ensure_data_valid` macro since the iceberg crate's macro
+/// uses `$crate::error::Error` paths that don't resolve from external crates
+/// (the `error` module is private).
+macro_rules! ensure_data_valid {
+    ($cond:expr, $fmt:literal, $($arg:tt)*) => {
+        if !$cond {
+            return Err(Error::new(ErrorKind::DataInvalid, format!($fmt, $($arg)*)));
+        }
+    };
+}
 
 /// Parses adls.* prefixed configuration properties.
 pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Result<AzdlsConfig> {
@@ -100,8 +113,8 @@ pub(crate) fn azdls_create_operator<'a>(
 ///   paths are expected to contain the `dfs` storage service.
 /// - `wasb[s]` is used to refer to files in Blob Storage directly; paths are
 ///   expected to contain the `blob` storage service.
-#[derive(Debug, PartialEq)]
-pub(crate) enum AzureStorageScheme {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AzureStorageScheme {
     Abfs,
     Abfss,
     Wasb,
@@ -147,7 +160,7 @@ impl FromStr for AzureStorageScheme {
 }
 
 /// Validates whether the given path matches what's configured for the backend.
-fn match_path_with_config(
+pub(crate) fn match_path_with_config(
     path: &AzureStoragePath,
     config: &AzdlsConfig,
     configured_scheme: &AzureStorageScheme,
@@ -200,12 +213,14 @@ fn azdls_config_build(config: &AzdlsConfig, path: &AzureStoragePath) -> Result<o
     }
     builder = builder.filesystem(&path.filesystem);
 
-    Ok(opendal::Operator::new(builder)?.finish())
+    Ok(opendal::Operator::new(builder)
+        .map_err(from_opendal_error)?
+        .finish())
 }
 
 /// Represents a fully qualified path to blob/ file in Azure Storage.
 #[derive(Debug, PartialEq)]
-struct AzureStoragePath {
+pub(crate) struct AzureStoragePath {
     /// The scheme of the URL, e.g., `abfss`, `abfs`, `wasbs`, or `wasb`.
     scheme: AzureStorageScheme,
 
@@ -221,7 +236,7 @@ struct AzureStoragePath {
     /// Path to the file.
     ///
     /// It is relative to the `root` of the `AzdlsConfig`.
-    path: String,
+    pub(crate) path: String,
 }
 
 impl AzureStoragePath {
@@ -320,8 +335,7 @@ mod tests {
 
     use opendal::services::AzdlsConfig;
 
-    use super::{AzureStoragePath, AzureStorageScheme, azdls_create_operator};
-    use crate::io::azdls_config_parse;
+    use super::{AzureStoragePath, AzureStorageScheme, azdls_config_parse, azdls_create_operator};
 
     #[test]
     fn test_azdls_config_parse() {

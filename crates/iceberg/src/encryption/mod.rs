@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use opendal::Operator;
-use opendal::services::MemoryConfig;
+//! Encryption module for Apache Iceberg.
+//!
+//! This module provides core cryptographic primitives for encrypting
+//! and decrypting data in Iceberg tables.
 
-use crate::Result;
+mod crypto;
 
-pub(crate) fn memory_config_build() -> Result<Operator> {
-    Ok(Operator::from_config(MemoryConfig::default())?.finish())
-}
+pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};

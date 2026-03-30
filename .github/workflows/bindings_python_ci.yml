@@ -40,6 +40,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   check-rust:
     runs-on: ubuntu-latest
@@ -53,10 +56,10 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   check-python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098
         with:
           version: "0.9.3"
           enable-cache: true
@@ -75,6 +78,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest
@@ -89,8 +93,8 @@ jobs:
         with:
           working-directory: "bindings/python"
           command: build
-          args: --out dist --sdist
-      - uses: astral-sh/setup-uv@v7
+          args: --out dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
+      - uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098
         with:
           version: "0.9.3"
           enable-cache: true
