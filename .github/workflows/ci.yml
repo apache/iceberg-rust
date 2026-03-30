@@ -97,7 +97,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@v2
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -123,7 +123,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -149,7 +149,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@v2
         with:
           key: ${{ matrix.test-suite.name }}
 
