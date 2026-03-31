@@ -460,7 +460,7 @@ impl TableMetadata {
             && metadata_content[0] == 0x1F
             && metadata_content[1] == 0x8B
         {
-            let decompressed_data = CompressionCodec::Gzip
+            let decompressed_data = CompressionCodec::gzip_default()
                 .decompress(metadata_content.to_vec())
                 .map_err(|e| {
                     Error::new(
@@ -502,7 +502,7 @@ impl TableMetadata {
 
         // Apply compression based on codec
         let data_to_write = match codec {
-            CompressionCodec::Gzip => codec.compress(json_data)?,
+            CompressionCodec::Gzip(_) => codec.compress(json_data)?,
             CompressionCodec::None => json_data,
             _ => {
                 return Err(Error::new(
@@ -3633,7 +3633,7 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
         let json = serde_json::to_string(&original_metadata).unwrap();
 
-        let compressed = CompressionCodec::Gzip
+        let compressed = CompressionCodec::gzip_default()
             .compress(json.into_bytes())
             .expect("failed to compress metadata");
         std::fs::write(&metadata_location, &compressed).expect("failed to write metadata");

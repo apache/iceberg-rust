@@ -78,18 +78,22 @@ pub(crate) fn parse_metadata_file_compression(
         Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported."
+                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
+                CompressionCodec::None.name(),
+                CompressionCodec::gzip_default().name()
             ),
         )
     })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
-        CompressionCodec::None | CompressionCodec::Gzip => Ok(codec),
-        CompressionCodec::Lz4 | CompressionCodec::Zstd => Err(Error::new(
+        CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
+        _ => Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid metadata compression codec: {value}. Only 'none' and 'gzip' are supported for metadata files."
+                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+                CompressionCodec::None.name(),
+                CompressionCodec::gzip_default().name()
             ),
         )),
     }
@@ -324,7 +328,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
     }
 
@@ -351,7 +355,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_upper).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
 
         // Test mixed case
@@ -362,7 +366,7 @@ mod tests {
         let table_properties = TableProperties::try_from(&props_mixed).unwrap();
         assert_eq!(
             table_properties.metadata_compression_codec,
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
 
         // Test "NONE" should also be case-insensitive
@@ -517,7 +521,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
 
         // Test case insensitivity - "NONE"
@@ -537,7 +541,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
 
         // Test case insensitivity - "GzIp"
@@ -547,7 +551,7 @@ mod tests {
         )]);
         assert_eq!(
             parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::Gzip
+            CompressionCodec::gzip_default()
         );
 
         // Test default when property is missing
