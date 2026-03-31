@@ -27,6 +27,7 @@ permissions:
 
 jobs:
   set-version:
+    if: github.repository == 'apache/iceberg-rust' || github.event_name == 'workflow_dispatch' # Run on schedule for apache repo, or on manual dispatch from any repo
     runs-on: ubuntu-latest
     outputs:
       timestamp: ${{ steps.set-ts.outputs.TIMESTAMP }}
@@ -37,7 +38,6 @@ jobs:
 
   sdist:
     needs: set-version
-    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -62,7 +62,6 @@ jobs:
 
   wheels:
     needs: set-version
-    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
       max-parallel: 15
@@ -114,6 +113,7 @@ jobs:
           path: bindings/python/dist
 
   testpypi-publish:
+    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
 
