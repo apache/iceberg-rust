@@ -761,83 +761,55 @@ mod tests {
             }
         };
 
-        // Write uncompressed manifest with multiple entries to make compression effective
+        async fn write_manifest(
+            io: &FileIO,
+            path: &std::path::Path,
+            metadata: &ManifestMetadata,
+            compression: CompressionCodec,
+        ) {
+            let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+            let mut writer = ManifestWriterBuilder::new(
+                output_file,
+                Some(1),
+                None,
+                metadata.schema.clone(),
+                metadata.partition_spec.clone(),
+                compression,
+            )
+            .build_v2_data();
+            for i in 0..1000 {
+                let data_file = DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!(
+                        "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
+                    ))
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .file_size_in_bytes(100000 + i)
+                    .record_count(1000 + i)
+                    .build()
+                    .unwrap();
+                let entry = ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .snapshot_id(1)
+                    .sequence_number(1)
+                    .file_sequence_number(1)
+                    .data_file(data_file)
+                    .build();
+                writer.add_entry(entry).unwrap();
+            }
+            writer.write_manifest_file().await.unwrap();
+        }
+
         let tmp_dir = TempDir::new().unwrap();
-        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
         let io = FileIO::new_with_fs();
-        let output_file = io.new_output(uncompressed_path.to_str().unwrap()).unwrap();
-        let mut writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(1),
-            None,
-            metadata.schema.clone(),
-            metadata.partition_spec.clone(),
-            CompressionCodec::None,
-        )
-        .build_v2_data();
-        // Add multiple entries with long paths to create compressible data
-        for i in 0..1000 {
-            let data_file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
-                ))
-                .file_format(DataFileFormat::Parquet)
-                .partition(Struct::empty())
-                .file_size_in_bytes(100000 + i)
-                .record_count(1000 + i)
-                .build()
-                .unwrap();
-
-            let entry = ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .snapshot_id(1)
-                .sequence_number(1)
-                .file_sequence_number(1)
-                .data_file(data_file)
-                .build();
-            writer.add_entry(entry).unwrap();
-        }
-        writer.write_manifest_file().await.unwrap();
-        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
-
-        // Write compressed manifest with gzip
+        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
         let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
-        let output_file = io.new_output(compressed_path.to_str().unwrap()).unwrap();
-        let compression = CompressionCodec::Gzip(9);
-        let mut writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(1),
-            None,
-            metadata.schema.clone(),
-            metadata.partition_spec.clone(),
-            compression,
-        )
-        .build_v2_data();
-        // Add the same entries with long paths as the uncompressed version
-        for i in 0..1000 {
-            let data_file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
-                ))
-                .file_format(DataFileFormat::Parquet)
-                .partition(Struct::empty())
-                .file_size_in_bytes(100000 + i)
-                .record_count(1000 + i)
-                .build()
-                .unwrap();
 
-            let entry = ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .snapshot_id(1)
-                .sequence_number(1)
-                .file_sequence_number(1)
-                .data_file(data_file)
-                .build();
-            writer.add_entry(entry).unwrap();
-        }
-        writer.write_manifest_file().await.unwrap();
+        write_manifest(&io, &uncompressed_path, &metadata, CompressionCodec::None).await;
+        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(9)).await;
+
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
         let compressed_size = fs::metadata(&compressed_path).unwrap().len();
 
         // Verify compression is actually working
