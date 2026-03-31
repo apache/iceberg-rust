@@ -324,7 +324,8 @@ mod tests {
     async fn test_zstd_compressed_metric_data_is_bit_identical_to_java_generated_file() {
         let temp_dir = TempDir::new().unwrap();
         let blobs = vec![blob_0(), blob_1()];
-        let blobs_with_compression = blobs_with_compression(blobs, CompressionCodec::zstd_default());
+        let blobs_with_compression =
+            blobs_with_compression(blobs, CompressionCodec::zstd_default());
 
         assert_files_are_bit_identical(
             write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
@@ -339,7 +340,8 @@ mod tests {
     async fn test_gzip_compression_rejected() {
         let temp_dir = TempDir::new().unwrap();
         let blobs = vec![blob_0()];
-        let blobs_with_compression = blobs_with_compression(blobs, CompressionCodec::gzip_default());
+        let blobs_with_compression =
+            blobs_with_compression(blobs, CompressionCodec::gzip_default());
 
         let result = write_puffin_file(&temp_dir, blobs_with_compression, file_properties()).await;
 

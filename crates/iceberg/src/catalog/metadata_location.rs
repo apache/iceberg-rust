@@ -351,7 +351,10 @@ mod test {
         );
 
         let next_gzip = location_gzip.with_next_version();
-        assert_eq!(next_gzip.compression_codec, CompressionCodec::gzip_default());
+        assert_eq!(
+            next_gzip.compression_codec,
+            CompressionCodec::gzip_default()
+        );
         assert_eq!(next_gzip.version, 6);
     }
 
@@ -372,7 +375,10 @@ mod test {
         );
         let metadata_gzip = create_test_metadata(props_gzip);
         let updated_gzip = location.with_new_metadata(&metadata_gzip);
-        assert_eq!(updated_gzip.compression_codec, CompressionCodec::gzip_default());
+        assert_eq!(
+            updated_gzip.compression_codec,
+            CompressionCodec::gzip_default()
+        );
         assert_eq!(updated_gzip.version, 0);
         assert_eq!(
             updated_gzip.to_string(),

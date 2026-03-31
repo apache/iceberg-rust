@@ -261,9 +261,15 @@ mod tests {
     fn test_display() {
         assert_eq!(CompressionCodec::None.to_string(), "None");
         assert_eq!(CompressionCodec::Lz4.to_string(), "Lz4");
-        assert_eq!(CompressionCodec::zstd_default().to_string(), "Zstd(level=3)");
+        assert_eq!(
+            CompressionCodec::zstd_default().to_string(),
+            "Zstd(level=3)"
+        );
         assert_eq!(CompressionCodec::Zstd(5).to_string(), "Zstd(level=5)");
-        assert_eq!(CompressionCodec::gzip_default().to_string(), "Gzip(level=6)");
+        assert_eq!(
+            CompressionCodec::gzip_default().to_string(),
+            "Gzip(level=6)"
+        );
         assert_eq!(CompressionCodec::Gzip(9).to_string(), "Gzip(level=9)");
         assert_eq!(CompressionCodec::Snappy.to_string(), "Snappy");
     }

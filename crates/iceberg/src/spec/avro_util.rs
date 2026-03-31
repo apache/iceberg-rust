@@ -58,7 +58,9 @@ pub(crate) fn parse_avro_codec(codec: Option<&str>, level: Option<u8>) -> Compre
     }
     match lowercase.as_str() {
         CODEC_GZIP => CompressionCodec::Gzip(level.unwrap_or(DEFAULT_GZIP_LEVEL)),
-        CODEC_ZSTD => CompressionCodec::Zstd(level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(MAX_ZSTD_LEVEL)),
+        CODEC_ZSTD => {
+            CompressionCodec::Zstd(level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(MAX_ZSTD_LEVEL))
+        }
         CODEC_SNAPPY => CompressionCodec::Snappy,
         _ => {
             warn!("Unrecognized compression codec '{codec_str}', using no compression");
