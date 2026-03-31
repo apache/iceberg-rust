@@ -696,17 +696,30 @@ impl Catalog for S3TablesCatalog {
     }
 }
 
-/// Check if an AWS SDK error represents a "not found" condition.
+/// Check if an AWS SDK error represents a "not found" condition for a
+/// namespace or table resource.
 ///
-/// This checks both the typed `NotFoundException` variant (returned by real AWS)
-/// and falls back to inspecting the raw HTTP 404 status code for compatibility
-/// with S3Tables-compatible backends (e.g. SeaweedFS) that may return unrecognized
-/// error codes like `NoSuchNamespace` or `NoSuchTable`.
+/// The typed `NotFoundException` from the real AWS S3Tables API is matched by
+/// checking the error code. S3Tables-compatible backends (e.g. SeaweedFS) may
+/// return different error codes such as `NoSuchNamespace` or `NoSuchTable`
+/// which the SDK deserializes as `Unhandled` variants. This function checks the
+/// error code metadata to handle both cases.
+///
+/// Importantly, this does NOT treat `NoSuchBucket` as "not found" -- a missing
+/// table bucket is an infrastructure/configuration error that should propagate.
 fn is_not_found_sdk_error<E>(err: &aws_sdk_s3tables::error::SdkError<E>) -> bool
 where E: aws_sdk_s3tables::error::ProvideErrorMetadata {
     match err {
         aws_sdk_s3tables::error::SdkError::ServiceError(service_err) => {
-            service_err.raw().status().as_u16() == 404
+            matches!(
+                service_err.err().code(),
+                Some(
+                    "NotFoundException"
+                        | "NoSuchNamespace"
+                        | "NoSuchTable"
+                        | "ResourceNotFoundException"
+                )
+            )
         }
         _ => false,
     }

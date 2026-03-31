@@ -74,6 +74,10 @@ services:
         aws --endpoint-url http://seaweedfs:9000 s3 mb s3://icebergdata || true;
         aws --endpoint-url http://seaweedfs:9000 s3 mb s3://warehouse || true;
         aws --endpoint-url http://seaweedfs:9000 s3 mb s3://bucket1 || true;
+        curl -sf -X POST http://seaweedfs:9000/ \
+          -H 'Content-Type: application/x-amz-json-1.1' \
+          -H 'X-Amz-Target: S3Tables.CreateTableBucket' \
+          -d '{\"name\": \"iceberg-test\"}' || true;
         echo 'Buckets created successfully';
         tail -f /dev/null
       "
