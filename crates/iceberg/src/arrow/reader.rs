@@ -1112,32 +1112,22 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
 ///
-/// Must iterate top-level fields (not leaf columns) to stay consistent with
-/// `add_fallback_field_ids_to_arrow_schema`, which assigns ordinal IDs to
-/// top-level Arrow fields. Iterating leaves instead would produce wrong indices
+/// Must use top-level field positions (not leaf column positions) to stay consistent
+/// with `add_fallback_field_ids_to_arrow_schema`, which assigns ordinal IDs to
+/// top-level Arrow fields. Using leaf positions instead would produce wrong indices
 /// when nested types (struct/list/map) expand into multiple leaf columns.
 ///
 /// Matches iceberg-java's ParquetSchemaUtil.addFallbackIds().
 fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
-    let mut leaf_idx = 0;
 
-    for (top_pos, field) in parquet_schema.root_schema().get_fields().iter().enumerate() {
-        let field_id = (top_pos + 1) as i32;
-
-        if field.is_primitive() {
+    for leaf_idx in 0..parquet_schema.num_columns() {
+        let root_idx = parquet_schema.get_column_root_idx(leaf_idx);
+        // Only map primitive root columns; leaves inside groups (struct/list/map)
+        // don't get fallback IDs since predicates only target root-level primitives.
+        if !parquet_schema.get_column_root(leaf_idx).is_group() {
+            let field_id = (root_idx + 1) as i32;
             column_map.insert(field_id, leaf_idx);
-            leaf_idx += 1;
-        } else {
-            fn count_leaves(tp: &parquet::schema::types::Type) -> usize {
-                match tp {
-                    parquet::schema::types::Type::PrimitiveType { .. } => 1,
-                    parquet::schema::types::Type::GroupType { fields, .. } => {
-                        fields.iter().map(|f| count_leaves(f)).sum()
-                    }
-                }
-            }
-            leaf_idx += count_leaves(field);
         }
     }
 
