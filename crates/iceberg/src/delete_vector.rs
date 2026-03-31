@@ -46,12 +46,20 @@ impl DeleteVector {
     }
 
     /// Inserts all positions in the range [start, end) into the delete vector.
-    /// If start >= end, this method does nothing and returns 0.
+    /// If start == end, this method does nothing and returns 0.
+    ///
+    /// # Panics
+    ///
+    /// Panics if start > end (a reversed range indicates a bug in the caller).
     ///
     /// Returns the number of newly inserted positions.
     #[allow(unused)]
     pub fn insert_range(&mut self, start: u64, end: u64) -> u64 {
-        if start >= end {
+        assert!(
+            start <= end,
+            "insert_range requires start <= end, got [{start}, {end})"
+        );
+        if start == end {
             return 0;
         }
         self.inner.insert_range(start..end)
@@ -76,6 +84,7 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
+    /// Returns true if the given position is present in the delete vector.
     #[allow(unused)]
     pub fn contains(&self, pos: u64) -> bool {
         self.inner.contains(pos)
@@ -276,10 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_range_empty_when_start_greater_than_end() {
+    #[should_panic(expected = "insert_range requires start <= end")]
+    fn test_insert_range_reversed_panics() {
         let mut dv = DeleteVector::default();
-        assert_eq!(dv.insert_range(100, 50), 0);
-        assert_eq!(dv.len(), 0);
+        dv.insert_range(100, 50);
     }
 
     #[test]
