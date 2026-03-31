@@ -1364,13 +1364,6 @@ fn coerce_field_at_path(
             // spec for the backward-compatibility rules:
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
             if depth + 2 < parquet_path.len() {
-                debug_assert_eq!(
-                    element_field.name(),
-                    &parquet_path[depth + 2],
-                    "Arrow list element name '{}' does not match Parquet path segment '{}'",
-                    element_field.name(),
-                    &parquet_path[depth + 2]
-                );
                 let (new_element, changed) =
                     coerce_field_at_path(element_field, parquet_path, depth + 2, iceberg_schema);
                 if changed {
