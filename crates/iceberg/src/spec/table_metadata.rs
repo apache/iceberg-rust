@@ -47,6 +47,9 @@ use crate::{Error, ErrorKind};
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 
+/// Sentinel value used by the Java implementation and older metadata files
+/// to represent a missing/empty current snapshot ID. During deserialization,
+/// this value is normalized to `None`.
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 
@@ -457,7 +460,7 @@ impl TableMetadata {
             && metadata_content[0] == 0x1F
             && metadata_content[1] == 0x8B
         {
-            let decompressed_data = CompressionCodec::Gzip(None)
+            let decompressed_data = CompressionCodec::gzip_default()
                 .decompress(metadata_content.to_vec())
                 .map_err(|e| {
                     Error::new(
@@ -765,8 +768,8 @@ pub(super) mod _serde {
     use uuid::Uuid;
 
     use super::{
-        DEFAULT_PARTITION_SPEC_ID, FormatVersion, MAIN_BRANCH, MetadataLog, SnapshotLog,
-        TableMetadata,
+        DEFAULT_PARTITION_SPEC_ID, EMPTY_SNAPSHOT_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
+        SnapshotLog, TableMetadata,
     };
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2, SnapshotV3};
@@ -950,7 +953,7 @@ pub(super) mod _serde {
                 encryption_keys,
                 snapshots,
             } = value;
-            let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
+            let current_snapshot_id = if value.current_snapshot_id == Some(EMPTY_SNAPSHOT_ID) {
                 None
             } else {
                 value.current_snapshot_id
@@ -1063,7 +1066,7 @@ pub(super) mod _serde {
         fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
             let snapshots = value.snapshots;
             let value = value.shared;
-            let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
+            let current_snapshot_id = if value.current_snapshot_id == Some(EMPTY_SNAPSHOT_ID) {
                 None
             } else {
                 value.current_snapshot_id
@@ -1170,7 +1173,7 @@ pub(super) mod _serde {
     impl TryFrom<TableMetadataV1> for TableMetadata {
         type Error = Error;
         fn try_from(value: TableMetadataV1) -> Result<Self, Error> {
-            let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
+            let current_snapshot_id = if value.current_snapshot_id == Some(EMPTY_SNAPSHOT_ID) {
                 None
             } else {
                 value.current_snapshot_id
@@ -3301,6 +3304,18 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_snapshot_id_is_normalized_to_none() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
+        let deserialized: TableMetadata = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(
+            deserialized.current_snapshot_id(),
+            None,
+            "current_snapshot_id of -1 should be deserialized as None"
+        );
+    }
+
+    #[test]
     fn test_table_metadata_v1_compat() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV1Compat.json").unwrap();
@@ -3618,7 +3633,7 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
         let json = serde_json::to_string(&original_metadata).unwrap();
 
-        let compressed = CompressionCodec::Gzip(None)
+        let compressed = CompressionCodec::gzip_default()
             .compress(json.into_bytes())
             .expect("failed to compress metadata");
         std::fs::write(&metadata_location, &compressed).expect("failed to write metadata");

@@ -2155,7 +2155,7 @@ mod test {
             .unwrap()
             .to_string();
 
-        let compression = CompressionCodec::Gzip(Some(9));
+        let compression = CompressionCodec::Gzip(9);
         let mut writer = ManifestListWriter::v2(
             file_io.new_output(&compressed_path).unwrap(),
             1646658105718557341,

@@ -33,6 +33,7 @@ default = []
 
 
 [dependencies]
+aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
 array-init = { workspace = true }
@@ -80,6 +81,7 @@ typed-builder = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]

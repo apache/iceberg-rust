@@ -34,7 +34,11 @@ fn validate_puffin_compression(codec: CompressionCodec) -> Result<()> {
         other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "{other:?} is not supported for Puffin files. Only None, Lz4, and Zstd are supported."
+                "Compression codec {} is not supported for Puffin files. Only {}, {}, and {} are supported.",
+                other.name(),
+                CompressionCodec::None.name(),
+                CompressionCodec::Lz4.name(),
+                CompressionCodec::zstd_default().name()
             ),
         )),
     }
@@ -61,11 +65,11 @@ mod tests {
         // Supported codecs
         assert!(validate_puffin_compression(CompressionCodec::None).is_ok());
         assert!(validate_puffin_compression(CompressionCodec::Lz4).is_ok());
-        assert!(validate_puffin_compression(CompressionCodec::Zstd(None)).is_ok());
-        assert!(validate_puffin_compression(CompressionCodec::Zstd(Some(3))).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::zstd_default()).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Zstd(3)).is_ok());
 
         // Unsupported codecs
-        assert!(validate_puffin_compression(CompressionCodec::Gzip(None)).is_err());
+        assert!(validate_puffin_compression(CompressionCodec::gzip_default()).is_err());
         assert!(validate_puffin_compression(CompressionCodec::Snappy).is_err());
     }
 }
