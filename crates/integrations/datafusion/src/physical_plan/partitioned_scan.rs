@@ -35,10 +35,7 @@ use crate::to_datafusion_error;
 /// A DataFusion [`ExecutionPlan`] that reads one [`FileScanTask`] per partition.
 ///
 /// Display information (projection, predicate) is derived at runtime from the output schema and
-/// the tasks rather than stored as dedicated struct fields. This keeps the node self-contained:
-/// all state is already serializable via `FileScanTask`, which simplifies the DataFusion
-/// distributed codec, adding dedicated fields would require encoding them separately in the
-/// protobuf round-trip.
+/// the tasks rather than stored as dedicated struct fields.
 #[derive(Debug, Clone)]
 pub struct IcebergPartitionedScan {
     tasks: Vec<FileScanTask>,
