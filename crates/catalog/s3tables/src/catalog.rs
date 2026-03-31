@@ -712,6 +712,7 @@ mod tests {
 
     use super::*;
 
+    /// Load a catalog configured for real AWS S3Tables (requires TABLE_BUCKET_ARN).
     async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
         let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {
             Some(table_bucket_arn) => table_bucket_arn,
@@ -724,6 +725,41 @@ mod tests {
             endpoint_url: None,
             client: None,
             props: HashMap::new(),
+        };
+
+        Ok(Some(S3TablesCatalog::new(config, None).await?))
+    }
+
+    /// Load a catalog configured for local SeaweedFS S3Tables testing.
+    /// Falls back to real AWS if TABLE_BUCKET_ARN is set, otherwise checks
+    /// ICEBERG_TEST_S3TABLES_ENDPOINT for a local SeaweedFS instance.
+    async fn load_s3tables_catalog_for_test() -> Result<Option<S3TablesCatalog>> {
+        // Prefer real AWS if TABLE_BUCKET_ARN is set
+        if let Some(catalog) = load_s3tables_catalog_from_env().await? {
+            return Ok(Some(catalog));
+        }
+
+        // Fall back to local SeaweedFS via ICEBERG_TEST_S3TABLES_ENDPOINT
+        let endpoint_url = match std::env::var("ICEBERG_TEST_S3TABLES_ENDPOINT").ok() {
+            Some(url) => url,
+            None => return Ok(None),
+        };
+
+        let table_bucket_arn = std::env::var("TABLE_BUCKET_ARN").unwrap_or_else(|_| {
+            "arn:aws:s3tables:us-east-1:000000000000:bucket/iceberg-test".to_string()
+        });
+
+        let mut props = HashMap::new();
+        props.insert("aws_access_key_id".to_string(), "admin".to_string());
+        props.insert("aws_secret_access_key".to_string(), "password".to_string());
+        props.insert("region_name".to_string(), "us-east-1".to_string());
+
+        let config = S3TablesCatalogConfig {
+            name: None,
+            table_bucket_arn,
+            endpoint_url: Some(endpoint_url),
+            client: None,
+            props,
         };
 
         Ok(Some(S3TablesCatalog::new(config, None).await?))
@@ -776,7 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3tables_create_delete_namespace() {
-        let catalog = match load_s3tables_catalog_from_env().await {
+        let catalog = match load_s3tables_catalog_for_test().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
             Err(e) => panic!("Error loading catalog: {e}"),
@@ -794,7 +830,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3tables_create_delete_table() {
-        let catalog = match load_s3tables_catalog_from_env().await {
+        let catalog = match load_s3tables_catalog_for_test().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
             Err(e) => panic!("Error loading catalog: {e}"),
@@ -821,8 +857,8 @@ mod tests {
             namespace.clone(),
             "test_s3tables_create_delete_table".to_string(),
         );
+        catalog.purge_table(&table_ident).await.ok();
         catalog.drop_namespace(&namespace).await.ok();
-        catalog.drop_table(&table_ident).await.ok();
 
         catalog
             .create_namespace(&namespace, HashMap::new())
@@ -830,14 +866,14 @@ mod tests {
             .unwrap();
         catalog.create_table(&namespace, creation).await.unwrap();
         assert!(catalog.table_exists(&table_ident).await.unwrap());
-        catalog.drop_table(&table_ident).await.unwrap();
+        catalog.purge_table(&table_ident).await.unwrap();
         assert!(!catalog.table_exists(&table_ident).await.unwrap());
         catalog.drop_namespace(&namespace).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_s3tables_update_table() {
-        let catalog = match load_s3tables_catalog_from_env().await {
+        let catalog = match load_s3tables_catalog_for_test().await {
             Ok(Some(catalog)) => catalog,
             Ok(None) => return,
             Err(e) => panic!("Error loading catalog: {e}"),
@@ -849,7 +885,7 @@ mod tests {
             TableIdent::new(namespace.clone(), "test_s3tables_update_table".to_string());
 
         // Clean up any existing resources from previous test runs
-        catalog.drop_table(&table_ident).await.ok();
+        catalog.purge_table(&table_ident).await.ok();
         catalog.drop_namespace(&namespace).await.ok();
 
         // Create namespace and table
