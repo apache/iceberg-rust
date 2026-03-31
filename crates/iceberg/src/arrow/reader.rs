@@ -5020,9 +5020,10 @@ message schema {
 
         let mut row_group = writer.next_row_group().unwrap();
         {
+            // def=1: ts is OPTIONAL and present. No repetition levels (top-level columns).
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int96Type>()
-                .write_batch(&int96_values, Some(&vec![1i16; test_data.len()]), None)
+                .write_batch(&int96_values, Some(&vec![1; test_data.len()]), None)
                 .unwrap();
             col.close().unwrap();
         }
@@ -5142,11 +5143,13 @@ message schema {
         let mut writer =
             SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
 
+        // def=1: struct is REQUIRED so no level, ts is OPTIONAL and present (1).
+        // No repetition levels needed (no repeated groups).
         let mut row_group = writer.next_row_group().unwrap();
         {
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int96Type>()
-                .write_batch(&[int96_val], Some(&[1i16]), None)
+                .write_batch(&[int96_val], Some(&[1]), None)
                 .unwrap();
             col.close().unwrap();
         }
@@ -5241,12 +5244,14 @@ message schema {
         let mut writer =
             SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
 
-        // Write a single row with a list containing one INT96 element
+        // Write a single row with a list containing one INT96 element.
+        // def=3: list present (1) + repeated group (2) + element present (3)
+        // rep=0: start of a new list
         let mut row_group = writer.next_row_group().unwrap();
         {
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int96Type>()
-                .write_batch(&[int96_val], Some(&[3i16]), Some(&[0i16]))
+                .write_batch(&[int96_val], Some(&[3]), Some(&[0]))
                 .unwrap();
             col.close().unwrap();
         }
@@ -5349,25 +5354,26 @@ message schema {
         let mut writer =
             SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
 
-        // Write a single row with a map containing one key-value pair
+        // Write a single row with a map containing one key-value pair.
+        // rep=0 for both columns: start of a new map.
+        // key def=2: map present (1) + key_value entry present (2), key is REQUIRED.
+        // value def=3: map present (1) + key_value entry present (2) + value present (3).
         let mut row_group = writer.next_row_group().unwrap();
         {
-            // key column
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<ByteArrayType>()
                 .write_batch(
                     &[parquet::data_type::ByteArray::from("event_time")],
-                    Some(&[2i16]),
-                    Some(&[0i16]),
+                    Some(&[2]),
+                    Some(&[0]),
                 )
                 .unwrap();
             col.close().unwrap();
         }
         {
-            // value column (INT96)
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int96Type>()
-                .write_batch(&[int96_val], Some(&[3i16]), Some(&[0i16]))
+                .write_batch(&[int96_val], Some(&[3]), Some(&[0]))
                 .unwrap();
             col.close().unwrap();
         }
