@@ -250,7 +250,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::{Manifest, ManifestFile, ManifestList, Snapshot};
+use crate::spec::{Manifest, ManifestFile, ManifestList, ManifestStatus, Snapshot};
 
 pub(crate) const DEFAULT_DELETE_CONCURRENCY_LIMIT: usize = 10;
 pub(crate) const DEFAULT_LOAD_CONCURRENCY_LIMIT: usize = 16;
@@ -453,6 +453,11 @@ impl ReachableFileCleanupStrategy {
     }
 
     /// Finds data files that can be safely deleted.
+    ///
+    /// Collects all data file paths from the manifests being deleted, then removes
+    /// any that are still actively referenced (status `Added` or `Existing`) by
+    /// surviving manifests. Files with `Deleted` status in surviving manifests are
+    /// tombstone entries and do not protect the underlying data files from deletion.
     async fn find_files_to_delete(
         &self,
         manifest_files: &HashSet<ManifestFile>,
@@ -483,9 +488,14 @@ impl ReachableFileCleanupStrategy {
         let loaded_referenced =
             load_manifests(&self.file_io, referenced_vec, self.load_concurrency).await?;
 
+        // Only protect files that are actively referenced (Added or Existing).
+        // Entries with Deleted status are tombstones — they indicate the file was
+        // removed from the table and should not prevent its deletion from storage.
         for (_, manifest) in loaded_referenced {
             for entry in manifest.entries() {
-                files_to_delete.remove(entry.data_file().file_path());
+                if entry.status() != ManifestStatus::Deleted {
+                    files_to_delete.remove(entry.data_file().file_path());
+                }
             }
         }
 
@@ -638,6 +648,204 @@ mod cleanup_tests {
             restored_props.get(S3_REGION).map(|s| s.as_str()),
             Some(s3_region),
             "After with_file_io the table's FileIO should carry the S3 region again"
+        );
+    }
+
+    /// Helper to create a minimal DataFile with the given path.
+    #[cfg(test)]
+    fn make_data_file(path: &str) -> crate::spec::DataFile {
+        use std::collections::HashMap;
+
+        use crate::spec::{DataContentType, DataFile, DataFileFormat, Struct};
+
+        DataFile {
+            content: DataContentType::Data,
+            file_path: path.to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 1,
+            file_size_in_bytes: 1024,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    /// Helper to write a manifest with the given entries to memory FileIO,
+    /// returning the resulting `ManifestFile`.
+    #[cfg(test)]
+    async fn write_test_manifest(
+        file_io: &crate::io::FileIO,
+        path: &str,
+        snapshot_id: i64,
+        entries: Vec<(crate::spec::ManifestStatus, &str)>,
+    ) -> crate::spec::ManifestFile {
+        use crate::spec::{
+            ManifestEntry, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
+            PrimitiveType, Schema, Type,
+        };
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let output = file_io.new_output(path).unwrap();
+        let mut writer =
+            ManifestWriterBuilder::new(output, Some(snapshot_id), None, schema, partition_spec)
+                .build_v2_data();
+
+        for (status, file_path) in entries {
+            let entry = ManifestEntry {
+                status,
+                snapshot_id: Some(snapshot_id),
+                sequence_number: Some(1),
+                file_sequence_number: Some(1),
+                data_file: make_data_file(file_path),
+            };
+            match status {
+                ManifestStatus::Added => writer.add_entry(entry).unwrap(),
+                ManifestStatus::Deleted => writer.add_delete_entry(entry).unwrap(),
+                ManifestStatus::Existing => writer.add_existing_entry(entry).unwrap(),
+            }
+        }
+
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    /// Verifies that `find_files_to_delete` does not protect data files whose
+    /// entries in surviving manifests have `ManifestStatus::Deleted` (tombstones).
+    ///
+    /// After compaction, replaced data files appear as `Deleted` entries in the
+    /// current snapshot's manifests.  Before the fix, these tombstone entries
+    /// incorrectly prevented the underlying data files from being cleaned up
+    /// when the old snapshot expired.
+    #[tokio::test]
+    async fn test_deleted_status_entries_do_not_protect_files_from_cleanup() {
+        use crate::spec::ManifestStatus;
+
+        let file_io = FileIOBuilder::new("memory").build().unwrap();
+
+        // ---- set up manifests ----
+        // Manifest belonging to an expired snapshot.
+        // Contains file_a (replaced by compaction) and file_b (still live).
+        let expired_manifest = write_test_manifest(
+            &file_io,
+            "memory://manifests/expired.avro",
+            1, // snapshot_id
+            vec![
+                (ManifestStatus::Added, "memory://data/file_a.parquet"),
+                (ManifestStatus::Added, "memory://data/file_b.parquet"),
+            ],
+        )
+        .await;
+
+        // Manifest still referenced by the current (surviving) snapshot.
+        // file_a has Deleted status (tombstone from compaction) — must NOT
+        // protect file_a from deletion.
+        // file_b has Existing status — must protect file_b from deletion.
+        let surviving_manifest = write_test_manifest(
+            &file_io,
+            "memory://manifests/surviving.avro",
+            2, // snapshot_id
+            vec![
+                (ManifestStatus::Deleted, "memory://data/file_a.parquet"),
+                (ManifestStatus::Existing, "memory://data/file_b.parquet"),
+            ],
+        )
+        .await;
+
+        // ---- call find_files_to_delete ----
+        let manifests_to_delete: HashSet<_> = [expired_manifest].into_iter().collect();
+        let referenced_manifests: HashSet<_> = [surviving_manifest].into_iter().collect();
+
+        let strategy = ReachableFileCleanupStrategy::new(file_io);
+        let files_to_delete = strategy
+            .find_files_to_delete(&manifests_to_delete, &referenced_manifests)
+            .await
+            .expect("find_files_to_delete should succeed");
+
+        // file_a should be deleted: the tombstone (Deleted status) in the
+        // surviving manifest must NOT prevent its removal.
+        assert!(
+            files_to_delete.contains("memory://data/file_a.parquet"),
+            "file_a should be marked for deletion because the Deleted tombstone \
+             in the surviving manifest must not protect it"
+        );
+
+        // file_b should NOT be deleted: it has Existing status in the
+        // surviving manifest, so it is still actively referenced.
+        assert!(
+            !files_to_delete.contains("memory://data/file_b.parquet"),
+            "file_b should be protected from deletion because it has Existing \
+             status in the surviving manifest"
+        );
+
+        assert_eq!(
+            files_to_delete.len(),
+            1,
+            "Exactly one file (file_a) should be marked for deletion"
+        );
+    }
+
+    /// Verifies that when a surviving manifest references a file with `Added`
+    /// status, that file is protected from deletion — even if an expired
+    /// manifest also references it.
+    #[tokio::test]
+    async fn test_added_status_entries_protect_files_from_cleanup() {
+        use crate::spec::ManifestStatus;
+
+        let file_io = FileIOBuilder::new("memory").build().unwrap();
+
+        let expired_manifest =
+            write_test_manifest(&file_io, "memory://manifests/expired.avro", 1, vec![(
+                ManifestStatus::Added,
+                "memory://data/file_c.parquet",
+            )])
+            .await;
+
+        // The same file appears as Added in a surviving manifest.
+        let surviving_manifest =
+            write_test_manifest(&file_io, "memory://manifests/surviving.avro", 2, vec![(
+                ManifestStatus::Added,
+                "memory://data/file_c.parquet",
+            )])
+            .await;
+
+        let manifests_to_delete: HashSet<_> = [expired_manifest].into_iter().collect();
+        let referenced_manifests: HashSet<_> = [surviving_manifest].into_iter().collect();
+
+        let strategy = ReachableFileCleanupStrategy::new(file_io);
+        let files_to_delete = strategy
+            .find_files_to_delete(&manifests_to_delete, &referenced_manifests)
+            .await
+            .expect("find_files_to_delete should succeed");
+
+        assert!(
+            files_to_delete.is_empty(),
+            "No files should be deleted when the surviving manifest has the file as Added"
         );
     }
 
