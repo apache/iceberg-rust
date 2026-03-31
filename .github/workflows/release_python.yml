@@ -49,6 +49,7 @@ jobs:
       - name: Validate release tag format
         id: validate
         # Valid formats: v<major>.<minor>.<patch> OR v<major>.<minor>.<patch>-rc.<release_candidate>
+        shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
@@ -119,6 +120,7 @@ jobs:
           # doing this explicitly to avoid issue in Windows where `mv` does not overwrite existing file
           rm Cargo.toml
           mv Cargo.toml.tmp Cargo.toml
+        shell: bash
         env:
           NEEDS_VALIDATE_RELEASE_TAG_OUTPUTS_CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
 
@@ -161,6 +163,7 @@ jobs:
       - name: Set cargo version for RC
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         working-directory: "bindings/python"
+        shell: bash
         env:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
