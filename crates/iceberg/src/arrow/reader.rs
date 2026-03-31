@@ -4751,9 +4751,8 @@ message schema {
         assert_eq!(ids, vec![2, 3]);
     }
 
-    /// Regression: predicate on a column after a struct in a migrated file (no field IDs).
-    /// Without the fix, build_fallback_field_id_map maps id's field_id to a leaf inside
-    /// the struct, causing "isn't a root column in Parquet schema".
+    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
+    /// predicate on a column after a struct in a migrated file (no field IDs).
     #[tokio::test]
     async fn test_predicate_on_migrated_file_with_struct() {
         let schema = Arc::new(
@@ -4810,7 +4809,8 @@ message schema {
         read_migrated_file_with_nested_type_and_predicate(schema, arrow_schema, batch).await;
     }
 
-    /// Regression: predicate on a column after a list in a migrated file (no field IDs).
+    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
+    /// predicate on a column after a list in a migrated file (no field IDs).
     /// Uses list-of-struct (2+ leaves) because a list of primitives has only 1 leaf,
     /// which coincidentally produces the same mapping as a top-level primitive.
     #[tokio::test]
@@ -4879,7 +4879,8 @@ message schema {
         read_migrated_file_with_nested_type_and_predicate(schema, arrow_schema, batch).await;
     }
 
-    /// Regression: predicate on a column after a map in a migrated file (no field IDs).
+    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
+    /// predicate on a column after a map in a migrated file (no field IDs).
     #[tokio::test]
     async fn test_predicate_on_migrated_file_with_map() {
         let schema = Arc::new(
