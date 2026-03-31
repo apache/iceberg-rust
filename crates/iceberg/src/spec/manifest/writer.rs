@@ -761,6 +761,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_manifest_writer_with_compression() {
+        let metadata = {
+            let schema = Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap();
+
+            ManifestMetadata {
+                schema_id: 0,
+                schema: Arc::new(schema),
+                partition_spec: PartitionSpec::unpartition_spec(),
+                format_version: FormatVersion::V2,
+                content: ManifestContentType::Data,
+            }
+        };
+
+        async fn write_manifest(
+            io: &FileIO,
+            path: &std::path::Path,
+            metadata: &ManifestMetadata,
+            compression: CompressionCodec,
+        ) {
+            let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+            let mut writer = ManifestWriterBuilder::new(
+                output_file,
+                Some(1),
+                None,
+                metadata.schema.clone(),
+                metadata.partition_spec.clone(),
+                compression,
+            )
+            .build_v2_data();
+            for i in 0..1000 {
+                let data_file = DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!(
+                        "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
+                    ))
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .file_size_in_bytes(100000 + i)
+                    .record_count(1000 + i)
+                    .build()
+                    .unwrap();
+                let entry = ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .snapshot_id(1)
+                    .sequence_number(1)
+                    .file_sequence_number(1)
+                    .data_file(data_file)
+                    .build();
+                writer.add_entry(entry).unwrap();
+            }
+            writer.write_manifest_file().await.unwrap();
+        }
+
+        let tmp_dir = TempDir::new().unwrap();
+        let io = FileIO::new_with_fs();
+        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
+        let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
+
+        write_manifest(&io, &uncompressed_path, &metadata, CompressionCodec::None).await;
+        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(9)).await;
+
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
+        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
+
+        // Verify compression is actually working
+        assert!(
+            compressed_size < uncompressed_size,
+            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
+        );
+
+        // Verify the compressed file can be read back correctly
+        let compressed_bytes = fs::read(&compressed_path).unwrap();
+        let manifest = Manifest::parse_avro(&compressed_bytes).unwrap();
+        assert_eq!(manifest.metadata.format_version, FormatVersion::V2);
+        assert_eq!(manifest.entries.len(), 1000);
+    }
+
+    #[tokio::test]
     async fn test_v3_delete_manifest_delete_file_roundtrip() {
         let schema = Arc::new(
             Schema::builder()
@@ -850,116 +935,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_manifest_writer_with_compression() {
-        let metadata = {
-            let schema = Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Int),
-                ))])
-                .build()
-                .unwrap();
-
-            ManifestMetadata {
-                schema_id: 0,
-                schema: Arc::new(schema),
-                partition_spec: PartitionSpec::unpartition_spec(),
-                format_version: FormatVersion::V2,
-                content: ManifestContentType::Data,
-            }
-        };
-
-        // Write uncompressed manifest with multiple entries to make compression effective
-        let tmp_dir = TempDir::new().unwrap();
-        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
-        let io = FileIO::new_with_fs();
-        let output_file = io.new_output(uncompressed_path.to_str().unwrap()).unwrap();
-        let mut writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(1),
-            None,
-            metadata.schema.clone(),
-            metadata.partition_spec.clone(),
-            CompressionCodec::None,
-        )
-        .build_v2_data();
-        // Add multiple entries with long paths to create compressible data
-        for i in 0..1000 {
-            let data_file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
-                ))
-                .file_format(DataFileFormat::Parquet)
-                .partition(Struct::empty())
-                .file_size_in_bytes(100000 + i)
-                .record_count(1000 + i)
-                .build()
-                .unwrap();
-
-            let entry = ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .snapshot_id(1)
-                .sequence_number(1)
-                .file_sequence_number(1)
-                .data_file(data_file)
-                .build();
-            writer.add_entry(entry).unwrap();
-        }
-        writer.write_manifest_file().await.unwrap();
-        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
-
-        // Write compressed manifest with gzip
-        let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
-        let output_file = io.new_output(compressed_path.to_str().unwrap()).unwrap();
-        let compression = CompressionCodec::Gzip(Some(9));
-        let mut writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(1),
-            None,
-            metadata.schema.clone(),
-            metadata.partition_spec.clone(),
-            compression,
-        )
-        .build_v2_data();
-        // Add the same entries with long paths as the uncompressed version
-        for i in 0..1000 {
-            let data_file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(format!(
-                    "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
-                ))
-                .file_format(DataFileFormat::Parquet)
-                .partition(Struct::empty())
-                .file_size_in_bytes(100000 + i)
-                .record_count(1000 + i)
-                .build()
-                .unwrap();
-
-            let entry = ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .snapshot_id(1)
-                .sequence_number(1)
-                .file_sequence_number(1)
-                .data_file(data_file)
-                .build();
-            writer.add_entry(entry).unwrap();
-        }
-        writer.write_manifest_file().await.unwrap();
-        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
-
-        // Verify compression is actually working
-        assert!(
-            compressed_size < uncompressed_size,
-            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
-        );
-
-        // Verify the compressed file can be read back correctly
-        let compressed_bytes = fs::read(&compressed_path).unwrap();
-        let manifest = Manifest::parse_avro(&compressed_bytes).unwrap();
-        assert_eq!(manifest.metadata.format_version, FormatVersion::V2);
-        assert_eq!(manifest.entries.len(), 1000);
-    }
 }
