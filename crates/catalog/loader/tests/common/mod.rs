@@ -49,7 +49,7 @@ use iceberg_catalog_sql::{
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{
-    get_glue_endpoint, get_hms_endpoint, get_s3_endpoint, get_rest_catalog_endpoint, set_up,
+    get_glue_endpoint, get_hms_endpoint, get_rest_catalog_endpoint, get_s3_endpoint, set_up,
 };
 use sqlx::migrate::MigrateDatabase;
 use tempfile::TempDir;
