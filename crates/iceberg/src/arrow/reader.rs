@@ -386,9 +386,8 @@ impl ArrowReader {
             arrow_metadata
         };
 
-        // Coerce INT96 timestamp columns to the correct TimeUnit from the Iceberg schema.
-        // Must happen before building the stream so arrow-rs decodes INT96 at the right
-        // resolution (e.g., microseconds instead of nanoseconds to avoid i64 overflow).
+        // Coerce INT96 timestamp columns to the resolution specified by the Iceberg schema.
+        // This must happen before building the stream reader to avoid i64 overflow in arrow-rs.
         let arrow_metadata = if let Some(coerced_schema) = coerce_int96_timestamps(
             arrow_metadata.metadata().file_metadata().schema_descr(),
             arrow_metadata.schema(),
@@ -1254,20 +1253,18 @@ fn add_fallback_field_ids_to_arrow_schema(arrow_schema: &ArrowSchemaRef) -> Arc<
     ))
 }
 
-/// Coerce Arrow schema types for Parquet INT96 columns to match the Iceberg table schema.
+/// Coerce Arrow schema types for INT96 columns to match the Iceberg table schema.
 ///
-/// INT96 is a legacy Parquet physical type for timestamps (common in Spark/Hive files).
-/// arrow-rs defaults INT96 to Timestamp(Nanosecond), which overflows i64 for dates outside
-/// ~1677-2262. The Iceberg spec defines timestamps as microsecond precision (timestamp) or
-/// nanosecond precision (timestamp_ns).
-/// See: https://iceberg.apache.org/spec/#primitive-types
+/// arrow-rs defaults INT96 to `Timestamp(Nanosecond)`, which overflows i64 for dates outside
+/// ~1677-2262. We use arrow-rs's schema hint mechanism to read INT96 at the resolution
+/// specified by the Iceberg schema (`timestamp` → microsecond, `timestamp_ns` → nanosecond).
 ///
-/// This function patches the Arrow schema so arrow-rs reads INT96 at the correct resolution,
-/// using the schema hint mechanism from arrow-rs PR #7285.
+/// Iceberg Java handles this differently: it bypasses parquet-mr with a custom column reader
+/// (`GenericParquetReaders.TimestampInt96Reader`). We achieve the same result via schema hints.
 ///
-/// Iceberg Java avoids this by using a custom INT96 column reader that bypasses parquet-mr's
-/// default decoding (GenericParquetReaders.TimestampInt96Reader). iceberg-rust delegates to
-/// arrow-rs, so we must pass the correct schema hint instead.
+/// References:
+/// - Iceberg spec primitive types: <https://iceberg.apache.org/spec/#primitive-types>
+/// - arrow-rs schema hint support: <https://github.com/apache/arrow-rs/pull/7285>
 fn coerce_int96_timestamps(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &ArrowSchemaRef,
@@ -1276,7 +1273,6 @@ fn coerce_int96_timestamps(
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use parquet::basic::Type as PhysicalType;
 
-    // Collect paths of INT96 leaf columns from the Parquet schema
     let int96_paths: HashSet<String> = parquet_schema
         .columns()
         .iter()
@@ -1288,7 +1284,6 @@ fn coerce_int96_timestamps(
         return None;
     }
 
-    // Recursively coerce fields, tracking the Parquet column path for matching
     fn coerce_field(
         field: &FieldRef,
         path_parts: &[&str],
@@ -1314,41 +1309,38 @@ fn coerce_int96_timestamps(
                     .with_metadata(field.metadata().clone()),
                 )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                let full_path = path_parts.join(".");
-                if int96_paths.contains(&full_path) {
-                    // Look up the Iceberg field by ID to determine target TimeUnit
-                    let target_unit = field
-                        .metadata()
-                        .get(PARQUET_FIELD_ID_META_KEY)
-                        .and_then(|id_str| id_str.parse::<i32>().ok())
-                        .and_then(|field_id| iceberg_schema.field_by_id(field_id))
-                        .and_then(|iceberg_field| match &*iceberg_field.field_type {
-                            Type::Primitive(PrimitiveType::Timestamp)
-                            | Type::Primitive(PrimitiveType::Timestamptz) => {
-                                Some(TimeUnit::Microsecond)
-                            }
-                            Type::Primitive(PrimitiveType::TimestampNs)
-                            | Type::Primitive(PrimitiveType::TimestamptzNs) => {
-                                Some(TimeUnit::Nanosecond)
-                            }
-                            _ => None,
-                        })
-                        // Default to Microsecond for INT96 — matches Iceberg Java behavior
-                        .unwrap_or(TimeUnit::Microsecond);
+            DataType::Timestamp(TimeUnit::Nanosecond, tz)
+                if int96_paths.contains(&path_parts.join(".")) =>
+            {
+                let target_unit = field
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .and_then(|id_str| id_str.parse::<i32>().ok())
+                    .and_then(|field_id| iceberg_schema.field_by_id(field_id))
+                    .and_then(|f| match &*f.field_type {
+                        Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz) => {
+                            Some(TimeUnit::Microsecond)
+                        }
+                        Type::Primitive(
+                            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                        ) => Some(TimeUnit::Nanosecond),
+                        _ => None,
+                    })
+                    // Iceberg Java reads INT96 as microseconds by default
+                    .unwrap_or(TimeUnit::Microsecond);
 
-                    if target_unit != TimeUnit::Nanosecond {
-                        return Arc::new(
-                            Field::new(
-                                field.name(),
-                                DataType::Timestamp(target_unit, tz.clone()),
-                                field.is_nullable(),
-                            )
-                            .with_metadata(field.metadata().clone()),
-                        );
-                    }
+                if target_unit == TimeUnit::Nanosecond {
+                    return Arc::clone(field);
                 }
-                Arc::clone(field)
+
+                Arc::new(
+                    Field::new(
+                        field.name(),
+                        DataType::Timestamp(target_unit, tz.clone()),
+                        field.is_nullable(),
+                    )
+                    .with_metadata(field.metadata().clone()),
+                )
             }
             _ => Arc::clone(field),
         }
@@ -1357,7 +1349,14 @@ fn coerce_int96_timestamps(
     let coerced_fields: Vec<FieldRef> = arrow_schema
         .fields()
         .iter()
-        .map(|field| coerce_field(field, &[field.name().as_str()], &int96_paths, iceberg_schema))
+        .map(|field| {
+            coerce_field(
+                field,
+                &[field.name().as_str()],
+                &int96_paths,
+                iceberg_schema,
+            )
+        })
         .collect();
 
     let coerced = ArrowSchema::new_with_metadata(coerced_fields, arrow_schema.metadata().clone());
@@ -4805,10 +4804,8 @@ message schema {
         assert_eq!(result[2], expected_2);
     }
 
-    /// Helper to write a Parquet file with INT96 timestamps using the low-level writer.
-    /// Returns (file_path, expected_microsecond_values).
-    ///
-    /// We must use SerializedFileWriter because ArrowWriter cannot write INT96.
+    /// Writes a Parquet file with INT96 timestamps using SerializedFileWriter
+    /// (ArrowWriter cannot write INT96). Returns (file_path, expected_microsecond_values).
     fn write_int96_parquet_file(
         table_location: &str,
         filename: &str,
@@ -4821,13 +4818,10 @@ message schema {
 
         let file_path = format!("{table_location}/{filename}");
 
-        // Build Parquet schema with INT96 timestamp and INT32 id
-        let mut ts_builder =
-            SchemaType::primitive_type_builder("ts", PhysicalType::INT96)
-                .with_repetition(Repetition::OPTIONAL);
-        let mut id_builder =
-            SchemaType::primitive_type_builder("id", PhysicalType::INT32)
-                .with_repetition(Repetition::REQUIRED);
+        let mut ts_builder = SchemaType::primitive_type_builder("ts", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL);
+        let mut id_builder = SchemaType::primitive_type_builder("id", PhysicalType::INT32)
+            .with_repetition(Repetition::REQUIRED);
 
         if with_field_ids {
             ts_builder = ts_builder.with_id(Some(1));
@@ -4844,28 +4838,33 @@ message schema {
 
         // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
         // Julian day 2_440_588 = Unix epoch (1970-01-01)
-        //
-        // We pick dates outside the i64 nanosecond range (~1677-2262) to trigger
-        // the overflow bug. Year 3333 ≈ Julian day 2_953_529.
+        // Dates outside the i64 nanosecond range (~1677-2262) overflow without coercion.
+        const UNIX_EPOCH_JULIAN: i64 = 2_440_588;
+        const MICROS_PER_DAY: i64 = 86_400_000_000;
+        const NOON_NANOS: u64 = 43_200_000_000_000;
+
         let test_data: Vec<(u32, u32, u32, i64)> = vec![
-            // (nanos_low, nanos_high, julian_day, expected_micros_since_epoch)
-            // Day 2_953_529 = 3333-01-01, nanos_within_day = 0
-            (0, 0, 2_953_529, {
-                (2_953_529i64 - 2_440_588) * 86_400_000_000
-            }),
-            // Day 2_953_529 = 3333-01-01, nanos_within_day = 43_200_000_000_000 (12:00:00 noon)
-            // 43_200_000_000_000 as two u32s: low = 43_200_000_000_000 & 0xFFFFFFFF, high = 43_200_000_000_000 >> 32
-            ({
-                (43_200_000_000_000u64 & 0xFFFFFFFF) as u32
-            }, {
-                (43_200_000_000_000u64 >> 32) as u32
-            }, 2_953_529, {
-                (2_953_529i64 - 2_440_588) * 86_400_000_000 + 43_200_000_000
-            }),
-            // Day 2_488_070 = 2100-01-01, nanos_within_day = 0
-            (0, 0, 2_488_070, {
-                (2_488_070i64 - 2_440_588) * 86_400_000_000
-            }),
+            // 3333-01-01 00:00:00
+            (
+                0,
+                0,
+                2_953_529,
+                (2_953_529 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY,
+            ),
+            // 3333-01-01 12:00:00
+            (
+                (NOON_NANOS & 0xFFFFFFFF) as u32,
+                (NOON_NANOS >> 32) as u32,
+                2_953_529,
+                (2_953_529 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY + (NOON_NANOS / 1_000) as i64,
+            ),
+            // 2100-01-01 00:00:00
+            (
+                0,
+                0,
+                2_488_070,
+                (2_488_070 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY,
+            ),
         ];
 
         let int96_values: Vec<Int96> = test_data
@@ -4886,7 +4885,6 @@ message schema {
 
         let mut row_group = writer.next_row_group().unwrap();
         {
-            // Write ts column (optional — all present, so def_levels = [1, 1, 1])
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int96Type>()
                 .write_batch(&int96_values, Some(&vec![1i16; test_data.len()]), None)
@@ -4894,7 +4892,6 @@ message schema {
             col.close().unwrap();
         }
         {
-            // Write id column (required — no def levels)
             let mut col = row_group.next_column().unwrap().unwrap();
             col.typed::<Int32Type>()
                 .write_batch(&id_values, None, None)
@@ -4907,12 +4904,58 @@ message schema {
         (file_path, expected_micros)
     }
 
-    /// Test reading INT96 timestamps through iceberg-rust's ArrowReader.
-    /// Files WITH embedded field IDs (branch 1 of schema resolution).
-    #[tokio::test]
-    async fn test_read_int96_timestamps_with_field_ids() {
+    /// Read INT96 Parquet file through ArrowReader and verify microsecond timestamps.
+    async fn assert_int96_read_matches(
+        file_path: &str,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        expected_micros: &[i64],
+    ) {
         use arrow_array::TimestampMicrosecondArray;
 
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let task = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(file_path).unwrap().len(),
+            start: 0,
+            length: std::fs::metadata(file_path).unwrap().len(),
+            record_count: None,
+            data_file_path: file_path.to_string(),
+            data_file_format: DataFileFormat::Parquet,
+            schema,
+            project_field_ids,
+            predicate: None,
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader.read(tasks).unwrap().try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let ts_array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray");
+
+        for (i, expected) in expected_micros.iter().enumerate() {
+            assert_eq!(
+                ts_array.value(i),
+                *expected,
+                "Row {i}: got {}, expected {expected}",
+                ts_array.value(i)
+            );
+        }
+    }
+
+    /// Files with embedded field IDs (branch 1 of schema resolution).
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_field_ids() {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -4927,63 +4970,15 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-
         let (file_path, expected_micros) =
             write_int96_parquet_file(&table_location, "with_ids.parquet", true);
 
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
-
-        let task = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
-            start: 0,
-            length: std::fs::metadata(&file_path).unwrap().len(),
-            record_count: None,
-            data_file_path: file_path,
-            data_file_format: DataFileFormat::Parquet,
-            schema: schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: None,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches: Vec<RecordBatch> = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-
-        let ts_array = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("Expected TimestampMicrosecondArray");
-
-        for (i, expected) in expected_micros.iter().enumerate() {
-            assert_eq!(
-                ts_array.value(i),
-                *expected,
-                "Mismatch at row {i}: got {}, expected {expected}",
-                ts_array.value(i)
-            );
-        }
+        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
     }
 
-    /// Test reading INT96 timestamps from migrated files WITHOUT field IDs
-    /// (branches 2/3 of schema resolution — the common migration case).
+    /// Migrated files without field IDs (branches 2/3 of schema resolution).
     #[tokio::test]
     async fn test_read_int96_timestamps_without_field_ids() {
-        use arrow_array::TimestampMicrosecondArray;
-
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -4998,63 +4993,14 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-
         let (file_path, expected_micros) =
             write_int96_parquet_file(&table_location, "no_ids.parquet", false);
 
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
-
-        let task = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
-            start: 0,
-            length: std::fs::metadata(&file_path).unwrap().len(),
-            record_count: None,
-            data_file_path: file_path,
-            data_file_format: DataFileFormat::Parquet,
-            schema: schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: None,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches: Vec<RecordBatch> = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-
-        let ts_array = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("Expected TimestampMicrosecondArray");
-
-        for (i, expected) in expected_micros.iter().enumerate() {
-            assert_eq!(
-                ts_array.value(i),
-                *expected,
-                "Mismatch at row {i}: got {}, expected {expected}",
-                ts_array.value(i)
-            );
-        }
+        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
     }
 
     /// Test reading INT96 timestamps inside a struct field.
-    // TODO: Add test_read_int96_timestamps_in_struct once RecordBatchTransformer
-    // supports struct fields written by SerializedFileWriter. The coerce_int96_timestamps
-    // function already handles nested types via recursive traversal.
     #[tokio::test]
-    #[ignore = "RecordBatchTransformer struct field matching needs work for this test setup"]
     async fn test_read_int96_timestamps_in_struct() {
         use arrow_array::TimestampMicrosecondArray;
         use parquet::basic::{Repetition, Type as PhysicalType};
@@ -5066,8 +5012,6 @@ message schema {
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_path = format!("{table_location}/struct_int96.parquet");
 
-        // Parquet schema: message schema { required group data { optional INT96 ts; } }
-        // With field IDs: data=1, ts=2
         let ts_type = SchemaType::primitive_type_builder("ts", PhysicalType::INT96)
             .with_repetition(Repetition::OPTIONAL)
             .with_id(Some(2))
@@ -5086,11 +5030,13 @@ message schema {
             .build()
             .unwrap();
 
-        // Write INT96 value: year 3333 (Julian day 2_953_529), noon
+        // Year 3333 (Julian day 2_953_529), noon — outside the i64 nanosecond range
+        const UNIX_EPOCH_JULIAN: i64 = 2_440_588;
+        const MICROS_PER_DAY: i64 = 86_400_000_000;
         let nanos_within_day = 43_200_000_000_000u64;
         let julian_day = 2_953_529u32;
-        let expected_micros =
-            (julian_day as i64 - 2_440_588) * 86_400_000_000 + (nanos_within_day / 1_000) as i64;
+        let expected_micros = (julian_day as i64 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY
+            + (nanos_within_day / 1_000) as i64;
 
         let mut int96_val = parquet::data_type::Int96::new();
         int96_val.set_data(
@@ -5114,19 +5060,24 @@ message schema {
         row_group.close().unwrap();
         writer.close().unwrap();
 
-        // Iceberg schema: struct<ts: timestamp>
         let iceberg_schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
-                .with_fields(vec![NestedField::required(
-                    1,
-                    "data",
-                    Type::Struct(crate::spec::StructType::new(vec![
-                        NestedField::optional(2, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "data",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(
+                                2,
+                                "ts",
+                                Type::Primitive(PrimitiveType::Timestamp),
+                            )
                             .into(),
-                    ])),
-                )
-                .into()])
+                        ])),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap(),
         );
@@ -5134,6 +5085,7 @@ message schema {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io).build();
 
+        // Only project the top-level struct field; nested fields are included implicitly
         let task = FileScanTask {
             file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
             start: 0,
@@ -5142,7 +5094,7 @@ message schema {
             data_file_path: file_path,
             data_file_format: DataFileFormat::Parquet,
             schema: iceberg_schema,
-            project_field_ids: vec![1, 2],
+            project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
             partition: None,
@@ -5152,17 +5104,11 @@ message schema {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches: Vec<RecordBatch> = reader
-            .read(tasks)
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+        let batches: Vec<RecordBatch> = reader.read(tasks).unwrap().try_collect().await.unwrap();
 
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
 
-        // Navigate into the struct to get the timestamp array
         let struct_array = batch
             .column(0)
             .as_any()
