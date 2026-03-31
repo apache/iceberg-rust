@@ -378,7 +378,7 @@ impl Catalog for S3TablesCatalog {
         match req.send().await {
             Ok(_) => Ok(true),
             Err(err) => {
-                if err.as_service_error().map(|e| e.is_not_found_exception()) == Some(true) {
+                if is_not_found_sdk_error(&err) {
                     Ok(false)
                 } else {
                     Err(from_aws_sdk_error(err))
@@ -606,7 +606,7 @@ impl Catalog for S3TablesCatalog {
         match req.send().await {
             Ok(_) => Ok(true),
             Err(err) => {
-                if err.as_service_error().map(|e| e.is_not_found_exception()) == Some(true) {
+                if is_not_found_sdk_error(&err) {
                     Ok(false)
                 } else {
                     Err(from_aws_sdk_error(err))
@@ -693,6 +693,22 @@ impl Catalog for S3TablesCatalog {
         })?;
 
         Ok(staged_table)
+    }
+}
+
+/// Check if an AWS SDK error represents a "not found" condition.
+///
+/// This checks both the typed `NotFoundException` variant (returned by real AWS)
+/// and falls back to inspecting the raw HTTP 404 status code for compatibility
+/// with S3Tables-compatible backends (e.g. SeaweedFS) that may return unrecognized
+/// error codes like `NoSuchNamespace` or `NoSuchTable`.
+fn is_not_found_sdk_error<E>(err: &aws_sdk_s3tables::error::SdkError<E>) -> bool
+where E: aws_sdk_s3tables::error::ProvideErrorMetadata {
+    match err {
+        aws_sdk_s3tables::error::SdkError::ServiceError(service_err) => {
+            service_err.raw().status().as_u16() == 404
+        }
+        _ => false,
     }
 }
 
