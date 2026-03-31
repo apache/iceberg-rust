@@ -570,7 +570,7 @@
 <a href=#570 id=570 data-nosnippet>570</a>
 <a href=#571 id=571 data-nosnippet>571</a>    <span class="doccomment">/// Remove a reference
 <a href=#572 id=572 data-nosnippet>572</a>    ///
-<a href=#573 id=573 data-nosnippet>573</a>    /// If `ref_name='main'` the current snapshot id is set to -1.
+<a href=#573 id=573 data-nosnippet>573</a>    /// If `ref_name='main'` the current snapshot id is set to `None`.
 <a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">pub fn </span>remove_ref(<span class="kw-2">mut </span><span class="self">self</span>, ref_name: <span class="kw-2">&amp;</span>str) -&gt; <span class="self">Self </span>{
 <a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">if </span>ref_name == MAIN_BRANCH {
 <a href=#576 id=576 data-nosnippet>576</a>            <span class="self">self</span>.metadata.current_snapshot_id = <span class="prelude-val">None</span>;
