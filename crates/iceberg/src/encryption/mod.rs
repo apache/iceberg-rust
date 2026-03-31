@@ -15,17 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod commit;
-pub(crate) mod expr_to_predicate;
-pub(crate) mod metadata_scan;
-pub(crate) mod project;
-pub(crate) mod repartition;
-pub(crate) mod scan;
-pub(crate) mod sort;
-pub(crate) mod write;
+//! Encryption module for Apache Iceberg.
+//!
+//! This module provides core cryptographic primitives for encrypting
+//! and decrypting data in Iceberg tables.
 
-pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
+mod crypto;
 
-pub use expr_to_predicate::convert_filters_to_predicate;
-pub use project::project_with_partition;
-pub use scan::IcebergTableScan;
+pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};
