@@ -141,11 +141,15 @@ impl RemoveOrphanFilesAction {
             return Ok(orphan_files);
         }
 
-        // Remove orphan files concurrently
-        stream::iter(&orphan_files)
+        // Remove orphan files concurrently.
+        // Clone paths into owned Strings so each async task owns its data,
+        // making the resulting future Send-safe (avoids HRTB lifetime issues
+        // with borrowed references across await points).
+        let file_io = file_io.clone();
+        stream::iter(orphan_files.clone())
             .map(|path| {
                 let file_io = file_io.clone();
-                async move { file_io.delete(path).await }
+                async move { file_io.delete(&path).await }
             })
             .buffer_unordered(self.delete_concurrency)
             .try_collect::<Vec<_>>()
