@@ -24,6 +24,7 @@ use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::runtime::spawn;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
@@ -178,14 +179,16 @@ impl<'a> SnapshotProducer<'a> {
                 .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
 
-            let file_io = self.table.file_io();
-            let mut manifest_futures: FuturesUnordered<_> = manifest_list
-                .entries()
-                .iter()
-                .map(|entry| entry.load_manifest(file_io))
+            let mut manifest_tasks: FuturesUnordered<_> = manifest_list
+                .consume_entries()
+                .into_iter()
+                .map(|entry| {
+                    let file_io = self.table.file_io().clone();
+                    spawn(async move { entry.load_manifest(&file_io).await })
+                })
                 .collect();
 
-            while let Some(manifest) = manifest_futures.try_next().await? {
+            while let Some(manifest) = manifest_tasks.try_next().await? {
                 for entry in manifest.entries() {
                     let file_path = entry.file_path();
                     if new_files.contains(file_path) && entry.is_alive() {
