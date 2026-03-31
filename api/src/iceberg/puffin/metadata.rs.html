@@ -985,7 +985,10 @@
 <a href=#985 id=985 data-nosnippet>985</a>        <span class="macro">assert!</span>(result.is_ok());
 <a href=#986 id=986 data-nosnippet>986</a>        <span class="kw">let </span>metadata = result.unwrap();
 <a href=#987 id=987 data-nosnippet>987</a>        <span class="macro">assert_eq!</span>(metadata.blobs.len(), <span class="number">1</span>);
-<a href=#988 id=988 data-nosnippet>988</a>        <span class="macro">assert_eq!</span>(metadata.blobs[<span class="number">0</span>].compression_codec, CompressionCodec::Gzip);
-<a href=#989 id=989 data-nosnippet>989</a>    }
-<a href=#990 id=990 data-nosnippet>990</a>}
+<a href=#988 id=988 data-nosnippet>988</a>        <span class="macro">assert_eq!</span>(
+<a href=#989 id=989 data-nosnippet>989</a>            metadata.blobs[<span class="number">0</span>].compression_codec,
+<a href=#990 id=990 data-nosnippet>990</a>            CompressionCodec::gzip_default()
+<a href=#991 id=991 data-nosnippet>991</a>        );
+<a href=#992 id=992 data-nosnippet>992</a>    }
+<a href=#993 id=993 data-nosnippet>993</a>}
 </code></pre></div></section></main></body></html>

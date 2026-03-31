@@ -144,7 +144,7 @@
 <a href=#144 id=144 data-nosnippet>144</a>            sequence_number: <span class="number">1</span>,
 <a href=#145 id=145 data-nosnippet>145</a>            offset: <span class="number">4</span>,
 <a href=#146 id=146 data-nosnippet>146</a>            length: <span class="number">10</span>,
-<a href=#147 id=147 data-nosnippet>147</a>            compression_codec: CompressionCodec::Gzip,
+<a href=#147 id=147 data-nosnippet>147</a>            compression_codec: CompressionCodec::gzip_default(),
 <a href=#148 id=148 data-nosnippet>148</a>            properties: HashMap::new(),
 <a href=#149 id=149 data-nosnippet>149</a>        };
 <a href=#150 id=150 data-nosnippet>150</a>
@@ -153,7 +153,7 @@
 <a href=#153 id=153 data-nosnippet>153</a>        <span class="macro">assert!</span>(result.is_err());
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span>err = result.unwrap_err();
 <a href=#155 id=155 data-nosnippet>155</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#156 id=156 data-nosnippet>156</a>        <span class="macro">assert!</span>(err.to_string().contains(<span class="string">"Gzip"</span>));
+<a href=#156 id=156 data-nosnippet>156</a>        <span class="macro">assert!</span>(err.to_string().contains(<span class="string">"gzip"</span>));
 <a href=#157 id=157 data-nosnippet>157</a>        <span class="macro">assert!</span>(
 <a href=#158 id=158 data-nosnippet>158</a>            err.to_string()
 <a href=#159 id=159 data-nosnippet>159</a>                .contains(<span class="string">"is not supported for Puffin files"</span>)
